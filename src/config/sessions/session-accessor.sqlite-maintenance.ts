@@ -30,7 +30,6 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { countSessionEntryMaintenanceEligibleEntries } from "./store-maintenance-eligibility.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -116,8 +115,8 @@ export function applySessionEntryMaintenance(
     return { entryRemovals: [], stateDeletePlans: [] };
   }
 
-  // Trigger and eviction decisions must use the same snapshot and preservation boundary.
-  // A preliminary count can otherwise miss active-work aliases or race the later mutation plan.
+  // Trigger and eviction decisions use the same snapshot. All rows consume the cap, while the
+  // preservation boundary below controls only which rows may satisfy an overflow.
   const store = loadSqliteSessionMaintenanceStore(database);
   const preserveKeys =
     collectSessionMaintenancePreserveKeysForStore({
@@ -125,7 +124,7 @@ export function applySessionEntryMaintenance(
       store,
       baseKeys: collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
     }) ?? new Set<string>();
-  const eligibleEntryCount = countSessionEntryMaintenanceEligibleEntries(store, preserveKeys);
+  const entryCount = Object.keys(store).length;
   const hasStaleCandidate = hasStaleSessionEntryCandidate(
     store,
     maintenance.pruneAfterMs,
@@ -133,15 +132,15 @@ export function applySessionEntryMaintenance(
   );
   const shouldMaintainStore =
     params.forceMaintenance === true ||
-    eligibleEntryCount > maintenance.maxEntries ||
+    entryCount > maintenance.maxEntries ||
     hasStaleCandidate ||
     shouldRunModelRunPrune({
       maintenance,
-      entryCount: eligibleEntryCount,
+      entryCount,
       force: params.forceMaintenance,
     }) ||
     shouldRunSessionEntryMaintenance({
-      entryCount: eligibleEntryCount,
+      entryCount,
       maxEntries: maintenance.maxEntries,
       force: params.forceMaintenance,
     });
@@ -159,30 +158,26 @@ export function applySessionEntryMaintenance(
       removedSessionIds.add(sessionId);
     }
   };
-  let remainingEligibleEntryCount = eligibleEntryCount;
+  let remainingEntryCount = entryCount;
   if (
     shouldRunModelRunPrune({
       maintenance,
-      entryCount: remainingEligibleEntryCount,
+      entryCount: remainingEntryCount,
       force: params.forceMaintenance,
     })
   ) {
-    remainingEligibleEntryCount -= pruneStaleModelRunEntries(
-      store,
-      maintenance.modelRunPruneAfterMs,
-      {
-        log: false,
-        onPruned: rememberRemovedEntry,
-        preserveKeys,
-      },
-    );
+    remainingEntryCount -= pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+      log: false,
+      onPruned: rememberRemovedEntry,
+      preserveKeys,
+    });
   }
   if (
     params.forceMaintenance === true ||
     hasStaleCandidate ||
-    remainingEligibleEntryCount > maintenance.maxEntries
+    remainingEntryCount > maintenance.maxEntries
   ) {
-    remainingEligibleEntryCount -= pruneStaleEntries(store, maintenance.pruneAfterMs, {
+    remainingEntryCount -= pruneStaleEntries(store, maintenance.pruneAfterMs, {
       log: false,
       onPruned: rememberRemovedEntry,
       preserveKeys,
@@ -190,7 +185,7 @@ export function applySessionEntryMaintenance(
   }
   if (
     shouldRunSessionEntryMaintenance({
-      entryCount: remainingEligibleEntryCount,
+      entryCount: remainingEntryCount,
       maxEntries: maintenance.maxEntries,
       force: params.forceMaintenance,
     })

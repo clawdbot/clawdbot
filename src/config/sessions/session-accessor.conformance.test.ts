@@ -1657,10 +1657,10 @@ describe("sqlite session normalization", () => {
         env,
         storePath: paths.sqlitePath,
       }).map((summary) => summary.sessionKey),
-    ).toEqual(["agent:main:active", "agent:main:newer", "agent:main:newest"]);
+    ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
-  it("keeps protected SQLite rows outside the write-triggered entry allowance", async () => {
+  it("counts protected SQLite rows while preserving them during write-triggered capping", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       session: {
         maintenance: {
@@ -1685,20 +1685,19 @@ describe("sqlite session normalization", () => {
       type: "metadata",
     };
 
-    for (const [sessionKey, sessionId, updatedAt] of [
-      ["agent:main:archived-1", "archived-session-1", now - 4],
-      ["agent:main:archived-2", "archived-session-2", now - 3],
-    ] as const) {
-      await patchSessionEntryCore(
-        scopeFor(sessionKey),
-        () => ({ archivedAt: updatedAt, sessionId, updatedAt }),
-        {
-          fallbackEntry: { archivedAt: updatedAt, sessionId, updatedAt },
-          replaceEntry: true,
-          skipMaintenance: true,
+    await patchSessionEntryCore(
+      scopeFor("agent:main:archived-1"),
+      () => ({ archivedAt: now - 4, sessionId: "archived-session-1", updatedAt: now - 4 }),
+      {
+        fallbackEntry: {
+          archivedAt: now - 4,
+          sessionId: "archived-session-1",
+          updatedAt: now - 4,
         },
-      );
-    }
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
     await patchSessionEntryCore(
       scopeFor("agent:main:recent-dashboard-1"),
       () => ({ sessionId: recentSessionId, updatedAt: now - 2 }),
@@ -1737,13 +1736,7 @@ describe("sqlite session normalization", () => {
         env,
         storePath: paths.sqlitePath,
       }).map((summary) => summary.sessionKey),
-    ).toEqual([
-      "agent:main:archived-1",
-      "agent:main:archived-2",
-      "agent:main:maintenance-trigger",
-      "agent:main:recent-dashboard-1",
-      "agent:main:recent-dashboard-2",
-    ]);
+    ).toEqual(["agent:main:archived-1", "agent:main:maintenance-trigger"]);
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -1751,7 +1744,7 @@ describe("sqlite session normalization", () => {
         sessionId: recentSessionId,
         storePath: paths.sqlitePath,
       }),
-    ).resolves.toEqual([recentTranscriptEvent]);
+    ).resolves.toEqual([]);
   });
 
   it("preserves pinned SQLite entries and transcripts during write-triggered capping", async () => {
@@ -1815,6 +1808,13 @@ describe("sqlite session normalization", () => {
       pinnedAt: 2,
       sessionId: pinnedSessionId,
     });
+    expect(
+      listSessionEntryRows({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      }).map((summary) => summary.sessionKey),
+    ).toEqual(["agent:main:maintenance-trigger", pinnedKey]);
     await expect(
       loadTranscriptEvents({
         agentId: "main",

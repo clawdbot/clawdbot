@@ -12,8 +12,8 @@ function makeStore(entries: Array<[string, SessionEntry]>): Record<string, Sessi
   return Object.fromEntries(entries);
 }
 
-describe("session maintenance eligible quota", () => {
-  it("keeps 499 archived sessions outside the ordinary-session allowance", () => {
+describe("session maintenance total entry cap", () => {
+  it("counts archived sessions toward the cap without evicting them", () => {
     const now = Date.now();
     const archivedEntries = Array.from({ length: 499 }, (_, index): [string, SessionEntry] => [
       `archived-${index}`,
@@ -26,34 +26,36 @@ describe("session maintenance eligible quota", () => {
       ["dashboard-3", makeEntry(now)],
     ]);
 
-    expect(capEntryCount(store, 500)).toBe(0);
-    expect(Object.keys(store)).toHaveLength(502);
-    expect(store).toHaveProperty("dashboard-1");
-    expect(store).toHaveProperty("dashboard-2");
+    expect(capEntryCount(store, 500)).toBe(2);
+    expect(Object.keys(store)).toHaveLength(500);
+    expect(store["dashboard-1"]).toBeUndefined();
+    expect(store["dashboard-2"]).toBeUndefined();
     expect(store).toHaveProperty("dashboard-3");
-  });
-
-  it("removes only the oldest eligible session above the allowance", () => {
-    const now = Date.now();
-    const archivedEntries = Array.from({ length: 499 }, (_, index): [string, SessionEntry] => [
-      `archived-${index}`,
-      { ...makeEntry(index), archivedAt: now },
-    ]);
-    const eligibleEntries = Array.from({ length: 501 }, (_, index): [string, SessionEntry] => [
-      `eligible-${index}`,
-      makeEntry(index),
-    ]);
-    const store = makeStore([...archivedEntries, ...eligibleEntries]);
-
-    expect(capEntryCount(store, 500)).toBe(1);
-    expect(store["eligible-0"]).toBeUndefined();
-    expect(store).toHaveProperty("eligible-1");
-    expect(store).toHaveProperty("eligible-500");
     expect(store).toHaveProperty("archived-0");
     expect(store).toHaveProperty("archived-498");
   });
 
-  it("does not count archived sessions against the active-session allowance", () => {
+  it("uses the remaining total capacity for ordinary sessions", () => {
+    const pinnedEntries = Array.from({ length: 200 }, (_, index): [string, SessionEntry] => [
+      `pinned-${index}`,
+      { ...makeEntry(index), pinnedAt: index + 1 },
+    ]);
+    const ordinaryEntries = Array.from({ length: 400 }, (_, index): [string, SessionEntry] => [
+      `ordinary-${index}`,
+      makeEntry(index),
+    ]);
+    const store = makeStore([...pinnedEntries, ...ordinaryEntries]);
+
+    expect(capEntryCount(store, 500)).toBe(100);
+    expect(Object.keys(store)).toHaveLength(500);
+    expect(store["ordinary-99"]).toBeUndefined();
+    expect(store).toHaveProperty("ordinary-100");
+    expect(store).toHaveProperty("ordinary-399");
+    expect(store).toHaveProperty("pinned-0");
+    expect(store).toHaveProperty("pinned-199");
+  });
+
+  it("uses total rows when warning that an active session would be capped", () => {
     const now = Date.now();
     const archivedEntries = Array.from({ length: 499 }, (_, index): [string, SessionEntry] => [
       `archived-${index}`,
@@ -70,9 +72,9 @@ describe("session maintenance eligible quota", () => {
         store,
         activeSessionKey: "active",
         pruneAfterMs: DAY_MS,
-        maxEntries: 2,
+        maxEntries: 500,
         nowMs: now,
       }),
-    ).toBeNull();
+    ).toMatchObject({ wouldCap: true, wouldPrune: false });
   });
 });
