@@ -44,6 +44,11 @@ import {
   mergeAuthProfileStores,
 } from "./persisted.js";
 import {
+  getRuntimeExternalCliProfileIds,
+  mergeRuntimeExternalProfileReferences,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
+import {
   clearRuntimeAuthProfileStoreSnapshotCore,
   clearRuntimeAuthProfileStoreSnapshots,
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
@@ -542,6 +547,10 @@ function pruneAuthProfileStoreReferences(
   store.runtimeExternalProfileIds = store.runtimeExternalProfileIds
     ?.filter((profileId) => keptProfileIds.has(profileId))
     .toSorted();
+  setRuntimeExternalCliProfileIds(
+    store,
+    getRuntimeExternalCliProfileIds(store).filter((profileId) => keptProfileIds.has(profileId)),
+  );
   if (
     store.runtimeExternalProfileIds?.length === 0 &&
     store.runtimeExternalProfileIdsAuthoritative !== true
@@ -613,6 +622,7 @@ function buildLocalAuthProfileStoreForSave(params: {
   if (params.options?.filterExternalAuthProfiles !== false) {
     localStore.runtimeExternalProfileIds = undefined;
     localStore.runtimeExternalProfileIdsAuthoritative = undefined;
+    setRuntimeExternalCliProfileIds(localStore, []);
   }
   return localStore;
 }
@@ -643,6 +653,7 @@ function stripRuntimeExternalProfileMetadata(store: AuthProfileStore): AuthProfi
   const stripped = { ...store };
   delete stripped.runtimeExternalProfileIds;
   delete stripped.runtimeExternalProfileIdsAuthoritative;
+  setRuntimeExternalCliProfileIds(stripped, []);
   return stripped;
 }
 
@@ -724,81 +735,12 @@ function setRuntimeExternalProfileMetadata(params: {
   params.store.runtimeExternalProfileIds =
     profileIds.length > 0 || params.authoritative ? profileIds : undefined;
   params.store.runtimeExternalProfileIdsAuthoritative = params.authoritative ? true : undefined;
-}
-
-function mergeRuntimeExternalProfileReferences(params: {
-  next: AuthProfileStore;
-  existing: AuthProfileStore;
-}): AuthProfileStore {
-  const runtimeExternalProfileIds = new Set(params.existing.runtimeExternalProfileIds ?? []);
-  if (params.next.runtimeExternalProfileIdsAuthoritative === true) {
-    return params.next;
-  }
-  if (runtimeExternalProfileIds.size === 0) {
-    return params.next;
-  }
-  const merged = cloneAuthProfileStore(params.next);
-  const mergedRuntimeExternalProfileIds = new Set(merged.runtimeExternalProfileIds ?? []);
-  const backfilledRuntimeExternalProfileIds = new Set<string>();
-  for (const profileId of runtimeExternalProfileIds) {
-    const existingCredential = params.existing.profiles[profileId];
-    const nextCredential = merged.profiles[profileId];
-    if (nextCredential) {
-      if (
-        mergedRuntimeExternalProfileIds.has(profileId) ||
-        (existingCredential && isDeepStrictEqual(nextCredential, existingCredential))
-      ) {
-        mergedRuntimeExternalProfileIds.add(profileId);
-      }
-      continue;
-    }
-    if (!existingCredential) {
-      continue;
-    }
-    merged.profiles[profileId] = existingCredential;
-    mergedRuntimeExternalProfileIds.add(profileId);
-    backfilledRuntimeExternalProfileIds.add(profileId);
-    if (params.existing.usageStats?.[profileId]) {
-      merged.usageStats = {
-        ...merged.usageStats,
-        [profileId]: params.existing.usageStats[profileId],
-      };
-    }
-  }
-  for (const [provider, profileIds] of Object.entries(params.existing.order ?? {})) {
-    const externalProfileIds = profileIds.filter((profileId) =>
-      backfilledRuntimeExternalProfileIds.has(profileId),
-    );
-    if (externalProfileIds.length === 0) {
-      continue;
-    }
-    if (merged.order?.[provider]) {
-      continue;
-    }
-    const existingOrder = merged.order?.[provider] ?? [];
-    merged.order = {
-      ...merged.order,
-      [provider]: [
-        ...externalProfileIds,
-        ...existingOrder.filter((profileId) => !externalProfileIds.includes(profileId)),
-      ],
-    };
-  }
-  for (const [provider, profileId] of Object.entries(params.existing.lastGood ?? {})) {
-    if (!backfilledRuntimeExternalProfileIds.has(profileId) || merged.lastGood?.[provider]) {
-      continue;
-    }
-    merged.lastGood = {
-      ...merged.lastGood,
-      [provider]: profileId,
-    };
-  }
-  setRuntimeExternalProfileMetadata({
-    store: merged,
-    profileIds: mergedRuntimeExternalProfileIds,
-    authoritative: params.existing.runtimeExternalProfileIdsAuthoritative === true,
-  });
-  return merged;
+  setRuntimeExternalCliProfileIds(
+    params.store,
+    getRuntimeExternalCliProfileIds(params.store).filter((profileId) =>
+      params.profileIds.has(profileId),
+    ),
+  );
 }
 
 export function preserveResolvedSecretBackedCredentials(params: {
@@ -841,6 +783,10 @@ function mergeRuntimeExternalProfileState(params: {
   }
   const merged = cloneAuthProfileStore(params.next);
   const mergedRuntimeProfileIds = new Set(merged.runtimeExternalProfileIds ?? []);
+  const existingRuntimeExternalCliProfileIds = new Set(
+    getRuntimeExternalCliProfileIds(params.existing),
+  );
+  const mergedRuntimeExternalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(merged));
   const activeRuntimeProfileIds = new Set<string>();
   const nextRuntimeProfileIdsAuthoritative =
     params.next.runtimeExternalProfileIdsAuthoritative === true;
@@ -860,12 +806,18 @@ function mergeRuntimeExternalProfileState(params: {
       ) {
         mergedRuntimeProfileIds.add(profileId);
         activeRuntimeProfileIds.add(profileId);
+        if (existingRuntimeExternalCliProfileIds.has(profileId)) {
+          mergedRuntimeExternalCliProfileIds.add(profileId);
+        }
       }
       continue;
     }
     merged.profiles[profileId] = existingCredential;
     mergedRuntimeProfileIds.add(profileId);
     activeRuntimeProfileIds.add(profileId);
+    if (existingRuntimeExternalCliProfileIds.has(profileId)) {
+      mergedRuntimeExternalCliProfileIds.add(profileId);
+    }
   }
   if (activeRuntimeProfileIds.size === 0) {
     return params.next;
@@ -904,6 +856,7 @@ function mergeRuntimeExternalProfileState(params: {
     profileIds: mergedRuntimeProfileIds,
     authoritative: params.existing.runtimeExternalProfileIdsAuthoritative === true,
   });
+  setRuntimeExternalCliProfileIds(merged, mergedRuntimeExternalCliProfileIds);
   return merged;
 }
 

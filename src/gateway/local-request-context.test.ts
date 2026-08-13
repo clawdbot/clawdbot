@@ -151,7 +151,7 @@ describe("local gateway request context", () => {
 
     const list = () =>
       withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-        dispatchGatewayMethodInProcessRaw("models.list", { view: "all" }),
+        dispatchGatewayMethodInProcessRaw("models.list", { view: "configured", refresh: true }),
       );
     const loggedIn = await list();
     const loggedOut = await list();
@@ -162,10 +162,14 @@ describe("local gateway request context", () => {
     });
     expect(loggedOut).toMatchObject({
       ok: true,
-      payload: { models: [expect.objectContaining({ id: "local-auth-model", available: false })] },
+      payload: { models: [] },
     });
-    expect(refreshAuth).toHaveBeenNthCalledWith(1, ["local-auth-provider"]);
-    expect(refreshAuth).toHaveBeenNthCalledWith(2, ["local-auth-provider"]);
+    expect(refreshAuth).toHaveBeenNthCalledWith(1, {
+      providerIds: ["local-auth-provider"],
+    });
+    expect(refreshAuth).toHaveBeenNthCalledWith(2, {
+      providerIds: ["local-auth-provider"],
+    });
     loadOwner.mockRestore();
   });
 

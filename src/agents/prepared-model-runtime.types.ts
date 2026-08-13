@@ -53,8 +53,10 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
    * Full inventory discovery is deliberately outside the startup publication boundary.
    */
   modelCatalog: ModelCatalogSnapshot;
+  /** Reads a completed full catalog without starting provider discovery. */
+  readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   /** Builds this generation's full control-plane catalog without replacing turn facts. */
-  loadFullModelCatalog?: () => Promise<ModelCatalogSnapshot>;
+  loadFullModelCatalog?: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
   /** Full static models for configured refs, resolved once at the lifecycle boundary. */
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */

@@ -6,7 +6,9 @@ import type {
 import {
   getPreparedModelRuntimeAuthMaterializations,
   loadPreparedModelRuntimeAuth,
+  type PreparedModelRuntimeAuthScope,
 } from "../agents/prepared-model-runtime-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
@@ -21,6 +23,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   agentDir?: string;
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
+  refreshFullCatalog?: boolean;
   workspaceDir?: string;
 }) => Promise<PublishedModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
@@ -29,9 +32,11 @@ type LoadGatewayModelCatalogParams = {
   getConfig?: () => GatewayModelCatalogConfig;
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
   readOnly?: boolean;
+  refreshFullCatalog?: boolean;
   workspaceDir?: string;
 };
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
+  authScope?: PreparedModelRuntimeAuthScope;
   refreshAuth?: boolean;
 };
 
@@ -71,6 +76,7 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
     config: (params?.getConfig ?? getRuntimeConfig)(),
     readOnly: params?.readOnly !== false,
+    ...(params?.refreshFullCatalog ? { refreshFullCatalog: true } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   const owner = resolvePublishedModelCatalogOwner(candidate);
@@ -101,20 +107,34 @@ function projectGatewayModelCatalogSnapshot(
 export async function loadPreparedGatewayModelCatalogSnapshot(
   params?: LoadPreparedGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
-  const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
-  const refreshedAuth = params?.refreshAuth
-    ? await loadPreparedModelRuntimeAuth(
-        candidate,
-        owner.modelCatalog.entries.map((entry) => entry.provider),
-      ).catch(() => undefined)
-    : undefined;
-  return {
-    ...projectGatewayModelCatalogSnapshot(owner),
-    authModes: refreshedAuth?.authModes ?? owner.authModes,
-    authStore: refreshedAuth?.authStore ?? owner.authStore,
-    metadataSnapshot: owner.metadataSnapshot,
-    authMaterializations: owner.authMaterializations,
-  };
+  for (;;) {
+    const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
+    let refreshedAuth: Awaited<ReturnType<typeof loadPreparedModelRuntimeAuth>>;
+    try {
+      refreshedAuth = params?.refreshAuth
+        ? await loadPreparedModelRuntimeAuth(
+            candidate,
+            params.authScope ?? {
+              providerIds: owner.modelCatalog.entries.map((entry) => entry.provider),
+            },
+          )
+        : undefined;
+    } catch (error) {
+      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+        // Supersession invalidates every captured owner fact. Reacquire the whole owner so
+        // replacement auth cannot be combined with stale catalog or metadata.
+        continue;
+      }
+      refreshedAuth = undefined;
+    }
+    return {
+      ...projectGatewayModelCatalogSnapshot(owner),
+      authModes: refreshedAuth?.authModes ?? owner.authModes,
+      authStore: refreshedAuth?.authStore ?? owner.authStore,
+      metadataSnapshot: owner.metadataSnapshot,
+      authMaterializations: owner.authMaterializations,
+    };
+  }
 }
 
 export async function loadGatewayModelCatalogSnapshot(

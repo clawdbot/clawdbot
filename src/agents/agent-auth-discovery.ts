@@ -22,6 +22,7 @@ export type DiscoverAuthStorageOptions = {
   ambientCredentials?: Readonly<AgentCredentialMap>;
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;
+  preparedStore?: AuthProfileStore;
   readOnly?: boolean;
   skipExternalAuthProfiles?: boolean;
   skipCredentials?: boolean;
@@ -95,8 +96,9 @@ export function resolveAgentDiscoveryAuthFacts(
     ...(options?.externalCli ? { externalCli: options.externalCli } : {}),
     ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
   };
-  const store =
-    options?.skipExternalAuthProfiles === true
+  const store = options?.preparedStore
+    ? options.preparedStore
+    : options?.skipExternalAuthProfiles === true
       ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
           ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),

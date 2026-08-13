@@ -168,6 +168,7 @@ vi.mock("./agent-scope.js", () => ({
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
+  getPreparedRuntimeAuthProfileStoreSnapshotCore: () => undefined,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {
@@ -416,7 +417,17 @@ describe("prepared model runtime Gateway catalog mode", () => {
       routeVariants: [],
     });
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
+    expect(snapshot?.readFullModelCatalog?.()).toEqual({ entries: [], routeVariants: [] });
+
+    await snapshot?.loadFullModelCatalog?.({ refresh: true });
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
+    mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(new Error("refresh failed"));
+    await expect(snapshot?.loadFullModelCatalog?.({ refresh: true })).rejects.toThrow(
+      "refresh failed",
+    );
+    expect(snapshot?.readFullModelCatalog?.()).toEqual({ entries: [], routeVariants: [] });
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
 
@@ -425,7 +436,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       affectsInheritedStores: false,
     });
     await expect(snapshot?.loadFullModelCatalog?.()).rejects.toThrow("superseded");
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
   });
 
   it("publishes exact dynamic configured models without building a live catalog", async () => {

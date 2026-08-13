@@ -1029,6 +1029,15 @@ context.
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
+Two optional controls separate automatic reads from operator-requested discovery:
+
+- `preparedOnly: true` reuses the current prepared catalog or a completed catalog for that
+  runtime generation without starting provider discovery. Control UI startup and polling use
+  this mode.
+- `refresh: true` replaces a completed full catalog when the selected view requires discovery.
+  Concurrent refreshes share one build; a failed refresh leaves the previous completed catalog
+  available and returns the failure to the caller.
+
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts

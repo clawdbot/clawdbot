@@ -230,6 +230,10 @@ export const AgentsFilesSetResultSchema = closedObject({
 export const ModelsListParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   includeProviderCapabilities: Type.Optional(Type.Boolean()),
+  /** Reuse prepared/cached facts without starting provider discovery. */
+  preparedOnly: Type.Optional(Type.Boolean()),
+  /** Force replacement of a completed full-catalog generation. */
+  refresh: Type.Optional(Type.Boolean()),
   view: Type.Optional(
     Type.Union([
       Type.Literal("default"),

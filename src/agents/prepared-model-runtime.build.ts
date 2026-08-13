@@ -18,6 +18,7 @@ import {
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
   type PreparedModelRuntimeAuth,
+  type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
@@ -49,8 +50,9 @@ const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 
 type PreparedModelRuntimeCatalogAccess = Readonly<{
-  loadFullModelCatalog: () => Promise<ModelCatalogSnapshot>;
-  loadAuth: (providerIds: readonly string[]) => Promise<PreparedModelRuntimeAuth>;
+  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
+  loadFullModelCatalog: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
+  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;
 type PreparedModelRuntimeBuildGuards =
   | ReadonlyMap<PreparedModelRuntimeInput, () => boolean>
@@ -119,8 +121,9 @@ function createFullModelCatalogAccess(params: {
   agentBuildCompletions: Map<string, Promise<void>>;
   isCurrent: () => boolean;
 }): PreparedModelRuntimeCatalogAccess {
-  // Concurrent readers share discovery, but completed results are discarded so
-  // refreshable providers can publish changed inventory on the next explicit read.
+  // The completed catalog is generation-owned. Explicit refresh replaces it only after a
+  // successful build, so failed refreshes cannot discard the last verified inventory.
+  let fullCatalog: ModelCatalogSnapshot | undefined;
   let pending: Promise<ModelCatalogSnapshot> | undefined;
   let pendingAuth:
     | {
@@ -136,27 +139,25 @@ function createFullModelCatalogAccess(params: {
     }
   };
   return {
-    loadAuth: (providerIds) => {
+    loadAuth: ({ providerIds, profileIds }) => {
       const key = [...new Set(providerIds)]
         .toSorted((left, right) => left.localeCompare(right))
         .join("\0");
-      if (key.length === 0) {
-        return Promise.resolve({
-          authStore: params.agentFacts.authStore,
-          authModes: resolveUsableAgentCredentialModes(params.agentFacts.credentials),
-        });
-      }
-      if (pendingAuth?.key === key) {
+      const profileKey = [...new Set(profileIds ?? [])]
+        .toSorted((left, right) => left.localeCompare(right))
+        .join("\0");
+      const cacheKey = `${key}\0\0${profileKey}`;
+      if (pendingAuth?.key === cacheKey) {
         return pendingAuth.promise;
       }
       const input = createPreparedModelAuthRefreshWorkerInput({
         agentDir: params.agentFacts.input.agentDir,
         inheritedAuthDir: params.agentFacts.input.inheritedAuthDir,
-        workspaceDir: params.agentFacts.input.workspaceDir,
         authStore: params.agentFacts.authStore,
         config: params.agentFacts.input.config,
         env: params.agentFacts.env,
         providerIds,
+        ...(profileIds?.length ? { profileIds } : {}),
       });
       const promise = runPreparedModelAuthRefreshWorker({
         input,
@@ -177,12 +178,24 @@ function createFullModelCatalogAccess(params: {
             pendingAuth = undefined;
           }
         });
-      pendingAuth = { key, promise };
+      pendingAuth = { key: cacheKey, promise };
       return promise;
     },
-    loadFullModelCatalog: () => {
+    readFullModelCatalog: () => {
+      assertCurrent();
+      return fullCatalog;
+    },
+    loadFullModelCatalog: (options) => {
+      try {
+        assertCurrent();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      if (!options?.refresh && fullCatalog) {
+        return Promise.resolve(fullCatalog);
+      }
       if (!pending) {
-        pending = runSerializedPreparedModelRuntimeTask({
+        const build = runSerializedPreparedModelRuntimeTask({
           agentDir: params.agentFacts.input.agentDir,
           agentBuildCompletions: params.agentBuildCompletions,
           isCurrent: params.isCurrent,
@@ -201,9 +214,15 @@ function createFullModelCatalogAccess(params: {
               assertCurrent();
               return catalog;
             }),
-        }).finally(() => {
-          pending = undefined;
         });
+        pending = build
+          .then((catalog) => {
+            fullCatalog = catalog;
+            return catalog;
+          })
+          .finally(() => {
+            pending = undefined;
+          });
       }
       return pending;
     },
@@ -241,6 +260,7 @@ function createSnapshot(
     ...(messageToolCatalog ? { messageToolCatalog } : {}),
     ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
     modelCatalog,
+    readFullModelCatalog: catalogAccess.readFullModelCatalog,
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
     configuredRuntimeModels,
     inlineProviderModels,

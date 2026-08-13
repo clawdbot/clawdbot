@@ -32,6 +32,7 @@ type ChatModelPickerParams = {
   triggerModelLabel: string;
   triggerStatusLabel?: string;
   onModelSetup?: () => void;
+  onOpen?: () => unknown;
   onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
@@ -378,6 +379,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           resetModelSearch(details);
           return;
         }
+        void params.onOpen?.();
         queueMicrotask(() => {
           const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
           if (input) {

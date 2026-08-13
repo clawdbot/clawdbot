@@ -8,6 +8,7 @@ import {
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 
@@ -74,6 +75,7 @@ export function renderChatPaneComposerControls(params: {
           effortAccess.allowed
             ? switchChatFastMode(state, next, targetSessionKey)
             : Promise.resolve(false),
+        onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
         onModelSelect: (next, targetSessionKey) =>
           modelAccess.allowed
             ? switchChatModel(state, next, targetSessionKey)

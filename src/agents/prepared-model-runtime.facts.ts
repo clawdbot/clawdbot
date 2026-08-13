@@ -25,6 +25,7 @@ import {
   discoverModels,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   buildInlineProviderModels,
@@ -122,12 +123,25 @@ function prepareAgentFacts(
   additionalProviderIds: readonly string[] = [],
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
+  const publishedStore = getPreparedRuntimeAuthProfileStoreSnapshot(
+    input.agentDir,
+    input.inheritedAuthDir,
+  );
+  // Runtime-only external profiles exist only in the published auth generation. Re-reading the
+  // durable store here would erase startup hydration before this owner can carry it forward.
+  const preparedStore =
+    publishedStore &&
+    (publishedStore.runtimeExternalProfileIds !== undefined ||
+      publishedStore.runtimeExternalProfileIdsAuthoritative === true)
+      ? publishedStore
+      : undefined;
   const authFacts = discoverAuthStorageFacts(input.agentDir, {
     config: input.config,
     // Prepared owners consume only the already-published runtime auth generation. External CLI
     // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
     readOnly: true,
     ambientCredentials,
+    ...(preparedStore ? { preparedStore } : {}),
     ...(input.skipCredentials ? { skipCredentials: true } : {}),
     ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),

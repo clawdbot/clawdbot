@@ -1,5 +1,6 @@
 import type { RuntimeAuthMaterialization } from "../agents/auth-profiles/runtime-materializations.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
+import type { PreparedModelRuntimeAuthScope } from "../agents/prepared-model-runtime-auth.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
@@ -11,7 +12,10 @@ export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
 type GatewayModelCatalogReadParams = {
   agentId?: string;
   agentDir?: string;
+  authScope?: PreparedModelRuntimeAuthScope;
   readOnly?: boolean;
+  refreshAuth?: boolean;
+  refreshFullCatalog?: boolean;
   workspaceDir?: string;
 };
 
@@ -50,9 +54,12 @@ function requirePrivateAccess(
 export async function loadDeferredCatalog(
   context: Pick<GatewayRequestContext, "loadGatewayModelCatalogSnapshot">,
   agentId: string,
-  readOnly: boolean,
+  options: Pick<
+    GatewayModelCatalogReadParams,
+    "authScope" | "readOnly" | "refreshAuth" | "refreshFullCatalog"
+  >,
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
-  return await requirePrivateAccess(context).loadDeferred({ agentId, readOnly });
+  return await requirePrivateAccess(context).loadDeferred({ agentId, ...options });
 }
 
 export async function readPreparedCatalog(

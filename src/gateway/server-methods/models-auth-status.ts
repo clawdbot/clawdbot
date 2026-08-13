@@ -16,8 +16,6 @@ import {
 } from "../../agents/auth-health.js";
 import {
   type AuthProfileStore,
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
   listProfilesForProvider,
@@ -49,8 +47,11 @@ import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.se
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
+import { supportsSetupManualSecret } from "../../system-agent/setup-inference-auth-options.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
+import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import {
@@ -64,6 +65,7 @@ import type {
   ModelAuthLogoutResult,
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
+  ModelProviderCapability,
 } from "./models-auth-status.types.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -73,10 +75,62 @@ export type {
   ModelAuthStatusProfile,
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
+  ModelProviderCapability,
 } from "./models-auth-status.types.js";
 
 const log = createSubsystemLogger("models-auth-status");
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
+
+function buildProviderCapabilities(params: {
+  config: OpenClawConfig;
+  workspaceDir: string;
+  metadataSnapshot: NonNullable<
+    Awaited<ReturnType<typeof readPreparedCatalog>>
+  >["metadataSnapshot"];
+}): ModelProviderCapability[] {
+  const capabilities = new Map<string, ModelProviderCapability>();
+  for (const choice of resolveManifestProviderAuthChoices({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    includeUntrustedWorkspacePlugins: false,
+    metadataSnapshot: params.metadataSnapshot,
+  })) {
+    const provider = resolveProviderIdForAuth(choice.providerId, {
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      includeUntrustedWorkspacePlugins: false,
+      metadataSnapshot: params.metadataSnapshot,
+    });
+    if (!provider) {
+      continue;
+    }
+    const current = capabilities.get(provider);
+    const apiKeySupported = choice.methodId === "api-key";
+    const quickApiKeySetup = apiKeySupported && supportsSetupManualSecret(choice);
+    capabilities.set(provider, {
+      provider,
+      apiKeySupported: current?.apiKeySupported === true || apiKeySupported,
+      quickApiKeySetup: current?.quickApiKeySetup === true || quickApiKeySetup,
+    });
+  }
+  return [...capabilities.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
+}
+
+function resolveAuthRefreshScope(cfg: OpenClawConfig): {
+  providerIds: string[];
+  profileIds?: string[];
+} {
+  const discovery = externalCliDiscoveryForConfigStatus({ cfg });
+  if (discovery.mode !== "scoped") {
+    return { providerIds: [] };
+  }
+  const providerIds = [...(discovery.providerIds ?? [])];
+  const profileIds = [...(discovery.profileIds ?? [])];
+  return {
+    providerIds,
+    ...(profileIds.length > 0 ? { profileIds } : {}),
+  };
+}
 
 /**
  * Invalidate auxiliary usage and prepared provider-auth state after an auth
@@ -99,16 +153,10 @@ async function refreshModelAuthStatusRuntimeState(): Promise<void> {
   // still uses invalidateModelAuthStatusCache() and clears usage immediately.
   clearCurrentProviderAuthState();
   try {
-    if (await refreshActiveProviderAuthRuntimeSnapshot()) {
-      return;
-    }
+    await refreshActiveProviderAuthRuntimeSnapshot();
   } catch (err) {
     log.warn(`runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`);
-    return;
   }
-  // Explicit status refresh follows CLI/doctor repairs. If no secrets runtime is
-  // active, drop runtime auth snapshots so the next status read observes disk.
-  clearRuntimeAuthProfileStoreSnapshots();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -578,12 +626,18 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           return;
         }
       }
-      const { agentId, agentDir } = scope;
-      // Use the external-profile-aware store for status reads so the dashboard
-      // reflects CLI-discovered credentials without persisting them here.
-      const store = ensureAuthProfileStore(agentDir, {
-        externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
-      });
+      const preparedSnapshot = refreshRequested
+        ? await loadDeferredCatalog(context, scope.agentId, {
+            readOnly: true,
+            authScope: resolveAuthRefreshScope(cfg),
+            refreshAuth: true,
+          })
+        : await readPreparedCatalog(context, scope.agentId);
+      if (!preparedSnapshot) {
+        throw new Error(`prepared model auth owner is unavailable (${scope.agentId})`);
+      }
+      cfg = preparedSnapshot.config;
+      const { agentId, agentDir, authStore: store, workspaceDir } = preparedSnapshot;
       const apiKeys = resolveProviderApiKeys(cfg, store);
       const configured = resolveConfiguredProviders(cfg, apiKeys);
       const statusProviderIds = new Set(configured.providers);
@@ -601,6 +655,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         cfg,
         providers: statusProviderIds.size > 0 ? [...statusProviderIds] : undefined,
         allowKeychainPrompt: false,
+        authAliasLookupParams: {
+          workspaceDir,
+          metadataSnapshot: preparedSnapshot.metadataSnapshot,
+          includeUntrustedWorkspacePlugins: false,
+        },
       });
 
       // Usage queries usually need refreshable credentials. Keep API-key status
@@ -657,7 +716,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           configBoundProfileIds,
         ),
       );
-      const result: ModelAuthStatusResult = { ts: now, providers };
+      const providerCapabilities = buildProviderCapabilities({
+        config: cfg,
+        workspaceDir,
+        metadataSnapshot: preparedSnapshot.metadataSnapshot,
+      });
+      const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };
       respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

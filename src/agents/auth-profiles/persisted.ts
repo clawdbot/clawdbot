@@ -19,6 +19,10 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
+import {
+  getRuntimeExternalCliProfileIds,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
 import { readPersistedAuthProfileStoreRaw } from "./sqlite.js";
 import {
   coerceAuthProfileState,
@@ -555,7 +559,7 @@ function replaceMergedProfileReferences(params: {
     }
   }
 
-  return {
+  const next = {
     ...store,
     profiles,
     ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
@@ -564,6 +568,13 @@ function replaceMergedProfileReferences(params: {
       ? { usageStats }
       : { usageStats: undefined }),
   };
+  setRuntimeExternalCliProfileIds(
+    next,
+    getRuntimeExternalCliProfileIds(store).map(
+      (profileId) => replacements.get(profileId) ?? profileId,
+    ),
+  );
+  return next;
 }
 
 function reconcileMainStoreOAuthProfileDrift(params: {
@@ -609,7 +620,8 @@ export function mergeAuthProfileStores(
     override.runtimeLocalProfileIds === undefined &&
     override.runtimeInheritsMainState === undefined &&
     override.runtimeExternalProfileIds === undefined &&
-    override.runtimeExternalProfileIdsAuthoritative !== true
+    override.runtimeExternalProfileIdsAuthoritative !== true &&
+    getRuntimeExternalCliProfileIds(override).length === 0
   ) {
     return base;
   }
@@ -705,7 +717,14 @@ export function mergeAuthProfileStores(
             : {}),
         }
       : {};
-  return reconcileMainStoreOAuthProfileDrift({
+  const runtimeExternalCliProfileIds = [
+    ...getRuntimeExternalCliProfileIds(base).filter(
+      (profileId) =>
+        !overrideProfileIds.has(profileId) && !removedRuntimeExternalProfileIds.has(profileId),
+    ),
+    ...getRuntimeExternalCliProfileIds(override),
+  ];
+  const result = reconcileMainStoreOAuthProfileDrift({
     base,
     override,
     merged: {
@@ -720,6 +739,8 @@ export function mergeAuthProfileStores(
       ...runtimeExternalProfileMetadata,
     },
   }) as RuntimeAuthProfileStore;
+  setRuntimeExternalCliProfileIds(result, runtimeExternalCliProfileIds);
+  return result;
 }
 
 /** Builds the persisted secrets store, stripping resolved literals when refs exist. */

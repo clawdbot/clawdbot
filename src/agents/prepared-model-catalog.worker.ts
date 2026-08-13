@@ -6,8 +6,9 @@ import {
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
-import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth.js";
+import { overlayExternalCliAuthProfiles } from "./auth-profiles/external-auth.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
+import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -27,7 +28,7 @@ function refreshAuthStore(params: {
   authStore: PreparedModelCatalogWorkerInput["authStore"];
   config: PreparedModelCatalogWorkerInput["input"]["config"];
   env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
+  profileIds?: readonly string[];
   providerIds?: readonly string[];
 }) {
   const durable = preserveResolvedSecretBackedCredentials({
@@ -48,12 +49,15 @@ function refreshAuthStore(params: {
       durable.profiles[profileId] = credential;
     }
   }
-  return overlayExternalAuthProfiles(durable, {
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
+  const prepared = mergeRuntimeExternalProfileReferences({
+    next: durable,
+    existing: params.authStore,
+  });
+  return overlayExternalCliAuthProfiles(prepared, {
     config: params.config,
     env: params.env,
     ...(params.providerIds ? { externalCliProviderIds: params.providerIds } : {}),
+    ...(params.profileIds ? { externalCliProfileIds: params.profileIds } : {}),
     allowKeychainPrompt: false,
   });
 }
@@ -66,10 +70,10 @@ export async function runPreparedModelCatalogWorkerInput(
       const authStore = refreshAuthStore({
         agentDir: value.agentDir,
         inheritedAuthDir: value.inheritedAuthDir,
-        workspaceDir: value.workspaceDir,
         authStore: value.authStore,
         config: value.config,
         env: value.env,
+        ...(value.profileIds ? { profileIds: value.profileIds } : {}),
         providerIds: value.providerIds,
       });
       return {
@@ -100,17 +104,14 @@ export async function runPreparedModelCatalogWorkerInput(
     }
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
-    const authStore = withPluginRuntimeRegistryScope(prepared.pluginGeneration.pluginRegistry, () =>
-      refreshAuthStore({
-        agentDir: value.input.agentDir,
-        inheritedAuthDir: value.input.inheritedAuthDir,
-        authStore: value.authStore,
-        config: value.input.config,
-        env: value.input.env ?? process.env,
-        providerIds: listExternalCliSyncProviderIds(),
-        workspaceDir: value.input.workspaceDir,
-      }),
-    );
+    const authStore = refreshAuthStore({
+      agentDir: value.input.agentDir,
+      inheritedAuthDir: value.input.inheritedAuthDir,
+      authStore: value.authStore,
+      config: value.input.config,
+      env: value.input.env ?? process.env,
+      providerIds: listExternalCliSyncProviderIds(),
+    });
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
     const ambientCredentials = withPluginRuntimeRegistryScope(
       prepared.pluginGeneration.pluginRegistry,

@@ -16,7 +16,9 @@ import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalo
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
 import {
   getPreparedModelRuntimeAuthMaterializations,
+  loadPreparedModelRuntimeAuth,
   setPreparedModelRuntimeAuthMaterializations,
+  setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.facts.js";
@@ -48,6 +50,8 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
+  /** Rebuilds a completed full catalog instead of reusing this generation's cache. */
+  refreshFullCatalog?: boolean;
   /** Scoped read-only loads may run live discovery for the scoped providers only. */
   scopedLiveProviderDiscovery?: boolean;
   allowGatewaySubagentBinding?: boolean;
@@ -63,11 +67,18 @@ type PreparedModelCatalogConfigPolicy = "exact" | "published";
 async function materializeRequestedModelCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
   readOnly: boolean | undefined,
+  refreshFullCatalog: boolean | undefined,
 ): Promise<PreparedModelRuntimeSnapshot> {
-  if (readOnly === true || !snapshot.loadFullModelCatalog) {
+  if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
-  const modelCatalog = await snapshot.loadFullModelCatalog();
+  const modelCatalog =
+    readOnly === true
+      ? snapshot.readFullModelCatalog?.()
+      : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true });
+  if (!modelCatalog) {
+    return snapshot;
+  }
   const fullAuth = getPreparedModelFullCatalogAuth(modelCatalog);
   if (!fullAuth) {
     throw new Error("prepared full model catalog omitted its auth generation");
@@ -77,9 +88,13 @@ async function materializeRequestedModelCatalog(
     authModes: fullAuth.authModes,
     modelCatalog,
   });
-  // A materialized full read owns the worker's refreshed auth generation. Do not copy the
-  // original loader or Gateway projection would start a second, split refresh after discovery.
   setPreparedModelRuntimeAuthStore(materialized, fullAuth.authStore);
+  // Later explicit auth refreshes stay bound to the original owner generation. Ordinary reads
+  // consume the full worker's paired auth without invoking this loader.
+  setPreparedModelRuntimeAuthLoader(
+    materialized,
+    async (scope) => (await loadPreparedModelRuntimeAuth(snapshot, scope)) ?? fullAuth,
+  );
   setPreparedModelRuntimeAuthMaterializations(
     materialized,
     getPreparedModelRuntimeAuthMaterializations(snapshot),
@@ -288,6 +303,7 @@ async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
   return await materializeRequestedModelCatalog(
     await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy),
     params.readOnly,
+    params.refreshFullCatalog,
   );
 }
 

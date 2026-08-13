@@ -5451,6 +5451,18 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
+  it("requests live wildcard discovery when the model picker opens", () => {
+    const { state } = createOpenAiHeaderState();
+    const onModelPickerOpen = vi.fn();
+    const container = renderModelControls(state, { onModelPickerOpen });
+
+    getChatModelSelect(container).dispatchEvent(
+      new CustomEvent("wa-show", { bubbles: true, composed: true }),
+    );
+
+    expect(onModelPickerOpen).toHaveBeenCalledOnce();
+  });
+
   it("keeps model enabled while write-only access disables effort controls", () => {
     const { state } = createOpenAiHeaderState();
     const onFastModeSelect = vi.fn(async () => true);

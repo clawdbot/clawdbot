@@ -11,11 +11,13 @@ import {
   loadPreparedGatewayModelCatalogSnapshot,
 } from "../gateway/server-model-catalog.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
+import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -47,10 +49,6 @@ const REF_ONLY_TOKEN_PROVIDER_ID = `${PROVIDER_ID}-ref-token`;
 const REF_ONLY_TOKEN_ENV = "OPENCLAW_WORKER_REF_ONLY_TOKEN";
 const DURABLE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-durable-auth`;
 const DURABLE_AUTH_KEY = "post-startup-durable-key-not-real";
-const WORKSPACE_AUTH_PLUGIN_ID = `${PLUGIN_ID}-workspace-auth`;
-const WORKSPACE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-workspace-auth`;
-const WORKSPACE_AUTH_PROFILE_ID = `${WORKSPACE_AUTH_PROVIDER_ID}:workspace`;
-const WORKSPACE_AUTH_KEY = "workspace-external-auth-key-not-real";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -59,9 +57,28 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-function createJwtWithExp(exp: number): string {
-  const payload = Buffer.from(JSON.stringify({ exp })).toString("base64url");
+function createJwtWithExp(exp: number, marker?: string): string {
+  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
+    "base64url",
+  );
   return `header.${payload}.signature`;
+}
+
+function writeCodexAuth(codexHome: string, marker: string): void {
+  const authPath = path.join(codexHome, "auth.json");
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
+        refresh_token: `refresh-${marker}-not-real`,
+      },
+    }),
+    "utf8",
+  );
+  const future = new Date(Date.now() + 2_000);
+  fs.utimesSync(authPath, future, future);
 }
 
 function writeFixturePlugin(params: { root: string; spinMs: number }): string {
@@ -139,57 +156,11 @@ module.exports = {
   return pluginFile;
 }
 
-function writeWorkspaceExternalAuthPlugin(workspaceDir: string): void {
-  const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", WORKSPACE_AUTH_PLUGIN_ID);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: `@openclaw/${WORKSPACE_AUTH_PLUGIN_ID}`,
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: WORKSPACE_AUTH_PLUGIN_ID,
-      providers: [WORKSPACE_AUTH_PROVIDER_ID],
-      contracts: { externalAuthProviders: [WORKSPACE_AUTH_PROVIDER_ID] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "index.cjs"),
-    `module.exports = {
-  id: ${JSON.stringify(WORKSPACE_AUTH_PLUGIN_ID)},
-  register(api) {
-    api.registerProvider({
-      id: ${JSON.stringify(WORKSPACE_AUTH_PROVIDER_ID)},
-      label: "Workspace external auth fixture",
-      auth: [],
-      resolveExternalAuthProfiles() {
-        return [{
-          profileId: ${JSON.stringify(WORKSPACE_AUTH_PROFILE_ID)},
-          credential: {
-            type: "api_key",
-            provider: ${JSON.stringify(WORKSPACE_AUTH_PROVIDER_ID)},
-            key: ${JSON.stringify(WORKSPACE_AUTH_KEY)},
-          },
-          persistence: "runtime-only",
-        }];
-      },
-    });
-  },
-};
-`,
-    "utf8",
-  );
-}
-
-async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessEnv = {}) {
+async function createStaticSnapshot(
+  spinMs: number,
+  envOverride: NodeJS.ProcessEnv = {},
+  options?: { hydrateExternalCliProviderIds?: readonly string[] },
+) {
   const root = tempDirs.make("openclaw-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -198,7 +169,6 @@ async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessE
   fs.mkdirSync(agentDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
   const pluginFile = writeFixturePlugin({ root, spinMs });
-  writeWorkspaceExternalAuthPlugin(workspaceDir);
   const env = {
     ...process.env,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -211,7 +181,7 @@ async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessE
   const config = {
     agents: { defaults: { model: `${PROVIDER_ID}/sqlite-model` } },
     plugins: {
-      allow: [PLUGIN_ID, WORKSPACE_AUTH_PLUGIN_ID],
+      allow: [PLUGIN_ID],
       load: { paths: [pluginFile] },
       entries: { [PLUGIN_ID]: { enabled: true } },
     },
@@ -239,6 +209,15 @@ async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessE
       },
     },
   ]);
+  const hydratedAuthStore = options?.hydrateExternalCliProviderIds
+    ? ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+        config,
+        externalCliProviderIds: options.hydrateExternalCliProviderIds,
+        readOnly: true,
+        syncExternalCli: false,
+      })
+    : undefined;
   replacePersistedPluginModelCatalogs({
     agentDir,
     pluginCatalogWrites: {
@@ -268,6 +247,7 @@ async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessE
     config,
     env,
     marker,
+    hydratedAuthStore,
     pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
     supersede: () => (current = false),
@@ -352,32 +332,6 @@ describe("prepared model catalog worker boundary", () => {
     });
   });
 
-  it("refreshes workspace plugin external auth in both worker operations", async () => {
-    const fixture = await createStaticSnapshot(0);
-
-    const refreshed = await loadPreparedModelRuntimeAuth(fixture.snapshot, [
-      WORKSPACE_AUTH_PROVIDER_ID,
-    ]);
-    expect(refreshed).toMatchObject({
-      authModes: { [WORKSPACE_AUTH_PROVIDER_ID]: "api_key" },
-      authStore: {
-        profiles: {
-          [WORKSPACE_AUTH_PROFILE_ID]: expect.objectContaining({ key: WORKSPACE_AUTH_KEY }),
-        },
-      },
-    });
-
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
-    expect(getPreparedModelFullCatalogAuth(catalog!)).toMatchObject({
-      authModes: { [WORKSPACE_AUTH_PROVIDER_ID]: "api_key" },
-      authStore: {
-        profiles: {
-          [WORKSPACE_AUTH_PROFILE_ID]: expect.objectContaining({ key: WORKSPACE_AUTH_KEY }),
-        },
-      },
-    });
-  });
-
   it("refreshes durable auth profiles added, updated, and removed after startup", async () => {
     const fixture = await createStaticSnapshot(0);
     const route = {
@@ -407,7 +361,7 @@ describe("prepared model catalog worker boundary", () => {
       modelCatalog: { entries: [route], routeVariants: [route] },
     });
     const project = async () => {
-      const fullCatalog = await fixture.snapshot.loadFullModelCatalog?.();
+      const fullCatalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
       const fullAuth = fullCatalog && getPreparedModelFullCatalogAuth(fullCatalog);
       if (!fullAuth) {
         throw new Error("full catalog omitted prepared auth");
@@ -558,7 +512,7 @@ describe("prepared model catalog worker boundary", () => {
         loadGatewayModelCatalogSnapshot: loadSnapshot,
         logGateway: { debug: () => undefined },
       } as unknown as GatewayRequestContext;
-      return await buildModelsListResult({ context, params: { view: "all" } });
+      return await buildModelsListResult({ context, params: { view: "all", refresh: true } });
     };
 
     await expect(listModels()).resolves.toMatchObject({
@@ -585,7 +539,52 @@ describe("prepared model catalog worker boundary", () => {
     });
   });
 
-  it("shares in-flight discovery but reruns completed refreshes with prepared auth and SQLite facts", async () => {
+  it("refreshes and removes a Codex login that existed in the prepared generation", async () => {
+    const codexHome = tempDirs.make("openclaw-prepared-codex-");
+    writeCodexAuth(codexHome, "startup");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    let fixture: Awaited<ReturnType<typeof createStaticSnapshot>>;
+    try {
+      fixture = await createStaticSnapshot(0, {}, { hydrateExternalCliProviderIds: ["openai"] });
+    } finally {
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+    }
+    const preparedStore = getPreparedModelRuntimeAuthStore(fixture.snapshot);
+    expect(fixture.hydratedAuthStore?.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      type: "oauth",
+      refresh: "refresh-startup-not-real",
+    });
+    expect(preparedStore?.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      type: "oauth",
+      refresh: "refresh-startup-not-real",
+    });
+    expect(preparedStore && getRuntimeExternalCliProfileIds(preparedStore)).toEqual([
+      OPENAI_CODEX_DEFAULT_PROFILE_ID,
+    ]);
+
+    writeCodexAuth(codexHome, "rotated");
+    const rotated = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: [],
+      profileIds: [OPENAI_CODEX_DEFAULT_PROFILE_ID],
+    });
+    expect(rotated?.authStore.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      type: "oauth",
+      refresh: "refresh-rotated-not-real",
+    });
+
+    fs.rmSync(path.join(codexHome, "auth.json"));
+    const loggedOut = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: ["openai"],
+    });
+    expect(loggedOut?.authStore.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();
+  });
+
+  it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async () => {
     const fixture = await createStaticSnapshot(750);
     let settled = false;
     const first = fixture.snapshot.loadFullModelCatalog?.().finally(() => {
@@ -603,7 +602,8 @@ describe("prepared model catalog worker boundary", () => {
         id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
       }),
     );
-    await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toEqual(
+    await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
+    await expect(fixture.snapshot.loadFullModelCatalog?.({ refresh: true })).resolves.toEqual(
       expect.objectContaining({
         entries: expect.arrayContaining([
           expect.objectContaining({

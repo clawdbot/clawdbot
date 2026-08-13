@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
+import {
+  createPreparedModelAuthRefreshWorkerInput,
+  createPreparedModelCatalogWorkerInput,
+} from "./prepared-model-catalog-worker.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
 
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
@@ -8,6 +11,27 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 }));
 
 describe("prepared model catalog worker input", () => {
+  it("serializes and fingerprints auth refresh profile scope", () => {
+    const params = {
+      agentDir: "/tmp/agent",
+      authStore: { version: 1, profiles: {} },
+      config: {},
+      env: {},
+      providerIds: ["openai"],
+    };
+    const scoped = createPreparedModelAuthRefreshWorkerInput({
+      ...params,
+      profileIds: ["openai:work", "openai:default", "openai:work"],
+    });
+    const other = createPreparedModelAuthRefreshWorkerInput({
+      ...params,
+      profileIds: ["openai:default"],
+    });
+
+    expect(structuredClone(scoped).profileIds).toEqual(["openai:default", "openai:work"]);
+    expect(scoped.generationFingerprint).not.toBe(other.generationFingerprint);
+  });
+
   it("preserves SecretRef identity beside materialized literals", () => {
     const authStore = {
       version: 1,

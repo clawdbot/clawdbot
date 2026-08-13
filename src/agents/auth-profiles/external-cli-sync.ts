@@ -266,6 +266,30 @@ function isExternalCliProviderInScope(params: {
   });
 }
 
+/** True when a previously resolved built-in CLI profile belongs to this refresh scope. */
+export function isExternalCliAuthProfileInScope(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  providerIds?: Iterable<string>;
+  profileIds?: Iterable<string>;
+}): boolean {
+  const credential = params.store.profiles[params.profileId];
+  const providerConfig = resolveExternalCliSyncProvider({
+    profileId: params.profileId,
+    ...(credential?.type === "oauth" ? { credential } : {}),
+  });
+  return providerConfig
+    ? isExternalCliProviderInScope({
+        providerConfig,
+        store: params.store,
+        options: {
+          ...(params.providerIds ? { providerIds: params.providerIds } : {}),
+          ...(params.profileIds ? { profileIds: params.profileIds } : {}),
+        },
+      })
+    : false;
+}
+
 function listScopedExternalCliProfileIds(params: {
   providerConfig: ExternalCliSyncProvider;
   store: AuthProfileStore;

@@ -95,8 +95,7 @@ const readPreparedGatewayModelCatalogOwnerSnapshot: ReadPreparedGatewayModelCata
   };
 
 registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-  loadDeferred: (params) =>
-    loadPreparedGatewayModelCatalogSnapshot({ ...params, refreshAuth: true }),
+  loadDeferred: (params) => loadPreparedGatewayModelCatalogSnapshot(params),
   readPrepared: readPreparedGatewayModelCatalogOwnerSnapshot,
 });
 

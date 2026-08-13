@@ -30,10 +30,10 @@ export type PreparedModelAuthRefreshWorkerInput = Readonly<{
   generationFingerprint: string;
   agentDir: string;
   inheritedAuthDir?: string;
-  workspaceDir?: string;
   authStore: AuthProfileStore;
   config: PreparedModelRuntimeInput["config"];
   env: NodeJS.ProcessEnv;
+  profileIds?: readonly string[];
   providerIds: readonly string[];
 }>;
 
@@ -140,10 +140,10 @@ export function createPreparedModelCatalogWorkerInput(params: {
 export function createPreparedModelAuthRefreshWorkerInput(params: {
   agentDir: string;
   inheritedAuthDir?: string;
-  workspaceDir?: string;
   authStore: AuthProfileStore;
   config: PreparedModelRuntimeInput["config"];
   env: NodeJS.ProcessEnv;
+  profileIds?: readonly string[];
   providerIds: readonly string[];
 }): PreparedModelAuthRefreshWorkerInput {
   const providerIds = [...new Set(params.providerIds)].toSorted((left, right) =>
@@ -151,23 +151,26 @@ export function createPreparedModelAuthRefreshWorkerInput(params: {
   );
   const authStore = cloneAuthProfileStore(params.authStore);
   const env = { ...params.env };
+  const profileIds = params.profileIds
+    ? [...new Set(params.profileIds)].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
   return {
     kind: "auth-refresh",
     agentDir: params.agentDir,
     ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     generationFingerprint: fingerprintPreparedRuntimeFacts({
       agentDir: params.agentDir,
       inheritedAuthDir: params.inheritedAuthDir,
-      workspaceDir: params.workspaceDir,
       authStore,
       config: params.config,
       env,
+      profileIds,
       providerIds,
     }),
     authStore,
     config: params.config,
     env,
+    ...(profileIds ? { profileIds } : {}),
     providerIds,
   };
 }
@@ -230,7 +233,11 @@ function runPreparedModelWorker<T>(params: {
       worker.removeAllListeners();
       const finish = () => {
         if (outcome.status === "resolved") {
-          resolve(outcome.value);
+          if (params.isCurrent()) {
+            resolve(outcome.value);
+          } else {
+            reject(superseded());
+          }
         } else {
           reject(outcome.error);
         }

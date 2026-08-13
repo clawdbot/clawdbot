@@ -116,7 +116,6 @@ function createLocalGatewayRequestContext(
       loadPreparedGatewayModelCatalogSnapshot({
         ...loadParams,
         getConfig: params.getRuntimeConfig,
-        refreshAuth: true,
       }),
     readPrepared: (loadParams) =>
       readPreparedGatewayModelCatalogOwnerSnapshot({

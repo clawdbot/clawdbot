@@ -160,9 +160,7 @@ suite.define(() => {
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-      const modelRequests = await gateway.getRequests("models.list");
-      expect(modelRequests).toHaveLength(1);
-      expect(modelRequests[0]?.params).toEqual({ view: "configured" });
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
@@ -846,9 +844,7 @@ suite.define(() => {
           activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
         .toBe(1);
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { view: "configured" } }),
-      ]);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
       await navigateToControlUiSession(page, "agent:other:main");
       const startupRequests = await gateway.getRequests("chat.startup");
@@ -870,10 +866,7 @@ suite.define(() => {
           activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
         .toBe(0);
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { view: "configured" } }),
-        expect.objectContaining({ params: { agentId: "other", view: "configured" } }),
-      ]);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
     });
   });
 
@@ -921,7 +914,7 @@ suite.define(() => {
           "models.list": {
             cases: [
               {
-                match: { agentId: "work", view: "configured" },
+                match: { agentId: "work", view: "configured", preparedOnly: true },
                 response: { models: [] },
               },
             ],
@@ -946,7 +939,9 @@ suite.define(() => {
         .not.toContain("GPT Default");
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { agentId: "work", view: "configured" } }),
+        expect.objectContaining({
+          params: { agentId: "work", view: "configured", preparedOnly: true },
+        }),
       ]);
     });
   });

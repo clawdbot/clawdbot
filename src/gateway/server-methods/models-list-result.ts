@@ -511,6 +511,8 @@ export async function buildModelsListResult(
   const initialConfig = params.context.getRuntimeConfig();
   const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
   const view = resolveModelsListView(params.params);
+  const preparedOnly = params.params.preparedOnly === true;
+  const refresh = params.params.refresh === true;
   const preloadedCatalog =
     params.preloadedCatalog?.agentId === initialAgentId &&
     preparedModelRuntimeConfigsMatch(params.preloadedCatalog.config, initialConfig)
@@ -532,6 +534,8 @@ export async function buildModelsListResult(
     cfg: initialConfig,
     agentId: initialAgentId,
     view,
+    preparedOnly,
+    refresh,
     loadCatalog: async (loadParams) => {
       loadedReadOnly = loadParams.readOnly ?? true;
       // A read-only preload cannot satisfy a full-discovery request. Reuse it only when the
@@ -546,7 +550,11 @@ export async function buildModelsListResult(
       if (params.preloadedOnly) {
         return { entries: [], routeVariants: [] };
       }
-      loadedSnapshot = await loadDeferredCatalog(params.context, initialAgentId, loadedReadOnly);
+      loadedSnapshot = await loadDeferredCatalog(params.context, initialAgentId, {
+        readOnly: loadedReadOnly,
+        refreshAuth: refresh && loadedReadOnly,
+        refreshFullCatalog: loadParams.refresh === true,
+      });
       return loadedSnapshot;
     },
     onTimeout: handleCatalogTimeout,
@@ -554,6 +562,7 @@ export async function buildModelsListResult(
   if (
     loadedSnapshot &&
     loadedReadOnly &&
+    !preparedOnly &&
     modelCatalogBrowseRequiresFullDiscovery({
       cfg: loadedSnapshot.config,
       agentId: loadedSnapshot.agentId,
@@ -567,8 +576,13 @@ export async function buildModelsListResult(
       cfg: loadedSnapshot.config,
       agentId: escalationAgentId,
       view,
+      refresh,
       loadCatalog: async ({ readOnly }) => {
-        fullSnapshot = await loadDeferredCatalog(params.context, escalationAgentId, readOnly);
+        fullSnapshot = await loadDeferredCatalog(params.context, escalationAgentId, {
+          readOnly,
+          refreshAuth: refresh && readOnly,
+          refreshFullCatalog: refresh,
+        });
         return fullSnapshot;
       },
       timeoutFullDiscovery: true,
