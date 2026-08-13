@@ -262,6 +262,12 @@ export function isBlockedSpecialUseIpv6Address(
     // `allowRfc2544BenchmarkRange` for the IPv4 side (#74351).
     return false;
   }
+  if (isRfc8215Nat64LocalUsePrefix(expectIpv6Hextets(address.parts))) {
+    // RFC8215 local-use NAT64 can carry deployment-specific more-specific
+    // prefixes, so the literal alone cannot prove which IPv4 bits a router
+    // will use. Block the allocation instead of guessing a public decoy.
+    return true;
+  }
   if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
     return true;
   }
@@ -306,16 +312,6 @@ function isRfc8215Nat64LocalUsePrefix(parts: Ipv6Hextets): boolean {
   return parts[0] === 0x0064 && parts[1] === 0xff9b && parts[2] === 0x0001;
 }
 
-function decodeRfc6052Prefix48Ipv4(parts: Ipv6Hextets): ipaddr.IPv4 {
-  const octets: [number, number, number, number] = [
-    (parts[3] >>> 8) & 0xff,
-    parts[3] & 0xff,
-    parts[4] & 0xff,
-    (parts[5] >>> 8) & 0xff,
-  ];
-  return ipaddr.IPv4.parse(octets.join("."));
-}
-
 /** Extracts the embedded IPv4 address from mapped and transition IPv6 prefixes. */
 export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 | undefined {
   const parts = expectIpv6Hextets(address.parts);
@@ -326,10 +322,9 @@ export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 |
       return decodeIpv4FromHextets(parts[6], parts[7]);
     case "rfc6052":
       if (isRfc8215Nat64LocalUsePrefix(parts)) {
-        // ipaddr.js labels the RFC8215 local-use allocation as a /48 range.
-        // Decode the /48 RFC6052 layout so trailing /96 bits cannot become a
-        // public decoy on hosts using that allocation.
-        return decodeRfc6052Prefix48Ipv4(parts);
+        // No single embedded IPv4 exists without the deployment's active NAT64
+        // prefix length. Policy blocks this allocation in the IPv6 check above.
+        return undefined;
       }
       return decodeIpv4FromHextets(parts[6], parts[7]);
     case "6to4":

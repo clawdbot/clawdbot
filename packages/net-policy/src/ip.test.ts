@@ -44,12 +44,6 @@ describe("shared ip helpers", () => {
       ["::ffff:127.0.0.1", "127.0.0.1"],
       ["::127.0.0.1", "127.0.0.1"],
       ["64:ff9b::8.8.8.8", "8.8.8.8"],
-      ["64:ff9b:1:a00:0:100::", "10.0.0.1"],
-      ["64:ff9b:1:a9fe:a9:fe00:808:808", "169.254.169.254"],
-      ["64:ff9b:1:7f00:0:100:808:808", "127.0.0.1"],
-      ["64:ff9b:1:6464:64:c800:808:808", "100.100.100.200"],
-      ["64:ff9b:1:808:808:808:808:808", "8.8.8.8"],
-      ["64:ff9b:1::8.8.8.8", "0.0.0.0"],
       ["2002:0808:0808::", "8.8.8.8"],
       ["2001::f7f7:f7f7", "8.8.8.8"],
       ["2001:4860:1::5efe:7f00:1", "127.0.0.1"],
@@ -64,6 +58,24 @@ describe("shared ip helpers", () => {
     }
   });
 
+  it("does not guess embedded IPv4 for local-use NAT64 literals", () => {
+    const cases = [
+      "64:ff9b:1:a00:0:100::",
+      "64:ff9b:1:a9fe:a9:fe00:808:808",
+      "64:ff9b:1:7f00:0:100:808:808",
+      "64:ff9b:1:808:808:808:a9fe:a9fe",
+      "64:ff9b:1::8.8.8.8",
+    ] as const;
+    for (const ipv6Literal of cases) {
+      const parsed = parseCanonicalIpAddress(ipv6Literal);
+      expect(parsed?.kind(), ipv6Literal).toBe("ipv6");
+      if (!parsed || !isIpv6Address(parsed)) {
+        continue;
+      }
+      expect(extractEmbeddedIpv4FromIpv6(parsed), ipv6Literal).toBeUndefined();
+    }
+  });
+
   it("treats blocked IPv6 classes as private/internal", () => {
     expect(isPrivateOrLoopbackIpAddress("fec0::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:db8::1")).toBe(true);
@@ -72,6 +84,8 @@ describe("shared ip helpers", () => {
     expect(isPrivateOrLoopbackIpAddress("2001:20::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:7f00:0:100:808:808")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:a9fe:a9:fe00:808:808")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:808:808:808:808:808")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe")).toBe(true);
     for (const literal of blockedIpv6MulticastLiterals) {
       expect(isPrivateOrLoopbackIpAddress(literal)).toBe(true);
     }
@@ -92,7 +106,6 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("0xa9fea9fe")).toBe(true);
     expect(isLinkLocalIpAddress("0xa9.0xfe.0xa9.0xfe")).toBe(true);
     expect(isLinkLocalIpAddress("64:ff9b::169.254.169.254")).toBe(true);
-    expect(isLinkLocalIpAddress("64:ff9b:1:a9fe:a9:fe00:808:808")).toBe(true);
     expect(isLinkLocalIpAddress("2002:a9fe:a9fe::")).toBe(true);
     expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
     expect(isLinkLocalIpAddress("[fe80::1]")).toBe(true);
@@ -105,7 +118,6 @@ describe("shared ip helpers", () => {
     expect(isCloudMetadataIpAddress("100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("::ffff:100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("64:ff9b::100.100.100.200")).toBe(true);
-    expect(isCloudMetadataIpAddress("64:ff9b:1:6464:64:c800:808:808")).toBe(true);
     expect(isCloudMetadataIpAddress("2002:6464:64c8::")).toBe(true);
     expect(isCloudMetadataIpAddress("1684301000")).toBe(true);
     expect(isCloudMetadataIpAddress("fd00:ec2::254")).toBe(true);
