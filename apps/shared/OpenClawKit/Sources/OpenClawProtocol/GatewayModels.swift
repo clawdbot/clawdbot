@@ -6807,6 +6807,32 @@ public struct SessionTypingEvent: Codable, Sendable {
     }
 }
 
+public struct SessionPlacementDiskSpace: Codable, Sendable {
+    public let status: AnyCodable
+    public let availablebytes: Int
+    public let totalbytes: Int
+    public let observedatms: Int
+
+    public init(
+        status: AnyCodable,
+        availablebytes: Int,
+        totalbytes: Int,
+        observedatms: Int)
+    {
+        self.status = status
+        self.availablebytes = availablebytes
+        self.totalbytes = totalbytes
+        self.observedatms = observedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case availablebytes = "availableBytes"
+        case totalbytes = "totalBytes"
+        case observedatms = "observedAtMs"
+    }
+}
+
 public struct LocalSessionPlacement: Codable, Sendable {
     public let state: String
     public let generation: Int
@@ -6999,6 +7025,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
     public let lasttranscriptackcursor: Int?
     public let lastliveeventackcursor: Int?
     public let workspaceresultconflict: [String: AnyCodable]?
+    public let diskspace: SessionPlacementDiskSpace?
 
     public init(
         state: String,
@@ -7013,7 +7040,8 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         remoteworkspacedir: String,
         lasttranscriptackcursor: Int? = nil,
         lastliveeventackcursor: Int? = nil,
-        workspaceresultconflict: [String: AnyCodable]? = nil)
+        workspaceresultconflict: [String: AnyCodable]? = nil,
+        diskspace: SessionPlacementDiskSpace? = nil)
     {
         self.state = state
         self.generation = generation
@@ -7028,6 +7056,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         self.lasttranscriptackcursor = lasttranscriptackcursor
         self.lastliveeventackcursor = lastliveeventackcursor
         self.workspaceresultconflict = workspaceresultconflict
+        self.diskspace = diskspace
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7044,6 +7073,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         case lasttranscriptackcursor = "lastTranscriptAckCursor"
         case lastliveeventackcursor = "lastLiveEventAckCursor"
         case workspaceresultconflict = "workspaceResultConflict"
+        case diskspace = "diskSpace"
     }
 }
 
@@ -7061,6 +7091,7 @@ public struct DrainingSessionPlacement: Codable, Sendable {
     public let lasttranscriptackcursor: Int?
     public let lastliveeventackcursor: Int?
     public let workspaceresultconflict: [String: AnyCodable]?
+    public let diskspace: SessionPlacementDiskSpace?
 
     public init(
         state: String,
@@ -7075,7 +7106,8 @@ public struct DrainingSessionPlacement: Codable, Sendable {
         remoteworkspacedir: String,
         lasttranscriptackcursor: Int? = nil,
         lastliveeventackcursor: Int? = nil,
-        workspaceresultconflict: [String: AnyCodable]? = nil)
+        workspaceresultconflict: [String: AnyCodable]? = nil,
+        diskspace: SessionPlacementDiskSpace? = nil)
     {
         self.state = state
         self.generation = generation
@@ -7090,6 +7122,7 @@ public struct DrainingSessionPlacement: Codable, Sendable {
         self.lasttranscriptackcursor = lasttranscriptackcursor
         self.lastliveeventackcursor = lastliveeventackcursor
         self.workspaceresultconflict = workspaceresultconflict
+        self.diskspace = diskspace
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7106,6 +7139,7 @@ public struct DrainingSessionPlacement: Codable, Sendable {
         case lasttranscriptackcursor = "lastTranscriptAckCursor"
         case lastliveeventackcursor = "lastLiveEventAckCursor"
         case workspaceresultconflict = "workspaceResultConflict"
+        case diskspace = "diskSpace"
     }
 }
 
@@ -7123,6 +7157,7 @@ public struct ReconcilingSessionPlacement: Codable, Sendable {
     public let lasttranscriptackcursor: Int?
     public let lastliveeventackcursor: Int?
     public let workspaceresultconflict: [String: AnyCodable]?
+    public let diskspace: SessionPlacementDiskSpace?
 
     public init(
         state: String,
@@ -7137,7 +7172,8 @@ public struct ReconcilingSessionPlacement: Codable, Sendable {
         remoteworkspacedir: String,
         lasttranscriptackcursor: Int? = nil,
         lastliveeventackcursor: Int? = nil,
-        workspaceresultconflict: [String: AnyCodable]? = nil)
+        workspaceresultconflict: [String: AnyCodable]? = nil,
+        diskspace: SessionPlacementDiskSpace? = nil)
     {
         self.state = state
         self.generation = generation
@@ -7152,6 +7188,7 @@ public struct ReconcilingSessionPlacement: Codable, Sendable {
         self.lasttranscriptackcursor = lasttranscriptackcursor
         self.lastliveeventackcursor = lastliveeventackcursor
         self.workspaceresultconflict = workspaceresultconflict
+        self.diskspace = diskspace
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7168,6 +7205,7 @@ public struct ReconcilingSessionPlacement: Codable, Sendable {
         case lasttranscriptackcursor = "lastTranscriptAckCursor"
         case lastliveeventackcursor = "lastLiveEventAckCursor"
         case workspaceresultconflict = "workspaceResultConflict"
+        case diskspace = "diskSpace"
     }
 }
 

@@ -3,6 +3,7 @@ import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protoc
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import type { WorkerPlacementDiskSpaceReader } from "./placement-projector.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -33,11 +34,6 @@ type DiskSpaceObservation = {
   environmentId: string;
   activeOwnerEpoch: number;
   snapshot: SessionPlacementDiskSpace;
-};
-
-export type WorkerPlacementDiskSpaceReader = {
-  read(record: WorkerSessionPlacementRecord): SessionPlacementDiskSpace | undefined;
-  version(): number;
 };
 
 function hasExactBinding(

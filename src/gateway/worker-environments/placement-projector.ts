@@ -8,6 +8,11 @@ export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
 };
 
+export type WorkerPlacementDiskSpaceReader = {
+  read(record: WorkerSessionPlacementRecord): SessionPlacementDiskSpace | undefined;
+  version(): number;
+};
+
 /** Removes gateway-only identity and turn-claim fields from the operator projection. */
 export function projectWorkerSessionPlacement(
   record: WorkerSessionPlacementRecord,
