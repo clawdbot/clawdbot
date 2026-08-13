@@ -43,6 +43,7 @@ describe("What chip state", () => {
         folder: "",
         workspace: "/workspace",
         projectId: "",
+        selectedRemoteProject: null,
         projects,
         recents: [
           {
@@ -70,5 +71,23 @@ describe("What chip state", () => {
     ["https://github.com/openclaw/openclaw.git --config=evil", false],
   ])("recognizes safe clone input %s", (value, expected) => {
     expect(projectCloneInput(value) !== null).toBe(expected);
+  });
+
+  it("shows an unmaterialized remote project as the current draft selection", () => {
+    const state = resolveProjectChip({
+      folder: "/workspace",
+      workspace: "/workspace",
+      projectId: "",
+      selectedRemoteProject: {
+        identity: "openclaw/openclaw",
+        cloneUrl: "https://github.com/openclaw/openclaw.git",
+      },
+      projects,
+      recents: [],
+      projectQuery: "openclaw",
+      execNode: "",
+    });
+
+    expect(state.label).toBe("openclaw/openclaw");
   });
 });

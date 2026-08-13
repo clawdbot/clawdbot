@@ -22,6 +22,12 @@ export function projectCloneInput(value: string): string | null {
   return /^(?:https:\/\/|ssh:\/\/git@|git@[^:]+:)/iu.test(trimmed) ? trimmed : null;
 }
 
+export type DraftRemoteProject = Readonly<{
+  identity: string;
+  cloneUrl: string;
+  projectId?: string;
+}>;
+
 function parentFolderDisplayName(path: string): string | undefined {
   const trimmed = path.replace(/[\\/]+$/u, "");
   const separator = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
@@ -44,6 +50,7 @@ export function resolveProjectChip(params: {
   folder: string;
   workspace: string;
   projectId: string;
+  selectedRemoteProject: DraftRemoteProject | null;
   projects: readonly ProjectRecord[];
   recents: readonly ProjectRecent[];
   projectQuery: string;
@@ -65,9 +72,11 @@ export function resolveProjectChip(params: {
     mode,
     label: selectedProject
       ? selectedProject.displayName
-      : folder
-        ? folderDisplayName(folder)
-        : folderDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
+      : params.selectedRemoteProject?.identity
+        ? params.selectedRemoteProject.identity
+        : folder
+          ? folderDisplayName(folder)
+          : folderDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     localProjects,
     recents: params.execNode
       ? params.recents.filter(
@@ -98,11 +107,10 @@ export function renderProjectChip(params: {
   projectSearchAvailable: boolean;
   projectAddAvailable: boolean;
   remoteProjects: readonly RemoteProject[];
+  selectedRemoteProject: DraftRemoteProject | null;
   projectSearchCredentialMissing: boolean;
   projectSearchLoading: boolean;
   projectSearchError: string | null;
-  projectCloneBusy: boolean;
-  projectCloneError: string | null;
   projectId: string;
   execNodes: readonly DraftNode[];
   gatewayLabel: string;
@@ -125,7 +133,7 @@ export function renderProjectChip(params: {
   onPopoverAfterHide: () => void;
   onSelectProject: (projectId: string) => void;
   onProjectQueryInput: (query: string) => void;
-  onCloneProject: (gitUrl: string) => void;
+  onSelectRemoteProject: (project: DraftRemoteProject) => void;
   onApplyFolder: (folder: string, execNode: string) => void;
   onBrowse: (target: BrowserTarget) => void;
   onBrowserPathDraftChange: (value: string) => void;
@@ -255,15 +263,16 @@ export function renderProjectChip(params: {
                         type="search"
                         placeholder=${t("newSession.projectSearchPlaceholder")}
                         .value=${params.projectQuery}
-                        ?disabled=${params.submitting ||
-                        params.pendingCloud ||
-                        params.projectCloneBusy}
+                        ?disabled=${params.submitting || params.pendingCloud}
                         @input=${(event: Event) =>
                           params.onProjectQueryInput((event.target as HTMLInputElement).value)}
                         @keydown=${(event: KeyboardEvent) => {
                           if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
                             event.preventDefault();
-                            params.onCloneProject(cloneInput);
+                            params.onSelectRemoteProject({
+                              identity: cloneInput,
+                              cloneUrl: cloneInput,
+                            });
                           }
                         }}
                       />
@@ -278,7 +287,7 @@ export function renderProjectChip(params: {
                           title: project.repoRoot,
                           onSelect: () => params.onSelectProject(project.id),
                         },
-                        params.submitting || params.projectCloneBusy,
+                        params.submitting,
                       ),
                     )}
                     ${cloneInput && params.projectAddAvailable
@@ -288,11 +297,14 @@ export function renderProjectChip(params: {
                             label: cloneInput,
                             icon: icons.gitBranch,
                             sub: t("newSession.cloneProject"),
-                            checked: false,
-                            keepOpen: true,
-                            onSelect: () => params.onCloneProject(cloneInput),
+                            checked: params.selectedRemoteProject?.cloneUrl === cloneInput,
+                            onSelect: () =>
+                              params.onSelectRemoteProject({
+                                identity: cloneInput,
+                                cloneUrl: cloneInput,
+                              }),
                           },
-                          params.submitting || params.projectCloneBusy,
+                          params.submitting,
                         )
                       : nothing}
                     ${!cloneInput && query.length >= 2 && params.projectSearchAvailable
@@ -322,27 +334,19 @@ export function renderProjectChip(params: {
                                 label: project.fullName,
                                 icon: icons.gitBranch,
                                 sub: project.description ?? t("newSession.cloneProject"),
-                                checked: false,
+                                checked:
+                                  params.selectedRemoteProject?.cloneUrl === project.cloneUrl,
                                 title: project.webUrl,
-                                keepOpen: true,
-                                onSelect: () => params.onCloneProject(project.cloneUrl),
+                                onSelect: () =>
+                                  params.onSelectRemoteProject({
+                                    identity: project.fullName,
+                                    cloneUrl: project.cloneUrl,
+                                  }),
                               },
-                              params.submitting ||
-                                params.projectCloneBusy ||
-                                !params.projectAddAvailable,
+                              params.submitting || !params.projectAddAvailable,
                             ),
                           )}
                         `
-                      : nothing}
-                    ${params.projectCloneBusy
-                      ? html`<div class="new-session-page__project-status" role="status">
-                          ${t("newSession.cloningProject")}
-                        </div>`
-                      : nothing}
-                    ${params.projectCloneError
-                      ? html`<div class="new-session-page__project-error" role="alert">
-                          ${params.projectCloneError}
-                        </div>`
                       : nothing}
                     ${params.projects.length === 0 && params.canWrite && !params.isAdmin
                       ? html`<div class="new-session-page__menu-note">

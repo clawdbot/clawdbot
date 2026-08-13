@@ -20,6 +20,156 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it("deduplicates remote materialization and preserves the draft when cloning fails", async () => {
+    let rejectClone!: (error: Error) => void;
+    const cloneResult = new Promise<never>((_resolve, reject) => {
+      rejectClone = reject;
+    });
+    const request = vi.fn((method: string) => {
+      if (method === "projects.add") {
+        return cloneResult;
+      }
+      return Promise.resolve({});
+    });
+    const client = { recoveryScope: "principal-a", recoveryScopeReady: true, request };
+    const context = {
+      gateway: {
+        connection: { gatewayUrl: "ws://gateway.example" },
+        snapshot: {
+          phase: "connected",
+          client,
+          hello: {
+            auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+            features: { methods: ["projects.add", "sessions.create"] },
+          },
+        },
+      },
+      agents: {
+        state: {
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              {
+                id: "main",
+                workspace: "/workspace",
+                workspaceGit: false,
+                model: { primary: "openai/gpt-5.6-luna" },
+              },
+            ],
+          },
+        },
+      },
+      sessions: { state: { result: null }, createResult: vi.fn() },
+      config: { current: {} },
+    } as unknown as ApplicationContext;
+    const host = new ControllerHost();
+    let place!: DraftPlaceState;
+    let flow!: DraftSubmissionFlow;
+    const gateway = new DraftGatewayState(
+      host,
+      () => ({
+        context,
+        data: undefined,
+        isConnected: true,
+        isAdmin: place?.isAdmin() ?? false,
+        canStartAsDraft: flow?.canStartAsDraft() ?? false,
+        visibility: flow?.visibility ?? "normal",
+        cloudProfileId: place?.cloudProfileId ?? "",
+        pendingCloud: flow?.pendingCloud ?? { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
+        agentsHydrated: place?.agentsHydrated ?? false,
+      }),
+      {
+        requestUpdate: vi.fn(),
+        updateComplete: () => Promise.resolve(),
+        onInvalidate: vi.fn(),
+        onVisibilityRetired: () => flow?.setVisibility("normal"),
+        onCloudProfileCleared: () => place?.clearCloudProfile(),
+        onCloudState: (error) => flow?.setError(error),
+        onPendingCloudReset: () => flow?.resetPendingCloudWithoutClearingStorage(),
+        onRecoveryReady: (gatewayUrl, recoveryScope) =>
+          flow?.restorePendingCloudRecovery(gatewayUrl, recoveryScope),
+        onAdoptAgentDefaults: () => place?.adoptAgentDefaults(),
+      },
+    );
+    const browser = new DraftPlaceBrowser(
+      host,
+      gateway,
+      () => ({
+        context,
+        projectId: place?.projectId ?? "",
+        nodes: place?.nodes ?? [],
+        folder: place?.folder ?? "",
+        execNode: place?.execNode ?? "",
+        isAdmin: place?.isAdmin() ?? false,
+      }),
+      {
+        requestUpdate: vi.fn(),
+        onProjectMissing: () => place?.clearProjectSelection(),
+        onSelectProject: (projectId) => place?.selectProjectId(projectId),
+        onApplyFolder: (folder, execNode, approved) =>
+          place?.applyFolder(folder, execNode, approved),
+        onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
+        querySelector: () => null,
+        activeElement: () => null,
+        body: () => null,
+      },
+    );
+    place = new DraftPlaceState(
+      gateway,
+      browser,
+      () => ({
+        context,
+        data: undefined,
+        submitting: flow?.submitting ?? false,
+        pendingCloudSessionKey: flow?.pendingCloud.sessionKey ?? "",
+      }),
+      {
+        requestUpdate: vi.fn(),
+        onError: (error) => flow?.setError(error),
+        onClearError: (error) => flow?.clearErrorIf(error),
+      },
+    );
+    flow = new DraftSubmissionFlow(
+      gateway,
+      place,
+      () => ({ context, data: undefined, isConnected: true }),
+      { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
+    );
+    gateway.synchronize(context.gateway);
+    place.setAgentsHydrated(true);
+    place.adoptAgentDefaults();
+    place.selectRemoteProject({
+      identity: "openclaw/openclaw",
+      cloneUrl: "https://github.com/openclaw/openclaw.git",
+    });
+    flow.setMessage("keep this prompt");
+    flow.attachmentDraft.replace([
+      {
+        id: "attachment-1",
+        dataUrl: "data:text/plain;base64,SGk=",
+        mimeType: "text/plain",
+        fileName: "note.txt",
+      },
+    ]);
+
+    const first = flow.submit();
+    const duplicate = flow.submit();
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "projects.add")).toHaveLength(1),
+    );
+    rejectClone(new Error("clone failed"));
+    await Promise.all([first, duplicate]);
+
+    expect(flow.error).toBe("clone failed");
+    expect(flow.message).toBe("keep this prompt");
+    expect(flow.attachmentDraft.attachments).toHaveLength(1);
+    expect(place.remoteProject).toMatchObject({
+      identity: "openclaw/openclaw",
+      cloneUrl: "https://github.com/openclaw/openclaw.git",
+    });
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+  });
+
   it("keeps startup progress active through the navigation handoff", async () => {
     const createResult = vi.fn(async (params: Record<string, unknown>) => ({
       key: String(params.key),

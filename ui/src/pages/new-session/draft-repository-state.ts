@@ -10,6 +10,7 @@ type DraftRepositorySnapshot = Readonly<{
   execNode: string;
   cloudProfileId: string;
   selectedProject: ProjectRecord | undefined;
+  remoteProjectSelected: boolean;
   folder: string;
   workspace: string;
   workspaceGit: boolean;
@@ -173,7 +174,11 @@ export class DraftRepositoryController {
     const snapshot = this.read();
     this.repositoryValue = { kind: "idle" };
     this.baseRefValue = "";
-    if (snapshot.execNode || (snapshot.selectedProject && !snapshot.selectedProject.repoRoot)) {
+    if (
+      snapshot.remoteProjectSelected ||
+      snapshot.execNode ||
+      (snapshot.selectedProject && !snapshot.selectedProject.repoRoot)
+    ) {
       this.preferredWorktreeRestore = false;
       return;
     }
