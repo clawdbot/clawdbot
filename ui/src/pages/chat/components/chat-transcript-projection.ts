@@ -573,9 +573,33 @@ export function projectChatTranscript(
       }
     }
   }
-  transcript.syncMessageRows(
-    new Map([...loadedReplySources].map(([messageId, source]) => [messageId, source.rowKey])),
-  );
+  const messageRowKeysById = new Map<string, string>();
+  const messageRowExpandersById = new Map<string, () => boolean>();
+  // Persisted IDs address transcript messages while virtualization owns rows.
+  // Collapsed work groups must expand before their matching bubble can be centered.
+  for (const item of transcriptItems) {
+    const groups = item.kind === "group" ? [item] : item.kind === "work-group" ? item.groups : [];
+    for (const group of groups) {
+      for (const entry of group.messages) {
+        const messageId = persistedMessageEntryId(entry.message);
+        if (!messageId) {
+          continue;
+        }
+        messageRowKeysById.set(messageId, item.key);
+        if (item.kind === "work-group") {
+          messageRowExpandersById.set(messageId, () => {
+            if (expandedToolCards.get(item.key)) {
+              return false;
+            }
+            setExpansionState(expandedToolCards, item.key, true);
+            requestUpdate();
+            return true;
+          });
+        }
+      }
+    }
+  }
+  transcript.syncMessageRows(messageRowKeysById, messageRowExpandersById);
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
