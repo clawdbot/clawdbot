@@ -1,7 +1,8 @@
 // Workspace skill sync plugin tests cover copying plugin-provided skills into sandbox workspaces.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 import {
@@ -16,15 +17,8 @@ vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: mockResolvePluginSkillDirs,
 }));
 
-const fixtures = createWorkspaceSkillSyncFixtures("openclaw-skills-sync-plugin");
-
-beforeAll(async () => {
-  await fixtures.setup();
-});
-
-afterAll(async () => {
-  await fixtures.cleanup();
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixtures = createWorkspaceSkillSyncFixtures("openclaw-skills-sync-plugin", tempDirs);
 
 describe("syncWorkspaceSkills for plugin skills", () => {
   it("syncs plugin skills from symlinked directories to sandbox workspace", async () => {

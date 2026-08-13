@@ -3,7 +3,8 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -22,8 +23,8 @@ vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
 
-const fixtures = createWorkspaceSkillSyncFixtures("openclaw-skills-sync-suite");
-let syncSourceTemplateDir = "";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixtures = createWorkspaceSkillSyncFixtures("openclaw-skills-sync-suite", tempDirs);
 
 async function syncSourceSkillsToTarget(sourceWorkspace: string, targetWorkspace: string) {
   await syncWorkspaceSkills({
@@ -57,35 +58,6 @@ async function expectSyncedSkillConfinement(params: {
   expect(await pathExists(params.escapedDest)).toBe(false);
 }
 
-beforeAll(async () => {
-  await fixtures.setup();
-  syncSourceTemplateDir = await fixtures.createCaseDir("source-template");
-  await writeSkill({
-    dir: path.join(syncSourceTemplateDir, ".extra", "demo-skill"),
-    name: "demo-skill",
-    description: "Extra version",
-  });
-  await writeSkill({
-    dir: path.join(syncSourceTemplateDir, ".bundled", "demo-skill"),
-    name: "demo-skill",
-    description: "Bundled version",
-  });
-  await writeSkill({
-    dir: path.join(syncSourceTemplateDir, ".managed", "demo-skill"),
-    name: "demo-skill",
-    description: "Managed version",
-  });
-  await writeSkill({
-    dir: path.join(syncSourceTemplateDir, "skills", "demo-skill"),
-    name: "demo-skill",
-    description: "Workspace version",
-  });
-});
-
-afterAll(async () => {
-  await fixtures.cleanup();
-});
-
 describe("syncWorkspaceSkills", () => {
   const buildPrompt = (
     workspaceDir: string,
@@ -101,7 +73,26 @@ describe("syncWorkspaceSkills", () => {
 
   const cloneSourceTemplate = async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
-    await fs.cp(syncSourceTemplateDir, sourceWorkspace, { recursive: true });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, ".extra", "demo-skill"),
+      name: "demo-skill",
+      description: "Extra version",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, ".bundled", "demo-skill"),
+      name: "demo-skill",
+      description: "Bundled version",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, ".managed", "demo-skill"),
+      name: "demo-skill",
+      description: "Managed version",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "demo-skill"),
+      name: "demo-skill",
+      description: "Workspace version",
+    });
     return sourceWorkspace;
   };
 

@@ -2,7 +2,8 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { resolveSandboxSkillRuntimeInputs } from "../../agents/embedded-agent-runner/sandbox-skills.js";
 import {
@@ -50,15 +51,8 @@ function resolveBoundSandboxCatalog(params: {
   });
 }
 
-const fixtures = createWorkspaceSkillSyncFixtures("openclaw-skills-sync-catalog-race");
-
-beforeAll(async () => {
-  await fixtures.setup();
-});
-
-afterAll(async () => {
-  await fixtures.cleanup();
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixtures = createWorkspaceSkillSyncFixtures("openclaw-skills-sync-catalog-race", tempDirs);
 
 describe("syncWorkspaceSkills catalog generations", () => {
   it("keeps concurrent prompt readers on a complete catalog during changed refresh", async () => {

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { createSandboxFsBridgeFromResolver } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import type { SkillSnapshot } from "../types.js";
@@ -69,22 +68,13 @@ export function createMaterializedSkillsBridge(targetWorkspace: string) {
   });
 }
 
-export function createWorkspaceSkillSyncFixtures(label: string) {
-  let fixtureRoot = "";
-  let fixtureCount = 0;
+export function createWorkspaceSkillSyncFixtures(
+  label: string,
+  tempDirs: { make: (prefix: string) => string },
+) {
   return {
-    async setup(): Promise<void> {
-      fixtureRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), `${label}-`)));
-    },
-    async cleanup(): Promise<void> {
-      if (fixtureRoot) {
-        await fs.rm(fixtureRoot, { recursive: true, force: true });
-      }
-    },
     async createCaseDir(prefix: string): Promise<string> {
-      const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-      await fs.mkdir(dir, { recursive: true });
-      return dir;
+      return fs.realpath(tempDirs.make(`${label}-${prefix}-`));
     },
   };
 }
