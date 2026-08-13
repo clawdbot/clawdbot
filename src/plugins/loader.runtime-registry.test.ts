@@ -84,6 +84,17 @@ function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {
 }
 
 describe("resolvePluginLoadCacheContext", () => {
+  it("partitions process-HOME catalog registration policy", () => {
+    const processHomeKey = resolvePluginLoadCacheContext({
+      allowProcessHomeSessionCatalogs: true,
+    }).cacheKey;
+    const isolatedKey = resolvePluginLoadCacheContext({
+      allowProcessHomeSessionCatalogs: false,
+    }).cacheKey;
+
+    expect(isolatedKey).not.toBe(processHomeKey);
+  });
+
   it("partitions full and setup channel plugin load intent", () => {
     const fullKey = resolvePluginLoadCacheContext({ config: {} }).cacheKey;
     const setupKey = resolvePluginLoadCacheContext({

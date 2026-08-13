@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
@@ -95,7 +94,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (!allowsProcessHomeSessionScan() && provider.supportsProcessHomeIsolation !== true) {
+    if (!state.allowProcessHomeSessionCatalogs && provider.supportsProcessHomeIsolation !== true) {
       if (!reportedLegacyCatalogSkip) {
         reportedLegacyCatalogSkip = true;
         pushDiagnostic({

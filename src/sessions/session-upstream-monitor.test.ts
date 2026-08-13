@@ -116,16 +116,16 @@ describe("session upstream monitor", () => {
     });
 
     expect(checkUpstreamActivity).toHaveBeenCalledTimes(2);
-    expect(checkUpstreamActivity.mock.calls[0]?.[0]).toEqual([
-      expect.objectContaining({ sessionKey: watched, marker: { offset: 0 } }),
-    ]);
-    expect(checkUpstreamActivity.mock.calls[1]?.[0]).toEqual([
-      expect.objectContaining({ sessionKey: watched, marker: { offset: 8 } }),
-    ]);
-    expect(checkUpstreamActivity.mock.calls.map((call) => call[1])).toEqual([
+    expect(checkUpstreamActivity).toHaveBeenNthCalledWith(
+      1,
+      [expect.objectContaining({ sessionKey: watched, marker: { offset: 0 } })],
       { allowProcessHomeFallback: false },
+    );
+    expect(checkUpstreamActivity).toHaveBeenNthCalledWith(
+      2,
+      [expect.objectContaining({ sessionKey: watched, marker: { offset: 8 } })],
       { allowProcessHomeFallback: false },
-    ]);
+    );
     const events = listSessionStateEventsSince(watched, "main", 0, 20, database).events;
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual(

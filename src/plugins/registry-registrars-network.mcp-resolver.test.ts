@@ -1,14 +1,11 @@
 /** Verifies MCP connection resolver registration ownership is fail-closed. */
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withEnv } from "../test-utils/env.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function createRegistryHarness() {
+function createRegistryHarness(allowProcessHomeSessionCatalogs = true) {
   const pluginRegistry = createPluginRegistry({
     logger: {
       info() {},
@@ -17,6 +14,7 @@ function createRegistryHarness() {
       debug() {},
     },
     runtime: {} as PluginRuntime,
+    allowProcessHomeSessionCatalogs,
     activateGlobalSideEffects: false,
   });
   const config = {} as OpenClawConfig;
@@ -79,35 +77,20 @@ describe("registerMcpServerConnectionResolver ownership", () => {
 });
 
 describe("registerSessionCatalog ownership", () => {
-  it("keeps providers registered for isolated profiles", () => {
-    const { pluginRegistry, apiFor } = createRegistryHarness();
-    const home = os.userInfo().homedir;
-    const stateDir = path.join(home, ".openclaw-dev");
-
-    withEnv(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_PROFILE: "dev",
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      },
-      () =>
-        apiFor("catalog").registerSessionCatalog({
-          id: "catalog",
-          label: "Catalog",
-          supportsProcessHomeIsolation: true as const,
-          list: async () => [],
-          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-        } as never),
-    );
+  it("keeps isolation-aware providers when process-HOME catalogs are disabled", () => {
+    const { pluginRegistry, apiFor } = createRegistryHarness(false);
+    apiFor("catalog").registerSessionCatalog({
+      id: "catalog",
+      label: "Catalog",
+      supportsProcessHomeIsolation: true,
+      list: async () => [],
+      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+    });
 
     expect(pluginRegistry.registry.sessionCatalogs).toHaveLength(1);
   });
 
-  it("suppresses legacy providers only for isolated profiles", () => {
-    const home = os.userInfo().homedir;
+  it("suppresses legacy providers only when process-HOME catalogs are disabled", () => {
     const legacyProvider = {
       id: "legacy",
       label: "Legacy",
@@ -118,19 +101,8 @@ describe("registerSessionCatalog ownership", () => {
         items: [],
       }),
     };
-    const isolated = createRegistryHarness();
-    const stateDir = path.join(home, ".openclaw-dev");
-    withEnv(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_PROFILE: "dev",
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      },
-      () => isolated.apiFor("legacy").registerSessionCatalog(legacyProvider),
-    );
+    const isolated = createRegistryHarness(false);
+    isolated.apiFor("legacy").registerSessionCatalog(legacyProvider);
     expect(isolated.pluginRegistry.registry.sessionCatalogs).toEqual([]);
     expect(isolated.pluginRegistry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
@@ -140,18 +112,7 @@ describe("registerSessionCatalog ownership", () => {
     );
 
     const defaultIdentity = createRegistryHarness();
-    const defaultStateDir = path.join(home, ".openclaw");
-    withEnv(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_STATE_DIR: defaultStateDir,
-        OPENCLAW_CONFIG_PATH: path.join(defaultStateDir, "openclaw.json"),
-      },
-      () => defaultIdentity.apiFor("legacy").registerSessionCatalog(legacyProvider),
-    );
+    defaultIdentity.apiFor("legacy").registerSessionCatalog(legacyProvider);
     expect(defaultIdentity.pluginRegistry.registry.sessionCatalogs).toHaveLength(1);
   });
 });
