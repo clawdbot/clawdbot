@@ -782,6 +782,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
           email: "user@example.com",
           oauthRef: {
             source: "openclaw-credentials",
+            id: "0123456789abcdef0123456789abcdef",
             provider: "openai-codex",
           },
         },
