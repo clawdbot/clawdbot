@@ -1,4 +1,5 @@
 // Doctor OAuth sidecar tests cover encrypted sidecar detection and auth repair guidance.
+import { createCipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -50,6 +51,32 @@ function writeLegacyAuthProfiles(
   agentId = "main",
 ): Promise<string> {
   return state.writeJson(path.join("agents", agentId, "agent", "auth-profiles.json"), store);
+}
+
+function encryptLegacySidecarMaterial(params: {
+  ref: { id: string };
+  profileId: string;
+  provider: string;
+  seed: string;
+  material: Record<string, string>;
+}) {
+  const iv = Buffer.alloc(12, 7);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    hash("sha256", `openclaw:auth-profile-oauth:${params.seed}`, "buffer"),
+    iv,
+  );
+  cipher.setAAD(Buffer.from(`${params.ref.id}\0${params.profileId}\0${params.provider}`, "utf8"));
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(params.material), "utf8"),
+    cipher.final(),
+  ]);
+  return {
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    ciphertext: ciphertext.toString("base64url"),
+  };
 }
 
 afterEach(async () => {
@@ -170,6 +197,80 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([]);
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(auth);
+  });
+
+  it("repairs the inherited auth owner after it leaves the explicit roster", async () => {
+    const seed = "retired-owner-sidecar-seed";
+    const state = await makeTestState(seed);
+    const profileId = "openai-codex:retired-owner";
+    const ref = {
+      source: "openclaw-credentials" as const,
+      provider: "openai-codex" as const,
+      id: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    };
+    const authPath = await writeLegacyAuthProfiles(
+      state,
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            oauthRef: ref,
+          },
+        },
+      },
+      "retired-ops",
+    );
+    const sidecarPath = await state.writeJson(
+      path.join("credentials", "auth-profiles", `${ref.id}.json`),
+      {
+        version: 1,
+        profileId,
+        provider: "openai-codex",
+        encrypted: encryptLegacySidecarMaterial({
+          ref,
+          profileId,
+          provider: "openai-codex",
+          seed,
+          material: {
+            access: "retired-owner-access",
+            refresh: "retired-owner-refresh",
+          },
+        }),
+      },
+    );
+
+    const result = await maybeRepairLegacyOAuthSidecarProfiles({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "retired-ops" } },
+          entries: { research: {}, writer: {} },
+        },
+      },
+      prompter: makePrompter(true),
+      now: () => 234,
+      env: state.env,
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toEqual([
+      `Migrated 1 legacy Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.234.bak).`,
+    ]);
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "retired-owner-access",
+          refresh: "retired-owner-refresh",
+        },
+      },
+    });
+    expect(fs.existsSync(sidecarPath)).toBe(false);
   });
 
   it("leaves undecryptable legacy sidecars in place and reports re-authentication", async () => {

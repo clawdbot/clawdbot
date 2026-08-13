@@ -405,7 +405,7 @@ function createSwarmToolNames(options: NonNullable<Parameters<typeof createOpenC
     ...options,
     config: {
       ...config,
-      agents: config.agents ?? { entries: { main: { default: true } } },
+      agents: config.agents ?? { entries: { main: {} } },
     },
   }).map((tool) => tool.name);
 }
@@ -421,7 +421,7 @@ describe("Swarm registration", () => {
 
   it("uses the effective requester agent override for the agents_wait gate", () => {
     const base = {
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: "agent:worker:main",
       requesterAgentIdOverride: "worker",
     };
     expect(
@@ -430,10 +430,7 @@ describe("Swarm registration", () => {
         config: {
           tools: { swarm: false },
           agents: {
-            list: [
-              { id: "main", default: true },
-              { id: "worker", tools: { swarm: true } },
-            ],
+            list: [{ id: "main" }, { id: "worker", tools: { swarm: true } }],
           },
         },
       }),
@@ -444,10 +441,7 @@ describe("Swarm registration", () => {
         config: {
           tools: { swarm: true },
           agents: {
-            list: [
-              { id: "main", default: true },
-              { id: "worker", tools: { swarm: false } },
-            ],
+            list: [{ id: "main" }, { id: "worker", tools: { swarm: false } }],
           },
         },
       }),
@@ -554,6 +548,7 @@ describe("sessions_yield completion ownership", () => {
 
       expect(result.details).toMatchObject({ status: "yielded" });
       expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
+        requesterAgentId: "main",
         requesterSessionKey: expectedSessionKey,
         requesterTurnRunId: "run-requester",
       });

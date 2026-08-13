@@ -188,6 +188,10 @@ export class DraftGatewayState {
     return this.preferenceModeValue === "loading";
   }
 
+  refreshCloudProfiles() {
+    return this.cloudProfileTask.run();
+  }
+
   synchronize(gateway: ApplicationContext["gateway"]) {
     const snapshot = gateway.snapshot;
     const connected = snapshot.phase === "connected";

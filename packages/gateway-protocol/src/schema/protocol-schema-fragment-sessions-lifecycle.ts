@@ -40,6 +40,8 @@ export const SessionLifecycleProtocolSchemas = {
   SessionWorktreeInfo: sessions.SessionWorktreeInfoSchema,
   SessionsCreateParams: sessions.SessionsCreateParamsSchema,
   SessionsCreateResult: sessions.SessionsCreateResultSchema,
+  SessionsRecoverParams: sessions.SessionsRecoverParamsSchema,
+  SessionsRecoverResult: sessions.SessionsRecoverResultSchema,
   SessionsSendParams: sessions.SessionsSendParamsSchema,
   SessionsMessagesSubscribeParams: sessions.SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParams: sessions.SessionsMessagesUnsubscribeParamsSchema,

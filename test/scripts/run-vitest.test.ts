@@ -913,7 +913,7 @@ describe("scripts/run-vitest", () => {
     }
   });
 
-  posixIt("reaps residual process-group descendants before completing", async () => {
+  posixIt("stops residual process-group descendants before completing", async () => {
     const descendantPidPath = nodePath.join(
       os.tmpdir(),
       `openclaw-run-vitest-residual-${process.pid}-${Date.now()}.pid`,
@@ -959,19 +959,34 @@ describe("scripts/run-vitest", () => {
 
       process.kill(watched.child.pid!, "SIGTERM");
       const snapshot = await Promise.race([
-        watched.completion.then((result) => ({
-          descendantAlive: isProcessAlive(descendantPid),
-          groupAlive: isProcessGroupAlive(watched.child.pid!),
-          result,
-        })),
+        watched.completion.then((result) => {
+          const psArgs =
+            process.platform === "linux" ? ["-eL", "-o", "pgid=,state="] : ["-axo", "pgid=,state="];
+          const stateResult = spawnSync("ps", psArgs, {
+            encoding: "utf8",
+          });
+          const rows = stateResult.stdout
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .map((line) => /^\s*(\d+)\s+(\S+)\s*$/.exec(line));
+          const groupStopped =
+            !stateResult.error &&
+            stateResult.signal === null &&
+            stateResult.stderr.trim() === "" &&
+            stateResult.status === 0 &&
+            rows.every(Boolean) &&
+            rows
+              .filter((row) => Number(row?.[1]) === watched.child.pid)
+              .every((row) => /^[ZX]/.test(row?.[2] ?? ""));
+          return { groupStopped, result };
+        }),
         delay(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS, undefined, { ref: false }).then(() => {
           throw new Error("timed out waiting for watched Vitest completion");
         }),
       ]);
 
       expect(snapshot).toEqual({
-        descendantAlive: false,
-        groupAlive: false,
+        groupStopped: true,
         result: { code: 0, signal: null },
       });
     } finally {
@@ -1258,14 +1273,5 @@ function isProcessAlive(pid: number) {
     return true;
   } catch {
     return false;
-  }
-}
-
-function isProcessGroupAlive(pgid: number) {
-  try {
-    process.kill(-pgid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }

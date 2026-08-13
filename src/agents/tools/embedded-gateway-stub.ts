@@ -229,7 +229,7 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if ("ambiguous" in resolved) {
     return { ok: false, candidates: resolved.candidates };
   }
-  return { ok: true, key: resolved.key };
+  return { ok: true, key: resolved.key, agentId: resolved.agentId };
 }
 
 async function handleSessionsSearch(params: Record<string, unknown>) {
@@ -264,9 +264,11 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   );
   const agentIds = new Set(
     sessionKeys?.map((sessionKey) =>
-      requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-        ? requestedAgentId
-        : rt.resolveSessionAgentId({ sessionKey, config: cfg }),
+      rt.resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      }),
     ),
   );
   if (

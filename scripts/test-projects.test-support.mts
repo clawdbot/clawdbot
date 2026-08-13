@@ -542,6 +542,13 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
       "src/plugins/contracts/tts.contract.test.ts",
     ],
   ],
+  [
+    "extensions/slack/src/monitor/enterprise-install.ts",
+    [
+      "extensions/slack/src/monitor/enterprise-install.test.ts",
+      "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
+    ],
+  ],
 ]);
 const DOCS_CONFIG_EXAMPLES_TEST_TARGET = "src/config/docs-config-examples.test.ts";
 const RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS = ["src/plugins/bundled-plugin-metadata.test.ts"];

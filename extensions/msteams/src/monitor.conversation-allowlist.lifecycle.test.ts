@@ -58,6 +58,17 @@ vi.mock("../runtime-api.js", async () => {
     keepHttpServerTaskAlive: keepHttpServerTaskAliveMock,
     mergeAllowlist: (params: { existing?: string[]; additions: string[] }) =>
       Array.from(new Set([...(params.existing ?? []), ...params.additions])),
+    resolveChannelMediaMaxBytes: (params: {
+      cfg: OpenClawConfig;
+      resolveChannelLimitMb: (context: { cfg: OpenClawConfig }) => number | undefined;
+    }) => {
+      const mediaMaxMb =
+        params.resolveChannelLimitMb({ cfg: params.cfg }) ??
+        params.cfg.agents?.defaults?.mediaMaxMb;
+      return typeof mediaMaxMb === "number" && mediaMaxMb > 0
+        ? Math.floor(mediaMaxMb * 1024 * 1024)
+        : undefined;
+    },
     summarizeMapping: vi.fn(),
   };
 });

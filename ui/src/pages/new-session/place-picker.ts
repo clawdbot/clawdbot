@@ -227,6 +227,7 @@ export function renderPlaceSelect(params: {
   onBrowserNavigate: (path: string | undefined) => void;
   onBrowserBack: () => void;
   onRegisterProject: (path: string) => void;
+  onConnectMachine: () => void;
   onClose: () => void;
   onToggleWorktree: () => void;
   onBaseRefInput: (baseRef: string) => void;
@@ -305,6 +306,28 @@ export function renderPlaceSelect(params: {
   const nodeIcon = isPhoneFamily(activeNode?.deviceFamily)
     ? icons.monitorSmartphone
     : icons.monitor;
+  const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
+  // Native disabled buttons suppress pointer/focus events in some browsers, so the
+  // repair tooltip keeps only this limited-access state focusable and guards activation.
+  const browseButton = html`<button
+    type="button"
+    class="session-menu__item"
+    data-value="browse"
+    aria-pressed="false"
+    aria-disabled=${browseNeedsAdmin ? "true" : nothing}
+    ?disabled=${params.submitting ||
+    params.pendingCloud ||
+    (!params.browseAvailable && !browseNeedsAdmin)}
+    @click=${() => {
+      if (params.browseAvailable && !params.submitting && !params.pendingCloud) {
+        params.onBrowse(browseTarget);
+      }
+    }}
+  >
+    <span class="session-menu__check" aria-hidden="true"></span>
+    <span class="session-menu__text">${t("newSession.browse")}</span>
+    <span class="new-session-page__menu-chevron" aria-hidden="true">${icons.chevronRight}</span>
+  </button>`;
 
   return html`
     <span class="new-session-page__select">
@@ -514,26 +537,13 @@ export function renderPlaceSelect(params: {
                     })}
                   `
                 : nothing}
-              <button
-                type="button"
-                class="session-menu__item"
-                data-value="browse"
-                aria-pressed="false"
-                title=${params.browseAvailable || params.isAdmin
-                  ? nothing
-                  : t("newSession.browseRequiresAdmin")}
-                ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
-                @click=${() => params.onBrowse(browseTarget)}
-              >
-                <span class="session-menu__text">${t("newSession.browse")}</span>
-                <span class="new-session-page__menu-chevron" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </button>
-
+              ${browseNeedsAdmin
+                ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+                    ${browseButton}
+                  </openclaw-tooltip>`
+                : browseButton}
               ${params.showDestinations
                 ? html`
-                    <div class="new-session-page__menu-title">${t("newSession.places")}</div>
                     <div class="new-session-page__menu-title">${t("newSession.thisGateway")}</div>
                     ${renderSessionMenuItem(
                       {
@@ -547,7 +557,9 @@ export function renderPlaceSelect(params: {
                     )}
                     ${deviceNodes.length > 0
                       ? html`
-                          <div class="new-session-page__menu-title">${t("tabs.devices")}</div>
+                          <div class="new-session-page__menu-title">
+                            ${t("newSession.yourDevices")}
+                          </div>
                           ${deviceNodes.map((node, index) =>
                             renderSessionMenuItem(
                               {
@@ -567,41 +579,42 @@ export function renderPlaceSelect(params: {
                         `
                       : nothing}
                     ${cloudProfiles.length > 0 || (params.cloudProfileId && !activeProfile)
-                      ? html`<div class="new-session-page__menu-title">
-                          ${t("newSession.cloud")}
-                        </div>`
-                      : nothing}
-                    ${renderCloudProfileMenuItems({
-                      profiles: cloudProfiles,
-                      selectedId: params.cloudProfileId,
-                      submitting: params.submitting,
-                      icon: icons.server,
-                      disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
-                      disabledReason: params.cloudDisabledReason,
-                      onSelect: params.onSelectCloudProfile,
-                    })}
-                    ${params.cloudProfileId && !activeProfile
-                      ? renderSessionMenuItem(
-                          {
-                            value: `cloud:${params.cloudProfileId}`,
-                            label: t("newSession.cloudWorker", {
-                              profile: params.cloudProfileId,
-                            }),
+                      ? html`
+                          <div class="new-session-page__menu-title">${t("newSession.cloud")}</div>
+                          ${renderCloudProfileMenuItems({
+                            profiles: cloudProfiles,
+                            selectedId: params.cloudProfileId,
+                            submitting: params.submitting,
                             icon: icons.server,
-                            checked: true,
-                            disabled: true,
-                            title: t("newSession.catalogUnavailable"),
-                            onSelect: () => undefined,
-                          },
-                          params.submitting,
-                        )
-                      : nothing}
-                    ${params.cloudProfileId && params.syncFolder
-                      ? html`<div class="new-session-page__menu-note">
-                          ${t("newSession.cloudSyncsFolder", {
-                            folder: folderDisplayName(params.syncFolder),
+                            disabled:
+                              !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
+                            disabledReason: params.cloudDisabledReason,
+                            onSelect: params.onSelectCloudProfile,
                           })}
-                        </div>`
+                          ${params.cloudProfileId && !activeProfile
+                            ? renderSessionMenuItem(
+                                {
+                                  value: `cloud:${params.cloudProfileId}`,
+                                  label: t("newSession.cloudWorker", {
+                                    profile: params.cloudProfileId,
+                                  }),
+                                  icon: icons.server,
+                                  checked: true,
+                                  disabled: true,
+                                  title: t("newSession.catalogUnavailable"),
+                                  onSelect: () => undefined,
+                                },
+                                params.submitting,
+                              )
+                            : nothing}
+                          ${params.cloudProfileId && params.syncFolder
+                            ? html`<div class="new-session-page__menu-note">
+                                ${t("newSession.cloudSyncsFolder", {
+                                  folder: folderDisplayName(params.syncFolder),
+                                })}
+                              </div>`
+                            : nothing}
+                        `
                       : nothing}
                   `
                 : nothing}
@@ -674,6 +687,22 @@ export function renderPlaceSelect(params: {
                 : html`<div class="new-session-page__menu-note">
                     ${t("newSession.runsOn", { place: gatewayLabel })}
                   </div>`}
+              ${params.isAdmin
+                ? html`
+                    <div class="session-menu__separator" role="separator"></div>
+                    <button
+                      type="button"
+                      class="session-menu__item new-session-page__connect-machine"
+                      data-value="connect-machine"
+                      aria-pressed="false"
+                      ?disabled=${params.submitting || params.pendingCloud}
+                      @click=${params.onConnectMachine}
+                    >
+                      <span class="session-menu__icon" aria-hidden="true">${icons.link}</span>
+                      <span class="session-menu__text">${t("newSession.connectMachine")}</span>
+                    </button>
+                  `
+                : nothing}
             </div>
           `}
     </wa-popover>

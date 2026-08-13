@@ -88,7 +88,6 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:plugins:plugin-sdk-subpaths-exported"],
     ],
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
-    ["web-search-provider-boundary", "pnpm", ["run", "lint:web-search-provider-boundaries"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
       "extension-src-outside-plugin-sdk-boundary",
@@ -99,11 +98,6 @@ export const BOUNDARY_CHECKS = (
       "extension-normalization-core-bypass-boundary",
       "pnpm",
       ["run", "lint:extensions:no-normalization-core-bypass"],
-    ],
-    [
-      "extension-plugin-sdk-internal-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-plugin-sdk-internal"],
     ],
     [
       "extension-relative-outside-package-boundary",

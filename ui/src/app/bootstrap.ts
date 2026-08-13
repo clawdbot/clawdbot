@@ -450,6 +450,18 @@ export function bootstrapApplication(
   const cancelPendingGatewayConnection = () => {
     pendingGatewayConnection = null;
   };
+  const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
+    const location = routeLocation(routeId, options);
+    // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
+    if (!routerStarted) {
+      pendingRouterStartNavigation = { routeId, location, mode: "push" };
+    }
+    const navigationPromise = router.navigate(routeId, context, { history: "push" }, location);
+    void navigationPromise.catch((error: unknown) => {
+      console.error("[openclaw] route navigation failed", error);
+    });
+    return navigationPromise;
+  };
   const context: ApplicationContext<RouteId> = {
     basePath,
     gateway,
@@ -472,16 +484,9 @@ export function bootstrapApplication(
     initialUserMessage,
     chatAttachmentHandoff,
     navigate: (routeId, options) => {
-      const location = routeLocation(routeId, options);
-      if (!routerStarted) {
-        pendingRouterStartNavigation = { routeId, location, mode: "push" };
-      }
-      void router
-        .navigate(routeId, context, { history: "push" }, location)
-        .catch((error: unknown) => {
-          console.error("[openclaw] route navigation failed", error);
-        });
+      void navigateAndWait(routeId, options);
     },
+    navigateAndWait,
     replace: (routeId, options) => {
       const location = routeLocation(routeId, options);
       if (!routerStarted) {
@@ -494,7 +499,7 @@ export function bootstrapApplication(
         });
     },
     revalidate: (routeId) => router.revalidate(context, routeId),
-    preload: (routeId) => router.preloadRoute(routeId, context),
+    preload: (routeId, options) => router.preloadLocation(routeLocation(routeId, options), context),
   };
   return {
     context,

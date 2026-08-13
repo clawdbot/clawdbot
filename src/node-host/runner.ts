@@ -30,6 +30,8 @@ type NodeHostRunOptions = {
   gatewayCandidates?: NodeHostGatewayConfig[];
   gatewayBootstrapToken?: string;
   preferGatewayBootstrapToken?: boolean;
+  /** Stop cleanly after the first authenticated hello (used before service install). */
+  stopAfterFirstConnect?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -502,13 +504,18 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         void activeRuntime.invoke(payload);
       }
     },
-    onHelloOk: (hello, url) => {
+    onHelloOk: (hello, url, tlsFingerprint) => {
       writeStderrLine(`node host gateway connected: ${url}`);
+      activeRuntime.updateGatewayConnection({ url, ...(tlsFingerprint ? { tlsFingerprint } : {}) });
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
       retireOptionalPublications();
       optionalPublicationStates = new Map();
+      if (opts.stopAfterFirstConnect) {
+        void finish(0);
+        return;
+      }
       publishInventory();
     },
     onConnectError: (error) => {
@@ -527,6 +534,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onClose: (code, reason) => {
       retireGatewayConnection();
+      activeRuntime.updateGatewayConnection();
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },

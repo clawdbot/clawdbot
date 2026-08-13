@@ -1,7 +1,6 @@
 // Logging config helpers read and normalize logger configuration.
 import fs from "node:fs";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { resolveConfigIncludes, resolveConfigIncludesForTopLevelKey } from "../config/includes.js";
 import { resolveConfigPath, resolveIncludeRoots } from "../config/paths.js";
@@ -53,12 +52,6 @@ function resolvePartialDiagnosticLoggingConfig(logging: unknown): LoggingConfig 
     }
   }
   return Object.keys(partial).length > 0 ? (partial as LoggingConfig) : undefined;
-}
-
-/** Avoids config reads that can mutate or validate config while schema/config commands run. */
-export function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.argv): boolean {
-  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
-  return primary === "config" && (secondary === "schema" || secondary === "validate");
 }
 
 /** Reads the logging block from config, caching by resolved config path. */

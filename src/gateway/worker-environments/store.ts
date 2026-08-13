@@ -63,7 +63,11 @@ type RecordBase = RecordIdentity & {
 };
 type Ssh = WorkerEnvironmentSshEndpoint;
 type UnleasedRecord = { state: WorkerEnvironmentUnleasedState; leaseId: null; sshEndpoint: null };
-type LeasedRecord = { state: WorkerEnvironmentLeasedState; leaseId: string; sshEndpoint: Ssh };
+type LeasedRecord = {
+  state: WorkerEnvironmentLeasedState;
+  leaseId: string;
+  sshEndpoint: Ssh | null;
+};
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
 export class WorkerSessionAlreadyAttachedError extends Error {
   constructor(
@@ -406,8 +410,8 @@ function assertShape(
     if (!leaseId) {
       throw new Error(`Worker environment state ${state} requires a provider lease`);
     }
-    if (!sshEndpoint) {
-      throw new Error("Worker environment provider lease requires an SSH endpoint reference");
+    if (state === "bootstrapping" && !sshEndpoint) {
+      throw new Error("Worker environment bootstrap requires an SSH endpoint reference");
     }
   } else if (leaseId || sshEndpoint || desktop) {
     throw new Error(`Worker environment state ${state} cannot retain a provider lease`);
@@ -954,6 +958,11 @@ export function createWorkerEnvironmentStore(
                 ? null
                 : normalizeWorkerDesktopEndpoint(patch.desktop);
         const acceptsBootstrapReceipt = from === "bootstrapping" && to === "ready";
+        const acceptsDeferredNodeReady =
+          from === "provisioning" && to === "ready" && sshEndpoint === null;
+        if (to === "ready" && !acceptsBootstrapReceipt && !acceptsDeferredNodeReady) {
+          throw new Error("Ready worker transition requires bootstrap proof or a node lease");
+        }
         if (patch.bootstrapReceipt !== undefined && !acceptsBootstrapReceipt) {
           throw new Error("Bootstrap receipt can only be recorded when a worker becomes ready");
         }
@@ -1023,11 +1032,12 @@ export function createWorkerEnvironmentStore(
             to === "destroyed" ||
             to === "failed" ||
             to === "orphaned");
-        const ownerEpoch = acceptsBootstrapReceipt
-          ? Math.max(1, current.ownerEpoch)
-          : acceptsAttachedCredential || ownerEndingTransition
-            ? nextGlobalOwnerEpoch(db)
-            : current.ownerEpoch;
+        const ownerEpoch =
+          acceptsBootstrapReceipt || acceptsDeferredNodeReady
+            ? Math.max(1, current.ownerEpoch)
+            : acceptsAttachedCredential || ownerEndingTransition
+              ? nextGlobalOwnerEpoch(db)
+              : current.ownerEpoch;
         updateRow(db, environmentId, from, {
           lease_id: leaseId,
           shared_host: sharedHost === null ? null : sharedHost ? 1 : 0,

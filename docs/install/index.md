@@ -186,10 +186,14 @@ If you want managed startup after install:
 
 Deploy OpenClaw on a cloud server or VPS. See [Linux server](/vps) for the full
 provider picker (DigitalOcean, Hetzner, Hostinger, Fly.io, GCP, Azure, Railway,
-Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
-[Render](/install/render).
+Northflank, Oracle Cloud, Raspberry Pi, and more), deploy declaratively on
+[Render](/install/render), or try the experimental [Cloudflare Containers](/install/cloudflare)
+template.
 
 <CardGroup cols={3}>
+  <Card title="Cloudflare" href="/install/cloudflare">
+    Experimental Worker + Container deployment.
+  </Card>
   <Card title="VPS" href="/vps">
     Pick a provider.
   </Card>

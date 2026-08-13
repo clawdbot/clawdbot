@@ -626,6 +626,7 @@ describe("worker protocol schemas", () => {
   });
 
   it("keeps worker close reasons closed", () => {
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "admission-rejected")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);

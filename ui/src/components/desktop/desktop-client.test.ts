@@ -26,7 +26,7 @@ function createFakeRfb() {
     constructor(
       readonly target: HTMLElement,
       readonly channel: string | WebSocket,
-      readonly options?: { credentials?: { password: string } },
+      readonly options?: { credentials?: { username?: string; password?: string } },
     ) {
       super();
       instances.push(this);
@@ -52,7 +52,7 @@ describe("DesktopClient", () => {
     await client.connect({
       gatewayUrl,
       wsUrl: "/desktop/observe?token=abc",
-      password: "secret",
+      credentials: { password: "secret" },
       viewOnly: true,
       target,
     });
@@ -70,7 +70,7 @@ describe("DesktopClient", () => {
     const handle = await client.connect({
       gatewayUrl: "ws://control.example.test",
       wsUrl: "/desktop/observe",
-      password: "secret",
+      credentials: { username: "operator", password: "secret" },
       background: "rgb(8, 8, 8)",
       viewOnly: false,
       target: document.createElement("div"),
@@ -79,7 +79,9 @@ describe("DesktopClient", () => {
     expect(instances[0]?.background).toBe("rgb(8, 8, 8)");
     expect(instances[0]?.viewOnly).toBe(false);
     expect(instances[0]?.scaleViewport).toBe(true);
-    expect(instances[0]?.options).toEqual({ credentials: { password: "secret" } });
+    expect(instances[0]?.options).toEqual({
+      credentials: { username: "operator", password: "secret" },
+    });
 
     handle.disconnect();
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();

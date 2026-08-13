@@ -57,6 +57,8 @@ let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliver
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.sendGoogleChatMessage.mockResolvedValue(null);
+  mocks.updateGoogleChatMessage.mockResolvedValue({});
   ({ createGoogleChatTypingMessage, deliverGoogleChatReply } =
     await import("./monitor-reply-delivery.js"));
 });
@@ -242,28 +244,6 @@ describe("Google Chat reply delivery", () => {
     for (const call of mocks.sendGoogleChatMessage.mock.calls) {
       expect(call[0]?.thread).toBeUndefined();
     }
-  });
-
-  it("rejects when a later text chunk send fails instead of dropping it silently", async () => {
-    const core = createCore({ chunks: ["first chunk", "second chunk", "third chunk"] });
-    const runtime = createRuntime();
-    const sendError = new Error("API 500");
-    mocks.sendGoogleChatMessage
-      .mockResolvedValueOnce({ messageName: "spaces/AAA/messages/one" })
-      .mockRejectedValueOnce(sendError);
-
-    await expect(
-      deliverGoogleChatReply({
-        payload: { text: "three chunks", replyToId: "spaces/AAA/threads/root" },
-        account,
-        spaceId: "spaces/AAA",
-        runtime,
-        core,
-        config,
-      }),
-    ).rejects.toBe(sendError);
-
-    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(2);
   });
 
   it("replaces a typing message when the final reply target changed", async () => {

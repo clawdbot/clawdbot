@@ -650,7 +650,7 @@ describe("headless Code Mode", () => {
   it("bounds output and returned values across separate worker legs", async () => {
     const tool = fakeTool("output_boundary", async () => jsonResult({ ok: true }));
 
-    const result = expectFailed(
+    const result = expectCompleted(
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([tool]),
         code: `
@@ -662,7 +662,11 @@ describe("headless Code Mode", () => {
       }),
     );
 
-    expect(result.code).toBe("output_limit_exceeded");
+    expect(JSON.stringify(result)).toContain("rerun with narrower args");
+    expect(
+      Buffer.byteLength(JSON.stringify(result.output), "utf8") +
+        Buffer.byteLength(JSON.stringify(result.value), "utf8"),
+    ).toBeLessThanOrEqual(1_024);
     expect(tool.execute).toHaveBeenCalledOnce();
   });
 
@@ -891,29 +895,15 @@ describe("headless Code Mode", () => {
     }
   });
 
-  it.each([
-    {
-      name: "syntax errors",
-      code: "return (;",
-      expectedCode: "internal_error",
-      overrides: undefined,
-    },
-    {
-      name: "output overages",
-      code: `text("x".repeat(2048)); return true;`,
-      expectedCode: "output_limit_exceeded",
-      overrides: { maxOutputBytes: 1024 },
-    },
-  ])("classifies $name", async ({ code, expectedCode, overrides }) => {
+  it("classifies syntax errors", async () => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness(),
-        code,
-        overrides,
+        code: "return (;",
       }),
     );
 
-    expect(result.code).toBe(expectedCode);
+    expect(result.code).toBe("internal_error");
   });
 
   it("clamps headless limit overrides to worker-safe bounds", () => {

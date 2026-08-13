@@ -14,8 +14,10 @@ type RfbClientMessageFilterResult =
   | { forward?: never; error: string };
 
 /** Filters one view-only RFB client byte stream without trusting WebSocket frame boundaries. */
-export function createRfbClientMessageFilter() {
-  let phase: RfbClientPhase = "version";
+export function createRfbClientMessageFilter(
+  options: { startPhase?: "version" | "clientInit" } = {},
+) {
+  let phase: RfbClientPhase = options.startPhase ?? "version";
   let pending = Buffer.alloc(0);
   let failure: string | undefined;
 

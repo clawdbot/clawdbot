@@ -224,18 +224,6 @@ export async function registerClonedProjectRegistry(
   );
 }
 
-export function findProjectRegistryByOrigin(
-  originUrl: string,
-  options: OpenClawStateDatabaseOptions = {},
-): ProjectRegistryRecord | undefined {
-  const { sqlite, kysely } = openProjectsDatabase(options);
-  const row = executeSqliteQueryTakeFirstSync(
-    sqlite,
-    kysely.selectFrom("projects").selectAll().where("origin_url", "=", originUrl),
-  );
-  return row ? rowToProject(row) : undefined;
-}
-
 export function listProjectRegistry(
   cfg: OpenClawConfig,
   options: OpenClawStateDatabaseOptions = {},

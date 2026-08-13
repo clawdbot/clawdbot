@@ -249,7 +249,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-place-trigger").click();
       const place = page.locator("wa-popover.new-session-page__place-popover");
-      await place.getByText("Devices", { exact: true }).waitFor();
+      await place.getByText("Your devices", { exact: true }).waitFor();
       await place.getByRole("button", { name: "Fallback device" }).waitFor();
       await captureUiProof(page, "04-catalog-unavailable-device-fallback.png");
     } finally {
@@ -368,7 +368,7 @@ suite.define(() => {
         .locator(".new-session-page__menu-title")
         .getByText("This gateway", { exact: true })
         .waitFor();
-      await place.getByText("Devices", { exact: true }).waitFor();
+      await place.getByText("Your devices", { exact: true }).waitFor();
       const first = page.locator('[data-value="node:11111111aaaaaaaa"]');
       const second = page.locator('[data-value="node:22222222bbbbbbbb"]');
       const phone = page.locator('[data-value="node:33333333cccccccc"]');
@@ -713,7 +713,7 @@ suite.define(() => {
         .locator(".new-session-page__menu-title")
         .getByText("This gateway", { exact: true })
         .waitFor();
-      await placeSelect.getByText("Devices", { exact: true }).waitFor();
+      await placeSelect.getByText("Your devices", { exact: true }).waitFor();
       await placeSelect.getByRole("button", { name: "MacBook" }).click();
       await pollLocatorText(placeLabel).toBe("Agent workspace · MacBook");
       // Node sessions cannot use managed worktrees, so the menu drops the item.

@@ -409,9 +409,10 @@ async function runIncompleteTurnOwnerHarnessWithContext(
       attemptCompactionCount: finalized.attemptCompactionCount,
       replayState: { replayInvalid, hadPotentialSideEffects },
       activePromptPersisted,
-      activateInternalPrompt: (prompt, persisted) => {
+      activateInternalPrompt: (prompt) => {
         nextPrompt = prompt;
-        nextPromptPersisted = persisted;
+        nextPromptPersisted = true;
+        suppressNextUserMessagePersistence = true;
         skipPreparedUserTurnMessage = true;
       },
       setSuppressNextUserMessagePersistence: (value) => {

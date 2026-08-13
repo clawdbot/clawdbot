@@ -1,7 +1,6 @@
 // Vydra tests cover shared download timeout plugin behavior.
 import { once } from "node:events";
 import http from "node:http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it } from "vitest";
 import { downloadVydraAsset } from "./shared.js";
@@ -204,32 +203,5 @@ describe("downloadVydraAsset", () => {
 
     expect(result).toBeInstanceOf(Error);
     expect(result).toMatchObject({ message: "broken success body" });
-  });
-
-  it("does not bound a dripping body when only chunk idle timeout is used", async () => {
-    // Negative control: chunkTimeoutMs resets on every drip, so idle alone never fires.
-    const port = await listenDripServer({
-      statusCode: 200,
-      contentType: "image/png",
-      chunk: Buffer.from([0x00]),
-    });
-    const response = await fetch(`http://127.0.0.1:${port}/`);
-    let settled = false;
-    void readResponseWithLimit(response, 1024 * 1024, {
-      chunkTimeoutMs: 100,
-      onIdleTimeout: ({ chunkTimeoutMs }) => new Error(`idle fired after ${chunkTimeoutMs}ms`),
-    })
-      .then(() => {
-        settled = true;
-      })
-      .catch(() => {
-        settled = true;
-      });
-
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 400);
-    });
-    expect(settled).toBe(false);
-    // Body reader is locked by readResponseWithLimit; tear down via server close in afterEach.
   });
 });

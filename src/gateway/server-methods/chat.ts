@@ -5,7 +5,7 @@ import {
   validateChatInjectParams,
   validateChatToolTitlesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -14,14 +14,16 @@ import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
-import { resolveSessionSubscriptionKeys } from "../session-subscription-keys.js";
 import {
   loadSessionEntry,
   loadGatewaySessionEntryReadOnly,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { sendGlobalAwareNodeChatPayload } from "./chat-broadcast.js";
+import {
+  resolveGlobalAwareNodeChatDeliveryKeys,
+  sendGlobalAwareNodeChatPayload,
+} from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
@@ -62,11 +64,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const agentIdOverride = normalizeOptionalText(params.agentId);
-    const requestedAgentId = resolveRequestedChatAgentId({
+    const requestedAgent = resolveRequestedChatAgentId({
       cfg,
       requestedSessionKey: params.sessionKey,
       agentId: agentIdOverride,
     });
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const requestedAgentId = requestedAgent.agentId;
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: params.sessionKey,
@@ -118,11 +125,16 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const requestedAgentId = resolveRequestedChatAgentId({
+    const requestedAgent = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
       requestedSessionKey: rawSessionKey,
       agentId: p.agentId,
     });
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const requestedAgentId = requestedAgent.agentId;
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
     const {
       cfg,
@@ -209,13 +221,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
       sessionKey,
-      ...(sessionKey === "global" && agentId ? { agentId } : {}),
+      ...(agentId ? { agentId } : {}),
       seq: 0,
       state: "final" as const,
       message,
     };
     context.broadcast("chat", chatPayload, {
-      sessionKeys: resolveSessionSubscriptionKeys(sessionKey, agentId, resolveDefaultAgentId(cfg)),
+      sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({ cfg, sessionKey, agentId }),
     });
     sendGlobalAwareNodeChatPayload({
       context,

@@ -143,7 +143,7 @@ function createPinnedAgentForCdpUrl(
       assertPinnedAgentAuthority(url, connectionOptions);
     } catch (err) {
       const socket = new net.Socket();
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toStringifiedError(err);
       process.nextTick(() => {
         callback?.(error, socket);
         socket.destroy(error);

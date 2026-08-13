@@ -335,10 +335,9 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     card,
     displayLabel: display.label,
     displayDetail: display.detail,
-    isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const argumentPreview = outcome === "failed" ? undefined : toolArgumentPreview(card.args);
+  const argumentPreview = toolArgumentPreview(card.args);
   const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
   const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
@@ -566,12 +565,7 @@ function resolveCollapsedToolSummaryParts(params: {
   card: ToolCard;
   displayLabel: string;
   displayDetail: string | undefined;
-  isError: boolean;
 }): { label: string; name?: string } {
-  if (params.isError) {
-    return { label: t("chat.toolCards.toolError"), name: params.displayLabel };
-  }
-
   const displayDetail = params.displayDetail?.trim();
   if (displayDetail) {
     return { label: params.displayLabel, name: displayDetail };
@@ -634,9 +628,7 @@ export function renderToolCard(
         : ""}"
     >
       <button
-        class="chat-tool-msg-summary chat-tool-row ${isError
-          ? "chat-tool-msg-summary--error"
-          : ""} ${isRunning ? "chat-tool-row--running" : ""}"
+        class="chat-tool-msg-summary chat-tool-row ${isRunning ? "chat-tool-row--running" : ""}"
         type="button"
         aria-expanded=${String(opts.expanded)}
         @click=${(event: MouseEvent) => {

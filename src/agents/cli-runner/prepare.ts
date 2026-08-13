@@ -412,9 +412,9 @@ export async function prepareCliRunContext(
 ): Promise<PreparedCliRunContext> {
   let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
   const runConfig = params.config!;
-  const selectedOwner = normalizeAgentId(
-    params.agentId?.trim() ||
-      parseAgentSessionKey(params.sessionKey)?.agentId ||
+  const sessionOwner = normalizeAgentId(
+    parseAgentSessionKey(params.sessionKey)?.agentId ||
+      params.agentId?.trim() ||
       LEGACY_IMPLICIT_AGENT_ID,
   );
   // Direct CLI-runner callers predate roster-aware ownership. Adapt that SDK
@@ -426,7 +426,7 @@ export async function prepareCliRunContext(
         ...runConfig,
         agents: {
           ...runConfig.agents,
-          entries: { [selectedOwner]: { default: true } },
+          entries: { [sessionOwner]: { default: true } },
         },
       } satisfies OpenClawConfig);
   const started = Date.now();
@@ -450,7 +450,7 @@ export async function prepareCliRunContext(
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    agentId: sessionOwner,
     config: workspaceConfig,
   });
   const resolvedWorkspace = workspaceResolution.workspaceDir;
@@ -563,7 +563,7 @@ export async function prepareCliRunContext(
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
-    agentId: params.agentId,
+    agentId: sessionOwner,
   });
   const agentContextTokens = resolveAgentConfig(params.config ?? {}, sessionAgentId)?.contextTokens;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
@@ -758,7 +758,7 @@ export async function prepareCliRunContext(
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
-      agentId: params.agentId,
+      agentId: sessionAgentId,
       config: params.config,
     });
     return openClawHistoryMessages;
@@ -1547,6 +1547,7 @@ export async function prepareCliRunContext(
           }) ?? systemPrompt;
         const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
           sessionKey: params.sessionKey,
+          agentId: sessionAgentId,
           trigger: params.trigger,
         });
         if (mediaTaskSystemPromptAddition) {
@@ -1598,7 +1599,7 @@ export async function prepareCliRunContext(
             sessionId: params.sessionId,
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
-            agentId: params.agentId,
+            agentId: sessionAgentId,
             config: params.config,
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
@@ -1699,7 +1700,7 @@ export async function prepareCliRunContext(
     const { sessionAgentId: contextEngineSessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: contextEngineConfig,
-      agentId: params.agentId,
+      agentId: sessionAgentId,
     });
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
@@ -1743,7 +1744,7 @@ export async function prepareCliRunContext(
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
-      agentId: params.agentId,
+      agentId: sessionAgentId,
       config: contextEngineConfig,
     });
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;

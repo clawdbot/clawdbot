@@ -1,4 +1,5 @@
 import * as agent from "./agent.js";
+import * as desktop from "./desktop.js";
 import * as environments from "./environments.js";
 import * as fsSchemas from "./fs.js";
 import * as projects from "./projects.js";
@@ -26,6 +27,10 @@ export const AgentControlProtocolSchemas = {
   WorkerDesktopLaunchResult: environments.WorkerDesktopLaunchResultSchema,
   ProjectCheckout: projects.ProjectCheckoutSchema,
   ProjectSummary: projects.ProjectSummarySchema,
+  DesktopSource: desktop.DesktopSourceSchema,
+  DesktopObserveParams: desktop.DesktopObserveParamsSchema,
+  DesktopObserveResult: desktop.DesktopObserveResultSchema,
+  DesktopLaunchParams: desktop.DesktopLaunchParamsSchema,
   SystemInfoParams: systemInfo.SystemInfoParamsSchema,
   SystemInfoResult: systemInfo.SystemInfoResultSchema,
   AgentEvent: agent.AgentEventSchema,

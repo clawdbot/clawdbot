@@ -9,6 +9,7 @@ const GATEWAY_PROBE_ROUTES = new Map<string, "live" | "ready" | "startup">([
 
 export const MCP_APP_STANDALONE_PATH = "/__openclaw__/mcp-app";
 export const MCP_APP_STANDALONE_VIEW_PATH = `${MCP_APP_STANDALONE_PATH}/view`;
+const WORKER_GATEWAY_PATH = "/__openclaw__/worker";
 
 export function classifyGatewayProbePath(
   pathname: string,
@@ -34,4 +35,11 @@ export function classifyMcpAppStandalonePath(
     return "view";
   }
   return pathname.startsWith(`${MCP_APP_STANDALONE_PATH}/`) ? "namespace" : "outside";
+}
+
+export function classifyWorkerGatewayPath(pathname: string): "worker" | "namespace" | "outside" {
+  if (pathname === WORKER_GATEWAY_PATH) {
+    return "worker";
+  }
+  return pathname.startsWith(`${WORKER_GATEWAY_PATH}/`) ? "namespace" : "outside";
 }

@@ -67,6 +67,7 @@ function placeParams(overrides: Partial<PlaceSelectParams> = {}): PlaceSelectPar
     onBrowserNavigate: () => undefined,
     onBrowserBack: () => undefined,
     onRegisterProject: () => undefined,
+    onConnectMachine: () => undefined,
     onClose: () => undefined,
     onToggleWorktree: () => undefined,
     onBaseRefInput: () => undefined,
@@ -86,6 +87,41 @@ describe("project picker", () => {
     ["https://github.com/openclaw/openclaw.git --config=evil", false],
   ])("detects clone input %s", (value, expected) => {
     expect(projectCloneInput(value) !== null).toBe(expected);
+  });
+
+  it("groups gateway, device, and cloud destinations without status copy", () => {
+    const container = document.createElement("div");
+    render(
+      renderPlaceSelect(
+        placeParams({
+          showDestinations: true,
+          worktreeAvailable: true,
+          execNodes: [
+            {
+              nodeId: "macbook",
+              displayName: "MacBook",
+              connected: true,
+              canExec: true,
+              canBrowse: true,
+            },
+          ],
+          cloudProfiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+        }),
+      ),
+      container,
+    );
+
+    const destinationHeadings = [
+      ...container.querySelectorAll<HTMLElement>(".new-session-page__menu-title"),
+    ]
+      .map((element) => element.textContent?.trim())
+      .filter((label) => ["This gateway", "Your devices", "Cloud", "Places"].includes(label ?? ""));
+    expect(destinationHeadings).toEqual(["This gateway", "Your devices", "Cloud"]);
+    expect(container.querySelector('[data-value="gateway"]')).not.toBeNull();
+    expect(container.querySelector('[data-value="node:macbook"]')).not.toBeNull();
+    expect(container.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("persistent");
+    expect(container.textContent).not.toContain("disposable");
   });
 
   it("renders local matches before remote clone results and explains missing credentials", () => {
@@ -165,6 +201,21 @@ describe("project picker", () => {
 });
 
 describe("Where picker", () => {
+  it("offers machine connection only to admins", () => {
+    const onConnectMachine = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderPlaceSelect(placeParams({ isAdmin: true, onConnectMachine })), container);
+
+    const connect = container.querySelector<HTMLButtonElement>('[data-value="connect-machine"]');
+    expect(connect?.textContent?.trim()).toBe("Connect a machine…");
+    connect?.click();
+    expect(onConnectMachine).toHaveBeenCalledOnce();
+
+    render(renderPlaceSelect(placeParams({ isAdmin: false, onConnectMachine })), container);
+    expect(container.querySelector('[data-value="connect-machine"]')).toBeNull();
+  });
+
   it("uses node presence until a non-empty authoritative environment catalog arrives", () => {
     const execNodes = [
       {
@@ -258,7 +309,7 @@ describe("Where picker", () => {
     const titles = [...container.querySelectorAll(".new-session-page__menu-title")].map((element) =>
       element.textContent?.trim(),
     );
-    expect(titles).toEqual(["Folder", "Projects", "Places", "This gateway", "Devices", "Cloud"]);
+    expect(titles).toEqual(["Folder", "Projects", "This gateway", "Your devices", "Cloud"]);
     expect(container.querySelector('[data-value="node:macbook"]')).not.toBeNull();
     for (const nodeId of [
       "worker",

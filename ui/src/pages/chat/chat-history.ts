@@ -3,6 +3,7 @@ import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -43,7 +44,6 @@ import {
   resolveUiSelectedGlobalAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {

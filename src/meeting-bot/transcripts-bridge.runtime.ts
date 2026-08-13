@@ -1,4 +1,5 @@
 import path from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
@@ -105,9 +106,7 @@ export function createMeetingDurableTranscriptBridge<
 
   const reportCaptureError = (sessionId: string, error: unknown) => {
     params.logger.debug?.(
-      `[meeting-transcripts] capture ignored session=${sessionId}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `[meeting-transcripts] capture ignored session=${sessionId}: ${coerceErrorMessage(error)}`,
     );
   };
 
@@ -118,16 +117,12 @@ export function createMeetingDurableTranscriptBridge<
     try {
       void Promise.resolve(subscriber.onStatus(status)).catch((error: unknown) => {
         params.logger.warn(
-          `[meeting-transcripts] subscriber status failed session=${status.sessionId ?? "unknown"}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `[meeting-transcripts] subscriber status failed session=${status.sessionId ?? "unknown"}: ${coerceErrorMessage(error)}`,
         );
       });
     } catch (error) {
       params.logger.warn(
-        `[meeting-transcripts] subscriber status failed session=${status.sessionId ?? "unknown"}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `[meeting-transcripts] subscriber status failed session=${status.sessionId ?? "unknown"}: ${coerceErrorMessage(error)}`,
       );
     }
   };
@@ -173,9 +168,7 @@ export function createMeetingDurableTranscriptBridge<
           } catch (error) {
             if (!active.initializationWarned) {
               params.logger.warn(
-                `[meeting-transcripts] durable capture initialization pending session=${session.id}: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
+                `[meeting-transcripts] durable capture initialization pending session=${session.id}: ${coerceErrorMessage(error)}`,
               );
               active.initializationWarned = true;
             }
@@ -242,9 +235,7 @@ export function createMeetingDurableTranscriptBridge<
             } catch (error) {
               subscribers.delete(subscriberSessionId);
               params.logger.warn(
-                `[meeting-transcripts] detached failing subscriber session=${subscriberSessionId}: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
+                `[meeting-transcripts] detached failing subscriber session=${subscriberSessionId}: ${coerceErrorMessage(error)}`,
               );
               notifySubscriberStatus(subscriber, {
                 sessionId: subscriberSessionId,
@@ -295,7 +286,7 @@ export function createMeetingDurableTranscriptBridge<
         } catch (error) {
           if (!(error instanceof MeetingTranscriptDeliveryError)) {
             reportCaptureError(session.id, error);
-            active.finalCaptureError = error instanceof Error ? error.message : String(error);
+            active.finalCaptureError = coerceErrorMessage(error);
             active.finalCaptureFailedAt ??= new Date().toISOString();
             deliveryError = undefined;
             break;
@@ -350,9 +341,7 @@ export function createMeetingDurableTranscriptBridge<
         });
       } catch (error) {
         params.logger.warn(
-          `[meeting-transcripts] could not finalize durable capture session=${session.id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `[meeting-transcripts] could not finalize durable capture session=${session.id}: ${coerceErrorMessage(error)}`,
         );
         throw error;
       }

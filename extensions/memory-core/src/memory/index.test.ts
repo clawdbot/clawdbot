@@ -1,10 +1,7 @@
 // Memory Core tests cover index plugin behavior.
-import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
@@ -13,509 +10,41 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
-} from "../test-helpers.js";
-import "./test-runtime-mocks.js";
-import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+  createManagerIndexFixture,
+  type ManagerIndexFixture,
+} from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
-import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
-// This suite performs real sqlite/media indexing and can exceed the global
-// timeout when it shares a packed CI extension shard.
-vi.setConfig({ testTimeout: 240_000 });
-
-afterAll(() => {
-  vi.resetConfig();
-});
-
-let embedBatchCalls = 0;
-let embeddedBatchTexts: string[] = [];
-let embedBatchInputCalls = 0;
-let providerRuntimeBatchCalls: string[][] = [];
-let providerRuntimeBatchGate: Promise<void> | null = null;
-let providerRuntimeBatchErrors: unknown[] = [];
-let providerRuntimeBatchFailuresRemaining = 0;
-let providerRuntimeActiveBatchCalls = 0;
-let providerRuntimeMaxActiveBatchCalls = 0;
-let providerCloseCalls = 0;
-let providerCloseFailuresRemaining = 0;
-let providerCloseFailure: unknown = new Error("provider close failed");
-let providerCreationFailure: string | null = null;
-let providerNullResult: string | null = null;
-let providerCloseGate: Promise<void> | null = null;
-let providerInitGate: Promise<void> | null = null;
-let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
-let forceNoProvider = false;
-
-const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
-
-const identityAliasFixture = vi.hoisted(() => ({
-  provider: "identity-alias-test",
-  canonicalModel: "hf:fixture/default-model.gguf",
-  cacheModel: "/fixture/cache/default-model.gguf",
-}));
-
-function setMemoryIndexStateDir(stateDir: string): void {
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-}
-
-function restoreMemoryIndexStateDir(): void {
-  if (originalMemoryIndexStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalMemoryIndexStateDir);
-  }
-}
-
-vi.mock("./embeddings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./embeddings.js")>();
-  const embedText = (text: string) => {
-    const lower = text.toLowerCase();
-    const alpha = lower.split("alpha").length - 1;
-    const beta = lower.split("beta").length - 1;
-    const image = lower.split("image").length - 1;
-    const audio = lower.split("audio").length - 1;
-    return [alpha, beta, image, audio];
-  };
-  return {
-    ...actual,
-    resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
-      providerId === "gemini" || providerId === "fallback-provider"
-        ? `${providerId}-embed`
-        : fallbackSourceModel,
-    resolveEmbeddingProviderAdapterId: (
-      providerId: string,
-      config?: {
-        models?: {
-          providers?: Record<string, { api?: string; baseUrl?: string; models?: unknown[] }>;
-        };
-      },
-    ) => config?.models?.providers?.[providerId]?.api ?? providerId,
-    resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
-      providerId === "local" ? "local" : "remote",
-    resolveEmbeddingProviderIndexIdentity: (options: { provider?: string; model?: string }) =>
-      options.provider === identityAliasFixture.provider
-        ? {
-            provider: {
-              id: identityAliasFixture.provider,
-              model: identityAliasFixture.canonicalModel,
-            },
-            cacheKeyData: {
-              provider: identityAliasFixture.provider,
-              model: identityAliasFixture.canonicalModel,
-            },
-            aliases: [
-              {
-                model: identityAliasFixture.cacheModel,
-                cacheKeyData: {
-                  provider: identityAliasFixture.provider,
-                  model: identityAliasFixture.cacheModel,
-                },
-              },
-            ],
-          }
-        : undefined,
-    createEmbeddingProvider: async (options: {
-      provider?: string;
-      model?: string;
-      outputDimensionality?: number;
-    }) => {
-      providerCalls.push({
-        provider: options.provider,
-        model: options.model,
-        outputDimensionality: options.outputDimensionality,
-      });
-      await providerInitGate;
-      if (options.provider === providerCreationFailure) {
-        throw new Error(`provider creation failed: ${options.provider}`);
-      }
-      if (options.provider === providerNullResult) {
-        return {
-          provider: null,
-          requestedProvider: options.provider,
-          providerUnavailableReason: `provider unavailable: ${options.provider}`,
-        };
-      }
-      if (forceNoProvider) {
-        return {
-          provider: null,
-          requestedProvider: options.provider ?? "auto",
-          providerUnavailableReason: "No API key found for provider",
-        };
-      }
-      const providerId =
-        options.provider === "gemini" ||
-        options.provider === "fallback-provider" ||
-        options.provider === "batch-test" ||
-        options.provider === "batch-wide-test" ||
-        options.provider === identityAliasFixture.provider ||
-        options.provider === "ollama"
-          ? options.provider
-          : "mock";
-      const requestedModel = options.model ?? "mock-embed";
-      const model =
-        providerId === identityAliasFixture.provider &&
-        (requestedModel === identityAliasFixture.canonicalModel ||
-          requestedModel === identityAliasFixture.cacheModel)
-          ? identityAliasFixture.canonicalModel
-          : requestedModel;
-      return {
-        requestedProvider: options.provider ?? "openai",
-        provider: {
-          id: providerId,
-          model,
-          close: async () => {
-            providerCloseCalls += 1;
-            await providerCloseGate;
-            if (providerCloseFailuresRemaining > 0) {
-              providerCloseFailuresRemaining -= 1;
-              throw providerCloseFailure;
-            }
-          },
-          embedQuery: async (text: string) => embedText(text),
-          embedBatch: async (texts: string[]) => {
-            embedBatchCalls += 1;
-            embeddedBatchTexts.push(...texts);
-            return texts.map(embedText);
-          },
-          ...(providerId === "gemini" || providerId === "fallback-provider"
-            ? {
-                embedBatchInputs: async (
-                  inputs: Array<{
-                    text: string;
-                    parts?: Array<
-                      | { type: "text"; text: string }
-                      | { type: "inline-data"; mimeType: string; data: string }
-                    >;
-                  }>,
-                ) => {
-                  embedBatchInputCalls += 1;
-                  return inputs.map((input) => {
-                    const inlineData = input.parts?.find((part) => part.type === "inline-data");
-                    if (inlineData?.type === "inline-data" && inlineData.data.length > 9000) {
-                      throw new Error("payload too large");
-                    }
-                    const mimeType =
-                      inlineData?.type === "inline-data" ? inlineData.mimeType : undefined;
-                    if (mimeType?.startsWith("image/")) {
-                      return [0, 0, 1, 0];
-                    }
-                    if (mimeType?.startsWith("audio/")) {
-                      return [0, 0, 0, 1];
-                    }
-                    return embedText(input.text);
-                  });
-                },
-              }
-            : {}),
-        },
-        ...(providerId === identityAliasFixture.provider
-          ? {
-              runtime: {
-                id: providerId,
-                cacheKeyData: {
-                  provider: providerId,
-                  model: identityAliasFixture.canonicalModel,
-                },
-                indexIdentityAliases: [
-                  {
-                    model: identityAliasFixture.cacheModel,
-                    cacheKeyData: {
-                      provider: providerId,
-                      model: identityAliasFixture.cacheModel,
-                    },
-                  },
-                ],
-              },
-            }
-          : providerId === "batch-test" || providerId === "batch-wide-test"
-            ? {
-                runtime: {
-                  id: providerId,
-                  ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
-                  batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
-                    providerRuntimeActiveBatchCalls += 1;
-                    providerRuntimeMaxActiveBatchCalls = Math.max(
-                      providerRuntimeMaxActiveBatchCalls,
-                      providerRuntimeActiveBatchCalls,
-                    );
-                    try {
-                      await providerRuntimeBatchGate;
-                      providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
-                      if (providerRuntimeBatchErrors.length > 0) {
-                        throw providerRuntimeBatchErrors.shift();
-                      }
-                      if (providerRuntimeBatchFailuresRemaining > 0) {
-                        providerRuntimeBatchFailuresRemaining -= 1;
-                        throw new Error("provider runtime batch failed");
-                      }
-                      return batch.chunks.map((chunk) => embedText(chunk.text));
-                    } finally {
-                      providerRuntimeActiveBatchCalls -= 1;
-                    }
-                  },
-                },
-              }
-            : providerId === "gemini" || providerId === "fallback-provider"
-              ? {
-                  runtime: {
-                    id: providerId,
-                    cacheKeyData: {
-                      provider: providerId,
-                      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                      model,
-                      outputDimensionality: options.outputDimensionality,
-                      headers: [],
-                    },
-                  },
-                }
-              : {}),
-      };
-    },
-  };
-});
+const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
 describe("memory index", () => {
-  let fixtureRoot = "";
-  let workspaceDir = "";
-  let memoryDir = "";
-
-  const managersForCleanup = new Set<MemoryIndexManager>();
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
-    workspaceDir = path.join(fixtureRoot, "workspace");
-    memoryDir = path.join(workspaceDir, "memory");
+  const fixture: ManagerIndexFixture = createManagerIndexFixture({
+    getMemorySearchManager,
+    closeAllMemorySearchManagers,
   });
-
-  afterAll(async () => {
-    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
-    await closeAllMemorySearchManagers();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    resetMemoryCoreDreamingStateForTests();
-    clearRegistry();
-    managersForCleanup.clear();
-    restoreMemoryIndexStateDir();
-  });
-
-  beforeEach(async () => {
-    vi.useRealTimers();
-    clearRegistry();
-    embedBatchCalls = 0;
-    embeddedBatchTexts = [];
-    embedBatchInputCalls = 0;
-    providerRuntimeBatchCalls = [];
-    providerRuntimeBatchGate = null;
-    providerRuntimeBatchErrors = [];
-    providerRuntimeBatchFailuresRemaining = 0;
-    providerRuntimeActiveBatchCalls = 0;
-    providerRuntimeMaxActiveBatchCalls = 0;
-    providerCloseCalls = 0;
-    providerCloseFailuresRemaining = 0;
-    providerCloseFailure = new Error("provider close failed");
-    providerCreationFailure = null;
-    providerNullResult = null;
-    providerCloseGate = null;
-    providerInitGate = null;
-    providerCalls = [];
-    forceNoProvider = false;
-
-    rmSync(workspaceDir, { recursive: true, force: true });
-    mkdirSync(memoryDir, { recursive: true });
-    setMemoryIndexStateDir(path.join(workspaceDir, ".state-memory-index"));
-    await configureMemoryCoreDreamingStateForTests();
-    await fs.writeFile(
-      path.join(memoryDir, "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nZebra memory line.",
-    );
-  });
-
-  function resetManagerForTest(manager: MemoryIndexManager) {
-    // These tests reuse managers for performance. Clear the index + embedding
-    // cache to keep each test fully isolated.
-    const db = (
-      manager as unknown as {
-        db: {
-          exec: (sql: string) => void;
-          prepare: (sql: string) => { get: (name: string) => { name?: string } | undefined };
-        };
-      }
-    ).db;
-    for (const table of [
-      "memory_index_sources",
-      "memory_index_chunks",
-      "memory_embedding_cache",
-      "memory_index_chunks_fts",
-      "memory_index_chunks_vec",
-    ]) {
-      const existingTable = db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-        .get(table);
-      if (existingTable?.name === table) {
-        db.exec(`DELETE FROM ${table}`);
-      }
-    }
-    (manager as unknown as { dirty: boolean }).dirty = true;
-    (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
-    (manager as unknown as { sessionsDirtyFiles: Set<string> }).sessionsDirtyFiles.clear();
-  }
-
-  type TestCfg = Parameters<typeof getMemorySearchManager>[0]["cfg"];
-
-  function createCfg(params: {
-    extraPaths?: string[];
-    sources?: Array<"memory" | "sessions">;
-    sessionMemory?: boolean;
-    rememberAcrossConversations?: boolean;
-    provider?: string;
-    fallback?: "none" | "gemini" | "fallback-provider";
-    providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
-    batchEnabled?: boolean;
-    model?: string;
-    outputDimensionality?: number;
-    multimodal?: {
-      enabled?: boolean;
-      modalities?: Array<"image" | "audio" | "all">;
-      maxFileBytes?: number;
-    };
-    vectorEnabled?: boolean;
-    cacheEnabled?: boolean;
-    minScore?: number;
-    onSearch?: boolean;
-    hybrid?: {
-      enabled: boolean;
-      vectorWeight?: number;
-      textWeight?: number;
-      temporalDecay?: { enabled: boolean };
-    };
-  }): TestCfg {
-    return isolateMemoryManagerTestConfig({
-      memory: {
-        search: {
-          ...(params.provider !== undefined ? { provider: params.provider } : {}),
-          model: params.model ?? "mock-embed",
-          fallback: params.fallback,
-          outputDimensionality: params.outputDimensionality,
-          store: {
-            vector: params.vectorEnabled !== undefined ? { enabled: params.vectorEnabled } : {},
-          },
-          remote: params.batchEnabled
-            ? {
-                batch: { enabled: true },
-              }
-            : undefined,
-          query: { minScore: params.minScore ?? 0 },
-          cache: params.cacheEnabled ? { enabled: true } : undefined,
-          extraPaths: params.extraPaths,
-          multimodal: params.multimodal,
-          sources: params.sources,
-          rememberAcrossConversations:
-            params.rememberAcrossConversations ?? params.sessionMemory ?? false,
-        },
-      },
-
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-        },
-        list: [{ id: "main", default: true }],
-      },
-      models: params.providerAliases ? { providers: params.providerAliases } : undefined,
-    });
-  }
-
-  async function seedMemoryIndexSessionTranscript(params: {
-    messages: Array<{
-      content: string;
-      role: "assistant" | "user";
-      senderIsOwner?: boolean;
-      timestamp: number | string;
-    }>;
-    sessionId: string;
-    sessionKey?: string;
-  }): Promise<void> {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
-    // Message timestamps are behavioral inputs; entry freshness only keeps the
-    // fixture out of real session-retention maintenance as wall time advances.
-    const updatedAt = Date.now();
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      storePath,
-      entry: {
-        sessionId: params.sessionId,
-        updatedAt,
-      },
-    });
-    for (const message of params.messages) {
-      await appendSessionTranscriptMessageByIdentity({
-        agentId: "main",
-        sessionId: params.sessionId,
-        sessionKey,
-        storePath,
-        message: {
-          role: message.role,
-          timestamp: message.timestamp,
-          content: [{ type: "text", text: message.content }],
-          ...(message.senderIsOwner ? { __openclaw: { senderIsOwner: true } } : {}),
-        },
-      });
-    }
-  }
-
-  function requireManager(
-    result: Awaited<ReturnType<typeof getMemorySearchManager>>,
-    missingMessage = "manager missing",
-  ): MemoryIndexManager {
-    if (!result.manager) {
-      throw new Error(missingMessage);
-    }
-    return result.manager as unknown as MemoryIndexManager;
-  }
-
-  async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    const manager = requireManager(result);
-    managersForCleanup.add(manager);
-    resetManagerForTest(manager);
-    return manager;
-  }
-
-  async function getFreshManager(
-    cfg: TestCfg,
-    purpose?: "default" | "status" | "cli",
-  ): Promise<MemoryIndexManager> {
-    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main", purpose }));
-    managersForCleanup.add(manager);
-    return manager;
-  }
+  const { provider: providerFixture } = fixture;
+  const {
+    createConfig: createCfg,
+    getFreshManager,
+    getFtsSessionManager,
+    getPersistentManager,
+    seedSessionTranscript: seedMemoryIndexSessionTranscript,
+    trackManager,
+  } = fixture;
 
   function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
     const providerKey = hashText(
       JSON.stringify({
-        provider: identityAliasFixture.provider,
+        provider: providerFixture.identityAlias.provider,
         model,
       }),
     );
@@ -536,7 +65,7 @@ describe("memory index", () => {
     db.prepare("UPDATE memory_index_chunks SET model = ?").run(model);
     db.prepare(
       "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
-    ).run(model, providerKey, identityAliasFixture.provider);
+    ).run(model, providerKey, providerFixture.identityAlias.provider);
   }
 
   it("does not prepare vector deletes after in-place reset drops a missing vector table", async () => {
@@ -545,7 +74,7 @@ describe("memory index", () => {
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
-    managersForCleanup.add(manager);
+    trackManager(manager);
     type VectorState = { available: boolean | null; dims?: number };
     const vector = Reflect.get(manager, "vector") as VectorState;
     vector.available = true;
@@ -558,25 +87,6 @@ describe("memory index", () => {
       ]),
     ).resolves.toBeUndefined();
   });
-
-  async function getFtsSessionManager(params: {
-    stateDirName: string;
-  }): Promise<MemoryIndexManager | null> {
-    forceNoProvider = true;
-    setMemoryIndexStateDir(path.join(workspaceDir, params.stateDirName));
-    const cfg = createCfg({
-      provider: "none",
-      sources: ["memory", "sessions"],
-      sessionMemory: true,
-      minScore: 0,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-    });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    const manager = requireManager(result);
-    managersForCleanup.add(manager);
-    resetManagerForTest(manager);
-    return manager.status().fts?.available ? manager : null;
-  }
 
   it("indexes memory files and searches", async () => {
     const cfg = createCfg({
@@ -607,7 +117,7 @@ describe("memory index", () => {
 
   it("indexes trailing recall annotations only from curated memory files", async () => {
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(fixture.paths.workspace, "MEMORY.md"),
       [
         "# Curated entries",
         "",
@@ -618,15 +128,15 @@ describe("memory index", () => {
       ].join("\n"),
     );
     await fs.writeFile(
-      path.join(workspaceDir, "USER.md"),
+      path.join(fixture.paths.workspace, "USER.md"),
       "- Prefer concise replies. <!-- trigger: writing style --> <!-- importance: 7 -->\n",
     );
     await fs.writeFile(
-      path.join(memoryDir, "2026-01-12.md"),
+      path.join(fixture.paths.memory, "2026-01-12.md"),
       "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 --> <!-- project: github.com/openclaw/openclaw -->\n",
     );
     await fs.writeFile(
-      path.join(memoryDir, "2026-01-13.md"),
+      path.join(fixture.paths.memory, "2026-01-13.md"),
       [
         "- Uppercase path. <!-- project: path:/Users/Alice/Repo -->",
         "- Lowercase path. <!-- project: path:/Users/alice/repo -->",
@@ -704,8 +214,8 @@ describe("memory index", () => {
         originClass: "agent",
       });
       expect(rows.every((row) => !row.text.includes("<!--"))).toBe(true);
-      expect(embeddedBatchTexts.length).toBeGreaterThan(0);
-      expect(embeddedBatchTexts.every((text) => !text.includes("<!--"))).toBe(true);
+      expect(providerFixture.embeddedBatchTexts.length).toBeGreaterThan(0);
+      expect(providerFixture.embeddedBatchTexts.every((text) => !text.includes("<!--"))).toBe(true);
 
       for (const query of ["trigger", "importance", "project"]) {
         const annotationHits = await manager.search(query, {
@@ -733,7 +243,7 @@ describe("memory index", () => {
   it("round-trips mixed-case project keys through indexed recall consumers", async () => {
     const projectKey = "github.com/OpenClaw/OpenClaw";
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(fixture.paths.workspace, "MEMORY.md"),
       `- Follow the kraken deploy ritual. <!-- trigger: kraken deploy ritual --> <!-- importance: 8 --> <!-- project: ${projectKey} -->\n`,
     );
 
@@ -788,7 +298,7 @@ describe("memory index", () => {
 
   it("keeps invalid project annotations scoped but unsatisfiable", async () => {
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(fixture.paths.workspace, "MEMORY.md"),
       [
         "- Invalid fact. <!-- trigger: invalid fact --> <!-- project: bad< -->",
         "- Mixed fact. <!-- trigger: mixed fact --> <!-- project: alpha-key; bad< -->",
@@ -838,7 +348,7 @@ describe("memory index", () => {
 
   it("inherits entry-scoped annotations across oversized curated fragments", async () => {
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(fixture.paths.workspace, "MEMORY.md"),
       [
         "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
         `  ${"alpha-fragment-body ".repeat(400)}`,
@@ -891,7 +401,7 @@ describe("memory index", () => {
       "- Beta entry. <!-- trigger: beta entry --> <!-- project: beta-key -->",
       "- Global entry. <!-- trigger: global entry -->",
     ].join("\n");
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), curatedContent);
+    await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), curatedContent);
 
     const manager = await getFreshManager(createCfg({ provider: "none" }));
     try {
@@ -1014,7 +524,10 @@ describe("memory index", () => {
           SELECT RAISE(FAIL, 'forced chunk publication failure');
         END;
       `);
-      await fs.writeFile(path.join(memoryDir, "2026-01-12.md"), "# Log\nUpdated memory line.");
+      await fs.writeFile(
+        path.join(fixture.paths.memory, "2026-01-12.md"),
+        "# Log\nUpdated memory line.",
+      );
       Reflect.set(manager, "dirty", true);
 
       await expect(manager.sync({ reason: "test" })).rejects.toThrow(
@@ -1037,8 +550,8 @@ describe("memory index", () => {
   });
 
   it("reindexes memory tables in place without deleting unrelated agent rows", async () => {
-    const stateDir = path.join(workspaceDir, "managed-memory-state");
-    setMemoryIndexStateDir(stateDir);
+    const stateDir = path.join(fixture.paths.workspace, "managed-memory-state");
+    fixture.setStateDir(stateDir);
     const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
     agentDb.db
@@ -1082,8 +595,14 @@ describe("memory index", () => {
   });
 
   it("batches dirty memory chunks across files", async () => {
-    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
-    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-13.md"),
+      "# Log\nBeta memory line.",
+    );
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-14.md"),
+      "# Log\nGamma memory line.",
+    );
     const cfg = createCfg({
       provider: "batch-wide-test",
       batchEnabled: true,
@@ -1092,8 +611,8 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "test" });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(1);
-      expect(providerRuntimeBatchCalls[0]).toEqual([
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
+      expect(providerFixture.providerRuntimeBatchCalls[0]).toEqual([
         "# Log\nAlpha memory line.\nZebra memory line.",
         "# Log\nBeta memory line.",
         "# Log\nGamma memory line.",
@@ -1112,15 +631,18 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "test" });
 
-      await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
-      providerRuntimeBatchCalls = [];
-      providerRuntimeBatchFailuresRemaining = 1;
-      embedBatchCalls = 0;
+      await fs.writeFile(
+        path.join(fixture.paths.memory, "2026-01-13.md"),
+        "# Log\nBeta memory line.",
+      );
+      providerFixture.providerRuntimeBatchCalls = [];
+      providerFixture.providerRuntimeBatchFailuresRemaining = 1;
+      providerFixture.embedBatchCalls = 0;
 
       await manager.sync({ reason: "test", force: true });
 
-      expect(providerRuntimeBatchCalls).toEqual([["# Log\nBeta memory line."]]);
-      expect(embedBatchCalls).toBe(1);
+      expect(providerFixture.providerRuntimeBatchCalls).toEqual([["# Log\nBeta memory line."]]);
+      expect(providerFixture.embedBatchCalls).toBe(1);
       const betaRow = (
         manager as unknown as {
           db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown } };
@@ -1137,7 +659,7 @@ describe("memory index", () => {
   });
 
   it("derives batch attempts locally instead of trusting provider error metadata", async () => {
-    providerRuntimeBatchErrors = [
+    providerFixture.providerRuntimeBatchErrors = [
       Object.assign(new Error("provider runtime batch failed"), {
         batchAttempts: Number.MAX_SAFE_INTEGER,
       }),
@@ -1148,8 +670,8 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "test" });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(1);
-      expect(embedBatchCalls).toBe(1);
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
+      expect(providerFixture.embedBatchCalls).toBe(1);
       expect(manager.status().batch).toMatchObject({
         enabled: true,
         failures: 1,
@@ -1161,7 +683,7 @@ describe("memory index", () => {
   });
 
   it("disables batch immediately when the provider reports it unavailable", async () => {
-    providerRuntimeBatchErrors = [
+    providerFixture.providerRuntimeBatchErrors = [
       Object.assign(new Error("provider batch unavailable"), {
         code: "embedding_batch_unavailable",
       }),
@@ -1172,8 +694,8 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "test" });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(1);
-      expect(embedBatchCalls).toBe(1);
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
+      expect(providerFixture.embedBatchCalls).toBe(1);
       expect(manager.status().batch).toMatchObject({
         enabled: false,
         failures: 2,
@@ -1188,15 +710,18 @@ describe("memory index", () => {
     ["frozen errors", Object.freeze(new Error("provider runtime retry failed"))],
     ["primitive rejections", "provider runtime retry failed"],
   ])("preserves %s while recording both attempts", async (_kind, retryError) => {
-    providerRuntimeBatchErrors = [new Error("memory embeddings batch timed out"), retryError];
+    providerFixture.providerRuntimeBatchErrors = [
+      new Error("memory embeddings batch timed out"),
+      retryError,
+    ];
     const manager = await getFreshManager(
       createCfg({ provider: "batch-wide-test", batchEnabled: true }),
     );
     try {
       await manager.sync({ reason: "test" });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(2);
-      expect(embedBatchCalls).toBe(1);
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+      expect(providerFixture.embedBatchCalls).toBe(1);
       expect(manager.status().batch).toMatchObject({
         enabled: false,
         failures: 2,
@@ -1208,7 +733,7 @@ describe("memory index", () => {
   });
 
   it("resets batch failures when a timeout retry recovers", async () => {
-    providerRuntimeBatchErrors = [new Error("provider runtime batch failed")];
+    providerFixture.providerRuntimeBatchErrors = [new Error("provider runtime batch failed")];
     const manager = await getFreshManager(
       createCfg({ provider: "batch-wide-test", batchEnabled: true }),
     );
@@ -1216,15 +741,18 @@ describe("memory index", () => {
       await manager.sync({ reason: "test" });
       expect(manager.status().batch?.failures).toBe(1);
 
-      await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
-      providerRuntimeBatchCalls = [];
-      providerRuntimeBatchErrors = [new Error("memory embeddings batch timed out")];
-      embedBatchCalls = 0;
+      await fs.writeFile(
+        path.join(fixture.paths.memory, "2026-01-13.md"),
+        "# Log\nBeta memory line.",
+      );
+      providerFixture.providerRuntimeBatchCalls = [];
+      providerFixture.providerRuntimeBatchErrors = [new Error("memory embeddings batch timed out")];
+      providerFixture.embedBatchCalls = 0;
 
       await manager.sync({ reason: "test", force: true });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(2);
-      expect(embedBatchCalls).toBe(0);
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+      expect(providerFixture.embedBatchCalls).toBe(0);
       expect(manager.status().batch).toMatchObject({
         enabled: true,
         failures: 0,
@@ -1237,10 +765,13 @@ describe("memory index", () => {
 
   it("keeps split chunks from oversized files in one source-wide batch", async () => {
     await fs.writeFile(
-      path.join(memoryDir, "2026-01-13.md"),
+      path.join(fixture.paths.memory, "2026-01-13.md"),
       `# Log\n${"Long split memory line. ".repeat(1200)}`,
     );
-    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-14.md"),
+      "# Log\nBeta memory line.",
+    );
     const cfg = createCfg({
       provider: "batch-wide-test",
       batchEnabled: true,
@@ -1249,8 +780,8 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "test" });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(1);
-      const combinedBatch = providerRuntimeBatchCalls[0] ?? [];
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
+      const combinedBatch = providerFixture.providerRuntimeBatchCalls[0] ?? [];
       expect(combinedBatch.length).toBeGreaterThan(3);
       expect(combinedBatch.join("\n")).toContain("Long split memory line.");
       expect(combinedBatch).toContain("# Log\nBeta memory line.");
@@ -1260,8 +791,14 @@ describe("memory index", () => {
   });
 
   it("keeps custom batch runtimes per file without source-wide opt in", async () => {
-    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
-    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-13.md"),
+      "# Log\nBeta memory line.",
+    );
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-14.md"),
+      "# Log\nGamma memory line.",
+    );
     const cfg = createCfg({
       provider: "batch-test",
       batchEnabled: true,
@@ -1270,9 +807,13 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "test" });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(3);
-      expect(providerRuntimeBatchCalls.every((call) => call.length === 1)).toBe(true);
-      expect(providerRuntimeBatchCalls.map((call) => call[0] ?? "").toSorted()).toEqual(
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(3);
+      expect(providerFixture.providerRuntimeBatchCalls.every((call) => call.length === 1)).toBe(
+        true,
+      );
+      expect(
+        providerFixture.providerRuntimeBatchCalls.map((call) => call[0] ?? "").toSorted(),
+      ).toEqual(
         [
           "# Log\nAlpha memory line.\nZebra memory line.",
           "# Log\nBeta memory line.",
@@ -1285,21 +826,29 @@ describe("memory index", () => {
   });
 
   it("keeps custom batch runtimes concurrent without source-wide opt in", async () => {
-    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
-    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-13.md"),
+      "# Log\nBeta memory line.",
+    );
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-14.md"),
+      "# Log\nGamma memory line.",
+    );
     const cfg = createCfg({
       provider: "batch-test",
       batchEnabled: true,
     });
     const manager = await getFreshManager(cfg);
     let releaseBatchGate: (() => void) | undefined;
-    providerRuntimeBatchGate = new Promise((resolve) => {
+    providerFixture.providerRuntimeBatchGate = new Promise((resolve) => {
       releaseBatchGate = resolve;
     });
     const syncPromise = manager.sync({ reason: "test" });
     let waitError: Error | undefined;
     try {
-      await vi.waitFor(() => expect(providerRuntimeMaxActiveBatchCalls).toBeGreaterThan(1));
+      await vi.waitFor(() =>
+        expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBeGreaterThan(1),
+      );
     } catch (err) {
       waitError = err instanceof Error ? err : new Error(String(err));
     } finally {
@@ -1316,7 +865,7 @@ describe("memory index", () => {
     const batchFileLimit = 2048;
     for (let index = 0; index < batchFileLimit; index += 1) {
       await fs.writeFile(
-        path.join(memoryDir, `2026-02-${String(index + 1).padStart(4, "0")}.md`),
+        path.join(fixture.paths.memory, `2026-02-${String(index + 1).padStart(4, "0")}.md`),
         `# Log\nBounded memory line ${index}.`,
       );
     }
@@ -1328,17 +877,20 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "test" });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(2);
-      expect(providerRuntimeBatchCalls[0]).toHaveLength(batchFileLimit);
-      expect(providerRuntimeBatchCalls[1]).toHaveLength(1);
-      expect(providerRuntimeBatchCalls.flat()).toHaveLength(batchFileLimit + 1);
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+      expect(providerFixture.providerRuntimeBatchCalls[0]).toHaveLength(batchFileLimit);
+      expect(providerFixture.providerRuntimeBatchCalls[1]).toHaveLength(1);
+      expect(providerFixture.providerRuntimeBatchCalls.flat()).toHaveLength(batchFileLimit + 1);
     } finally {
       await manager.close?.();
     }
   });
 
   it("batches forced memory and session indexing across files", async () => {
-    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-13.md"),
+      "# Log\nBeta memory line.",
+    );
     await seedMemoryIndexSessionTranscript({
       sessionId: "session-alpha",
       messages: [
@@ -1369,8 +921,8 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "cli", force: true });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(1);
-      const combinedBatch = providerRuntimeBatchCalls[0] ?? [];
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
+      const combinedBatch = providerFixture.providerRuntimeBatchCalls[0] ?? [];
       expect(combinedBatch.slice(0, 2)).toEqual([
         "# Log\nAlpha memory line.\nZebra memory line.",
         "# Log\nBeta memory line.",
@@ -1403,21 +955,21 @@ describe("memory index", () => {
         status: "mismatched",
         reason: "index was built for model old-embed, expected new-embed",
       });
-      embedBatchCalls = 0;
+      providerFixture.embedBatchCalls = 0;
 
       const results = await nextManager.search("alpha");
 
       expect(results).toStrictEqual([]);
-      expect(embedBatchCalls).toBe(0);
+      expect(providerFixture.embedBatchCalls).toBe(0);
       expect(nextManager.status().dirty).toBe(true);
 
       await fs.writeFile(
-        path.join(memoryDir, "2026-01-12.md"),
+        path.join(fixture.paths.memory, "2026-01-12.md"),
         "# Log\nAlpha memory line changed.\nZebra memory line.",
       );
       await nextManager.sync({ reason: "watch" });
 
-      expect(embedBatchCalls).toBe(0);
+      expect(providerFixture.embedBatchCalls).toBe(0);
       const stillPausedResults = await nextManager.search("alpha");
       expect(stillPausedResults).toStrictEqual([]);
       expect(nextManager.status().dirty).toBe(true);
@@ -1433,20 +985,20 @@ describe("memory index", () => {
   it.each([
     {
       direction: "HF to exact cache path",
-      indexedModel: identityAliasFixture.canonicalModel,
-      configuredModel: identityAliasFixture.cacheModel,
+      indexedModel: providerFixture.identityAlias.canonicalModel,
+      configuredModel: providerFixture.identityAlias.cacheModel,
     },
     {
       direction: "exact cache path to HF",
-      indexedModel: identityAliasFixture.cacheModel,
-      configuredModel: identityAliasFixture.canonicalModel,
+      indexedModel: providerFixture.identityAlias.cacheModel,
+      configuredModel: providerFixture.identityAlias.canonicalModel,
     },
   ])(
     "keeps $direction indexes and embedding caches usable",
     async ({ indexedModel, configuredModel }) => {
       const indexedCfg = createCfg({
-        provider: identityAliasFixture.provider,
-        model: identityAliasFixture.canonicalModel,
+        provider: providerFixture.identityAlias.provider,
+        model: providerFixture.identityAlias.canonicalModel,
         cacheEnabled: true,
         vectorEnabled: false,
         onSearch: false,
@@ -1454,14 +1006,14 @@ describe("memory index", () => {
       });
       const indexedManager = await getFreshManager(indexedCfg);
       await indexedManager.sync({ reason: "test", force: true });
-      if (indexedModel !== identityAliasFixture.canonicalModel) {
+      if (indexedModel !== providerFixture.identityAlias.canonicalModel) {
         rewritePersistedProviderIdentity(indexedManager, indexedModel);
       }
       await indexedManager.close?.();
 
-      const embedsBeforeReuse = embedBatchCalls;
+      const embedsBeforeReuse = providerFixture.embedBatchCalls;
       const nextCfg = createCfg({
-        provider: identityAliasFixture.provider,
+        provider: providerFixture.identityAlias.provider,
         model: configuredModel,
         cacheEnabled: true,
         vectorEnabled: false,
@@ -1486,7 +1038,7 @@ describe("memory index", () => {
 
         await nextManager.sync({ reason: "test", force: true });
 
-        expect(embedBatchCalls).toBe(embedsBeforeReuse);
+        expect(providerFixture.embedBatchCalls).toBe(embedsBeforeReuse);
       } finally {
         await nextManager.close?.();
       }
@@ -1560,11 +1112,14 @@ describe("memory index", () => {
     const cfg = createCfg({
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
-    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-13.md"),
+      "# Log\nBeta memory line.",
+    );
     const oldManager = await getFreshManager(cfg);
     await oldManager.sync({ reason: "test", force: true });
     await oldManager.close?.();
-    await fs.rm(path.join(memoryDir, "2026-01-12.md"));
+    await fs.rm(path.join(fixture.paths.memory, "2026-01-12.md"));
 
     const nextManager = await getFreshManager(cfg);
     try {
@@ -1598,7 +1153,7 @@ describe("memory index", () => {
     await oldManager.sync({ reason: "test", force: true });
     await oldManager.close?.();
 
-    forceNoProvider = true;
+    providerFixture.forceNoProvider = true;
     const nextManager = await getFreshManager(oldCfg);
     try {
       const results = await nextManager.search("alpha");
@@ -1622,7 +1177,7 @@ describe("memory index", () => {
     await oldManager.sync({ reason: "test", force: true });
     await oldManager.close?.();
 
-    forceNoProvider = true;
+    providerFixture.forceNoProvider = true;
     const nextManager = await getFreshManager(oldCfg);
     try {
       const db = (
@@ -1653,7 +1208,7 @@ describe("memory index", () => {
 
   it("clears dirty after sessions-only identity reindex", async () => {
     try {
-      setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-only-reindex"));
+      fixture.setStateDir(path.join(fixture.paths.workspace, ".state-sessions-only-reindex"));
       await seedMemoryIndexSessionTranscript({
         sessionId: "session-identity",
         messages: [
@@ -1692,13 +1247,13 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      restoreMemoryIndexStateDir();
+      fixture.restoreStateDir();
     }
   });
 
   it("marks sessions-only indexes dirty when metadata is missing but chunks exist", async () => {
     try {
-      setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-missing-meta"));
+      fixture.setStateDir(path.join(fixture.paths.workspace, ".state-sessions-missing-meta"));
       await seedMemoryIndexSessionTranscript({
         sessionId: "session-missing-meta",
         messages: [
@@ -1737,7 +1292,7 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      restoreMemoryIndexStateDir();
+      fixture.restoreStateDir();
     }
   });
 
@@ -2241,7 +1796,7 @@ describe("memory index", () => {
 
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
     try {
-      setMemoryIndexStateDir(path.join(workspaceDir, ".state-targeted-cutover"));
+      fixture.setStateDir(path.join(fixture.paths.workspace, ".state-targeted-cutover"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionFile = path.join(sessionsDir, "session-targeted-cutover.jsonl");
@@ -2283,11 +1838,11 @@ describe("memory index", () => {
       const nextManager = await getFreshManager(nextCfg);
       try {
         expect(nextManager.status().dirty).toBe(true);
-        embedBatchCalls = 0;
+        providerFixture.embedBatchCalls = 0;
 
         await nextManager.sync({ reason: "test", archiveFiles: [sessionFile] });
 
-        expect(embedBatchCalls).toBe(0);
+        expect(providerFixture.embedBatchCalls).toBe(0);
         expect(nextManager.status().dirty).toBe(true);
         expect(nextManager.status().custom?.indexIdentity).toEqual({
           status: "mismatched",
@@ -2299,13 +1854,13 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      restoreMemoryIndexStateDir();
+      fixture.restoreStateDir();
     }
   });
 
   it("preserves memory dirty events raised during session identity reindex", async () => {
     try {
-      setMemoryIndexStateDir(path.join(workspaceDir, ".state-dirty-during-session"));
+      fixture.setStateDir(path.join(fixture.paths.workspace, ".state-dirty-during-session"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });
       await fs.writeFile(
@@ -2363,7 +1918,7 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      restoreMemoryIndexStateDir();
+      fixture.restoreStateDir();
     }
   });
 
@@ -2374,12 +1929,12 @@ describe("memory index", () => {
     const manager = await getFreshManager(cfg);
 
     await manager.probeEmbeddingAvailability();
-    expect(providerCloseCalls).toBe(0);
+    expect(providerFixture.providerCloseCalls).toBe(0);
 
     await manager.close();
     await manager.close();
 
-    expect(providerCloseCalls).toBe(1);
+    expect(providerFixture.providerCloseCalls).toBe(1);
   });
 
   it("waits for pending sync before closing embedding providers", async () => {
@@ -2397,7 +1952,7 @@ describe("memory index", () => {
     const concurrentClosePromise = manager.close();
     try {
       await Promise.resolve();
-      expect(providerCloseCalls).toBe(0);
+      expect(providerFixture.providerCloseCalls).toBe(0);
 
       let closeSettled = false;
       void closePromise.then(() => {
@@ -2410,12 +1965,12 @@ describe("memory index", () => {
       resolveSync();
     }
     await Promise.all([closePromise, concurrentClosePromise]);
-    expect(providerCloseCalls).toBe(1);
+    expect(providerFixture.providerCloseCalls).toBe(1);
   });
 
   it("waits for sync that attaches after provider initialization before closing providers", async () => {
     let releaseProviderInit: () => void = () => {};
-    providerInitGate = new Promise<void>((resolve) => {
+    providerFixture.providerInitGate = new Promise<void>((resolve) => {
       releaseProviderInit = resolve;
     });
     const cfg = createCfg({
@@ -2449,7 +2004,7 @@ describe("memory index", () => {
 
     const syncPromise = manager.sync({ reason: "test" });
     await vi.waitFor(() => {
-      expect(providerCalls).toHaveLength(1);
+      expect(providerFixture.providerCalls).toHaveLength(1);
     });
 
     const closePromise = manager.close();
@@ -2458,21 +2013,21 @@ describe("memory index", () => {
       await syncStarted;
       await Promise.resolve();
 
-      expect(providerCloseCalls).toBe(0);
+      expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
       releaseSync();
     }
     await syncPromise;
     await closePromise;
-    expect(providerCloseCalls).toBe(1);
+    expect(providerFixture.providerCloseCalls).toBe(1);
   });
 
   it("indexes multimodal files only from extra paths", async () => {
-    const mediaDir = path.join(workspaceDir, "media-memory");
+    const mediaDir = path.join(fixture.paths.workspace, "media-memory");
     await fs.mkdir(mediaDir, { recursive: true });
     await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
     await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
-    await fs.writeFile(path.join(memoryDir, "default-diagram.png"), Buffer.from("png"));
+    await fs.writeFile(path.join(fixture.paths.memory, "default-diagram.png"), Buffer.from("png"));
 
     const cfg = createCfg({
       provider: "gemini",
@@ -2483,7 +2038,7 @@ describe("memory index", () => {
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
-    expect(embedBatchInputCalls).toBeGreaterThan(0);
+    expect(providerFixture.embedBatchInputCalls).toBeGreaterThan(0);
 
     const db = Reflect.get(manager, "db") as DatabaseSync;
     const indexedMediaPaths = () =>
@@ -2562,7 +2117,7 @@ describe("memory index", () => {
   });
 
   it("probes sqlite vector store availability without initializing embeddings", async () => {
-    forceNoProvider = true;
+    providerFixture.forceNoProvider = true;
     const cfg = createCfg({
       vectorEnabled: true,
     });
@@ -2571,7 +2126,7 @@ describe("memory index", () => {
     const available = await manager.probeVectorStoreAvailability?.();
     const status = manager.status();
 
-    expect(providerCalls).toStrictEqual([]);
+    expect(providerFixture.providerCalls).toStrictEqual([]);
     expect(typeof status.vector?.storeAvailable).toBe("boolean");
     expect(status.vector?.storeAvailable).toBe(available);
     expect(status.vector?.semanticAvailable).toBeUndefined();
@@ -2646,7 +2201,7 @@ describe("memory index", () => {
     await initialManager.close?.();
 
     await fs.writeFile(
-      path.join(memoryDir, "2026-01-12.md"),
+      path.join(fixture.paths.memory, "2026-01-12.md"),
       "# Updated\n\nvector writes were disabled for this update\n",
     );
     const disabledManager = await getFreshManager(
@@ -2682,7 +2237,7 @@ describe("memory index", () => {
   });
 
   it("keeps empty vector indexes clean after vector store probing", async () => {
-    await fs.rm(path.join(memoryDir, "2026-01-12.md"));
+    await fs.rm(path.join(fixture.paths.memory, "2026-01-12.md"));
     const legacyCfg = createCfg({
       provider: "gemini",
       vectorEnabled: false,
@@ -2731,11 +2286,11 @@ describe("memory index", () => {
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
-    const beforeCalls = embedBatchCalls;
+    const beforeCalls = providerFixture.embedBatchCalls;
     (manager as unknown as { dirty: boolean }).dirty = true;
     await manager.sync({ reason: "test", force: true });
 
-    expect(embedBatchCalls).toBe(beforeCalls);
+    expect(providerFixture.embedBatchCalls).toBe(beforeCalls);
   });
 
   it("preserves trusted per-line provenance through session indexing", async () => {
@@ -2772,7 +2327,7 @@ describe("memory index", () => {
         observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
       });
     } finally {
-      restoreMemoryIndexStateDir();
+      fixture.restoreStateDir();
     }
   });
 
@@ -2781,7 +2336,7 @@ describe("memory index", () => {
     // must report dirty=true when session files exist without index rows.
     const cfg = createCfg({ sources: ["sessions"], sessionMemory: true });
     const stateDirName = ".state-status-dirty-test";
-    setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
+    fixture.setStateDir(path.join(fixture.paths.workspace, stateDirName));
     try {
       await seedMemoryIndexSessionTranscript({
         sessionId: "status-dirty-test",
@@ -2795,12 +2350,12 @@ describe("memory index", () => {
       });
 
       const manager = await getFreshManager(cfg, "status");
-      managersForCleanup.add(manager);
+      trackManager(manager);
 
       const result = manager.status();
       expect(result.dirty).toBe(true);
     } finally {
-      restoreMemoryIndexStateDir();
+      fixture.restoreStateDir();
     }
   });
 
@@ -2812,7 +2367,7 @@ describe("memory index", () => {
       minScore: 0,
     });
     const stateDirName = ".state-status-stale-session-test";
-    setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
+    fixture.setStateDir(path.join(fixture.paths.workspace, stateDirName));
     const sessionId = "status-stale-session-test";
     const sessionKey = `agent:main:memory:${sessionId}`;
     const survivorId = "status-stale-session-survivor";
@@ -2843,7 +2398,7 @@ describe("memory index", () => {
       });
 
       const initial = await getFreshManager(cfg, "cli");
-      managersForCleanup.add(initial);
+      trackManager(initial);
       await initial.sync({ reason: "cli", force: true });
       await expect(
         initial.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
@@ -2852,7 +2407,7 @@ describe("memory index", () => {
       const agentDb = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
       agentDb.exec("DELETE FROM memory_embedding_cache");
       agentDb.close();
-      embedBatchCalls = 0;
+      providerFixture.embedBatchCalls = 0;
 
       await expect(
         deleteSessionEntry({
@@ -2865,11 +2420,11 @@ describe("memory index", () => {
       ).resolves.toBe(true);
 
       const statusManager = await getFreshManager(cfg, "status");
-      managersForCleanup.add(statusManager);
+      trackManager(statusManager);
       expect(statusManager.status().dirty).toBe(true);
 
       await statusManager.sync({ reason: "cli" });
-      expect(embedBatchCalls).toBe(0);
+      expect(providerFixture.embedBatchCalls).toBe(0);
       const deletedResults = await statusManager.search("ORBIT-DELETE-91", {
         minScore: 0,
         sources: ["sessions"],
@@ -2884,7 +2439,7 @@ describe("memory index", () => {
         .get() as { count: number };
       expect(sourceCount.count).toBe(1);
     } finally {
-      restoreMemoryIndexStateDir();
+      fixture.restoreStateDir();
     }
   });
 });

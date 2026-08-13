@@ -16,14 +16,11 @@ private-local entries explicitly. Three files define the boundary:
   excluded from the typed, documented SDK. Production entries remain available
   as JavaScript-only host runtime exports for separately published official
   plugins; test-only entries stay unexported.
-- `src/plugin-sdk/entrypoints.ts`: classification metadata for deprecated
-  subpaths, reserved bundled helpers, supported bundled facades, and
-  plugin-owned public surfaces.
+- `scripts/lib/plugin-sdk-entries.mts`: derived public/private export metadata,
+  supported bundled facades, and plugin-owned public surfaces.
 
 Maintainers audit the public export count with `pnpm plugin-sdk:surface` and
-active reserved helper subpaths with `pnpm plugins:boundary-report:summary`;
-unused reserved helper exports fail the CI report instead of staying in the
-public SDK as dormant compatibility debt.
+the compatibility queue with `pnpm plugins:boundary-report:summary`.
 
 For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview).
 
@@ -44,9 +41,8 @@ Only the later-window deprecated subpaths remain exported. July 2026 aliases and
 unused subpaths were deleted, while bundled-only helpers were removed from the
 public package and are labeled private-local below. The maintained list is
 `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; CI rejects bundled
-`plugin-sdk/text-runtime` are compatibility only, and `plugin-sdk/zod` is a
-compatibility re-export: import `zod` directly from `zod`. The broad domain
-barrels `plugin-sdk/agent-runtime`, `plugin-sdk/channel-lifecycle`,
+imports of these compatibility-only subpaths. The broad domain barrels
+`plugin-sdk/agent-runtime`, `plugin-sdk/channel-lifecycle`,
 `plugin-sdk/conversation-runtime`, `plugin-sdk/hook-runtime`,
 `plugin-sdk/media-runtime`, `plugin-sdk/plugin-runtime`, and
 `plugin-sdk/security-runtime` are likewise deprecated in favor of focused
@@ -64,10 +60,10 @@ longer package exports: `agent-runtime-test-contracts`,
 
 ### Bundled plugin helper subpaths
 
-Bundled-only helper modules are private-local after the July 2026 sweep. Cross-owner imports are blocked by package contract guardrails. `src/plugin-sdk/entrypoints.ts` separately tracks the supported bundled facades that remain public, SDK
-entrypoints backed by their bundled plugin until generic contracts replace
-`plugin-sdk/qa-runner-runtime`, `plugin-sdk/telegram-account`,
-deprecated for new code; see the per-row notes below.
+Bundled-only helper modules are private-local after the July 2026 sweep.
+Package contract guardrails classify the supported bundled facades that remain
+public until generic contracts replace them. Those facades are deprecated for
+new code; see the per-row notes below.
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
@@ -114,7 +110,6 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/channel-config-writes` | Private-local after July 2026; Channel config-write authorization helpers |
     | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
-    | `plugin-sdk/group-access` | Deprecated group-access decision helpers; use `resolveChannelMessageIngress` from `plugin-sdk/channel-ingress-runtime` |
     | `plugin-sdk/direct-dm-guard-policy` | Private-local after July 2026; Narrow direct-DM pre-crypto guard policy helpers |
     | `plugin-sdk/discord` | Deprecated Discord compatibility facade for published `@openclaw/discord@2026.3.13` and tracked owner compatibility; new plugins should use generic channel SDK subpaths |
     | `plugin-sdk/telegram-account` | Deprecated Telegram account-resolution compatibility facade for tracked owner compatibility; new plugins should use injected runtime helpers or generic channel SDK subpaths |
@@ -123,7 +118,6 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, formatting, roots, debounce, mention matching, mention-policy, and inbound logging |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
     | `plugin-sdk/channel-mention-gating` | Private-local after July 2026; Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
-    | `plugin-sdk/channel-streaming` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-streaming-config` | Dependency-light channel streaming config readers (`getChannelStreamingConfigObject`, `resolveChannelStreamingNativeTransport`) for doctor contract closures and other control-plane paths that must not load the reply pipeline |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | Channel message-action helpers, plus deprecated native schema helpers kept for plugin compatibility |
@@ -200,7 +194,6 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/command-surface` | Private-local after July 2026; Command-body normalization and command-surface helpers |
     | `plugin-sdk/allow-from` | Allow-from parsing, normalization, resolution, and matching helpers |
     | `plugin-sdk/provider-auth-login-flow-runtime` | Private-local after July 2026; Lazy provider auth login flow helpers for private channel and Web UI device-code pairing |
-    | `plugin-sdk/channel-secret-runtime` | Deprecated broad secret-contract surface (`collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, secret target types); prefer the focused subpaths below |
     | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
     | `plugin-sdk/channel-secret-tts-runtime` | Private-local after July 2026; Narrow nested channel TTS secret assignment helpers |
     | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, setup-plan construction, and setup CLI scaffolding for plugin-owned secret providers |
@@ -223,10 +216,9 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
-    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
+    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex helper for serializing transcript-mirror writes; not for third-party plugins |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
-    | `plugin-sdk/matrix` | Deprecated Matrix compatibility facade for older third-party channel packages; new plugins should import `plugin-sdk/run-command` directly |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/plugin-command-runtime` | Registry-generation-bound native plugin command candidates, terminal catalog decisions, and exact selected dispatch execution |
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
@@ -240,7 +232,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/tts-runtime` | Private-local after July 2026; Supported facade for text-to-speech config schemas and runtime helpers |
     | `plugin-sdk/gateway-method-runtime` | Reserved Gateway method dispatch helper for plugin HTTP routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |
     | `plugin-sdk/gateway-runtime` | Gateway client, event-loop-ready client start helper, gateway CLI RPC, gateway protocol errors, advertised LAN host resolution, and channel-status patch helpers |
-    | `plugin-sdk/config-contracts` | Focused type-only config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types |
+    | `plugin-sdk/config-contracts` | Focused config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types, plus the dependency-light runtime helper `resolveGatewayPublicOrigin(cfg)` which returns the normalized `gateway.publicOrigin` (bare http(s) origin, optional reverse-proxy path, no query/hash) or `undefined` when unset, for building links back to the Gateway |
     | `plugin-sdk/plugin-config-runtime` | Deprecated compatibility facade for runtime plugin-config helpers; new plugins use `api.pluginConfig` plus focused config contracts, snapshots, and mutation helpers |
     | `plugin-sdk/config-mutation` | Transactional config mutation helpers such as `mutateConfigFile`, `replaceConfigFile`, and `logConfigUpdated` |
     | `plugin-sdk/message-tool-delivery-hints` | Private-local after July 2026; Shared message-tool delivery metadata hint strings |
@@ -285,7 +277,6 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/acp-runtime` | Private-local after July 2026; ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/acp-runtime-backend` | Private-local after July 2026; Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
     | `plugin-sdk/acp-binding-resolve-runtime` | Private-local after July 2026; Read-only ACP binding resolution without lifecycle startup imports |
-    | `plugin-sdk/agent-config-primitives` | Deprecated agent runtime config-schema primitives; import schema primitives from a maintained plugin-owned surface |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
     | `plugin-sdk/dangerous-name-runtime` | Private-local after July 2026; Dangerous-name matching resolution helpers |
     | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers, including `BOOTSTRAP_HANDOFF_OPERATOR_SCOPES` |
@@ -355,7 +346,6 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/transcripts` | Private-local after July 2026; Shared transcript source provider types, registry helpers, meeting-provider bridge factory, session descriptors, and utterance metadata |
     | `plugin-sdk/webhook-targets` | Private-local after July 2026; Webhook target registry and route-install helpers |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
-    | `plugin-sdk/zod` | Deprecated compatibility re-export; import `zod` from `zod` directly |
     | `plugin-sdk/plugin-test-api` | Repo-local minimal `createTestPluginApi` helper for direct plugin registration unit tests without importing repo test helper bridges |
     | `plugin-sdk/agent-runtime-test-contracts` | Repo-local native agent-runtime adapter contract fixtures for auth, delivery, fallback, tool-hook, prompt-overlay, schema, and transcript projection tests |
     | `plugin-sdk/channel-test-helpers` | Repo-local channel-oriented test helpers for generic actions/setup/status contracts, directory assertions, account startup lifecycle, send-config threading, runtime mocks, status issues, outbound delivery, and hook registration |
@@ -403,8 +393,8 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
 
     | Subpath | Owner and purpose |
     | --- | --- |
-    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (reserved package export) |
-    | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex plugin helper for serializing transcript-mirror writes (reserved package export) |
+    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (default-only package export) |
+    | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex plugin helper for serializing transcript-mirror writes (default-only package export) |
 
   </Accordion>
 </AccordionGroup>

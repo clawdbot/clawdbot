@@ -730,7 +730,7 @@ describe("gateway usage helpers", () => {
     );
 
     const config = {
-      agents: { list: [{ id: "main" }, { id: "opus" }] },
+      agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
       session: {},
     } as OpenClawConfig;
     const context = { getRuntimeConfig: () => config };
