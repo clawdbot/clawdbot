@@ -242,6 +242,9 @@ type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
     entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
     nowMs: number;
   };
+};
+
+type SaveCronJobsStoreInternalOptions = SaveCronJobsStoreOptions & {
   transactionHooks?: CronStoreTransactionHooks;
 };
 
@@ -250,7 +253,12 @@ export async function saveCronJobsStore(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,
-) {
+): Promise<void>;
+export async function saveCronJobsStore(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronJobsStoreInternalOptions,
+): Promise<void> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   const stateOnly = opts?.stateOnly === true && !opts.quarantine?.entries.length;
