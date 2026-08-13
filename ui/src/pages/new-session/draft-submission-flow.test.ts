@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -32,12 +33,15 @@ describe("DraftSubmissionFlow", () => {
     );
     let finishNavigation!: () => void;
     const navigateAndWait = vi.fn(
-      () =>
+      (_routeId: string, _options?: Parameters<ApplicationContext["navigateAndWait"]>[1]) =>
         new Promise<void>((resolve) => {
           finishNavigation = resolve;
         }),
     );
-    const preload = vi.fn(async () => undefined);
+    const preload = vi.fn(
+      async (_routeId: string, _options?: Parameters<ApplicationContext["preload"]>[1]) =>
+        undefined,
+    );
     const setSessionKey = vi.fn();
     const selectAgent = vi.fn();
     const client = {
@@ -198,7 +202,12 @@ describe("DraftSubmissionFlow", () => {
     await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
 
     expect(flow.submitting).toBe(true);
+    expect(preload).toHaveBeenCalledWith("chat", navigateAndWait.mock.calls[0]?.[1]);
+    expect(preload.mock.invocationCallOrder[0]).toBeLessThan(
+      navigateAndWait.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     finishNavigation();
+    document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
     await submission;
 
     expect(start).toHaveBeenCalledOnce();
@@ -213,6 +222,6 @@ describe("DraftSubmissionFlow", () => {
     expect(createResult).toHaveBeenCalledOnce();
     expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
     expect(selectAgent).toHaveBeenCalledWith("cloud");
-    expect(preload).not.toHaveBeenCalled();
+    expect(preload).toHaveBeenCalledOnce();
   });
 });
