@@ -14,6 +14,7 @@ import {
   normalizeChatModelProviderId,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
+import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -475,6 +476,13 @@ export class NewSessionModelControl {
 
   isRestoringPreference(): boolean {
     return this.restoringPreference;
+  }
+
+  isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
+    return (
+      this.metadataState.hasSnapshot &&
+      isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
+    );
   }
 
   private restorePreference(

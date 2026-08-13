@@ -244,23 +244,22 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const explicitOverride = props.modelOverrides?.[props.sessionKey];
   const currentCatalogEntry = resolveChatModelCatalogEntry(currentOverride, props.modelCatalog);
   if (
-    typeof explicitOverride === "string" &&
-    explicitOverride.trim() &&
-    currentCatalogEntry &&
+    currentOverride &&
+    modelOptions.length > 0 &&
     !modelOptions.some((option) => option.value === currentOverride)
   ) {
     modelOptions.push({
       commitValue: currentOverride,
-      ...(currentCatalogEntry.contextWindow
+      ...(currentCatalogEntry?.contextWindow
         ? { contextWindow: currentCatalogEntry.contextWindow }
         : {}),
-      ...(typeof currentCatalogEntry.supportsTools === "boolean"
+      ...(typeof currentCatalogEntry?.supportsTools === "boolean"
         ? { supportsTools: currentCatalogEntry.supportsTools }
         : {}),
-      ...(currentCatalogEntry.available === false ? { disabled: true } : {}),
+      ...(currentCatalogEntry?.available === false ? { disabled: true } : {}),
       isDefault: false,
       value: currentOverride,
-      label: currentCatalogEntry.name.trim() || currentOverride,
+      label: currentCatalogEntry?.name.trim() || currentOverride,
       provider: resolveChatModelProvider(
         currentOverride,
         props.modelCatalog,

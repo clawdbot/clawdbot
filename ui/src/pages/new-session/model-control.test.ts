@@ -15,7 +15,9 @@ function contextWith(
   featureMethods: string[] = [],
 ) {
   const request = vi.fn().mockResolvedValue({ models });
+  const navigate = vi.fn();
   const context = {
+    navigate,
     gateway: {
       snapshot: {
         phase: "connected",
@@ -36,7 +38,7 @@ function contextWith(
       },
     },
   } as unknown as ApplicationContext;
-  return { context, request };
+  return { context, navigate, request };
 }
 
 function startupUnavailableError(retryAfterMs = 250): GatewayRequestError {
