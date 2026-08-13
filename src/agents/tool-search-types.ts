@@ -12,6 +12,13 @@ export const TOOL_SEARCH_CODE_MODE_TOOL_NAME = "tool_search_code";
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
 export const TOOL_CALL_RAW_TOOL_NAME = "tool_call";
+// One model-visible search response, including a batch, may expose at most this many candidates.
+export const MAX_TOOL_SEARCH_RESULTS = 50;
+export const MAX_TOOL_SEARCH_BATCH_QUERIES = 16;
+export const MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES = 512;
+// Includes JSON escaping and multibyte text echoed to identify batch result groups.
+export const MAX_TOOL_SEARCH_BATCH_QUERY_BYTES = 512;
+export const MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS = 4_000;
 
 export const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -27,6 +34,9 @@ export const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
 ]);
 
 export type ToolSearchMode = "code" | "tools" | "directory";
+export type ToolSearchRequest =
+  | { kind: "single"; search: { query: string; limit: number } }
+  | { kind: "batch"; searches: Array<{ query: string; limit: number }> };
 export type CatalogSource = "openclaw" | "mcp" | "client";
 export type CatalogTool = AnyAgentTool | ToolDefinition;
 export type CatalogVisibilityOptions = {

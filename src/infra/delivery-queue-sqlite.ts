@@ -504,7 +504,7 @@ export function reserveDeliveryQueueEntryAttempt(params: {
         current.platformSendAttemptId !== params.expectedPlatformSendAttemptId &&
         current.producerClaimId !== params.expectedPlatformSendAttemptId
       ) {
-        throw new Error(`Stable delivery platform claim was lost: ${params.id}`);
+        throw new Error(`Delivery platform claim was lost: ${params.id}`);
       }
       const persistedAttemptCount =
         typeof current.attemptCount === "number" &&

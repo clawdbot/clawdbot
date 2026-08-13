@@ -19,6 +19,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { listNodePairing } from "../infra/device-pairing-node.js";
 import {
   approveDevicePairing,
   getPairedDevice,
@@ -26,7 +27,6 @@ import {
   resolveNodePairingState,
   revokeDeviceToken,
 } from "../infra/device-pairing.js";
-import { listNodePairing } from "../infra/node-pairing.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";

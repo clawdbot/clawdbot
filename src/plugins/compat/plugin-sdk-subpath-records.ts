@@ -1,16 +1,19 @@
 import type { PluginCompatRecord } from "./types.js";
 
-type SeedFields = "code" | "owner" | "removeAfter" | "replacement";
-type DeprecatedPluginSdkSubpathSeed = Pick<PluginCompatRecord, SeedFields> &
-  Record<"subpath", string>;
+type SeedFields = "code" | "owner" | "removeAfter" | "removalGate" | "replacement";
+type PluginSdkSubpathSeed = Pick<PluginCompatRecord, SeedFields> &
+  Record<"subpath", string> &
+  Partial<Pick<PluginCompatRecord, "status" | "releaseNote">>;
 
-const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
+const PLUGIN_SDK_SUBPATH_SEEDS = [
   {
     code: "plugin-sdk-channel-streaming-subpath",
     subpath: "channel-streaming",
+    status: "removed",
     owner: "channel",
-    removeAfter: "2026-08-15",
     replacement: "`openclaw/plugin-sdk/channel-outbound`",
+    releaseNote:
+      "The deprecated `channel-streaming` Plugin SDK subpath was removed; plugins now import channel streaming helpers from `channel-outbound`.",
   },
   {
     code: "plugin-sdk-config-runtime-subpath",
@@ -24,7 +27,7 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
     code: "plugin-sdk-inbound-reply-dispatch-subpath",
     subpath: "inbound-reply-dispatch",
     owner: "channel",
-    removeAfter: "2026-08-15",
+    removalGate: "next-plugin-sdk-major",
     replacement: "`openclaw/plugin-sdk/channel-inbound` and `openclaw/plugin-sdk/channel-outbound`",
   },
   {
@@ -45,39 +48,49 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
   {
     code: "plugin-sdk-text-runtime-subpath",
     subpath: "text-runtime",
+    status: "removed",
     owner: "sdk",
-    removeAfter: "2026-08-15",
     replacement:
       "`openclaw/plugin-sdk/logging-core`, `openclaw/plugin-sdk/text-chunking`, `openclaw/plugin-sdk/text-utility-runtime`, and `openclaw/plugin-sdk/string-coerce-runtime`",
+    releaseNote:
+      "The deprecated `text-runtime` Plugin SDK facade was removed; plugins now import logging, chunking, text utility, and string coercion helpers from their focused subpaths.",
   },
   {
     code: "plugin-sdk-channel-secret-runtime-subpath",
     subpath: "channel-secret-runtime",
+    status: "removed",
     owner: "channel",
-    removeAfter: "2026-08-15",
     replacement:
       "`openclaw/plugin-sdk/channel-secret-basic-runtime` and `openclaw/plugin-sdk/channel-secret-tts-runtime`",
+    releaseNote:
+      "The deprecated `channel-secret-runtime` Plugin SDK subpath was removed; plugins now use the focused basic and TTS secret-runtime subpaths.",
   },
   {
     code: "plugin-sdk-agent-config-primitives-subpath",
     subpath: "agent-config-primitives",
+    status: "removed",
     owner: "config",
-    removeAfter: "2026-08-15",
     replacement: "`openclaw/plugin-sdk/channel-config-schema`",
+    releaseNote:
+      "The deprecated `agent-config-primitives` Plugin SDK subpath was removed; plugins now use maintained config-schema primitives.",
   },
   {
     code: "plugin-sdk-matrix-subpath",
     subpath: "matrix",
+    status: "removed",
     owner: "channel",
-    removeAfter: "2026-08-15",
     replacement: "`openclaw/plugin-sdk/run-command`",
+    releaseNote:
+      "The deprecated `matrix` Plugin SDK facade was removed; command execution now uses the generic `run-command` subpath.",
   },
   {
     code: "plugin-sdk-channel-logging-subpath",
     subpath: "channel-logging",
+    status: "removed",
     owner: "channel",
-    removeAfter: "2026-08-15",
     replacement: "`openclaw/plugin-sdk/channel-inbound` and `openclaw/plugin-sdk/channel-outbound`",
+    releaseNote:
+      "The deprecated `channel-logging` Plugin SDK subpath was removed; channel logging helpers now come from the inbound and outbound channel surfaces.",
   },
   {
     code: "plugin-sdk-channel-lifecycle-subpath",
@@ -96,37 +109,60 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
   {
     code: "plugin-sdk-group-access-subpath",
     subpath: "group-access",
+    status: "removed",
     owner: "channel",
-    removeAfter: "2026-08-15",
     replacement: "`openclaw/plugin-sdk/channel-ingress-runtime`",
+    releaseNote:
+      "The deprecated `group-access` Plugin SDK subpath was removed; plugins now resolve message admission through `channel-ingress-runtime`.",
   },
   {
     code: "plugin-sdk-zod-subpath",
     subpath: "zod",
+    status: "removed",
     owner: "sdk",
-    removeAfter: "2026-08-15",
     replacement: "the direct `zod` package import",
+    releaseNote:
+      "The deprecated `zod` Plugin SDK re-export was removed; plugins now import `zod` directly.",
   },
-] as const satisfies readonly DeprecatedPluginSdkSubpathSeed[];
+] as const satisfies readonly PluginSdkSubpathSeed[];
 
-export const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS.map(
-  ({ code, subpath, owner, removeAfter, replacement }) =>
-    ({
-      code,
-      status: "deprecated" as const,
-      owner,
+function buildPluginSdkSubpathRecord(seed: (typeof PLUGIN_SDK_SUBPATH_SEEDS)[number]) {
+  if ("status" in seed) {
+    return {
+      code: seed.code,
+      status: seed.status,
+      owner: seed.owner,
       introduced: "2026-07-06",
-      deprecated: "2026-07-06",
-      warningStarts: "2026-07-06",
-      removeAfter,
-      replacement,
+      replacement: seed.replacement,
       docsPath: "/plugins/sdk-migration",
-      surfaces: [`openclaw/plugin-sdk/${subpath}`],
-      diagnostics: [
-        "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
-      ],
+      surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
+      diagnostics: ["plugin SDK compatibility registry and migration guide"],
       tests: ["src/plugins/compat/registry.test.ts"],
-    }) satisfies PluginCompatRecord,
+      releaseNote: seed.releaseNote,
+    } satisfies PluginCompatRecord;
+  }
+
+  return {
+    code: seed.code,
+    status: "deprecated",
+    owner: seed.owner,
+    introduced: "2026-07-06",
+    deprecated: "2026-07-06",
+    warningStarts: "2026-07-06",
+    removeAfter: "removeAfter" in seed ? seed.removeAfter : undefined,
+    removalGate: "removalGate" in seed ? seed.removalGate : undefined,
+    replacement: seed.replacement,
+    docsPath: "/plugins/sdk-migration",
+    surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
+    diagnostics: [
+      "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
+    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+  } satisfies PluginCompatRecord;
+}
+
+export const PLUGIN_SDK_SUBPATH_RECORDS = PLUGIN_SDK_SUBPATH_SEEDS.map(
+  buildPluginSdkSubpathRecord,
 ) satisfies readonly PluginCompatRecord[];
 
 const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_SEEDS = [

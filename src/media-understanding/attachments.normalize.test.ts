@@ -20,8 +20,16 @@ describe("normalizeAttachmentPath", () => {
     expect(normalizeAttachmentPath(fileUrl.href)).toBe(localPath);
   });
 
+  it("recognizes file URL schemes case-insensitively", () => {
+    const localPath = path.join(os.tmpdir(), "photo with space.png");
+    const fileUrl = pathToFileURL(localPath).href.replace(/^file:/u, "FILE:");
+
+    expect(normalizeAttachmentPath(fileUrl)).toBe(localPath);
+  });
+
   it("rejects remote-host file URLs", () => {
     expect(normalizeAttachmentPath("file://attacker/share/photo.png")).toBeUndefined();
+    expect(normalizeAttachmentPath("FILE://attacker/share/photo.png")).toBeUndefined();
   });
 
   it("rejects Windows network paths", () => {

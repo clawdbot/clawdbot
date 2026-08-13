@@ -411,6 +411,8 @@ describe("Slack read actions", () => {
       cfg: { channels: { slack: { enabled: true, botToken: "test-auth-token" } } },
     } as Parameters<typeof resolveSlackConversationName>[1]);
 
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith("test-auth-token");
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("test-auth-token", {
+      teamId: undefined,
+    });
   });
 });

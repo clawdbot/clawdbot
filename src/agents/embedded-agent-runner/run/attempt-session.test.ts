@@ -69,7 +69,7 @@ vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: hoisted.notifyToolActivity,
 }));
 
-import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
+import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
 
 const attempt = {
   authStorage: { id: "auth" },
@@ -105,12 +105,12 @@ function createInput(options?: {
     }
   });
   const activeSession = {
-    agent: { id: "agent" },
+    agent: { id: "agent", subscribe: vi.fn() },
     setActiveToolsByName,
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
-  const sessionLockController = {
-    withSessionWriteLock: vi.fn(async (operation: () => unknown) => await operation()),
+  const transcriptLifecycle = {
+    withTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
   };
   const hookRunner = { id: "hooks" };
   const sessionToolAllowlist = [{ name: "read" }];
@@ -181,7 +181,7 @@ function createInput(options?: {
       },
       runAbortSignal: new AbortController().signal,
       sessionAgentId: "agent-1",
-      sessionLockController: sessionLockController as never,
+      transcriptLifecycle: transcriptLifecycle as never,
       sessionManager: sessionManager as never,
     },
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
@@ -219,15 +219,13 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(hoisted.applyAgentCompactionSettingsFromConfig.mock.invocationCallOrder[0]).toBeLessThan(
       hoisted.applyAgentAutoCompactionGuard.mock.invocationCallOrder[1] ?? 0,
     );
-    expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resourceLoader: fixture.resourceLoader,
-      }),
-      { contextOverflowRecoveryOwner: "caller" },
-    );
-    expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[0]).not.toHaveProperty(
-      "contextOverflowRecoveryOwner",
-    );
+    const sessionCall = hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0];
+    expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
+    expect(sessionCall?.[1]).toMatchObject({
+      beforeToolBatch: undefined,
+      contextOverflowRecoveryOwner: "caller",
+    });
+    expect(sessionCall?.[0]).not.toHaveProperty("contextOverflowRecoveryOwner");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
       expect.objectContaining({
@@ -261,7 +259,8 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
     await prepareEmbeddedAttemptAgentSession(fixture.input);
 
-    expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(expect.any(Object), {
+    expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[1]).toMatchObject({
+      beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "session",
     });
   });

@@ -1,4 +1,5 @@
 import {
+  GATEWAY_SERVER_CAPS,
   readSystemAgentInferenceUnavailableErrorDetails,
   type SystemAgentChatParams,
   type SystemAgentChatResult,
@@ -8,7 +9,11 @@ import type { WizardStep } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  canCallGatewayMethod,
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import { custodianWizardSubmission, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
@@ -33,7 +38,11 @@ const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 function hasCustodianUserInput(params: SystemAgentChatParams): boolean {
-  return params.message !== undefined || params.wizardAnswer !== undefined;
+  return (
+    params.message !== undefined ||
+    params.wizardAnswer !== undefined ||
+    params.wizardCancel !== undefined
+  );
 }
 
 type StoreListener = () => void;
@@ -67,6 +76,7 @@ export class CustodianSessionStore {
   private sessionVariant: CustodianSessionVariant | null = null;
   private sessionId = createCustodianSessionId();
   private requestEpoch = 0;
+  private requestAbort: AbortController | null = null;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
   private sessionClient: GatewayBrowserClient | null = null;
@@ -160,6 +170,15 @@ export class CustodianSessionStore {
 
   get setupRequired(): boolean {
     return this.setupIssue !== null;
+  }
+
+  get wizardCancelAvailable(): boolean {
+    return (
+      isGatewayCapabilityAdvertised(
+        this.context?.gateway.snapshot ?? {},
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
+      ) ?? false
+    );
   }
 
   retry(): void {
@@ -261,6 +280,7 @@ export class CustodianSessionStore {
 
   openChannelsFromOnboarding(): void {
     this.channelOnboardingNudgeClosed = true;
+    this.revokeNavigationAuthority();
     this.emit();
     this.context?.navigate("channels");
   }
@@ -315,11 +335,48 @@ export class CustodianSessionStore {
     );
   }
 
+  cancelWizardStep(message: CustodianMessage): void {
+    const step = message.step;
+    const client = this.activeClient;
+    if (
+      !step ||
+      !this.wizardInputPending ||
+      !client ||
+      !this.chatAvailable ||
+      !this.wizardCancelAvailable ||
+      this.sending ||
+      this.setupRequired
+    ) {
+      this.emit();
+      return;
+    }
+    void this.sendUserTurn(
+      client,
+      { sessionId: this.sessionId, wizardCancel: { stepId: step.id } },
+      t("custodian.cancel"),
+      true,
+    );
+  }
+
   exitSetup(): void {
+    // Leaving setup revokes navigation authority from every in-flight reply.
+    // The destination surface separately decides whether to retain or rotate context.
+    this.revokeNavigationAuthority();
     this.context?.navigate("chat");
   }
 
+  private revokeNavigationAuthority(): void {
+    this.requestAbort?.abort();
+    this.requestAbort = null;
+    this.requestEpoch += 1;
+    this.sending = false;
+    this.questionReplyUncertain = false;
+    this.retryParams = null;
+    this.error = null;
+  }
+
   openModelSetup(): void {
+    this.revokeNavigationAuthority();
     this.context?.navigate("model-setup");
   }
 
@@ -360,7 +417,7 @@ export class CustodianSessionStore {
   }
 
   private abandonPendingUserTurn(pendingParams: SystemAgentChatParams | null): void {
-    if (pendingParams?.message === undefined) {
+    if (!pendingParams || !hasCustodianUserInput(pendingParams)) {
       return;
     }
     this.retryParams = null;
@@ -392,7 +449,8 @@ export class CustodianSessionStore {
     const snapshot = context.gateway.snapshot;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     const chatSupported =
-      client !== null && isGatewayMethodAdvertised(snapshot, "openclaw.chat") === true;
+      client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
+    const chatUnsupported = isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false;
     const configuredInferenceState = this.resolveConfiguredInferenceState();
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
@@ -432,7 +490,7 @@ export class CustodianSessionStore {
       if (!chatSupported) {
         this.sessionStarted = false;
         this.abandonPendingUserTurn(pendingParams);
-        this.error = t("custodian.unsupportedGateway");
+        this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
         return;
       }
       this.chatAvailable = true;
@@ -449,7 +507,7 @@ export class CustodianSessionStore {
       return;
     }
     if (!chatSupported) {
-      this.error = t("custodian.unsupportedGateway");
+      this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
       return;
     }
     if (configuredInferenceState === "unresolved") {
@@ -581,6 +639,16 @@ export class CustodianSessionStore {
     if (!context) {
       return "rejected";
     }
+    const snapshot = context.gateway.snapshot;
+    if (
+      snapshot.client !== client ||
+      !canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")
+    ) {
+      return "rejected";
+    }
+    this.requestAbort?.abort();
+    const requestAbort = new AbortController();
+    this.requestAbort = requestAbort;
     const epoch = ++this.requestEpoch;
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
@@ -594,6 +662,7 @@ export class CustodianSessionStore {
       const result = await client.request<SystemAgentChatResult>("openclaw.chat", params, {
         timeoutMs: SYSTEM_AGENT_CHAT_TIMEOUT_MS,
         onSent: () => (delivery = "sent"),
+        signal: requestAbort.signal,
       });
       delivery = "received";
       if (epoch !== this.requestEpoch || client !== this.activeClient) {
@@ -665,6 +734,9 @@ export class CustodianSessionStore {
       }
       return eventNudgeState.classifyCustodianSendFailure(error, delivery);
     } finally {
+      if (this.requestAbort === requestAbort) {
+        this.requestAbort = null;
+      }
       if (epoch === this.requestEpoch) {
         this.sending = false;
       }

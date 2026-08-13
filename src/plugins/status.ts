@@ -95,6 +95,7 @@ export type PluginInspectReport = {
   mcpServers: Array<{
     name: string;
     hasStdioTransport: boolean;
+    unsupported?: boolean;
   }>;
   lspServers: Array<{
     name: string;
@@ -424,14 +425,16 @@ export function buildPluginInspectReport(params: {
             })
           : undefined;
     if (mcpSupport) {
+      const stdioServerNames = new Set(mcpSupport.stdioServerNames);
       mcpServers = [
         ...mcpSupport.supportedServerNames.map((name) => ({
           name,
-          hasStdioTransport: true,
+          hasStdioTransport: stdioServerNames.has(name),
         })),
         ...mcpSupport.unsupportedServerNames.map((name) => ({
           name,
           hasStdioTransport: false,
+          unsupported: true,
         })),
       ];
     }

@@ -8,7 +8,7 @@ import {
   resolveLlamaCppSyntheticApiKey,
 } from "./src/defaults.js";
 import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
-import { createLlamaCppStreamFn } from "./src/inference-provider.js";
+import { createLlamaCppInferenceRuntime } from "./src/inference-provider.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./src/setup.js";
 
 export default definePluginEntry({
@@ -16,6 +16,12 @@ export default definePluginEntry({
   name: "llama.cpp Provider",
   description: "Local GGUF text inference and embeddings through node-llama-cpp",
   register(api: OpenClawPluginApi) {
+    const inferenceRuntime = createLlamaCppInferenceRuntime();
+    api.registerService({
+      id: "llama-cpp-inference-runtime",
+      start: () => undefined,
+      stop: () => inferenceRuntime.dispose(),
+    });
     api.registerEmbeddingProvider(llamaCppEmbeddingProviderAdapter);
     api.registerProvider({
       id: LLAMA_CPP_PROVIDER_ID,
@@ -51,7 +57,7 @@ export default definePluginEntry({
         if (model.baseUrl !== LLAMA_CPP_LOCAL_BASE_URL) {
           return undefined;
         }
-        return createLlamaCppStreamFn({
+        return inferenceRuntime.createStreamFn({
           providerConfig: config?.models?.providers?.[provider],
         });
       },

@@ -175,12 +175,12 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
         maxConcurrent: 4,
       },
     },
-    list: [
-      {
-        id: "coordinator",
+    entries: {
+      coordinator: {
+        default: true,
         subagents: { delegationMode: "prefer" },
       },
-    ],
+    },
   },
 }
 ```
@@ -296,6 +296,27 @@ Only use `sessions_yield` when the session's effective tool list includes
 it. Some minimal or custom tool profiles may expose `sessions_spawn` and
 `subagents` without exposing `sessions_yield`; in that case, do not invent
 a polling loop just to wait for completion.
+
+A sub-agent can also yield on its own behalf to wait for external work, such
+as a remote job or a long-running task it does not drive itself. That pauses
+the child run instead of completing it, so the requester receives no
+completion event yet and keeps waiting. A plugin can then continue that same run
+by calling `api.runtime.subagent.run` with the paused `sessionKey`, instead of
+starting a sibling. The requester is announced once such a follow-up finishes
+normally; a follow-up that yields again leaves the run paused and the requester
+waiting.
+
+Automatic continuation is specific to the plugin runtime API above. Ordinary
+follow-ups through routes not tracked as sub-agent runs neither continue the
+paused run nor announce its requester. Explicit `subagents` steering is
+different: it deliberately replaces the yielded run and continues the same
+child session.
+
+Among plugin runtime follow-ups, continuation applies to those that use default
+delivery. A follow-up that supplies its own requester or completion-delivery
+context is asking for its own audience, so it runs as a separate sibling and
+delivers there instead. The paused run stays resumable, and a later default
+follow-up still continues it.
 
 When active children exist, OpenClaw injects a compact runtime-generated
 `Active Subagents` prompt block into normal turns so the requester can see
@@ -507,8 +528,9 @@ fallbacks. Fully isolated auth per agent is not supported yet.
 Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
-- If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
-- If the latest assistant text is the exact silent token `NO_REPLY` / `no_reply`, announce output is suppressed even if earlier visible progress existed.
+- An exact `ANNOUNCE_SKIP` response suppresses announce output.
+- For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
+- Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
 
 Delivery depends on requester depth:
 
@@ -573,14 +595,16 @@ Sub-agents use the same profile and tool-policy pipeline as the parent or
 target agent first. After that, OpenClaw applies the sub-agent restriction
 layer.
 
-Sub-agents always lose `gateway`, `agents_list`, `session_status`, and
-`cron` regardless of depth or role (system-level/interactive tools, or
-tools the main agent should coordinate). Leaf sub-agents (default depth-1
-behavior, and always at depth 2) additionally lose `subagents`,
-`sessions_list`, `sessions_history`, and `sessions_spawn`. Sub-agents never
-get the `message` tool — it is disabled at spawn time, not filtered by
-this deny list — and `sessions_send` stays denied so sub-agents
-communicate only through the announce chain.
+Sub-agents always lose `gateway`, `agents_list`, `session_status`, `cron`,
+`message`, `sessions_send`, and the `conversations_*` tools regardless of
+depth or role (system-level/interactive tools, direct delivery surfaces, or
+tools the main agent should coordinate). This hard-deny layer is derived from
+the persisted sub-agent session envelope on every turn, including resumed and
+visible dashboard sessions; ordinary `allow`/`alsoAllow` entries cannot override
+it. Hidden launches also disable `message` before tool construction as defense in
+depth. Leaf sub-agents (default depth-1 behavior, and always at depth 2)
+additionally lose `subagents`, `sessions_list`, `sessions_history`, and
+`sessions_spawn`, so sub-agent communication stays on the announce chain.
 
 `sessions_history` remains a bounded, sanitized recall view here too — it
 is not a raw transcript dump.

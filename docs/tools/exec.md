@@ -32,8 +32,10 @@ Auto-background the command after this delay (ms).
 Background the command immediately instead of waiting for `yieldMs`.
 </ParamField>
 
-<ParamField path="timeout" type="number" default="tools.exec.timeoutSeconds">
-Override the configured exec timeout for this call, in seconds. Applies to foreground, background, `yieldMs`, gateway, sandbox, and node `system.run` execution. `timeout: 0` disables the exec process timeout for that call.
+<ParamField path="timeoutSeconds" type="number" default="tools.exec.timeoutSeconds">
+Override the configured exec timeout for this call, in **seconds**. Note the sibling `yieldMs` is in
+milliseconds, and the `process` tool's identically named `timeout` is also in milliseconds - pass
+`timeoutSeconds` so the unit is explicit at the call site. Applies to foreground, background, `yieldMs`, gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call.
 </ParamField>
 
 <ParamField path="pty" type="boolean" default="false">
@@ -86,7 +88,7 @@ Notes:
 
 | Key                                  | Default                  | Notes                                                                                                                                                   |
 | ------------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools.exec.timeoutSeconds`          | `1800`                   | Default per-command exec timeout in seconds. Per-call `timeout` overrides it; per-call `timeout: 0` disables the exec process timeout.                  |
+| `tools.exec.timeoutSeconds`          | `1800`                   | Default per-command exec timeout in seconds. Per-call `timeoutSeconds` overrides it; per-call `timeoutSeconds: 0` disables the exec process timeout.    |
 | `tools.exec.host`                    | `auto`                   | Resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.                                                                            |
 | `tools.exec.mode`                    | host-derived             | Canonical policy knob. See [Modes](#modes) below.                                                                                                       |
 | `tools.exec.reviewer.model`          | configured agent primary | Optional provider/model override for `mode=auto` review.                                                                                                |

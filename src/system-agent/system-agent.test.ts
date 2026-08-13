@@ -5,10 +5,8 @@ import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { runSystemAgent, type RunSystemAgentOptions } from "./system-agent.js";
-import {
-  createSystemAgentTestRuntime,
-  createSystemAgentVerifiedInferenceTestFixture,
-} from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
+import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 const inferenceMocks = vi.hoisted(() => ({

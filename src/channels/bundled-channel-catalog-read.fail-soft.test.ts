@@ -8,7 +8,7 @@ afterEach(() => {
 });
 
 describe("listBundledChannelCatalogEntries discovery failures", () => {
-  it("falls back when bundled package metadata is unavailable during import", async () => {
+  it("falls back to bundled official metadata when package metadata is unavailable", async () => {
     vi.doMock("../infra/openclaw-root.js", () => ({
       resolveOpenClawPackageRootSync: () => null,
       resolveOpenClawPackageRoot: async () => null,
@@ -22,6 +22,9 @@ describe("listBundledChannelCatalogEntries discovery failures", () => {
       "./bundled-channel-catalog-read.js?scope=discovery-fail-soft",
     );
 
-    expect(catalog.listBundledChannelCatalogEntries()).toStrictEqual([]);
+    expect(catalog.listBundledChannelCatalogEntries().map((entry) => entry.id)).toContain("qqbot");
+    expect(catalog.findBundledChannelCatalogMetadata("qqbot")?.approvalFlags).toStrictEqual([
+      "native",
+    ]);
   });
 });

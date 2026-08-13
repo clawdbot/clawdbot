@@ -1,13 +1,46 @@
 // Verifies config IO compatibility loading and migration behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
+import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { VERSION } from "../version.js";
-import { createConfigIO } from "./io.js";
+import { createConfigIO } from "./io.factory.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
-import { withTempHome } from "./test-helpers.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
+
+vi.mock("../commands/doctor/shared/legacy-config-compat.js", () => ({
+  applyLegacyDoctorMigrations: () => {
+    throw new Error("config IO compatibility tests must not enter recovery migration");
+  },
+}));
+
+vi.mock("../plugins/gateway-startup-plugin-ids.js", () => ({
+  createConfigValidationMetadataPluginIdScope: (params: {
+    config: { plugins?: { entries?: Record<string, unknown> } };
+  }) => {
+    const configuredPluginIds = Object.keys(params.config.plugins?.entries ?? {}).toSorted();
+    const removedPluginIds = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+    if (configuredPluginIds.some((pluginId) => !removedPluginIds.has(pluginId))) {
+      throw new Error("config IO compatibility tests require real metadata for active plugins");
+    }
+    return {
+      key: `io-compat:${configuredPluginIds.join(",")}`,
+      resolve: () => [],
+    };
+  },
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  rebasePluginMetadataSnapshotManifestRegistry: () => {
+    throw new Error("config IO compatibility tests must not materialize metadata snapshots");
+  },
+  resolvePluginMetadataSnapshot: () => ({
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  }),
+}));
+
+function withTempHome<T>(run: (home: string) => Promise<T>): Promise<T> {
+  return withTempDir("openclaw-config-compat-", run);
+}
 
 async function writeConfig(
   home: string,
@@ -30,29 +63,6 @@ function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.Pro
 }
 
 describe("config io paths", () => {
-  let whatsappSharedAccessDefaults: unknown;
-
-  beforeAll(() => {
-    const migrated = normalizeCompatibilityConfigValues({
-      channels: {
-        whatsapp: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["+15550001111"],
-          groupPolicy: "open",
-          groupAllowFrom: [],
-          accounts: {
-            work: {
-              enabled: true,
-              authDir: "/tmp/wa-work",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-    whatsappSharedAccessDefaults = migrated.config.channels?.whatsapp?.accounts?.default;
-  });
-
   it("uses ~/.openclaw/openclaw.json when config exists", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeConfig(home, ".openclaw", 19001);
@@ -86,44 +96,27 @@ describe("config io paths", () => {
     });
   });
 
-  it("logs validation warnings with real line breaks", async () => {
+  it("keeps canonical custom gateway bind byte-identical during load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            plugins: {
-              entries: {
-                "google-antigravity-auth": {
-                  enabled: false,
-                  config: { stale: true },
-                },
-              },
-            },
-          },
-          null,
-          2,
-        ),
-      );
-      const logger = {
-        error: vi.fn(),
-        warn: vi.fn(),
+      const gateway = {
+        mode: "local" as const,
+        bind: "custom" as const,
+        customBindHost: "127.0.0.1",
       };
-
+      const raw = `${JSON.stringify({ gateway }, null, 2)}\n`;
+      await fs.writeFile(configPath, raw, "utf-8");
       const io = createConfigIO({
         configPath,
         env: { HOME: home } as NodeJS.ProcessEnv,
         homedir: () => home,
-        logger,
       });
-      io.loadConfig();
 
-      expect(logger.warn).toHaveBeenCalledWith(
-        "Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-      );
-      expect(logger.warn).not.toHaveBeenCalledWith("Config warnings:\\n");
+      const config = io.loadConfig();
+
+      expect(config.gateway).toMatchObject({ bind: "custom", customBindHost: "127.0.0.1" });
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
     });
   });
 
@@ -153,6 +146,9 @@ describe("config io paths", () => {
       load();
       load();
       expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+      );
 
       createConfigIO({
         configPath,
@@ -307,14 +303,5 @@ describe("config io paths", () => {
       },
     });
     expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
-  });
-
-  it("moves WhatsApp shared access defaults into accounts.default during runtime compat", () => {
-    expect(whatsappSharedAccessDefaults).toEqual({
-      dmPolicy: "allowlist",
-      allowFrom: ["+15550001111"],
-      groupPolicy: "open",
-      groupAllowFrom: [],
-    });
   });
 });

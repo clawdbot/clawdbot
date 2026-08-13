@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
 
@@ -309,7 +310,7 @@ extension OpenClawChatViewModel {
 
 // MARK: - Markdown shapes fixture
 
-// Extended-delimiter literal keeps the fenced Swift interpolation inert.
+/// Extended-delimiter literal keeps the fenced Swift interpolation inert.
 private let markdownShapesFixture = #"""
 # Release Notes
 
@@ -344,6 +345,37 @@ Closing paragraph with unicode — dashes, émojis 🦀🚀, and a trailing line
 /// `session.message` rows, duplicate delivery, out-of-order arrival, and reconnect
 /// convergence. Tracking: #100196.
 struct ChatStreamReplayTests {
+    @Test func `live session message marker produces a visible transcript row`() async throws {
+        let harness = try await StreamReplayHarness.bootstrapped()
+        let frame = EventFrame(
+            type: "event",
+            event: "session.message",
+            payload: AnyCodable([
+                "sessionKey": "main",
+                "messageId": "live-reset",
+                "message": [
+                    "role": "system",
+                    "content": [],
+                    "timestamp": 1,
+                    "__openclaw": ["kind": "reset", "id": "live-reset"],
+                ],
+            ]))
+        let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: frame))
+
+        harness.transport.emit(event)
+        try await harness.converge("live reset marker appended") { vm in
+            vm.messages.contains { $0.historyMarker?.kind == "reset" }
+        }
+
+        let rows = await MainActor.run { ChatTranscriptRow.build(from: harness.vm.messages) }
+        guard let last = rows.last, case let .historyDivider(divider) = last else {
+            Issue.record("Expected the live reset marker to produce a divider")
+            return
+        }
+        #expect(divider.label == "Session reset")
+        #expect(divider.description == "The earlier conversation was cleared.")
+    }
+
     @Test func `clean streaming run converges losslessly to durable rows`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let finalText = "Hello, world!"

@@ -6,7 +6,7 @@ import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { renderConfiguredModel } from "./configured-model.ts";
 
-function mount(result: SystemAgentSetupDetectResult) {
+function mount(result: SystemAgentSetupDetectResult, onContinue?: () => void) {
   const container = document.createElement("div");
   document.body.append(container);
   const onVerify = vi.fn();
@@ -21,6 +21,7 @@ function mount(result: SystemAgentSetupDetectResult) {
       canVerify: true,
       actionsDisabled: false,
       onVerify,
+      onContinue,
     }),
     container,
   );
@@ -95,5 +96,25 @@ describe("renderConfiguredModel", () => {
 
     button?.click();
     expect(onVerify).toHaveBeenCalledOnce();
+  });
+
+  it("renders the optional continuation action in the configured card", () => {
+    const onContinue = vi.fn();
+    const { container } = mount(
+      {
+        candidates: [],
+        manualProviders: [],
+        prepareOptions: [],
+        workspace: "/tmp/workspace",
+        configuredModel: "openai/gpt-5",
+        setupComplete: true,
+      },
+      onContinue,
+    );
+    const button = [...container.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Continue setup",
+    );
+    button?.click();
+    expect(onContinue).toHaveBeenCalledOnce();
   });
 });

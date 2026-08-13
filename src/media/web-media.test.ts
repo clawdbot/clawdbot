@@ -1425,9 +1425,14 @@ describe("loadWebMedia", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32").each([2, 3] as const)(
+  // Swap at open 2 trips the hardlink guard (invalid-path); swap at open 3 trips
+  // the fs-safe pre-open identity re-check, an access denial (path-not-allowed).
+  it.runIf(process.platform !== "win32").each([
+    [2, "invalid-path"],
+    [3, "path-not-allowed"],
+  ] as const)(
     "rejects an inbound media store URI swapped to a hardlink on guarded open %s",
-    async (swapOpen) => {
+    async (swapOpen, expectedCode) => {
       const id = `signal-hardlink-race-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
       const filePath = path.join(stateDir, "media", "inbound", id);
       const outsidePath = path.join(fixtureRoot, `${id}.outside`);
@@ -1452,7 +1457,7 @@ describe("loadWebMedia", () => {
       try {
         await expectLoadWebMediaErrorCode(
           loadWebMediaRaw(`media://inbound/${id}`, { maxBytes: 1024 }),
-          "invalid-path",
+          expectedCode,
         );
         expect(matchingOpens).toBe(swapOpen);
       } finally {

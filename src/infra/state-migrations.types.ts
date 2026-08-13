@@ -1,4 +1,3 @@
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
@@ -44,10 +43,6 @@ export type LegacyStateDetection = {
     targetDir: string;
     hasLegacy: boolean;
   };
-  channelPlans: {
-    hasLegacy: boolean;
-    plans: ChannelLegacyStateMigrationPlan[];
-  };
   pluginPlans?: {
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
@@ -69,7 +64,10 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     preview: string[];
   };
-  worktrees: { hasLegacy: boolean };
+  worktrees: {
+    hasLegacy: boolean;
+    pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
+  };
   taskStateSidecars: {
     taskRunsPath: string;
     flowRunsPath: string;
@@ -102,10 +100,6 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
   };
   tuiLastSessions: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  commitments: {
     sourcePath: string;
     hasLegacy: boolean;
   };

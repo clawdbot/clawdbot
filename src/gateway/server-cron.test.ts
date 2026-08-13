@@ -1,18 +1,21 @@
-// Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
-// delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+// Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
+// delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
-import { createDeferred } from "../test-utils/deferred.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
@@ -20,7 +23,7 @@ type RunCronIsolatedAgentTurnMock = (params: {
 
 const {
   enqueueSystemEventMock,
-  consumeSelectedSystemEventEntriesMock,
+  systemEventReceiptRemoveMock,
   requestHeartbeatMock,
   runHeartbeatOnceMock,
   loadConfigMock,
@@ -39,7 +42,7 @@ const {
   isAgentDeletionBlockedMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
-  consumeSelectedSystemEventEntriesMock: vi.fn((_sessionKey, entries) => entries ?? []),
+  systemEventReceiptRemoveMock: vi.fn(() => true),
   requestHeartbeatMock: vi.fn(),
   runHeartbeatOnceMock: vi.fn<
     (...args: unknown[]) => Promise<{ status: "ran"; durationMs: number }>
@@ -102,19 +105,12 @@ function enqueueSystemEvent(text: string, opts?: unknown) {
   return enqueueSystemEventMock(text, opts);
 }
 
-function enqueueSystemEventEntry(text: string, opts?: unknown) {
+function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
   const result = enqueueSystemEventMock(text, opts);
   if (result === false || result === null) {
     return null;
   }
-  return {
-    text,
-    ts: Date.now(),
-  };
-}
-
-function consumeSelectedSystemEventEntries(sessionKey: string, entries: readonly unknown[]) {
-  return consumeSelectedSystemEventEntriesMock(sessionKey, entries);
+  return systemEventReceiptRemoveMock;
 }
 
 function requestHeartbeat(...args: unknown[]) {
@@ -127,8 +123,7 @@ function runHeartbeatOnce(...args: unknown[]) {
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
-  enqueueSystemEventEntry,
-  consumeSelectedSystemEventEntries,
+  enqueueSystemEventWithReceipt,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
@@ -155,7 +150,7 @@ vi.mock("../infra/restart-coordinator.js", async () => {
   );
   return {
     ...actual,
-    requestSafeGatewayRestart: requestSafeGatewayRestartMock,
+    scheduleSafeGatewayRestart: requestSafeGatewayRestartMock,
   };
 });
 
@@ -255,12 +250,7 @@ function createCronConfig(name: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(
   mock: { mock: { calls: Array<Array<unknown>> } },
@@ -319,7 +309,7 @@ describe("buildGatewayCronService", () => {
   beforeEach(() => {
     resetActiveCronTaskRunsForTests();
     enqueueSystemEventMock.mockClear();
-    consumeSelectedSystemEventEntriesMock.mockClear();
+    systemEventReceiptRemoveMock.mockClear();
     requestHeartbeatMock.mockClear();
     runHeartbeatOnceMock.mockClear();
     loadConfigMock.mockClear();
@@ -350,6 +340,99 @@ describe("buildGatewayCronService", () => {
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
     });
+  });
+
+  it("keeps sole-agent ownerless jobs dynamic across a restart and roster rename", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-sole-owner-${Date.now()}`);
+    const store = path.join(tmpDir, "cron.json");
+    const opsCfg = {
+      cron: { store },
+      agents: { entries: { ops: {} } },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(opsCfg);
+    const initial = buildGatewayCronService({
+      cfg: opsCfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    await initial.cron.start();
+    const job = await initial.cron.add({
+      name: "dynamic sole owner",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "follow the live owner" },
+    });
+    expect(job.agentId).toBeUndefined();
+    initial.cron.stop();
+
+    const restarted = buildGatewayCronService({
+      cfg: opsCfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      await restarted.cron.start();
+      expect((await restarted.cron.readJob(job.id))?.agentId).toBeUndefined();
+
+      loadConfigMock.mockReturnValue({
+        ...opsCfg,
+        agents: { entries: { research: {} } },
+      });
+      await expect(restarted.cron.run(job.id, "force")).resolves.toEqual({
+        ok: true,
+        ran: true,
+      });
+      expectIsolatedRunFields({ agentId: "research" });
+    } finally {
+      restarted.cron.stop();
+    }
+  });
+
+  it("pins ownerless jobs only when a retained legacy owner is present", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-retained-owner-${Date.now()}`);
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        cron: { store: path.join(tmpDir, "cron.json") },
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
+      } as OpenClawConfig,
+      "ops",
+    );
+    loadConfigMock.mockReturnValue(cfg);
+    const initial = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    await initial.cron.start();
+    const job = await initial.cron.add({
+      name: "legacy retained owner",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "pin once" },
+    });
+    expect(job.agentId).toBe("ops");
+    initial.cron.stop();
+
+    const restartedCfg = structuredClone(cfg);
+    loadConfigMock.mockReturnValue(restartedCfg);
+    const restarted = buildGatewayCronService({
+      cfg: restartedCfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      await restarted.cron.start();
+      expect((await restarted.cron.readJob(job.id))?.agentId).toBe("ops");
+    } finally {
+      restarted.cron.stop();
+    }
   });
 
   it("passes the persisted payload tool cap to trigger evaluation", async () => {
@@ -1727,8 +1810,8 @@ describe("buildGatewayCronService", () => {
       );
       expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          message: "queue changed",
           jobId: job.id,
+          payload: { text: "queue changed" },
           target: expect.objectContaining({ threadId: 456 }),
         }),
       );
@@ -1974,7 +2057,8 @@ describe("buildGatewayCronService", () => {
         callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "cron announce payload"),
         "cron announce payload",
       );
-      const message = typeof announcePayload.message === "string" ? announcePayload.message : "";
+      const payload = requireRecord(announcePayload.payload, "cron announce reply payload");
+      const message = typeof payload.text === "string" ? payload.text : "";
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
@@ -2060,6 +2144,7 @@ describe("buildGatewayCronService", () => {
         "options",
       );
       expect(eventOptions.sessionKey).toBe("global");
+      expect(resolveSystemEventOptionsOwnerAgentId(eventOptions)).toBe("main");
       const heartbeatRequest = requireRecord(
         callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
         "request",
@@ -2434,8 +2519,7 @@ describe("buildGatewayCronService", () => {
       },
       agents: {
         entries: {
-          primary: { default: true, model: "test/primary" },
-          main: { model: "test/main" },
+          primary: { model: "test/primary" },
         },
       },
     } as unknown as OpenClawConfig;
@@ -2954,11 +3038,11 @@ describe("buildGatewayCronService", () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-default-change-${Date.now()}`);
     const startupCfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { entries: { main: {}, yinze: { default: true }, other: {} } },
+      agents: { entries: { yinze: {} } },
     } as OpenClawConfig;
     const runtimeCfg = {
       ...startupCfg,
-      agents: { entries: { main: {}, yinze: {}, other: { default: true } } },
+      agents: { entries: { other: {} } },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(startupCfg);
     const state = buildGatewayCronService({

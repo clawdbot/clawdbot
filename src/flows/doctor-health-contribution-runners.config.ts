@@ -10,18 +10,20 @@ import {
 } from "./doctor-health-contribution-utils.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
-function isTruthyEnvValue(value: string | undefined): boolean {
+function isExplicitOptOutEnvValue(value: string | undefined): boolean {
   if (!value) {
     return false;
   }
+  // Update handoff predates canonical opt-in flags: every non-false value means the
+  // parent opted in, so preserve its broad acceptance until that protocol is retired.
   const normalized = value.trim().toLowerCase();
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
 function shouldSkipLegacyUpdateDoctorConfigWrite(env: NodeJS.ProcessEnv): boolean {
   return (
-    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
-    !isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+    isExplicitOptOutEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+    !isExplicitOptOutEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
   );
 }
 

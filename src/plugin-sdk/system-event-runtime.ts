@@ -1,4 +1,4 @@
-// System event queue helpers without the broad infra-runtime barrel.
+// Narrow system event enqueue/peek helper surface without the broad infra-runtime barrel.
 
 export {
   enqueueSystemEvent,

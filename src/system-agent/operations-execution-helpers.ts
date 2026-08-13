@@ -97,9 +97,9 @@ export async function runGatewayLifecycle(
   surface?: "cli" | "gateway",
 ): Promise<void | boolean> {
   if (operation === "restart" && surface === "gateway") {
-    const { requestSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
+    const { scheduleSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
     // In-process ownership prevents remote URL/config overrides from restarting another Gateway.
-    return requestSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
+    return scheduleSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
   }
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
@@ -187,12 +187,12 @@ export function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
   };
 }
 
-export async function resolveTuiAgentId(params: {
+export function resolveTuiAgentId(params: {
   requestedAgentId: string | undefined;
   requestedWorkspace?: string;
-  deps?: SystemAgentCommandDeps;
-}): Promise<string | undefined> {
-  const overview = await loadOverviewForOperation(params.deps);
+  overview: SystemAgentOverview;
+}): string | undefined {
+  const { overview } = params;
   const workspace = params.requestedWorkspace
     ? resolveUserPath(params.requestedWorkspace)
     : undefined;

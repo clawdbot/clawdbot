@@ -1,7 +1,8 @@
 // Cron service timer tests cover timer scheduling, cancellation, and wakeups.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
@@ -13,7 +14,6 @@ import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -125,7 +125,7 @@ describe("cron service timer seam coverage", () => {
     };
     const cronRunSessionKey = `agent:main-pr-router:cron:main-heartbeat-job:run:${now}`;
     const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath: sessionStorePath, sessionKey: "agent:main-pr-router:main" },
       {
         sessionId: "main-pr-router-session",
@@ -323,7 +323,7 @@ describe("cron service timer seam coverage", () => {
     let terminalStatePersisted = false;
     let finalizedAfterPersist = false;
     const save = cronStoreModule.saveCronJobsStore;
-    const finalize = taskExecutor.finalizeTaskRunByRunId;
+    const finalize = taskExecutor.finalizeTaskRunByRunIdCore;
     const saveSpy = vi
       .spyOn(cronStoreModule, "saveCronJobsStore")
       .mockImplementation(async (...args) => {
@@ -337,7 +337,7 @@ describe("cron service timer seam coverage", () => {
         }
       });
     const finalizeSpy = vi
-      .spyOn(taskExecutor, "finalizeTaskRunByRunId")
+      .spyOn(taskExecutor, "finalizeTaskRunByRunIdCore")
       .mockImplementation((params) => {
         finalizedAfterPersist = terminalStatePersisted;
         return finalize(params);
@@ -800,7 +800,7 @@ describe("cron service timer seam coverage", () => {
     });
 
     const createTaskRecordSpy = vi
-      .spyOn(taskExecutor, "createRunningTaskRun")
+      .spyOn(taskExecutor, "createRunningTaskRunCore")
       .mockImplementation(() => {
         throw ledgerError;
       });

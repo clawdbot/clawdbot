@@ -67,14 +67,6 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
   return undefined;
 }
 
-function resolveGoogleChatTimestampMs(eventTime?: string): number | undefined {
-  if (!eventTime) {
-    return undefined;
-  }
-  const parsed = Date.parse(eventTime);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function resolveGoogleChatBotLoopProtection(params: {
   allowBots: boolean;
   isBotSender: boolean;
@@ -588,3 +580,4 @@ export function resolveGoogleChatWebhookPath(params: {
     defaultPath: "/googlechat",
   });
 }
+import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";

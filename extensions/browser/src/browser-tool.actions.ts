@@ -49,7 +49,6 @@ const browserToolActionDeps = {
 };
 
 const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
-export { executeExtractAction } from "./browser-extract.js";
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
 type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };

@@ -10,7 +10,7 @@ import {
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 describe("sessions_yield orchestration", () => {
   beforeAll(async () => {

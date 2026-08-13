@@ -15,6 +15,19 @@ export function createFileOps(): FileOperations {
   };
 }
 
+/** Restore file metadata recorded by an earlier compaction or branch summary. */
+export function mergeSummaryFileOperations(
+  fileOps: FileOperations,
+  details: { readFiles: string[]; modifiedFiles: string[] },
+): void {
+  for (const path of Array.isArray(details.readFiles) ? details.readFiles : []) {
+    fileOps.read.add(path);
+  }
+  for (const path of Array.isArray(details.modifiedFiles) ? details.modifiedFiles : []) {
+    fileOps.edited.add(path);
+  }
+}
+
 /** Add file operations from assistant tool calls to an accumulator. */
 export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOperations): void {
   if (message.role !== "assistant") {
@@ -98,7 +111,7 @@ const TOOL_RESULT_MAX_CHARS = 2000;
 const IMPORTANT_TOOL_RESULT_TAIL =
   /(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)/i;
 
-function safeJsonStringify(value: unknown): string {
+export function stringifyCompactionValue(value: unknown): string {
   try {
     return JSON.stringify(value) ?? "undefined";
   } catch {
@@ -192,7 +205,7 @@ export function serializeConversation(messages: Message[]): string {
         } else if (block.type === "toolCall") {
           const args = block.arguments;
           const argsStr = Object.entries(args)
-            .map(([k, v]) => `${k}=${safeJsonStringify(v)}`)
+            .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
             .join(", ");
           toolCalls.push(`${block.name}(${argsStr})`);
         }

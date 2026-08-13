@@ -1,4 +1,5 @@
 // Synology Chat tests cover channel.integration plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContextMock,
@@ -25,12 +26,7 @@ function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireMockCall<TArgs extends unknown[]>(
   mock: { mock: { calls: TArgs[] } },

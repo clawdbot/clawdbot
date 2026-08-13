@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
@@ -497,6 +498,7 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   it("converts unavailable skills into repair-capable health findings", async () => {
     const unavailableSkill = createSkill();
+    const detectUnavailableSkills = vi.fn(async () => [unavailableSkill]);
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -506,18 +508,20 @@ describe("CORE_HEALTH_CHECKS", () => {
       },
     };
     const check = getCheck(
-      createCoreHealthChecks(
-        createDeps({
-          async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
-            return [unavailableSkill];
-          },
-        }),
-      ),
+      createCoreHealthChecks(createDeps({ detectUnavailableSkills })),
       "core/doctor/skills-readiness",
     );
 
     expect(check).toMatchObject({ defaultEnabled: false });
     expect(check["repair"]).toBeTypeOf("function");
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: { agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] } },
+      }),
+    ).resolves.toEqual([]);
+    expect(detectUnavailableSkills).not.toHaveBeenCalled();
 
     const findings = await check.detect({
       mode: "lint",
@@ -628,38 +632,38 @@ describe("CORE_HEALTH_CHECKS", () => {
       createCoreHealthChecks(createDeps()),
       "core/doctor/codex-session-routes",
     );
-
+    const codex = {
+      enabled: false,
+      config: { appServer: { command: "node -e process.exit(99)" } },
+    };
     const findings = await check.detect({
       mode: "lint",
       runtime,
       cfg: {
-        plugins: {
-          entries: {
-            codex: { enabled: false },
-          },
-        },
+        plugins: { entries: { codex } },
         agents: {
           defaults: {
-            model: {
-              primary: "gpt-5.5",
-            },
+            model: "openai-codex/gpt-5.5",
+            params: { temperature: 0.7 },
           },
         },
       } as unknown as OpenClawConfig,
     });
-
-    expect(findings).toStrictEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/codex-session-routes",
-        severity: "warning",
-        path: "agents.defaults.model.primary",
-        target: "openai/gpt-5.5",
-        requirement: "Codex plugin enabled for routes that use the Codex runtime.",
-        fixHint:
-          "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
-      }),
-    ]);
-    expect(findings[0]?.message).toContain("Codex plugin is disabled by config");
+    expect(findings.map((finding) => finding.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Codex plugin is disabled by config"),
+        "Codex app-server command override includes inline arguments.",
+        "Custom Codex app-server command bypasses OpenClaw's managed exact-version binary.",
+        "Explicit native Codex model routes cannot reproduce authored request transport parameters.",
+      ]),
+    );
+    expect(findings[0]).toMatchObject({
+      path: "agents.defaults.model",
+      target: "openai/gpt-5.5",
+      requirement: "Codex plugin enabled for routes that use the Codex runtime.",
+      fixHint:
+        "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
+    });
   });
 
   it("uses the read-only model catalog for hooks.gmail.model checks", async () => {
@@ -1012,30 +1016,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       }),
     );
   });
-
-  it("registers stale session locks as a legacy-owned structured check", async () => {
-    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/session-locks");
-
-    if (typeof check.repair !== "function") {
-      throw new Error("expected session lock check repair");
-    }
-    await expect(
-      check.repair(
-        {
-          mode: "fix",
-          runtime,
-          cfg: {},
-          cwd: "/tmp/openclaw-test-workspace",
-        },
-        [],
-      ),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        status: "skipped",
-        reason: "legacy doctor session lock contribution owns cleanup",
-      }),
-    );
-  });
 });
 
 describe("core/doctor/bootstrap-size", () => {
@@ -1066,6 +1046,7 @@ describe("core/doctor/bootstrap-size", () => {
           list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
         },
       },
+      cwd: tmp,
     });
 
     expect(findings).toContainEqual(
@@ -1076,5 +1057,20 @@ describe("core/doctor/bootstrap-size", () => {
         fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
       }),
     );
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: {
+          agents: {
+            defaults: { bootstrapMaxChars: 20_000 },
+            list: [
+              { id: "alpha", default: true, workspace: tmp, bootstrapMaxChars: 10_000 },
+              { id: "beta" },
+            ],
+          },
+        },
+      }),
+    ).resolves.toEqual([]);
   });
 });

@@ -94,7 +94,7 @@ describe("delivery-queue storage", () => {
         if (!firstAttemptId) {
           throw new Error("test invariant: first platform owner must claim the durable row");
         }
-        const lostClaim = `Stable delivery platform claim was lost: ${id}`;
+        const lostClaim = `Delivery platform claim was lost: ${id}`;
         // Admission snapshots taken before ownership must CAS the unclaimed
         // state; a producer that claimed meanwhile retains its media and row.
         await expect(
@@ -547,6 +547,25 @@ describe("delivery-queue storage", () => {
       expect(entry.recoveryState).toBe("send_attempt_started");
     });
 
+    it("keeps ambiguous post-send evidence across a later unclaimed batch dispatch", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir(),
+      );
+
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+      await markDeliveryPlatformSendDispatched(id, tmpDir());
+
+      // Downgrading to send_attempt_started would let recovery replay the whole
+      // batch as not_sent and duplicate the payload that already reached the platform.
+      expect(readQueuedEntry(tmpDir(), id).recoveryState).toBe("unknown_after_send");
+    });
+
     it("increments retryCount, records attempt time, and sets lastError", async () => {
       const id = await enqueueTextDelivery(
         {
@@ -564,6 +583,27 @@ describe("delivery-queue storage", () => {
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("connection refused");
+    });
+
+    it("releases a settled live owner while retaining retryable custody", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+        requiresProducerClaim: true,
+      });
+      const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+      expect(claimId).toEqual(expect.any(String));
+
+      await failDelivery(id, "provider failed", tmpDir(), claimId);
+
+      expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
+        retryCount: 1,
+        lastError: "provider failed",
+      });
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("availableAt");
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("producerClaimId");
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("recoveryState");
     });
 
     it("keeps post-send failure evidence while recording the retry failure", async () => {

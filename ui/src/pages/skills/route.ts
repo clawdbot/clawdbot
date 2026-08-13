@@ -1,9 +1,8 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
 
@@ -30,12 +29,12 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
   try {
     agentsList = await agents.ensureList();
   } catch (err) {
-    error = formatErrorMessage(err, { redact: redactToolDetail });
+    error = formatUiError(err);
   }
   try {
     report = (await loadSkillStatusReport(client, null)) ?? null;
   } catch (err) {
-    error ??= formatErrorMessage(err, { redact: redactToolDetail });
+    error ??= formatUiError(err);
   }
   return {
     gateway,

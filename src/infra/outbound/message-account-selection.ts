@@ -107,7 +107,8 @@ export function validateExplicitMessageAccountSelection(params: {
   return accountId;
 }
 
-function isPotentialBroadcastChannel(params: {
+/** Selects configured, enabled, deliverable plugins without bootstrap or config mutation. */
+export function isPotentialConfiguredMessageChannel(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
 }): params is { cfg: OpenClawConfig; plugin: ChannelPlugin & { id: ChannelId } } {
@@ -156,7 +157,7 @@ export function resolveMessageBroadcastAccountPlan(params: {
   }
 
   const candidatePlugins = listChannelPlugins().filter((plugin) =>
-    isPotentialBroadcastChannel({ cfg: params.cfg, plugin }),
+    isPotentialConfiguredMessageChannel({ cfg: params.cfg, plugin }),
   );
   const secretChannels = candidatePlugins.flatMap((plugin) => {
     try {

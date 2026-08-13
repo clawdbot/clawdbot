@@ -198,12 +198,13 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
 /** Audits a candidate summary for required sections, pending asks, and identifier preservation. */
 export function auditSummaryQuality(params: {
   summary: string;
+  structuralSummary: string;
   identifiers: string[];
   latestAsk: string | null;
   identifierPolicy?: CompactionSummarizationInstructions["identifierPolicy"];
 }): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
-  const lines = new Set(normalizedSummaryLines(params.summary));
+  const lines = new Set(normalizedSummaryLines(params.structuralSummary));
   for (const section of REQUIRED_SUMMARY_SECTIONS) {
     if (!lines.has(section)) {
       reasons.push(`missing_section:${section}`);

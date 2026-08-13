@@ -2153,7 +2153,15 @@ kill -TERM "$$"`,
     expect(transports).toContain("launch retry");
   });
 
-  it("keeps Windows update-only env flags scoped before verification", () => {
+  it("preserves bundled plugin inventory during dev updates", () => {
+    const devUpdateLines = [macos, windows].map((script) =>
+      script.split("\n").find((line) => line.includes("update --channel dev")),
+    );
+
+    expect(devUpdateLines).not.toContain(undefined);
+    for (const updateLine of devUpdateLines) {
+      expect(updateLine).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    }
     expect(powershell).toContain("windowsScopedEnvFunction");
     expect(windows).toContain(
       "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",

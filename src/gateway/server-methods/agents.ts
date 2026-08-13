@@ -34,11 +34,11 @@ import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../../agents/agent-lifecycle-registry.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  tryResolveSoleAgentId,
 } from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
@@ -47,6 +47,7 @@ import {
   sanitizeAgentIdentityLine,
 } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
+import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -72,6 +73,7 @@ import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -387,13 +389,6 @@ async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
   }
 }
 
-function isMissingCleanupPathError(error: unknown): boolean {
-  return (
-    (error instanceof FsSafeError && error.code === "not-found") ||
-    (error as NodeJS.ErrnoException).code === "ENOENT"
-  );
-}
-
 async function removeAgentPath(
   cleanupPath: AgentDeleteCleanupPath,
 ): Promise<AgentDeletePathOutcome> {
@@ -405,7 +400,7 @@ async function removeAgentPath(
     if (error instanceof AgentCleanupIdentityMismatchError) {
       return { skipped: { path: pathname, reason: error.message } };
     }
-    return isMissingCleanupPathError(error)
+    return isMissingPathError(error)
       ? { removed: { path: pathname, method: "missing" } }
       : cleanupFailure(pathname, error);
   }
@@ -415,14 +410,14 @@ async function removeAgentPath(
     await movePathToTrash(trashPath);
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (!isMissingPathError(error)) {
       return cleanupFailure(pathname, error);
     }
     try {
       await statAgentCleanupPath(cleanupPath);
       return cleanupFailure(pathname, error);
     } catch (statError) {
-      return isMissingCleanupPathError(statError)
+      return isMissingPathError(statError)
         ? { removed: { path: pathname, method: "missing" } }
         : cleanupFailure(pathname, statError);
     }
@@ -450,14 +445,14 @@ async function resolveAgentDeleteCleanupTarget(pathname: string): Promise<string
     try {
       return path.resolve(await fs.realpath(candidate), ...missingSuffix);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (!isMissingPathError(error)) {
         throw error;
       }
       let candidateStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
       try {
         candidateStat = await fs.lstat(candidate);
       } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code !== "ENOENT") {
+        if (!isMissingPathError(statError)) {
           throw statError;
         }
       }
@@ -538,7 +533,7 @@ async function prepareAgentDeleteCleanupPaths(
     try {
       sourceStat = await fs.lstat(pathname);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (!isMissingPathError(error)) {
         preparationError ??= error;
       }
     }
@@ -547,7 +542,7 @@ async function prepareAgentDeleteCleanupPaths(
       try {
         targetStat = await fs.lstat(resolvedPath);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        if (!isMissingPathError(error)) {
           preparationError ??= error;
         }
         targetStat = undefined;
@@ -817,7 +812,7 @@ async function readWorkspaceFileContent(
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {
-    if (err instanceof FsSafeError && err.code === "not-found") {
+    if (isMissingPathError(err)) {
       return undefined;
     }
     throw err;
@@ -1034,13 +1029,25 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondAgentNotFound(respond, agentId);
       return;
     }
-    if (agentId === resolveDefaultAgentId(cfg)) {
+    if (agentId === tryResolveSoleAgentId(cfg)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+          `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
+        ),
+      );
+      return;
+    }
+    if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(cfg))) {
+      // H2-2 owns credential relocation; deleting this directory first destroys the shared store.
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
         ),
       );
       return;
@@ -1055,9 +1062,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
         }
-        if (agentId === resolveDefaultAgentId(lockedConfig)) {
+        if (agentId === tryResolveSoleAgentId(lockedConfig)) {
+          throw new AgentConfigPreconditionError(`agent "${agentId}" is the only configured agent`);
+        }
+        if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(lockedConfig))) {
           throw new AgentConfigPreconditionError(
-            `agent "${agentId}" is the default; reassign default first`,
+            `agent "${agentId}" owns agents.defaults.authInheritance.agentId; relocate credentials and re-point it first`,
           );
         }
         if (configured && lockedJournal?.cleanupCompleted) {
@@ -1337,7 +1347,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               try {
                 await statAgentCleanupPath(cleanupPath);
               } catch (error) {
-                if (isMissingCleanupPathError(error)) {
+                if (isMissingPathError(error)) {
                   replacementPresent = false;
                 } else if (!(error instanceof AgentCleanupIdentityMismatchError)) {
                   note = "completed cleanup path could not be verified; replacement preserved";
@@ -1524,7 +1534,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         nonBlockingRead: true,
       });
     } catch (err) {
-      if (err instanceof FsSafeError && err.code === "not-found") {
+      if (isMissingPathError(err)) {
         respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
         return;
       }
@@ -1599,5 +1609,4 @@ export const agentsHandlers: GatewayRequestHandlers = {
     );
   },
 };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

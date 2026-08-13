@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 /**
  * Task ledger protocol schemas.
@@ -31,6 +32,14 @@ const TaskDeliveryStatusSchema = Type.Union([
   Type.Literal("not_applicable"),
 ]);
 const TaskTerminalOutcomeSchema = Type.Union([Type.Literal("succeeded"), Type.Literal("blocked")]);
+const TaskDiffStatSchema = withSince(
+  "2026.8",
+  closedObject({
+    files: Type.Integer({ minimum: 0 }),
+    added: Type.Integer({ minimum: 0 }),
+    removed: Type.Integer({ minimum: 0 }),
+  }),
+);
 
 /** Public task summary returned by task list/get/cancel responses. */
 export const TaskSummarySchema = closedObject({
@@ -54,6 +63,8 @@ export const TaskSummarySchema = closedObject({
   endedAt: Type.Optional(TimestampSchema),
   toolUseCount: Type.Optional(Type.Integer({ minimum: 0 })),
   lastToolName: Type.Optional(Type.String()),
+  lastActivity: Type.Optional(withSince("2026.8", Type.String({ maxLength: 200 }))),
+  diffStat: Type.Optional(TaskDiffStatSchema),
   progressSummary: Type.Optional(Type.String()),
   terminalSummary: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),

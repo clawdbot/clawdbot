@@ -299,20 +299,20 @@ function resolveManagedCodexPackageBinCandidate(root: string): string | null {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
       bin?: unknown;
     };
+    const packageBin =
+      packageJson.bin && typeof packageJson.bin === "object"
+        ? (packageJson.bin as Record<string, unknown>)
+        : undefined;
     const binPath =
       typeof packageJson.bin === "string"
         ? packageJson.bin
-        : isRecord(packageJson.bin) && typeof packageJson.bin.codex === "string"
-          ? packageJson.bin.codex
+        : typeof packageBin?.codex === "string"
+          ? packageBin.codex
           : null;
     return binPath ? path.resolve(packageRoot, binPath) : null;
   } catch {
     return null;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function isDistExtensionRoot(pluginRoot: string, platform: NodeJS.Platform): boolean {

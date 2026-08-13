@@ -5,12 +5,14 @@ import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
+import type { DevUpdateTarget } from "./update-dev-target.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -516,6 +518,73 @@ describe("runGatewayUpdate", () => {
     await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
   }
 
+  async function runRealGit(cwd: string, ...args: string[]): Promise<string> {
+    const result = await runCommandWithTimeout(["git", ...args], { cwd, timeoutMs: 5000 });
+    if (result.code !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+    }
+    return result.stdout.trim();
+  }
+
+  async function createTrackedGitFixture(detached: boolean) {
+    const sourceRoot = await fixtureRootTracker.make("tracked-source");
+    const localRoot = await fixtureRootTracker.make("tracked-local");
+    await runRealGit(sourceRoot, "init", "--initial-branch=main");
+    await runRealGit(sourceRoot, "config", "user.name", "OpenClaw Test");
+    await runRealGit(sourceRoot, "config", "user.email", "openclaw@example.com");
+    await fs.writeFile(
+      path.join(sourceRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@10.0.0" }),
+    );
+    await fs.writeFile(path.join(sourceRoot, "openclaw.mjs"), "export {};\n");
+    await fs.writeFile(path.join(sourceRoot, "README.md"), "base\n");
+    await runRealGit(sourceRoot, "add", "package.json", "openclaw.mjs", "README.md");
+    await runRealGit(sourceRoot, "commit", "-m", "base");
+    const baseSha = await runRealGit(sourceRoot, "rev-parse", "HEAD");
+    await runRealGit(path.dirname(localRoot), "clone", "--quiet", sourceRoot, localRoot);
+    await runRealGit(localRoot, "config", "user.name", "OpenClaw Test");
+    await runRealGit(localRoot, "config", "user.email", "openclaw@example.com");
+    if (detached) {
+      await runRealGit(localRoot, "checkout", "--detach", baseSha);
+    }
+    await fs.writeFile(path.join(sourceRoot, "README.md"), "target\n");
+    await runRealGit(sourceRoot, "add", "README.md");
+    await runRealGit(sourceRoot, "commit", "-m", "target");
+    const targetSha = await runRealGit(sourceRoot, "rev-parse", "HEAD");
+    return { sourceRoot, localRoot, baseSha, targetSha };
+  }
+
+  function createRealGitUpdateRunner(params: { finalHead?: { root: string; sha: string } } = {}) {
+    let headReads = 0;
+    return async (argv: string[], options: { cwd?: string; timeoutMs?: number }) => {
+      if (argv[0] === "git") {
+        const finalHead = params.finalHead;
+        if (
+          finalHead &&
+          argv[2] === finalHead.root &&
+          argv[3] === "rev-parse" &&
+          argv[4] === "HEAD"
+        ) {
+          headReads += 1;
+          if (headReads === 2) {
+            return toCommandResult({ stdout: finalHead.sha });
+          }
+        }
+        return await runCommandWithTimeout(argv, {
+          cwd: options.cwd,
+          timeoutMs: options.timeoutMs ?? 5000,
+        });
+      }
+      if (argv[0] === "pnpm" && (argv[1] === "build" || argv[1] === "ui:build")) {
+        const cwd = options.cwd ?? process.cwd();
+        const uiDir = path.join(cwd, "dist", "control-ui");
+        await fs.mkdir(uiDir, { recursive: true });
+        await fs.writeFile(path.join(uiDir, "index.html"), "ok\n");
+      }
+      return toCommandResult();
+    };
+  }
+
   async function runWithCommand(
     runCommand: (
       argv: string[],
@@ -525,7 +594,7 @@ describe("runGatewayUpdate", () => {
       channel?: UpdateChannel;
       tag?: string;
       cwd?: string;
-      devTargetRef?: string;
+      devTarget?: DevUpdateTarget;
       deferConfiguredPluginInstallRepair?: boolean;
       allowGatewayServiceRepair?: boolean;
       allowGatewayActivation?: boolean;
@@ -543,7 +612,7 @@ describe("runGatewayUpdate", () => {
       timeoutMs: 5000,
       ...(options?.channel ? { channel: options.channel } : {}),
       ...(options?.tag ? { tag: options.tag } : {}),
-      ...(options?.devTargetRef ? { devTargetRef: options.devTargetRef } : {}),
+      ...(options?.devTarget ? { devTarget: options.devTarget } : {}),
       ...(options?.deferConfiguredPluginInstallRepair
         ? { deferConfiguredPluginInstallRepair: true }
         : {}),
@@ -561,7 +630,7 @@ describe("runGatewayUpdate", () => {
       channel?: UpdateChannel;
       tag?: string;
       cwd?: string;
-      devTargetRef?: string;
+      devTarget?: DevUpdateTarget;
       deferConfiguredPluginInstallRepair?: boolean;
       beforeGitMutation?: (target: {
         schemaVersions?: { state: number; agent: number };
@@ -723,7 +792,7 @@ describe("runGatewayUpdate", () => {
 
   it.each([
     { name: "upstream", options: {} },
-    { name: "target ref", options: { devTargetRef: "main" } },
+    { name: "target ref", options: { devTarget: { mode: "detached", ref: "main" } } },
   ] as const)("stops dev update when fetch fails before resolving $name", async ({ options }) => {
     await setupGitCheckout();
     const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-tags`;
@@ -1092,7 +1161,7 @@ describe("runGatewayUpdate", () => {
 
     const result = await runWithRunner(runner, {
       channel: "dev",
-      devTargetRef: "refs/tags/v2026.5.19-beta.2",
+      devTarget: { mode: "detached", ref: "refs/tags/v2026.5.19-beta.2" },
     });
 
     expect(result.status).toBe("ok");
@@ -1118,7 +1187,7 @@ describe("runGatewayUpdate", () => {
 
     const result = await runWithRunner(runner, {
       channel: "dev",
-      devTargetRef: "refs/tags/v2026.5.19-beta.2",
+      devTarget: { mode: "detached", ref: "refs/tags/v2026.5.19-beta.2" },
     });
 
     expect(result.status).toBe("error");
@@ -2194,13 +2263,122 @@ describe("runGatewayUpdate", () => {
       return { stdout: "", stderr: "", code: 0 };
     };
 
-    const result = await runWithCommand(runCommand, { channel: "dev", devTargetRef: targetSha });
+    const result = await runWithCommand(runCommand, {
+      channel: "dev",
+      devTarget: { mode: "detached", ref: targetSha },
+    });
 
     expect(result.status).toBe("ok");
     expect(calls).toContain(`git -C ${tempDir} rev-parse ${targetSha}`);
     expect(calls).toContain(`git -C ${tempDir} checkout --detach ${targetSha}`);
     expect(calls).not.toContain(`git -C ${tempDir} rev-parse @{upstream}`);
     expect(calls).not.toContain(`git -C ${tempDir} rebase ${targetSha}`);
+    expect(result.after).not.toHaveProperty("upstreamRef");
+  });
+
+  it.each([
+    { name: "main", detached: false },
+    { name: "detached HEAD", detached: true },
+  ])(
+    "keeps a tracked dev target detached from $name and records its verified upstream",
+    async ({ detached }) => {
+      const { localRoot, targetSha } = await createTrackedGitFixture(detached);
+
+      const result = await runGatewayUpdate({
+        cwd: localRoot,
+        channel: "dev",
+        devTarget: {
+          mode: "tracked",
+          upstreamRef: "origin/main",
+          upstreamSha: targetSha,
+        },
+        timeoutMs: 5000,
+        runCommand: createRealGitUpdateRunner(),
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.after).toMatchObject({ sha: targetSha, upstreamRef: "origin/main" });
+      expect(await runRealGit(localRoot, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+      expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(targetSha);
+    },
+  );
+
+  it("refuses a tracked target that is unrelated to its authoritative upstream", async () => {
+    const { sourceRoot, localRoot, baseSha, targetSha } = await createTrackedGitFixture(false);
+    await runRealGit(sourceRoot, "checkout", "-b", "unrelated", baseSha);
+    await fs.writeFile(path.join(sourceRoot, "README.md"), "unrelated\n");
+    await runRealGit(sourceRoot, "add", "README.md");
+    await runRealGit(sourceRoot, "commit", "-m", "unrelated target");
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
+
+    const result = await runGatewayUpdate({
+      cwd: localRoot,
+      channel: "dev",
+      devTarget: {
+        mode: "tracked",
+        upstreamRef: "origin/unrelated",
+        upstreamSha: targetSha,
+      },
+      timeoutMs: 5000,
+      runCommand: createRealGitUpdateRunner(),
+      beforeGitMutation,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("tracked-upstream-invalid");
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+    expect(await runRealGit(localRoot, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(baseSha);
+    expect(await runRealGit(localRoot, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe(
+      "origin/main",
+    );
+  });
+
+  it("refuses a tracked target whose authoritative upstream is missing", async () => {
+    const { localRoot, baseSha, targetSha } = await createTrackedGitFixture(false);
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
+
+    const result = await runGatewayUpdate({
+      cwd: localRoot,
+      channel: "dev",
+      devTarget: {
+        mode: "tracked",
+        upstreamRef: "origin/missing",
+        upstreamSha: targetSha,
+      },
+      timeoutMs: 5000,
+      runCommand: createRealGitUpdateRunner(),
+      beforeGitMutation,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("tracked-upstream-invalid");
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+    expect(await runRealGit(localRoot, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(baseSha);
+    expect(await runRealGit(localRoot, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe(
+      "origin/main",
+    );
+  });
+
+  it("rejects a tracked result whose final HEAD differs from the frozen SHA", async () => {
+    const { localRoot, baseSha, targetSha } = await createTrackedGitFixture(false);
+
+    const result = await runGatewayUpdate({
+      cwd: localRoot,
+      channel: "dev",
+      devTarget: {
+        mode: "tracked",
+        upstreamRef: "origin/main",
+        upstreamSha: targetSha,
+      },
+      timeoutMs: 5000,
+      runCommand: createRealGitUpdateRunner({ finalHead: { root: localRoot, sha: baseSha } }),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("target-sha-mismatch");
+    expect(result.after).toBeUndefined();
   });
 
   it("resolves symbolic dev target refs from the fetched remote branch", async () => {
@@ -2275,7 +2453,10 @@ describe("runGatewayUpdate", () => {
       return { stdout: "", stderr: "", code: 0 };
     };
 
-    const result = await runWithCommand(runCommand, { channel: "dev", devTargetRef: "main" });
+    const result = await runWithCommand(runCommand, {
+      channel: "dev",
+      devTarget: { mode: "detached", ref: "main" },
+    });
 
     expect(result.status).toBe("ok");
     expect(calls).toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
@@ -2359,7 +2540,10 @@ describe("runGatewayUpdate", () => {
       return { stdout: "", stderr: "", code: 0 };
     };
 
-    const result = await runWithCommand(runCommand, { channel: "dev", devTargetRef: "main" });
+    const result = await runWithCommand(runCommand, {
+      channel: "dev",
+      devTarget: { mode: "detached", ref: "main" },
+    });
 
     expect(result.status).toBe("ok");
     expect(calls).toContain(`git -C ${tempDir} rev-parse --show-toplevel`);

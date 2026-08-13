@@ -582,6 +582,36 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("classifies signed same-origin MEDIA image and audio routes", () => {
+      const imageUrl = "/media/inbound/photo.png?mediaTicket=signed#preview";
+      const audioUrl = "/__openclaw__/media/voice%2Eogg?mediaTicket=signed";
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `MEDIA:${imageUrl}\nMEDIA:${audioUrl}`,
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: imageUrl,
+            kind: "image",
+            label: "photo.png?mediaTicket=signed#preview",
+            mimeType: "image/png",
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            url: audioUrl,
+            kind: "audio",
+            label: "voice%2Eogg?mediaTicket=signed",
+            mimeType: "audio/ogg",
+          },
+        },
+      ]);
+    });
+
     it("keeps valid local MEDIA paths as assistant attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

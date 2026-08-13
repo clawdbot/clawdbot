@@ -24,7 +24,7 @@ Run a continuous, current-`main` OpenClaw product campaign. Treat a reviewer fin
 ## Start with the moving source
 
 1. Read all of root `AGENTS.md`, then each scoped guide for the lanes under inspection. Read the current skill for a specialized workflow instead of reproducing stale instructions:
-   - `$openclaw-landable-bug-sweep` for bug acceptance and duplicate handling.
+   - `$openclaw-repair-sweep` for bug acceptance and duplicate handling.
    - `$openclaw-testing` for actual test and CI selection.
    - `$openclaw-qa-testing` for QA Lab, scenario catalogs, and real provider lanes.
    - `$control-ui-e2e` for browser and Control UI proof.

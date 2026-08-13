@@ -1,4 +1,5 @@
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
@@ -24,10 +25,11 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { handleApprovalRequest, toTranscriptToolResult } from "./run-attempt-tools.js";
+import { toTranscriptToolResult } from "./run-attempt-tools.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
   inferCodexDynamicToolMeta,
+  isCodexCommandBearingToolCall,
   resolveCodexToolProgressDetailMode,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
@@ -113,7 +115,7 @@ export function createCodexAttemptServerRequestController(
           armCompletionWatchOnResponse = true;
           markCurrentTurnRequestProgress();
         }
-        return userInputBridgeRef.current?.handleRequest({
+        return await userInputBridgeRef.current?.handleRequest({
           id: request.id,
           params: request.params,
         });
@@ -124,9 +126,9 @@ export function createCodexAttemptServerRequestController(
             armCompletionWatchOnResponse = true;
             markCurrentTurnRequestProgress();
           }
-          return handleApprovalRequest({
+          return await handleCodexAppServerApprovalRequest({
             method: request.method,
-            params: request.params,
+            requestParams: request.params,
             paramsForRun: params,
             threadId: resourceState.thread.threadId,
             turnId,
@@ -185,6 +187,7 @@ export function createCodexAttemptServerRequestController(
         resolveCodexToolProgressDetailMode(params.toolProgressDetail),
       );
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
+      const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
       if (shouldEmitDynamicToolProgress) {
         void emitCodexAppServerEvent(params, {
@@ -195,6 +198,7 @@ export function createCodexAttemptServerRequestController(
             toolCallId: call.callId,
             ...(toolMeta ? { meta: toolMeta } : {}),
             ...(toolArgs ? { args: toolArgs } : {}),
+            ...(commandBearing ? { commandBearing: true } : {}),
           },
         });
       }
@@ -265,6 +269,9 @@ export function createCodexAttemptServerRequestController(
           contentItems: protocolResponse.contentItems,
         });
         recordCodexDynamicToolResult(projector, call, response, protocolResponse);
+        if (protocolResponse.success && call.tool === "update_plan") {
+          projector?.recordDynamicPlanUpdate(response.executedArguments ?? call.arguments);
+        }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
           void emitCodexAppServerEvent(params, {
@@ -274,6 +281,7 @@ export function createCodexAttemptServerRequestController(
               name: call.tool,
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
+              ...(commandBearing ? { commandBearing: true } : {}),
               isError: !protocolResponse.success,
               result: toTranscriptToolResult(progressResponse),
             },

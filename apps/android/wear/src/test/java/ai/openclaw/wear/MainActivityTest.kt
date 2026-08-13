@@ -77,6 +77,75 @@ class MainActivityTest {
   }
 
   @Test
+  fun chatFollowTracksStreamingGrowthAtLatest() {
+    val messages = listOf(WearChatMessage(id = "user-1", role = "user", text = "Status?", timestamp = 1L))
+    val anchor = wearChatLatestAnchorIndex(1, hasStreaming = true, canAbort = false, hasAssistant = false, hasFailure = false)
+    val first =
+      nextWearThreadFollowForContent(
+        state = WearThreadFollowState(),
+        contentRevision = wearChatContentRevision("session-1", messages, "Read", anchor),
+      )
+    val continued =
+      nextWearThreadFollowForContent(
+        state = first.state,
+        contentRevision = wearChatContentRevision("session-1", messages, "Ready", anchor),
+      )
+
+    assertTrue(first.scrollToLatest)
+    assertTrue(continued.scrollToLatest)
+    assertTrue(continued.state.followingLatest)
+    assertFalse(continued.state.hasNewContent)
+  }
+
+  @Test
+  fun chatFollowPreservesManualScrollForNewContent() {
+    val firstMessage = WearChatMessage(id = "message-1", role = "assistant", text = "First", timestamp = 1L)
+    val initial =
+      nextWearThreadFollowForContent(
+        state = WearThreadFollowState(),
+        contentRevision = wearChatContentRevision("session-1", listOf(firstMessage), null, 6),
+      )
+    val scrolledBack =
+      nextWearThreadFollowForViewport(
+        state = initial.state,
+        atLatest = false,
+        scrollingBackward = true,
+      )
+    val newContent =
+      nextWearThreadFollowForContent(
+        state = scrolledBack,
+        contentRevision =
+          wearChatContentRevision(
+            "session-1",
+            listOf(firstMessage, WearChatMessage(id = "message-2", role = "assistant", text = "Second", timestamp = 2L)),
+            null,
+            7,
+          ),
+      )
+
+    assertFalse(newContent.scrollToLatest)
+    assertFalse(newContent.state.followingLatest)
+    assertTrue(newContent.state.hasNewContent)
+    assertTrue(wearThreadFollowLatest(newContent.state).followingLatest)
+  }
+
+  @Test
+  fun chatFollowTargetsRenderedTrailingAnchor() {
+    assertEquals(
+      -1,
+      wearChatLatestAnchorIndex(0, hasStreaming = false, canAbort = false, hasAssistant = false, hasFailure = true),
+    )
+    assertEquals(
+      5,
+      wearChatLatestAnchorIndex(1, hasStreaming = false, canAbort = false, hasAssistant = false, hasFailure = false),
+    )
+    assertEquals(
+      10,
+      wearChatLatestAnchorIndex(2, hasStreaming = true, canAbort = true, hasAssistant = true, hasFailure = true),
+    )
+  }
+
+  @Test
   fun threadFollowTargetsTrailingAnchorAfterLatestContent() {
     assertEquals(-1, wearThreadLatestAnchorIndex(entryCount = 0, thinking = false))
     assertEquals(1, wearThreadLatestAnchorIndex(entryCount = 1, thinking = false))

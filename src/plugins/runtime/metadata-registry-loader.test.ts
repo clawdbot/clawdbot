@@ -24,7 +24,11 @@ vi.mock("../loader.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: () => "/resolved-workspace",
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
+    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
+  >(() => "/resolved-workspace"),
   resolveDefaultAgentId: () => "default",
 }));
 

@@ -8,6 +8,7 @@ import {
   formatUncaughtError,
   hasErrnoCode,
   isErrno,
+  isMissingPathError,
   readErrorName,
 } from "./errors.js";
 
@@ -98,6 +99,18 @@ describe("error helpers", () => {
     expect(hasErrnoCode(err, "EADDRINUSE")).toBe(true);
     expect(hasErrnoCode(err, "ENOENT")).toBe(false);
     expect(isErrno("busy")).toBe(false);
+  });
+
+  it.each(["ENOENT", "ENOTDIR", "not-found"])(
+    "classifies %s as a missing path without requiring Error identity",
+    (code) => {
+      expect(isMissingPathError({ code })).toBe(true);
+    },
+  );
+
+  it("does not classify other fs-safe or errno failures as missing paths", () => {
+    expect(isMissingPathError({ code: "path-alias" })).toBe(false);
+    expect(isMissingPathError(new Error("ENOENT"))).toBe(false);
   });
 
   it.each([

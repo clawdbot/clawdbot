@@ -36,8 +36,11 @@ describe("prepared model runtime snapshots", () => {
     const build = startSerializedSnapshotBuild(input, new Map(), 1_000, "static");
 
     await expect(build.pending).resolves.toMatchObject({
-      agentDir: input.agentDir,
-      config: input.config,
+      snapshot: {
+        agentDir: input.agentDir,
+        config: input.config,
+      },
+      pluginGeneration: expect.any(Object),
     });
     await expect(build.completion).resolves.toBeUndefined();
   });
@@ -45,6 +48,24 @@ describe("prepared model runtime snapshots", () => {
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
     mocks.configuredAgentIds = ["default"];
     const stagedConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+    const selectedPluginRegistry = createEmptyPluginRegistry();
+    selectedPluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
+      (params as { selections?: unknown }).selections
+        ? selectedPluginRegistry
+        : createEmptyPluginRegistry(),
+    );
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
     markPreparedModelRuntimeSnapshotsStale("test isolated probe replacement", {
       waitForReplacement: true,
@@ -55,6 +76,7 @@ describe("prepared model runtime snapshots", () => {
       agentDir: "/tmp/setup-probe-agent",
       inheritedAuthDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
     });
     await Promise.resolve();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
@@ -69,6 +91,14 @@ describe("prepared model runtime snapshots", () => {
       agentDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
     });
+    expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
+      "codex",
+    ]);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
+      }),
+    );
     lease.release();
   });
 
@@ -164,6 +194,28 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ env }),
     );
+  });
+
+  it("keeps provider catalog outcomes on the published live snapshot", async () => {
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (...args: unknown[]) => {
+      const options = args[2] as {
+        onProviderCatalogOutcome?: (outcome: {
+          provider: string;
+          status: "ready" | "auth-rejected" | "unavailable";
+        }) => void;
+      };
+      options.onProviderCatalogOutcome?.({ provider: "openai", status: "auth-rejected" });
+      return { agentDir: "/tmp/provider-outcome-agent", wrote: false };
+    });
+
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      config: {},
+      agentDir: "/tmp/provider-outcome-agent",
+    });
+
+    expect(snapshot.modelCatalog.providerOutcomes).toEqual([
+      { provider: "openai", status: "auth-rejected" },
+    ]);
   });
 
   it("captures static provider-hook rows in the same lifecycle generation", async () => {
@@ -548,6 +600,8 @@ describe("prepared model runtime snapshots", () => {
 
     expect(second).toBe(first);
     expect(Object.isFrozen(first)).toBe(true);
+    expect(first.authModes).toEqual({ custom: "api_key" });
+    expect(Object.isFrozen(first.authModes)).toBe(true);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
     expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(1);
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
@@ -560,6 +614,43 @@ describe("prepared model runtime snapshots", () => {
     expect(secondStores.authStorage).not.toBe(firstStores.authStorage);
     expect(secondStores.modelRegistry).not.toBe(firstStores.modelRegistry);
   });
+
+  it.each([
+    {
+      label: "usable",
+      credential: { type: "oauth", access: "a", refresh: "r", expires: 1 },
+      expected: "oauth",
+    },
+    {
+      label: "unusable",
+      credential: { type: "oauth", access: "", refresh: "", expires: 0 },
+      expected: undefined,
+    },
+  ] as const)(
+    "consumes $label startup CLI hydration without rediscovery",
+    async ({ credential, expected }) => {
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: { "openai/gpt-5.4": {} },
+          },
+        },
+      };
+      mocks.authStorage.getAll.mockReturnValue({ openai: credential });
+
+      const snapshot = await publishPreparedModelRuntimeSnapshot({
+        config,
+        agentDir: "/tmp/prepared-model-runtime-cli-startup",
+      });
+
+      const discoveryOptions = mocks.discoverAuthStorage.mock.calls[0]?.[1] as {
+        externalCli?: unknown;
+      };
+      expect(discoveryOptions.externalCli).toBeUndefined();
+      expect(snapshot.authModes.openai).toBe(expected);
+    },
+  );
 
   it("ignores request config identity until lifecycle publication", async () => {
     const agentDir = "/tmp/prepared-model-runtime-request-config";

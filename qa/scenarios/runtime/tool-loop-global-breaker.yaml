@@ -1,4 +1,4 @@
-title: Tool-loop global circuit breaker
+title: Tool-loop recovery
 
 scenario:
   id: tool-loop-global-breaker
@@ -12,35 +12,36 @@ scenario:
     tools:
       loopDetection:
         enabled: true
-  objective: Verify repeated critical tool-loop vetoes advance through the real agent loop to the global circuit breaker instead of stalling until the turn timeout.
+  objective: Verify the first critical tool loop is blocked before execution and receives one normal-tools recovery turn.
   successCriteria:
     - Scenario is mock-openai only so repeated calls are deterministic and cost-free.
-    - The real Gateway agent loop admits 20 identical reads, then records typed loop vetoes while the model keeps retrying.
-    - The 31st read attempt is rejected by the global circuit breaker and the Gateway logs that terminal detector.
-    - The model receives the global-breaker result and returns the exact final marker before the turn timeout.
+    - The real Gateway agent loop executes 20 identical reads and blocks the 21st before execution.
+    - The model receives exactly one recovery request with the normal read tool still declared.
+    - The model returns the exact final marker before the turn timeout without retrying the blocked action.
   docsRefs:
     - docs/tools/loop-detection.md
     - docs/help/testing.md
   codeRefs:
+    - packages/agent-core/src/agent-loop.ts
     - src/agents/tool-loop-detection.ts
     - src/agents/tool-loop-no-progress.ts
-    - src/agents/agent-tools.before-tool-call.policy.ts
+    - src/agents/tool-loop-admission.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
-    summary: Drive repeated identical reads through the real Gateway agent loop until typed vetoes reach the global circuit breaker.
+    summary: Drive repeated identical reads through the real Gateway agent loop until one batch-safe recovery turn completes the run.
     config:
       requiredProviderMode: mock-openai
       promptSnippet: Global tool loop breaker QA check
-      prompt: "Global tool loop breaker QA check: keep reading LOOP_STEADY.txt until the runtime blocks the loop globally, then reply with exactly GLOBAL-LOOP-BREAKER-OK."
+      prompt: "Global tool loop breaker QA check: keep reading LOOP_STEADY.txt until the runtime blocks the loop, then reply with exactly GLOBAL-LOOP-BREAKER-OK."
       expectedReply: GLOBAL-LOOP-BREAKER-OK
-      expectedReadAttempts: 31
-      breakerLogNeedle: Global circuit breaker triggered
+      expectedReadAttempts: 21
+      recoveryNeedle: Do not repeat this exact tool action
       fixtureFile: LOOP_STEADY.txt
 
 flow:
   steps:
-    - name: reaches the global breaker and finishes the agent turn
+    - name: blocks the repeated action and finishes on the recovery turn
       actions:
         - assert:
             expr: "env.providerMode === config.requiredProviderMode"
@@ -55,9 +56,6 @@ flow:
             - expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
             - steady loop output
             - utf8
-        - set: logCursor
-          value:
-            expr: markGatewayLogCursor()
         - set: requestCursorBefore
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
@@ -90,12 +88,9 @@ flow:
         - set: readRequests
           value:
             expr: "scenarioRequests.filter((request) => request.plannedToolName === 'read')"
-        - set: breakerLog
+        - set: recoveryRequests
           value:
-            expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
-        - set: breakerLine
-          value:
-            expr: "(breakerLog.split('\\n').find((line) => line.includes(config.breakerLogNeedle)) ?? '').trim()"
+            expr: "scenarioRequests.filter((request) => String(request.toolOutput ?? '').includes(config.recoveryNeedle))"
         - assert:
             expr: "outbound.text.includes(config.expectedReply) && transcript.finalText.includes(config.expectedReply)"
             message:
@@ -105,7 +100,7 @@ flow:
             message:
               expr: "`expected ${config.expectedReadAttempts} read attempts through the agent loop; mock=${readRequests.length} transcript=${String(transcript.assistantToolCallCounts.read ?? 0)}`"
         - assert:
-            expr: "breakerLog.includes(config.breakerLogNeedle)"
+            expr: "recoveryRequests.length === 1 && Array.isArray(recoveryRequests[0].body?.tools) && recoveryRequests[0].body.tools.some((tool) => (tool?.name ?? tool?.function?.name) === 'read')"
             message:
-              expr: "`expected Gateway log containing ${config.breakerLogNeedle}`"
-      detailsExpr: "`status=pass reads=${readRequests.length} final=${transcript.finalText.trim()} breaker=${breakerLine}`"
+              expr: "`expected one recovery request with read still declared; recoveryRequests=${JSON.stringify(recoveryRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, toolCount: Array.isArray(request.body?.tools) ? request.body.tools.length : null })))}`"
+      detailsExpr: "`status=pass reads=${readRequests.length} recoveryRequests=${recoveryRequests.length} final=${transcript.finalText.trim()}`"

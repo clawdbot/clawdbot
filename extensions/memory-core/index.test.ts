@@ -36,7 +36,6 @@ const hostRuntime = {
     acquireLocalService: async () => undefined,
   },
   state: {
-    withLease: vi.fn(),
     openKeyedStore: vi.fn(() => ({
       lookup: vi.fn(),
       register: vi.fn(),
@@ -195,108 +194,14 @@ describe("memory-core plugin runtime registration", () => {
     expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
   });
 
-  it("warms each configured memory manager at gateway start and logs failures at debug", async () => {
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const syncMain = vi.fn(async () => {});
-    const syncWork = vi.fn(async () => {
-      throw new Error("warmup failed");
-    });
-    const debug = vi.fn();
-    getMemorySearchManagerMock
-      .mockResolvedValueOnce({ manager: { sync: syncMain } } as never)
-      .mockResolvedValueOnce({ manager: { sync: syncWork } } as never);
-    const config = {
-      agents: { entries: { main: { default: true }, work: {} } },
-    } as OpenClawConfig;
-    const testApi = createTestPluginApi({
-      config,
-      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      runtime: hostRuntime,
-      on(hookName, handler) {
-        if (hookName === "gateway_start") {
-          gatewayStartHandlers.push(
-            handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-          );
-        }
-      },
-    });
-
-    plugin.register(testApi);
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
-    warmup({}, { config });
-
-    await vi.waitFor(() => {
-      expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
-      expect(syncMain).toHaveBeenCalledWith({ reason: "startup-warmup" });
-      expect(syncWork).toHaveBeenCalledWith({ reason: "startup-warmup" });
-      expect(debug).toHaveBeenCalledWith(
-        "memory-core: startup index warmup failed for work: warmup failed",
-      );
-    });
-  });
-
-  it("leaves QMD startup synchronization to the backend boot policy", async () => {
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const sync = vi.fn(async () => {});
-    getMemorySearchManagerMock.mockResolvedValueOnce({ manager: { sync } } as never);
-    const config = {
-      memory: { backend: "qmd", qmd: { update: { onBoot: false } } },
-    } as OpenClawConfig;
+  it("keeps memory manager initialization demand-driven", () => {
     plugin.register(
       createTestPluginApi({
-        config,
         runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-        },
       }),
     );
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
 
-    warmup({}, { config });
-
-    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
-    expect(sync).not.toHaveBeenCalled();
-  });
-
-  it("does not warm memory-core when another plugin owns the memory slot", async () => {
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const config = {
-      plugins: { slots: { memory: "memory-lancedb" } },
-    } as OpenClawConfig;
-    plugin.register(
-      createTestPluginApi({
-        config,
-        runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-        },
-      }),
-    );
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
-
-    warmup({}, { config });
-
+    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
@@ -316,10 +221,51 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.getMemorySearchManager({ cfg, agentId: "main" });
 
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
-      acquireLocalService: hostRuntime.llm.acquireLocalService,
+      acquireLocalService: expect.any(Function),
       openKeyedStore: expect.any(Function),
-      withLease: expect.any(Function),
     });
+  });
+
+  it("defers nested host runtime access until the injected operation runs", async () => {
+    const acquireLocalService = vi.fn(async () => undefined);
+    const openKeyedStore = vi.fn(() => ({}));
+    const llmGetter = vi.fn(() => ({ acquireLocalService }));
+    const stateGetter = vi.fn(() => ({ openKeyedStore }));
+    const host = Object.defineProperties(
+      {},
+      {
+        llm: { configurable: true, enumerable: true, get: llmGetter },
+        state: { configurable: true, enumerable: true, get: stateGetter },
+      },
+    ) as OpenClawPluginApi["runtime"];
+    let runtime: MemoryPluginRuntime | undefined;
+
+    plugin.register(
+      createTestPluginApi({
+        runtime: host,
+        registerMemoryCapability(capability) {
+          runtime = capability.runtime;
+        },
+      }),
+    );
+
+    expect(llmGetter).not.toHaveBeenCalled();
+    expect(stateGetter).not.toHaveBeenCalled();
+    await runtime?.getMemorySearchManager({ cfg: {}, agentId: "main" });
+    const injectedHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
+    if (!injectedHost?.acquireLocalService || !injectedHost.openKeyedStore) {
+      throw new Error("expected memory-core host operations");
+    }
+
+    const target = { providerId: "local", baseUrl: "http://127.0.0.1:11434" };
+    await injectedHost.acquireLocalService(target);
+    const storeOptions = { namespace: "lazy-host", maxEntries: 1 };
+    injectedHost.openKeyedStore(storeOptions);
+
+    expect(llmGetter).toHaveBeenCalledOnce();
+    expect(acquireLocalService).toHaveBeenCalledWith(target);
+    expect(stateGetter).toHaveBeenCalledOnce();
+    expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
   });
 
   it("forwards search-hit authorization through the registered memory runtime", async () => {
@@ -353,13 +299,12 @@ describe("memory-core plugin runtime registration", () => {
       hits,
     });
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
-      acquireLocalService: hostRuntime.llm.acquireLocalService,
+      acquireLocalService: expect.any(Function),
       openKeyedStore: expect.any(Function),
-      withLease: expect.any(Function),
     });
   });
 
-  it("binds the host SQLite state hooks to tools and CLI runtime", async () => {
+  it("binds the host SQLite state hook to tools and CLI runtime", async () => {
     const runtime = registerMemoryCoreRuntime();
     const cfg = {} as OpenClawConfig;
 
@@ -369,7 +314,6 @@ describe("memory-core plugin runtime registration", () => {
     const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
     host?.openKeyedStore?.(storeOptions);
     expect(hostRuntime.state.openKeyedStore).toHaveBeenCalledWith(storeOptions);
-    expect(host?.withLease).toEqual(expect.any(Function));
   });
 });
 

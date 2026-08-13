@@ -18,6 +18,10 @@ export function projectWorkerSessionPlacement(
   const conflict = record.workspaceResultConflict
     ? { workspaceResultConflict: record.workspaceResultConflict }
     : {};
+  const terminal = {
+    ...(record.terminalReason ? { terminalReason: record.terminalReason } : {}),
+    ...(record.terminalAtMs !== null ? { terminalAtMs: record.terminalAtMs } : {}),
+  };
   switch (record.state) {
     case "local":
       return { state: "local", ...timing };
@@ -114,6 +118,7 @@ export function projectWorkerSessionPlacement(
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
         ...conflict,
+        ...terminal,
       };
     case "failed":
       return {
@@ -134,6 +139,7 @@ export function projectWorkerSessionPlacement(
           : {}),
         ...conflict,
         recoveryError: record.recoveryError,
+        ...terminal,
       };
   }
   // Exhaustive over placement states; the return satisfies consistent-return.

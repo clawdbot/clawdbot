@@ -1466,7 +1466,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   height: 20px;
   transform: translateX(-50%);
   pointer-events: auto;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -1727,7 +1727,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   background: color-mix(in srgb, var(--card) 82%, transparent);
   opacity: 0;
   pointer-events: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     opacity 0.16s ease,
     color 0.16s ease,

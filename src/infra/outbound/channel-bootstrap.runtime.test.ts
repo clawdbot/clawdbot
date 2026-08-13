@@ -110,7 +110,9 @@ describe("bootstrapOutboundChannelPlugin", () => {
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(handle);
+    expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(handle);
     expect(getActivePluginRegistry()).toBe(root);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith(
       expect.objectContaining({ onlyPluginIds: ["discord"] }),
     );
@@ -168,6 +170,24 @@ describe("bootstrapOutboundChannelPlugin", () => {
     bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
 
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds failed channel outcomes and refreshes misses by LRU recency", () => {
+    installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+
+    for (let index = 0; index < 64; index += 1) {
+      bootstrapOutboundChannelPlugin({ channel: `channel-${index}`, cfg: discordConfig });
+    }
+    bootstrapOutboundChannelPlugin({ channel: "channel-0", cfg: discordConfig });
+    bootstrapOutboundChannelPlugin({ channel: "channel-64", cfg: discordConfig });
+    bootstrapOutboundChannelPlugin({ channel: "channel-0", cfg: discordConfig });
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(65);
+
+    bootstrapOutboundChannelPlugin({ channel: "channel-1", cfg: discordConfig });
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(66);
   });
 
   it("retries after the runtime config changes", () => {

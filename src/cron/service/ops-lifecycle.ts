@@ -1,5 +1,6 @@
+import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
+import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
@@ -10,7 +11,7 @@ import {
   STARTUP_INTERRUPTED_ERROR,
 } from "./startup-run-repair.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded, persist, pruneCronJobScratchAfterCommit } from "./store.js";
 import { tryFindCronTaskRunIdForRecovery, tryFindFinalizedCronTaskRun } from "./task-runs.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
 
@@ -29,6 +30,24 @@ export async function start(state: CronServiceState) {
   const postPersistNotifications: DeferredCronNotifications = [];
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
+    if (state.stopped) {
+      return;
+    }
+    if (state.deps.legacyDefaultAgentId) {
+      const rewritten = materializeLegacyDefaultCronJobOwners({
+        storePath: state.deps.storePath,
+        legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
+      });
+      if (rewritten > 0) {
+        state.deps.log.info(
+          { storePath: state.deps.storePath, rewritten },
+          "cron: assigned legacy jobs to the retained owner",
+        );
+        // The first load can import legacy JSON into SQLite. Refresh the runtime
+        // snapshot after ownership is committed and before any job can run.
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      }
+    }
     if (state.stopped) {
       return;
     }
@@ -59,16 +78,22 @@ export async function start(state: CronServiceState) {
             ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
             deferredNotifications: postPersistNotifications,
           });
-          // Skip only the old invocation; a distinct overdue replacement
-          // must remain eligible for normal one-shot startup catch-up.
-          if (repaired.replacementAtMs === undefined) {
-            interruptedJobIds.add(job.id);
+          if (repaired) {
+            // Skip only the old invocation; a distinct overdue replacement
+            // must remain eligible for normal one-shot startup catch-up.
+            if (repaired.replacementAtMs === undefined) {
+              interruptedJobIds.add(job.id);
+            }
+            if (repaired.shouldDelete) {
+              completedJobIdsToDelete.add(job.id);
+            }
+            repairedAnyStartupRun = true;
+            continue;
           }
-          if (repaired.shouldDelete) {
-            completedJobIdsToDelete.add(job.id);
-          }
-          repairedAnyStartupRun = true;
-          continue;
+          state.deps.log.warn(
+            { jobId: job.id },
+            "cron: treating invalid finalized startup run as interrupted",
+          );
         }
         const nowMs = state.deps.nowMs();
         const interrupted = markInterruptedStartupRun({
@@ -92,10 +117,13 @@ export async function start(state: CronServiceState) {
     if (repairedAnyStartupRun || jobs.length > 0) {
       // Recovery notifications describe repaired durable rows, so never
       // publish them until the startup write has committed successfully.
-      await persist(state, {
+      const persisted = await persist(state, {
         ...(repairedAnyStartupRun ? {} : { stateOnly: true }),
         postPersistNotifications,
       });
+      if (persisted) {
+        pruneCronJobScratchAfterCommit(state, completedJobIdsToDelete);
+      }
     }
   });
 

@@ -177,15 +177,7 @@ describe("provider public artifacts", () => {
         modelId: "deepseek-v4-pro",
       }),
     ).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "xhigh" },
-        { id: "max" },
-      ],
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
       defaultLevel: "high",
     });
     expect(
@@ -426,7 +418,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -487,7 +479,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -612,7 +604,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -648,7 +640,7 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
-  it("loads provider policy surfaces without package-manager repair", async () => {
+  it("keeps canonical provider policy lookup on the direct artifact path", async () => {
     const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
       normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => ctx.providerConfig,
     }));
@@ -660,7 +652,12 @@ describe("provider public artifacts", () => {
       typeof import("./provider-public-artifacts.js")
     >(import.meta.url, "./provider-public-artifacts.js?scope=no-runtime-deps");
 
-    const surface = resolvePolicySurface("openai");
+    const manifestRegistry = {
+      get plugins(): never {
+        throw new Error("direct provider policy lookup must not inspect manifest metadata");
+      },
+    };
+    const surface = resolvePolicySurface("openai", { manifestRegistry });
     expect(surface?.normalizeConfig).toBeTypeOf("function");
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "openai",

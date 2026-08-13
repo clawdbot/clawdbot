@@ -16,7 +16,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -320,7 +320,7 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
     }),
   );
   for (const sessionId of [canonicalSessionId, aliasSessionId]) {
-    await replaceSqliteTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
       { type: "session", id: sessionId, content: sessionId },
     ]);
   }
@@ -677,26 +677,6 @@ test("sessions.delete keeps lifecycle admission blocked through session unbindin
   } finally {
     replacementAdmission.release();
   }
-});
-
-test("sessions.patch rejects archiving active runs", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "discord:group:dev": sessionStoreEntry("sess-active"),
-    },
-  });
-  embeddedRunMock.activeIds.add("sess-active");
-
-  const archived = await directSessionReq("sessions.patch", {
-    key: "discord:group:dev",
-    archived: true,
-  });
-
-  expect(archived.ok).toBe(false);
-  expect(archived.error).toMatchObject({
-    message: "Cannot archive a session with an active run.",
-  });
 });
 
 test("sessions.delete limits plugin-runtime cleanup to sessions owned by that plugin", async () => {

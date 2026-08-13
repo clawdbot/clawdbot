@@ -1,25 +1,19 @@
 /** Builds runtime command arguments for gateway and node service installs. */
-import { execFileSync } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import {
   buildGatewayDistEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
   isGatewayDistEntrypointPath,
 } from "./gateway-entrypoint.js";
-import { isNodeRuntime } from "./runtime-binary.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
   workingDirectory?: string;
 };
 
-type GatewayRuntimePreference = "auto" | "node";
-
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
-const NODE_BINARY_LOOKUP_TIMEOUT_MS = 5_000;
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
@@ -156,32 +150,6 @@ function resolveRepoRootForDev(): string {
   return parts.slice(0, srcIndex).join(path.sep);
 }
 
-async function resolveNodePath(): Promise<string> {
-  const nodePath = await resolveBinaryPath("node");
-  return nodePath;
-}
-
-async function resolveBinaryPath(binary: string): Promise<string> {
-  const cmd = process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
-  try {
-    const output = execFileSync(cmd, [binary], {
-      encoding: "utf8",
-      timeout: NODE_BINARY_LOOKUP_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-    }).trim();
-    const resolved = output.split(/\r?\n/)[0]?.trim();
-    if (!resolved) {
-      throw new Error("empty");
-    }
-    await fs.access(resolved);
-    return resolved;
-  } catch {
-    throw new Error(
-      "Node not found in PATH. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+).",
-    );
-  }
-}
-
 export async function resolveOpenClawWrapperPath(
   inputPath: string | undefined,
 ): Promise<string | undefined> {
@@ -211,7 +179,6 @@ export async function resolveOpenClawWrapperPath(
 async function resolveCliProgramArguments(params: {
   args: string[];
   dev?: boolean;
-  runtime?: GatewayRuntimePreference;
   nodePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
@@ -220,9 +187,12 @@ async function resolveCliProgramArguments(params: {
     return { programArguments: [wrapperPath, ...params.args] };
   }
 
-  const execPath = process.execPath;
-  const nodePath =
-    params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
+  if (!params.nodePath?.trim()) {
+    throw new Error(
+      "No supported Node runtime was selected for the daemon. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+), then retry.",
+    );
+  }
+  const nodePath = params.nodePath;
 
   if (params.dev) {
     const repoRoot = resolveRepoRootForDev();
@@ -243,7 +213,6 @@ async function resolveCliProgramArguments(params: {
 export async function resolveGatewayProgramArguments(params: {
   port: number;
   dev?: boolean;
-  runtime?: GatewayRuntimePreference;
   nodePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
@@ -251,7 +220,6 @@ export async function resolveGatewayProgramArguments(params: {
   return resolveCliProgramArguments({
     args: gatewayArgs,
     dev: params.dev,
-    runtime: params.runtime,
     nodePath: params.nodePath,
     wrapperPath: params.wrapperPath,
   });
@@ -267,7 +235,6 @@ export async function resolveNodeProgramArguments(params: {
   displayName?: string;
   installedAppsSharing?: boolean;
   dev?: boolean;
-  runtime?: GatewayRuntimePreference;
   nodePath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
@@ -296,7 +263,6 @@ export async function resolveNodeProgramArguments(params: {
   return resolveCliProgramArguments({
     args,
     dev: params.dev,
-    runtime: params.runtime,
     nodePath: params.nodePath,
   });
 }

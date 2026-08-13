@@ -2,14 +2,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-} from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { resolveLegacyInheritedAuthDir } from "../agents/legacy-inherited-auth-dir.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -62,7 +59,8 @@ export function collectCandidateAgentDirs(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
 ): string[] {
   const dirs = new Set<string>();
-  dirs.add(resolveUserPath(resolveDefaultAgentDir(config, env), env));
+  dirs.add(resolveUserPath(resolveAgentDir(config, "main", env), env));
+  dirs.add(resolveUserPath(resolveLegacyInheritedAuthDir(config, env), env));
   for (const agentId of listAgentIds(config)) {
     dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
   }
@@ -106,8 +104,7 @@ function hasCandidateAuthProfileStoreSources(params: {
   agentDirs?: string[];
 }): boolean {
   const candidateDirs = resolveCandidateAgentDirs(params);
-  // The shipped no-argument auth store is fixed at agents/main/agent even when
-  // another roster entry is default, so the fast path must probe it separately.
+  // The shipped no-argument auth store remains fixed at agents/main/agent.
   const mainAgentDir = path.join(
     resolveStateDir(params.env as NodeJS.ProcessEnv),
     "agents",

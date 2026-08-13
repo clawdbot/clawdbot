@@ -1,6 +1,6 @@
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { asRecord } from "./dreaming-shared.js";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
@@ -163,17 +163,17 @@ export function normalizeShortTermPhaseSignalStore(
   raw: unknown,
   nowIso: string,
 ): ShortTermPhaseSignalStore {
-  const record = asRecord(raw);
+  const record = asNullableRecord(raw);
   if (!record) {
     return emptyPhaseSignalStore(nowIso);
   }
-  const entriesRaw = asRecord(record?.entries);
+  const entriesRaw = asNullableRecord(record?.entries);
   if (!entriesRaw) {
     return emptyPhaseSignalStore(nowIso);
   }
   const entries: Record<string, ShortTermPhaseSignalEntry> = {};
   for (const [mapKey, value] of Object.entries(entriesRaw)) {
-    const entry = asRecord(value);
+    const entry = asNullableRecord(value);
     if (!entry) {
       continue;
     }

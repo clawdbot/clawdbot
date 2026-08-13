@@ -45,7 +45,7 @@ openclaw gateway restart
 3. Run onboarding:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice cohere-api-key \
   --cohere-api-key "$COHERE_API_KEY"
 ```

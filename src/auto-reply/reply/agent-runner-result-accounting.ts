@@ -4,13 +4,14 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveConfiguredFallbackModel } from "./agent-runner-core.js";
+import { resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -175,7 +176,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   );
   const fallbackStateEntry =
     activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
-  const configuredFallbackModel = resolveConfiguredFallbackModel({
+  const configuredFallbackModel = resolveFallbackOriginModel({
     run: followupRun.run,
     fallbackStateEntry,
   });
@@ -251,9 +252,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
     compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
     promptTokens,
-    usageIsContextSnapshot: usedCliProvider ? true : undefined,
     isHeartbeat,
-    preserveRuntimeModel: fallbackExhausted,
+    preserveRuntimeModel:
+      fallbackExhausted || fallbackTransition.nextState.selectedModel !== undefined,
     preserveUserFacingSessionModelState: preserveUserFacingSessionState,
     modelUsed,
     providerUsed,
@@ -359,7 +360,7 @@ export async function accountFollowupTurn(params: {
       nextModel: accounting.modelUsed,
       nextModelOverrideSource: entry?.modelOverrideSource,
       nextAuthProfileId: entry?.authProfileOverride,
-      nextAuthProfileIdSource: entry?.authProfileOverrideSource,
+      nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(entry),
     });
   }
   let compactionNotice: ReplyPayload | undefined;

@@ -26,7 +26,7 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["env", "file", "exec"]
+            "enum": ["env", "file", "exec", "store"]
           },
           "provider": { "type": "string" },
           "id": { "type": "string" }

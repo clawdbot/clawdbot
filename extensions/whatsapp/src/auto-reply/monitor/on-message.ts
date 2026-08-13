@@ -27,7 +27,6 @@ import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
-import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
 import { applyGroupGating } from "./group-gating.js";
 import { updateLastRouteInBackground } from "./last-route.js";
@@ -56,7 +55,6 @@ export function createWebOnMessageHandler(params: {
   groupHistoryLimit: number;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupMemberNames: Map<string, Map<string, string>>;
-  echoTracker: EchoTracker;
   backgroundTasks: Set<Promise<unknown>>;
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<(typeof import("openclaw/plugin-sdk/runtime-env"))["getChildLogger"]>;
@@ -127,10 +125,6 @@ export function createWebOnMessageHandler(params: {
       replyResolver: params.replyResolver,
       replyLogger: params.replyLogger,
       backgroundTasks: params.backgroundTasks,
-      rememberSentText: params.echoTracker.rememberText,
-      echoHas: params.echoTracker.has,
-      echoForget: params.echoTracker.forget,
-      buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
     };
     if (opts?.groupHistory !== undefined) {
       processParams.groupHistory = opts.groupHistory;
@@ -185,13 +179,6 @@ export function createWebOnMessageHandler(params: {
     // Same-phone mode logging retained
     if (conversationId === msg.platform.recipientJid) {
       logVerbose(`📱 Same-phone mode detected (from === to: ${conversationId})`);
-    }
-
-    // Skip if this is a message we just sent (echo detection)
-    if (params.echoTracker.has(msg.payload.body, conversationId)) {
-      logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
-      params.echoTracker.forget(msg.payload.body, conversationId);
-      return;
     }
 
     const configuredRoute = resolveConfiguredBindingRoute({

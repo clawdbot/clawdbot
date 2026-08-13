@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveConfiguredSubagentSpawnModelSelection } from "./model-selection.js";
-import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
+import { resolveSubagentSpawnAcceptedNote } from "./subagents/spawn/subagent-spawn-accepted-note.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
   splitModelRef,
-} from "./subagent-spawn-plan.js";
-import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
+} from "./subagents/spawn/subagent-spawn-plan.js";
+import { resolveSubagentThinkingOverride } from "./subagents/spawn/subagent-spawn-thinking.js";
 
 type SubagentModelPlan = ReturnType<typeof resolveSubagentModelAndThinkingPlan>;
 type OkSubagentModelPlan = Extract<SubagentModelPlan, { status: "ok" }>;

@@ -23,7 +23,7 @@ vi.mock("./gateway.js", async (importOriginal) => {
   return { ...actual, callGatewayTool: callGatewayToolMock };
 });
 
-vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 const { createComputerTool } = await import("./computer-tool.js");
 

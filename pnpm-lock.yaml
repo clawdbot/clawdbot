@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@agentclientprotocol/codex-acp@1.1.7>@openai/codex': 0.146.0
+  '@agentclientprotocol/codex-acp@1.1.7>@openai/codex': 0.147.0
   '@anthropic-ai/sdk': 0.115.0
   '@opentelemetry/core': 2.10.0
   '@opentelemetry/propagator-jaeger': 2.10.0
@@ -89,8 +89,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.5.0
-        version: 0.5.0
+        specifier: 0.5.5
+        version: 0.5.5
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
@@ -98,8 +98,8 @@ importers:
         specifier: 0.3.4
         version: 0.3.4
       '@trycua/cua-driver':
-        specifier: 0.14.1
-        version: 0.14.1
+        specifier: 0.19.3
+        version: 0.19.3
       acorn:
         specifier: 8.17.0
         version: 8.17.0
@@ -257,6 +257,12 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
+      '@openclaw/session-url-contract':
+        specifier: workspace:*
+        version: link:packages/session-url-contract
+      '@opentelemetry/sdk-node':
+        specifier: 0.221.0
+        version: 0.221.0(@opentelemetry/api@1.9.1)(supports-color@10.2.2)
       '@shikijs/core':
         specifier: 4.3.1
         version: 4.3.1
@@ -275,6 +281,9 @@ importers:
       '@types/markdown-it':
         specifier: 14.1.2
         version: 14.1.2
+      '@types/mdast':
+        specifier: 4.0.4
+        version: 4.0.4
       '@types/ms':
         specifier: 2.1.0
         version: 2.1.0
@@ -299,9 +308,6 @@ importers:
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
-      fast-glob:
-        specifier: 3.3.3
-        version: 3.3.3
       ipaddr.js:
         specifier: 2.4.0
         version: 2.4.0
@@ -347,6 +353,9 @@ importers:
       sigstore:
         specifier: 5.0.0
         version: 5.0.0(supports-color@10.2.2)
+      string-width:
+        specifier: 8.2.2
+        version: 8.2.2
       stylelint:
         specifier: 17.14.1
         version: 17.14.1(supports-color@10.2.2)(typescript@6.0.3)
@@ -518,12 +527,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
-      '@noble/ed25519':
-        specifier: 3.1.0
-        version: 3.1.0
-      esbuild:
-        specifier: 0.28.1
-        version: 0.28.1
       express:
         specifier: 5.2.1
         version: 5.2.1(supports-color@10.2.2)
@@ -537,9 +540,6 @@ importers:
         specifier: 8.21.1
         version: 8.21.1
     devDependencies:
-      '@openclaw/gateway-client':
-        specifier: workspace:*
-        version: link:../../packages/gateway-client
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -637,8 +637,8 @@ importers:
   extensions/codex:
     dependencies:
       '@openai/codex':
-        specifier: 0.146.0
-        version: 0.146.0
+        specifier: 0.147.0
+        version: 0.147.0
       smol-toml:
         specifier: 1.7.1
         version: 1.7.1
@@ -693,8 +693,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@trycua/cua-driver':
-        specifier: 0.14.1
-        version: 0.14.1
+        specifier: 0.19.3
+        version: 0.19.3
       rastermill:
         specifier: 0.3.1
         version: 0.3.1
@@ -732,6 +732,12 @@ importers:
       '@opentelemetry/api-logs':
         specifier: 0.221.0
         version: 0.221.0
+      '@opentelemetry/context-async-hooks':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/core':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/exporter-logs-otlp-proto':
         specifier: 0.221.0
         version: 0.221.0(@opentelemetry/api@1.9.1)
@@ -741,6 +747,12 @@ importers:
       '@opentelemetry/exporter-trace-otlp-proto':
         specifier: 0.221.0
         version: 0.221.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/propagator-b3':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/propagator-jaeger':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources':
         specifier: 2.10.0
         version: 2.10.0(@opentelemetry/api@1.9.1)
@@ -750,9 +762,6 @@ importers:
       '@opentelemetry/sdk-metrics':
         specifier: 2.10.0
         version: 2.10.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-node':
-        specifier: 0.221.0
-        version: 0.221.0(@opentelemetry/api@1.9.1)(supports-color@10.2.2)
       '@opentelemetry/sdk-trace-base':
         specifier: 2.10.0
         version: 2.10.0(@opentelemetry/api@1.9.1)
@@ -935,17 +944,13 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/fish-audio:
+  extensions/fish-audio-speech:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
   extensions/github-copilot:
-    dependencies:
-      '@clack/prompts':
-        specifier: 1.7.0
-        version: 1.7.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1388,9 +1393,6 @@ importers:
       jose:
         specifier: 6.2.4
         version: 6.2.4
-      jwks-rsa:
-        specifier: 4.1.0
-        version: 4.1.0(supports-color@10.2.2)
       openclaw:
         specifier: workspace:*
         version: link:../..
@@ -1481,8 +1483,8 @@ importers:
   extensions/onepassword:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.5.0
-        version: 0.5.0
+        specifier: 0.5.5
+        version: 0.5.5
       execa:
         specifier: 10.0.0
         version: 10.0.0
@@ -1660,40 +1662,6 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-
-  extensions/qqbot:
-    dependencies:
-      '@tencent-connect/qqbot-connector':
-        specifier: 1.2.0
-        version: 1.2.0
-      mpg123-decoder:
-        specifier: 1.0.3
-        version: 1.0.3
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
-      pretty-ms:
-        specifier: 9.3.0
-        version: 9.3.0
-      silk-wasm:
-        specifier: 3.7.1
-        version: 3.7.1
-      ws:
-        specifier: 8.21.1
-        version: 8.21.1
-      zod:
-        specifier: 4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      '@types/ws':
-        specifier: 8.18.1
-        version: 8.18.1
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
 
   extensions/qwen:
     devDependencies:
@@ -1986,12 +1954,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/video-generation-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/vllm:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -2204,6 +2166,10 @@ importers:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/gateway-client:
     dependencies:
@@ -2297,6 +2263,9 @@ importers:
 
   packages/net-policy:
     dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       ipaddr.js:
         specifier: 2.4.0
         version: 2.4.0
@@ -2321,8 +2290,15 @@ importers:
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../gateway-client
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
-  packages/session-url-contract: {}
+  packages/session-url-contract:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/terminal-core:
     dependencies:
@@ -2367,9 +2343,6 @@ importers:
       '@codemirror/view':
         specifier: 6.43.6
         version: 6.43.6
-      '@create-markdown/preview':
-        specifier: 2.0.3
-        version: 2.0.3(shiki@4.3.1)
       '@lezer/highlight':
         specifier: 1.2.3
         version: 1.2.3
@@ -2388,15 +2361,27 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@novnc/novnc':
+        specifier: 1.7.0
+        version: 1.7.0
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../packages/gateway-client
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../packages/gateway-protocol
       '@openclaw/libterminal':
         specifier: 0.3.2
         version: 0.3.2
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
+      '@openclaw/model-catalog-core':
+        specifier: workspace:*
+        version: link:../packages/model-catalog-core
+      '@openclaw/net-policy':
+        specifier: workspace:*
+        version: link:../packages/net-policy
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../packages/normalization-core
@@ -2404,17 +2389,17 @@ importers:
         specifier: workspace:*
         version: link:../packages/session-url-contract
       '@openclaw/uirouter':
-        specifier: 0.1.0
-        version: 0.1.0
+        specifier: 0.1.1
+        version: 0.1.1
       '@openclaw/workboard-contract':
         specifier: workspace:*
         version: link:../packages/workboard-contract
       '@tanstack/lit-virtual':
-        specifier: 3.13.35
-        version: 3.13.35(lit@3.3.3)
+        specifier: 3.13.36
+        version: 3.13.36(lit@3.3.3)
       '@tanstack/virtual-core':
-        specifier: 3.17.6
-        version: 3.17.6
+        specifier: 3.17.7
+        version: 3.17.7
       dompurify:
         specifier: 3.4.12
         version: 3.4.12
@@ -2436,9 +2421,6 @@ importers:
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1
-      marked:
-        specifier: 18.0.7
-        version: 18.0.7
       remend:
         specifier: 1.3.0
         version: 1.3.0
@@ -2597,6 +2579,9 @@ packages:
   '@aws-sdk/core@3.977.1':
     resolution: {integrity: sha512-KVtQRtc00ES/y+Sc3vYXeP6pCIcNlBJCZOwvqSy8ZpVGmbM5+IG+AfhuTKQ2oXmIVqZJewaGMMpzPkywC6xg0w==}
     engines: {node: '>=20.0.0'}
+    deprecated: |-
+      Deprecated due to Document number parsing bug in JSON, see
+        https://github.com/aws/aws-sdk-js-v3/issues/8246. Newer version available.
 
   '@aws-sdk/credential-provider-cognito-identity@3.972.60':
     resolution: {integrity: sha512-16Fxa3veKIO6nHJr+vN76z3BkSU7725lzruc5S2SQSTUTbK4TXtmi8033WQljZj4k1+383UsMaNOHN6B76fK5A==}
@@ -2943,18 +2928,6 @@ packages:
       jest:
         optional: true
       vitest:
-        optional: true
-
-  '@create-markdown/preview@2.0.3':
-    resolution: {integrity: sha512-Vrp8DyuiouryZ3E4NQ7tBgoYQdoekd0+DzN64mZ48QYCw3V+MCb/H2q10SW8KC8XPr931XOMDvKX4I83qpQh3g==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      '@create-markdown/core': '>=2.0.3'
-      shiki: '>=1.0.0'
-    peerDependenciesMeta:
-      '@create-markdown/core':
-        optional: true
-      shiki:
         optional: true
 
   '@csstools/color-helpers@6.1.0':
@@ -4064,6 +4037,9 @@ packages:
     resolution: {integrity: sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==}
     engines: {node: '>=12.4.0'}
 
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
+
   '@npmcli/agent@5.0.2':
     resolution: {integrity: sha512-EkzGmEsgbQ1rqWkRJe2P0oQHx/ylZozDUNPMXCklLuSFL3GY+QyEfBUjhjCsgGXzh4OGpnHvkboSQgczjP/jJg==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
@@ -4076,43 +4052,43 @@ packages:
     resolution: {integrity: sha512-3zcN5Q3yEmeyxXBzqB6fXPQFzYa2ROsGFSr69W0ArXIAGJqxl/aFECOVPD2kbkYPm0U/EHxFKgclK3UA9WQg5A==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@openai/codex@0.146.0':
-    resolution: {integrity: sha512-yG3sPWNda/2YAIQIDq9MrrjoCTIQ7rxYM5IasrG3VBcuhCLTkgeg/JzqmJq1V98RE4MJ5jCxDXXQlOjrditFRw==}
+  '@openai/codex@0.147.0':
+    resolution: {integrity: sha512-EQLEXecAG2ptxI7UpBMo2TR/ga5596/c/OsYF/0LoUDh5JANZ7IoGqlzBEWbuEVQ76JePIbtTW/ihCkp1a7Z3w==}
     engines: {node: '>=16'}
     hasBin: true
 
-  '@openai/codex@0.146.0-darwin-arm64':
-    resolution: {integrity: sha512-nb61yX4r5L6Z0dlC4o3u0GAK1YCd4TUvjaB382bajDoh84V+uv2hTBIVZ++fgXWV9yoeuNrNnNcn7GoTGOe2Tg==}
+  '@openai/codex@0.147.0-darwin-arm64':
+    resolution: {integrity: sha512-BEUVkiOW7kLcRyrMLfAr/h9wF8sRVJyZDy6OHtVn6QGDXiv3BvAZVTY1Pu9xF7KdIdkYXbp4uayN0aDQQaAUJw==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openai/codex@0.146.0-darwin-x64':
-    resolution: {integrity: sha512-hTQR5jy/ObfTf1MDnuJCZJAe+SljKE8DDwQWN6lDFgjsPhMQz852U2tILt8Ei+G5GkQSzemHYKl2AYPwW0Y5xw==}
+  '@openai/codex@0.147.0-darwin-x64':
+    resolution: {integrity: sha512-Tb8McE5SvJIH0Vs5R6sq7u+quiC931yan2KOOl6km1OdZ82+Wi7eF5XrSFPs5CF7xCgoIK4Vs+byMbT5hN+ZUw==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@openai/codex@0.146.0-linux-arm64':
-    resolution: {integrity: sha512-qiYDxkkEFnXG7joadJW6Q+XcgyDXCpGdpa9nk/c+i0gEomur1j7bHvx12NfWWCF/y8Tqri6ay+FLuC2MjdehtA==}
+  '@openai/codex@0.147.0-linux-arm64':
+    resolution: {integrity: sha512-SLC1JXw2TYfr/c3HhrJubyyLelq7vTOLWVmiThFA+z0+WgzCPmaseJ/kzDD3Gge/TO7fCnnj7UcPmC0d2c8XAg==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@openai/codex@0.146.0-linux-x64':
-    resolution: {integrity: sha512-fswvyGprAPCMiOEue/7MKMk7pCjh9kZIJfJX5i9atmfnmGYbYCcUhZsEH9LEP0+0t5xyPqDbfNXY7NSxIVuXxA==}
+  '@openai/codex@0.147.0-linux-x64':
+    resolution: {integrity: sha512-0W9MBxPpWW0cSkNqrTDN2jR7rzzT7oNMhQY5446lT2Lw5cz5yhDTck4Va9rjkQEm+HlFzP/dmEMSZbXfJsINmw==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@openai/codex@0.146.0-win32-arm64':
-    resolution: {integrity: sha512-EW6zdjDe+SLX2Iw+xymJ5+Pz2+DGexdstfFHXh4Ub+TfJsQPiMjGfZfNaoWgdJ2FsqSIzVKu2+G0KCMGYz2W8g==}
+  '@openai/codex@0.147.0-win32-arm64':
+    resolution: {integrity: sha512-e2ZstJ8zT8Rm1nvR7CUVO+Gr3cTChE41+VfOzGhynzDXEoW0wfbjUQbc2bWbh1arG94LMm4y3dqBtUIbSrfeGA==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@openai/codex@0.146.0-win32-x64':
-    resolution: {integrity: sha512-b3lxMYeR0+IhstNo4JjX1P9cPc1xwVcCVkPd1lD1wpWPJ0SBhpIkPczwbu3ZRkJcdyl342+rgyf4DUrbZLdrGA==}
+  '@openai/codex@0.147.0-win32-x64':
+    resolution: {integrity: sha512-oT7Ss5fAPf2fiWE9QNURqZcQGAAawSVxmIUdgPzckq4KFZAM+pRz9JbM4Rr498CjtbNgTOjWvDJ+DXvIBSfOPA==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
@@ -4122,8 +4098,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe@0.5.0':
-    resolution: {integrity: sha512-TPpFG8PkAKlM/eP7glzHhCeZnDX3sSqyjXgeoc0jeyii0y957/zePB62BIwc75gOFmxaeKLWkd4iF41/Ghlgjg==}
+  '@openclaw/fs-safe@0.5.5':
+    resolution: {integrity: sha512-x8wYigrOwmnsE8v4LfAh2eTvvkuDMspBrQeBp/GyB9/c7eFf8aL7gK4keewDbhscKX1pACD8Yd+ehZq6o29xHw==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.2':
@@ -4141,8 +4117,8 @@ packages:
     peerDependencies:
       undici: '>=8.5.0 <9'
 
-  '@openclaw/uirouter@0.1.0':
-    resolution: {integrity: sha512-w5tNj2FIukVJqJ1wt5wiDbrI6DI4tOkUbtqnnU5Fl4EgnRKFJtfHI3WrWTWTTJlXbbrwGSMptyrSZmQVdRo83Q==}
+  '@openclaw/uirouter@0.1.1':
+    resolution: {integrity: sha512-aiZFvWmP/ndpS3em5xVtiPlj1k6asA8ueoNxGxekA1024EZlCwnICPZklG6g2sU4Wlntp9AYocLCr5/iuvL7hw==}
     engines: {node: ^22.18.0 || >=24.11.0}
 
   '@opentelemetry/api-logs@0.221.0':
@@ -5045,7 +5021,7 @@ packages:
     resolution: {integrity: sha512-QShO60SB0E+HH+TbcKj3CBEQbodToRyiXnxuSB4t1kvUlqEmuGA1nOOjrRDkDJbOECAZ13PLe4ek9SrntpfoYg==}
     engines: {node: '>=20', npm: '>=9.6.4'}
     peerDependencies:
-      undici: ^7.0.0
+      undici: 7.29.0
 
   '@slack/types@3.0.0':
     resolution: {integrity: sha512-KNOqpnNAlsFt5Jk9XBclslQ0lobRIg/0tnhpmvZJAglHJx9E8oceN8hC3gaBzkR6UzQ9Wzq4rLsJ98wUcxWPfw==}
@@ -5203,17 +5179,13 @@ packages:
   '@swc/helpers@0.5.23':
     resolution: {integrity: sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==}
 
-  '@tanstack/lit-virtual@3.13.35':
-    resolution: {integrity: sha512-ZFUpMwYHsWelrBleD6JekvTwtHYBWzM79/5f3MrrdyDlMUBi0XfuqKB9wNJM0zVwyuu5uOUWQA+Gt3BLwzRHlQ==}
+  '@tanstack/lit-virtual@3.13.36':
+    resolution: {integrity: sha512-dju+ZvpztbcSZjWLllJIgHioXWypAm8hq9ALqFfAt/9hmRtU3gZKNEWgy+pgxtbHMouq2hQFrXWKfF3LRXKwJQ==}
     peerDependencies:
       lit: ^3.1.0
 
-  '@tanstack/virtual-core@3.17.6':
-    resolution: {integrity: sha512-h0/Ebo18CkOrChlQIhNtQkM5ySUnh/GumQ/D1st3hG2HWUPEF+ILUc2k29UtivCi/9G7w7G3/f7Xyd5cCFbKBw==}
-
-  '@tencent-connect/qqbot-connector@1.2.0':
-    resolution: {integrity: sha512-FAOUCvgxP4M9UiYbHrtVgJ7BavSlh1CHJPjeEQuTAkP9MZ91lX4yATqv6I/lB9yp15nVq+G2DaGSSJwQTSoSsA==}
-    engines: {node: '>=18.0.0'}
+  '@tanstack/virtual-core@3.17.7':
+    resolution: {integrity: sha512-bp+v10y65sp2H7WpWfIMyxTNfl8ZVfxFTLRjPIFRryi6FV/J33z4IS53WO4pTk36KlvJ4iLiQz+oaydDC1xbcA==}
 
   '@thi.ng/bitstream@2.4.54':
     resolution: {integrity: sha512-uInkAJge5O0bWWEaYKrQpMccPbFg0z6eIA5NDCJXPm7l3rjlDje6RBHBXll3LiQz9Y051EdzlAEQRaB5hEifdg==}
@@ -5262,40 +5234,40 @@ packages:
   '@tokenizer/token@0.3.0':
     resolution: {integrity: sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==}
 
-  '@trycua/cua-driver-darwin-arm64@0.14.1':
-    resolution: {integrity: sha512-Ijt252VfIbebSbNsoSLw66UAQKe/OV9wGVf80Qyt6F8DSrVSRQQOb4c+vWUYVF2349SQvKA0kJuY2i3Lj23zXw==}
+  '@trycua/cua-driver-darwin-arm64@0.19.3':
+    resolution: {integrity: sha512-zd37WTn8JP3ixXiMN4BjhYsN5o/+TsF/UTD4YTEtapYqTiw1DcQxuwZhXQDtvrmQYfaPjOgwlDib1vZ584UBIA==}
     cpu: [arm64]
     os: [darwin]
 
-  '@trycua/cua-driver-darwin-x64@0.14.1':
-    resolution: {integrity: sha512-3kfPWxemK/zg/kSMIwk3EWF83OpZq6p19sB3BJzbk0zZqlCSKmZVPNIyFGOG7Bq1AxSdvEgHb4djrsFOEo9adA==}
+  '@trycua/cua-driver-darwin-x64@0.19.3':
+    resolution: {integrity: sha512-Z1jTJ9IImfR6njGu79DHe5JCuvximAUbqlpi+RmcXHVmkW8R6Ht7lhnAvOT58pa3FEiyY6zIDouZyxePxX950A==}
     cpu: [x64]
     os: [darwin]
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.14.1':
-    resolution: {integrity: sha512-MGbJDlmGWm/yp8mojTfBDMI09TzlC/UlIuFmW2UsapqyBAeBp01x5nRVs5c6xFXO5XIHasrYCwU93gzIvtjO4Q==}
+  '@trycua/cua-driver-linux-arm64-gnu@0.19.3':
+    resolution: {integrity: sha512-Q0pDIpg0TNbLQmi8mIdgeBrfcvSq0vJYLQu20E0DBTiAQz+hhx2uvPjNbOadQXJgEnnEs7RUgO5g+mJ5SZpQ3A==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-linux-x64-gnu@0.14.1':
-    resolution: {integrity: sha512-uzhoOKRiTdzSVXP8MlO73JnuLXkpwvEGmyEVjNhiK1MKy9aIZfteRpBATZHUM/E+PG/IgvIqxuM+JWgB5QagEg==}
+  '@trycua/cua-driver-linux-x64-gnu@0.19.3':
+    resolution: {integrity: sha512-knUIsm9k5DlUOx8cTDOTwN2GQHyDvAsNqETdVpKOpTakut5FO4OHgabjlPw+q37TkZxPaKntaY6OBjCNlezgvA==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.14.1':
-    resolution: {integrity: sha512-n3/hDOz2H2JQhH0slANAl9C0rUqPadBNy7t0HdsvHPyDM9vV9WtbvptI6pW4ZQH+3fPqy7gV41/V33/8f3mHnQ==}
+  '@trycua/cua-driver-win32-arm64-msvc@0.19.3':
+    resolution: {integrity: sha512-SEyYNfDXsgbOzH9z0mEqgMrrSkfEveB8C8SRemfujXvhnvtx8CfzGz+BPYKqLGo9tA9JxJwX4jfM8J41XOR8/g==}
     cpu: [arm64]
     os: [win32]
 
-  '@trycua/cua-driver-win32-x64-msvc@0.14.1':
-    resolution: {integrity: sha512-7ALlbufJBfSCR64kO8fwatzp2+aWohNc+A63JHthwS+9c28bWOSzVzOBe+QUrxUVwx7j4SP2wWJIQewP6v5yPQ==}
+  '@trycua/cua-driver-win32-x64-msvc@0.19.3':
+    resolution: {integrity: sha512-an3KaK/6HxB6LnHJ1uYv3ZBpZl3v0jukEOHPXzWifk3Zml14pKtTMbTuEnkr4I07c6BJumzXJ7gOTOZYcuMX7g==}
     cpu: [x64]
     os: [win32]
 
-  '@trycua/cua-driver@0.14.1':
-    resolution: {integrity: sha512-/o16k+vcTbdqwmvQqgFCKzrYksSQHz282qO8RkpD67GQoY4Vp3pyDndQexRJ8AbzNQpUt1bIXSAAaFBaMad6rg==}
+  '@trycua/cua-driver@0.19.3':
+    resolution: {integrity: sha512-Oc/FsGP56kpKn4TcADELcEUkLDCby+Wglt+5dX6r4QJbESWvRPdPJ09wvFPmIQeJ7dAUEnrIjuQt4Kz/LIQN3Q==}
 
   '@tufjs/canonical-json@2.0.0':
     resolution: {integrity: sha512-yVtV8zsdo8qFHe+/3kw81dSLyF7D576A5cCFCi4X7B39tWT7SekaEFUnvnWJHz+9qO7qJTah1JbrDjWKqFtdWA==}
@@ -6266,6 +6238,7 @@ packages:
 
   crypto-js@4.2.0:
     resolution: {integrity: sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==}
+    deprecated: Active development of CryptoJS has been discontinued. This library is no longer maintained.
 
   css-functions-list@3.3.3:
     resolution: {integrity: sha512-8HFEBPKhOpJPEPu70wJJetjKta86Gw9+CCyCnB3sui2qQfOvRyqBy4IKLKKAwdMpWb2lHXWk9Wb4Z6AmaUT1Pg==}
@@ -7266,10 +7239,6 @@ packages:
     resolution: {integrity: sha512-BqTyEDV+lS8F2trk3A+qJnxV5Q9EqKCBJOPti3W97r7qTympCZjb7h2X6f2kc+0K3rsSTY1/6YG2eaXKoj497w==}
     engines: {node: '>=14'}
 
-  jwks-rsa@4.1.0:
-    resolution: {integrity: sha512-sbkByqyATKYJP5F4RXj03N5TUNC0QLTjCAZvwTzC4BwJZ8e0/cWxN8YROnyUth2g1/ONWi4eSFHeu6oYalrc3Q==}
-    engines: {node: ^20.19.0 || ^22.12.0 || >= 23.0.0}
-
   jws@4.0.1:
     resolution: {integrity: sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==}
 
@@ -7510,9 +7479,6 @@ packages:
 
   lru-memoizer@2.3.0:
     resolution: {integrity: sha512-GXn7gyHAMhO13WSKrIiNfztwxodVsP8IoZ3XfrJV4yH2x0/OeTO/FIaAHTY5YekdGgW94njfuKmyyt1E0mR6Ug==}
-
-  lru-memoizer@3.0.0:
-    resolution: {integrity: sha512-m83w/cYXLdUIboKSPxzPAGfYnk+vqeDYXuoSrQRw1q+yVEd8IXhvMufN8Q5TIPe7e2jyX4SRNrDJI2Skw1yznQ==}
 
   lru_map@0.4.1:
     resolution: {integrity: sha512-I+lBvqMMFfqaV8CJCISjI3wbjmwVu/VyOoU7+qtu9d7ioW5klMgsTTiUOUp+DJvfTTzKXoPbyC6YfgkNcyPSOg==}
@@ -7826,8 +7792,8 @@ packages:
     resolution: {integrity: sha512-RyOSq98kuVfXB1emJ+NjBF0av8Ph3oBuqNy+Z5sFFfLhjYrkBQEB53V8u+U0RNTVwNo20WoPUwNkfKwZfrOqmQ==}
     engines: {node: '>=18'}
 
-  nanoid@3.3.16:
-    resolution: {integrity: sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==}
+  nanoid@3.3.18:
+    resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
@@ -9515,7 +9481,7 @@ snapshots:
   '@agentclientprotocol/codex-acp@1.1.7':
     dependencies:
       '@agentclientprotocol/sdk': 1.3.0(zod@4.4.3)
-      '@openai/codex': 0.146.0
+      '@openai/codex': 0.147.0
       diff: 9.0.0
       open: 11.0.0
       vscode-jsonrpc: 9.0.1
@@ -10342,10 +10308,6 @@ snapshots:
   '@copilotkit/aimock@1.37.4(vitest@4.1.10)':
     optionalDependencies:
       vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(@vitest/browser-playwright@4.1.10)(@vitest/coverage-v8@4.1.10)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
-
-  '@create-markdown/preview@2.0.3(shiki@4.3.1)':
-    optionalDependencies:
-      shiki: 4.3.1
 
   '@csstools/color-helpers@6.1.0': {}
 
@@ -11362,6 +11324,8 @@ snapshots:
 
   '@nolyfill/domexception@1.0.28': {}
 
+  '@novnc/novnc@1.7.0': {}
+
   '@npmcli/agent@5.0.2(supports-color@10.2.2)':
     dependencies:
       agent-base: 9.0.0
@@ -11379,31 +11343,31 @@ snapshots:
 
   '@npmcli/redact@5.0.0': {}
 
-  '@openai/codex@0.146.0':
+  '@openai/codex@0.147.0':
     optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.146.0-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.146.0-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.146.0-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.146.0-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.146.0-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.146.0-win32-x64'
+      '@openai/codex-darwin-arm64': '@openai/codex@0.147.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.147.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.147.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.147.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.147.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.147.0-win32-x64'
 
-  '@openai/codex@0.146.0-darwin-arm64':
+  '@openai/codex@0.147.0-darwin-arm64':
     optional: true
 
-  '@openai/codex@0.146.0-darwin-x64':
+  '@openai/codex@0.147.0-darwin-x64':
     optional: true
 
-  '@openai/codex@0.146.0-linux-arm64':
+  '@openai/codex@0.147.0-linux-arm64':
     optional: true
 
-  '@openai/codex@0.146.0-linux-x64':
+  '@openai/codex@0.147.0-linux-x64':
     optional: true
 
-  '@openai/codex@0.146.0-win32-arm64':
+  '@openai/codex@0.147.0-win32-arm64':
     optional: true
 
-  '@openai/codex@0.146.0-win32-x64':
+  '@openai/codex@0.147.0-win32-x64':
     optional: true
 
   '@openclaw/crabline@0.1.11':
@@ -11422,7 +11386,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.5.0':
+  '@openclaw/fs-safe@0.5.5':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.22
@@ -11435,7 +11399,7 @@ snapshots:
     dependencies:
       undici: 8.9.0
 
-  '@openclaw/uirouter@0.1.0': {}
+  '@openclaw/uirouter@0.1.1': {}
 
   '@opentelemetry/api-logs@0.221.0':
     dependencies:
@@ -12368,16 +12332,12 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@tanstack/lit-virtual@3.13.35(lit@3.3.3)':
+  '@tanstack/lit-virtual@3.13.36(lit@3.3.3)':
     dependencies:
-      '@tanstack/virtual-core': 3.17.6
+      '@tanstack/virtual-core': 3.17.7
       lit: 3.3.3
 
-  '@tanstack/virtual-core@3.17.6': {}
-
-  '@tencent-connect/qqbot-connector@1.2.0':
-    dependencies:
-      qrcode-terminal: 0.12.0
+  '@tanstack/virtual-core@3.17.7': {}
 
   '@thi.ng/bitstream@2.4.54':
     dependencies:
@@ -12416,35 +12376,35 @@ snapshots:
 
   '@tokenizer/token@0.3.0': {}
 
-  '@trycua/cua-driver-darwin-arm64@0.14.1':
+  '@trycua/cua-driver-darwin-arm64@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-darwin-x64@0.14.1':
+  '@trycua/cua-driver-darwin-x64@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.14.1':
+  '@trycua/cua-driver-linux-arm64-gnu@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-linux-x64-gnu@0.14.1':
+  '@trycua/cua-driver-linux-x64-gnu@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.14.1':
+  '@trycua/cua-driver-win32-arm64-msvc@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-win32-x64-msvc@0.14.1':
+  '@trycua/cua-driver-win32-x64-msvc@0.19.3':
     optional: true
 
-  '@trycua/cua-driver@0.14.1':
+  '@trycua/cua-driver@0.19.3':
     dependencies:
       '@ubjs/core': 0.31.0-3
       '@ubjs/node': 0.31.0-3
     optionalDependencies:
-      '@trycua/cua-driver-darwin-arm64': 0.14.1
-      '@trycua/cua-driver-darwin-x64': 0.14.1
-      '@trycua/cua-driver-linux-arm64-gnu': 0.14.1
-      '@trycua/cua-driver-linux-x64-gnu': 0.14.1
-      '@trycua/cua-driver-win32-arm64-msvc': 0.14.1
-      '@trycua/cua-driver-win32-x64-msvc': 0.14.1
+      '@trycua/cua-driver-darwin-arm64': 0.19.3
+      '@trycua/cua-driver-darwin-x64': 0.19.3
+      '@trycua/cua-driver-linux-arm64-gnu': 0.19.3
+      '@trycua/cua-driver-linux-x64-gnu': 0.19.3
+      '@trycua/cua-driver-win32-arm64-msvc': 0.19.3
+      '@trycua/cua-driver-win32-x64-msvc': 0.19.3
 
   '@tufjs/canonical-json@2.0.0': {}
 
@@ -14558,17 +14518,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  jwks-rsa@4.1.0(supports-color@10.2.2):
-    dependencies:
-      '@types/jsonwebtoken': 9.0.10
-      debug: 4.4.3(supports-color@10.2.2)
-      jose: 6.2.4
-      limiter: 1.1.5
-      lru-cache: 11.5.2
-      lru-memoizer: 3.0.0
-    transitivePeerDependencies:
-      - supports-color
-
   jws@4.0.1:
     dependencies:
       jwa: 2.0.1
@@ -14786,11 +14735,6 @@ snapshots:
     dependencies:
       lodash.clonedeep: 4.5.0
       lru-cache: 6.0.0
-
-  lru-memoizer@3.0.0:
-    dependencies:
-      lodash.clonedeep: 4.5.0
-      lru-cache: 11.5.2
 
   lru_map@0.4.1: {}
 
@@ -15324,7 +15268,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  nanoid@3.3.16: {}
+  nanoid@3.3.18: {}
 
   nanoid@5.1.16: {}
 
@@ -15800,7 +15744,7 @@ snapshots:
 
   postcss@8.5.23:
     dependencies:
-      nanoid: 3.3.16
+      nanoid: 3.3.18
       picocolors: 1.1.1
       source-map-js: 1.2.1
 

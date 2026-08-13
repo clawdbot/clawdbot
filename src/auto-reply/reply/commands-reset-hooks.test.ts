@@ -1,11 +1,12 @@
 // Tests reset hook emission and cleanup around reset commands.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const triggerInternalHookMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const routeReplyMock = vi.hoisted(() =>
@@ -98,7 +99,7 @@ function buildResetParams(
       to: ctx.To ?? "bot",
       resetHookTriggered: false,
     },
-    directives: parseInlineDirectives(""),
+    directives: parseInlineSessionDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp/openclaw-commands",
@@ -122,12 +123,7 @@ function mockCall(mock: unknown, index = 0): Array<unknown> {
   return call;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectObjectFields(
   value: unknown,

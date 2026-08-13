@@ -424,12 +424,8 @@ export const testing = {
   buildXaiWebSearchPayload,
   extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
-  resolveXaiWebSearchAuth,
   resolveXaiInlineCitations,
   resolveXaiWebSearchCredential,
-  resolveXaiWebSearchEndpoint,
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
-  requestXaiWebSearch,
 };
-export { testing as __testing };

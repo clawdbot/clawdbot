@@ -40,6 +40,7 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
 export function createNetworkRegistrars(state: PluginRegistryState) {
   const { registry, coreGatewayMethods, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
     state;
+  let reportedLegacyCatalogSkip = false;
 
   const registerGatewayMethod = (
     record: PluginRecord,
@@ -91,6 +92,19 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         source: record.source,
         message: "session catalog requires non-empty id and label",
       });
+      return;
+    }
+    if (!state.allowProcessHomeSessionCatalogs && provider.supportsProcessHomeIsolation !== true) {
+      if (!reportedLegacyCatalogSkip) {
+        reportedLegacyCatalogSkip = true;
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            "external session catalog skipped in isolated state: provider must declare supportsProcessHomeIsolation",
+        });
+      }
       return;
     }
     const existing = registry.sessionCatalogs.find((entry) => entry.provider.id === id);

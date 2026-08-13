@@ -3,6 +3,7 @@ import type {
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
+import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
 import type { HealthCheckInput } from "./health-check-runner-types.js";
 import type { HealthFinding } from "./health-checks.js";
 
@@ -12,6 +13,7 @@ export function createDoctorHealthContribution(params: {
   healthCheckIds?: readonly string[];
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   hint?: string;
+  required?: true;
   run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
   const healthChecks = normalizeHealthChecks(params.id, params.healthChecks);
@@ -31,6 +33,7 @@ export function createDoctorHealthContribution(params: {
     source: "doctor",
     healthChecks,
     healthCheckIds,
+    ...(params.required ? { required: true as const } : {}),
     run:
       params.run ??
       ((ctx) =>
@@ -89,12 +92,7 @@ async function runStructuredDoctorHealthContribution(params: {
     throw new Error(`doctor contribution ${params.contributionId} has no structured health`);
   }
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
-  const workspaceDir = resolveAgentWorkspaceDir(
-    params.ctx.cfg,
-    resolveDefaultAgentId(params.ctx.cfg),
-  );
+  const workspaceDir = resolveDoctorWorkspaceDir(params.ctx.cfg, params.ctx.env);
   const dryRun = !params.ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
     {

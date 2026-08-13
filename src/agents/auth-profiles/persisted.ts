@@ -5,15 +5,16 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { asBoolean } from "../../utils/boolean.js";
-import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   hasOAuthIdentity,
-  hasUsableOAuthCredential,
   isSafeToAdoptMainStoreOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
@@ -56,11 +57,7 @@ function isRetainedUsageStatsId(
 // Persisted credential normalization accepts old field names and SecretRef-ish
 // values, then emits the current credential discriminated union.
 function normalizeOptionalCredentialString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? value : undefined;
+  return readNonBlankString(value);
 }
 
 function normalizeExpiryField(value: unknown): number | undefined {
@@ -253,7 +250,7 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
     },
     {},
   );
-  log.warn("ignored invalid auth profile entries during store load", {
+  authProfilesLog.warn("ignored invalid auth profile entries during store load", {
     source,
     dropped: rejected.length,
     reasons,

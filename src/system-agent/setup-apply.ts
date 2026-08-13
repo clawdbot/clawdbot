@@ -14,6 +14,7 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -692,6 +693,8 @@ export async function applySystemAgentSetup(
             gateway = { status: "failed", error: `Gateway is not reachable yet (${detail}).` };
             lines.push(`Gateway: not reachable yet (${detail}) — say \`gateway status\` to check`);
           }
+        } else if (gateway.reason === "external") {
+          lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
         } else {
           lines.push(
             "Gateway: service install skipped — say `start gateway` when you want it running.",

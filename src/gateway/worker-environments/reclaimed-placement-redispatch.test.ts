@@ -13,7 +13,7 @@ const placement = {
 } as ReclaimedWorkerPlacement;
 
 describe("createReclaimedPlacementRedispatch", () => {
-  it("reuses the previous environment profile for a fresh dispatch", async () => {
+  it("reuses the previous environment's exact profile snapshot for a fresh dispatch", async () => {
     const active = { state: "active" } as Extract<
       WorkerSessionPlacementRecord,
       { state: "active" }
@@ -21,7 +21,12 @@ describe("createReclaimedPlacementRedispatch", () => {
     const dispatch = vi.fn(async () => active);
     const redispatch = createReclaimedPlacementRedispatch({
       environments: {
-        get: () => ({ profileId: "development" }) as never,
+        get: () =>
+          ({
+            profileId: "development",
+            providerId: "fake",
+            profileSnapshot: { settings: { region: "parent" } },
+          }) as never,
       },
       dispatch,
     });
@@ -32,6 +37,10 @@ describe("createReclaimedPlacementRedispatch", () => {
       sessionKey: placement.sessionKey,
       agentId: placement.agentId,
       profileId: "development",
+      inheritedProfile: {
+        providerId: "fake",
+        profileSnapshot: { settings: { region: "parent" } },
+      },
     });
   });
 

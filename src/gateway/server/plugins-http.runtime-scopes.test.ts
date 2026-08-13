@@ -13,7 +13,7 @@ import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from ".
 import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
-import { createTestRegistry } from "./__tests__/test-utils.js";
+import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
 
 const SECURE_HOOK_PATH = "/secure-hook";
@@ -80,11 +80,11 @@ function assertAdminHelperAllowed() {
 function createPluginRequestHandler(params: {
   routes: PluginHttpRoute[];
   log?: SubsystemLogger;
-  getRouteRegistry?: () => ReturnType<typeof createTestRegistry>;
+  getRouteRegistry?: () => ReturnType<typeof createGatewayTestRegistry>;
   getGatewayRequestContext?: () => GatewayRequestContext;
 }) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({ httpRoutes: params.routes }),
+    registry: createGatewayTestRegistry({ httpRoutes: params.routes }),
     ...(params.getRouteRegistry ? { getRouteRegistry: params.getRouteRegistry } : {}),
     log: params.log ?? createMockLogger(),
     ...(params.getGatewayRequestContext
@@ -247,7 +247,7 @@ describe("plugin HTTP route runtime scopes", () => {
     const serverAContext = { label: "server-a" } as unknown as GatewayRequestContext;
     const serverBContext = { label: "server-b" } as unknown as GatewayRequestContext;
     const observed: Array<{ route: string; context?: GatewayRequestContext }> = [];
-    const serverARegistry = createTestRegistry({
+    const serverARegistry = createGatewayTestRegistry({
       httpRoutes: [
         createRoute({
           path: SECURE_HOOK_PATH,
@@ -260,7 +260,7 @@ describe("plugin HTTP route runtime scopes", () => {
         }),
       ],
     });
-    const serverBRegistry = createTestRegistry({
+    const serverBRegistry = createGatewayTestRegistry({
       httpRoutes: [
         createRoute({
           path: SECURE_HOOK_PATH,
@@ -418,7 +418,7 @@ describe("plugin HTTP route runtime scopes", () => {
     const observed: Array<{ route: "exact" | "prefix"; scopes: string[] }> = [];
     const log = createMockLogger();
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           createRoute({
             path: "/secure/admin-hook",
@@ -487,7 +487,7 @@ describe("plugin HTTP route runtime scopes", () => {
     async ({ auth, gatewayAuthSatisfied, gatewayRequestOperatorScopes, path, expectedScopes }) => {
       let observedScopes: string[] | undefined;
       const handler = createGatewayPluginRequestHandler({
-        registry: createTestRegistry({
+        registry: createGatewayTestRegistry({
           httpRoutes: [
             createRoute({
               path,

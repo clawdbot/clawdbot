@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { toQaError } from "../errors.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -1244,7 +1245,7 @@ async function copyRemoteArtifacts(params: {
   remoteOutputDir: string;
   runner: CommandRunner;
 }) {
-  const { host, sshArgs, sshUser } = sshCommand({ inspect: params.inspect });
+  const { host, sshArgs, sshUser } = await sshCommand(params);
   await fs.mkdir(path.join(params.outputDir, "slack-qa"), { recursive: true });
   await runCommand({
     command: "rsync",
@@ -1464,7 +1465,7 @@ export async function runMantisSlackDesktopSmoke(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted && !slackQaCompleted) {
-      throw toErrorObject(remoteRunError);
+      throw toQaError(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
@@ -1580,7 +1581,4 @@ export async function runMantisSlackDesktopSmoke(
   }
 }
 
-function toErrorObject(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

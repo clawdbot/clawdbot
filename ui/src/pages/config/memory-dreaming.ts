@@ -3,6 +3,8 @@
 // picker) lives in memory-dreaming-page.ts, mirroring memory.ts/memory-page.ts.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
+import { renderModelPicker } from "../../components/model-picker.ts";
+import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import {
   renderSettingsDefaultState,
   renderSettingsRow,
@@ -353,6 +355,34 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
         ? value
         : "";
   const bounds = spec.kind === "number" ? spec.bounds : null;
+  if (spec.kind === "text" && spec.path[0] === "model") {
+    const provider = providerIdFromModelRef(defaultValue);
+    return renderSettingsRow({
+      title: t(spec.labelKey),
+      description: html`${t(spec.helpKey)} ${defaultState.description}`,
+      control: html`
+        ${defaultState.action}
+        ${renderModelPicker({
+          label: t(spec.labelKey),
+          value: text,
+          options: [
+            {
+              value: "",
+              label: defaultValue,
+              ...(provider ? { provider } : {}),
+            },
+          ],
+          disabled: props.disabled,
+          custom: {
+            label: t("cron.form.customModel"),
+            placeholder: spec.placeholderKey ? t(spec.placeholderKey) : "",
+            commit: "change",
+          },
+          onChange: (model) => props.onPatch(spec.path, model.trim() || undefined),
+        })}
+      `,
+    });
+  }
   return renderSettingsRow({
     title: t(spec.labelKey),
     description: html`${t(spec.helpKey)} ${defaultState.description}`,

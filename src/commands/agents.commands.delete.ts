@@ -3,8 +3,9 @@ import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
+import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -30,8 +31,9 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
-import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
+import { createQuietRuntime } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
+import { requireValidConfigFileSnapshot } from "./config-validation.js";
 import { moveToTrash } from "./onboard-helpers.js";
 
 type AgentsDeleteOptions = {
@@ -47,6 +49,12 @@ type AgentsDeleteGatewayResult = {
   removed?: Array<{ path: string; method: "trash" | "missing" }>;
   failed?: Array<{ path: string; reason: string }>;
 };
+
+function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly string[]): void {
+  if (clearedOwnerRefs.length > 0) {
+    runtime.log(`Cleared owner references: ${clearedOwnerRefs.join(", ")}`);
+  }
+}
 
 async function maybeDeleteAgentThroughGateway(params: {
   agentId: string;
@@ -110,9 +118,15 @@ export async function agentsDeleteCommand(
     runtime.exit(1);
     return;
   }
-  if (agentId === resolveDefaultAgentId(cfg)) {
+  if (agentId === tryResolveSoleAgentId(cfg)) {
+    runtime.error(`Agent "${agentId}" is the only configured agent and cannot be deleted.`);
+    runtime.exit(1);
+    return;
+  }
+  if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(cfg))) {
+    // H2-2 owns credential relocation; deleting this directory first destroys the shared store.
     runtime.error(
-      `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+      `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
     );
     runtime.exit(1);
     return;
@@ -158,12 +172,14 @@ export async function agentsDeleteCommand(
         sessionsDir,
         removedBindings: gatewayResult.removedBindings,
         removedAllow: result.removedAllow,
+        clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
         removed: gatewayResult.removed,
         failed: gatewayResult.failed,
         transport: "gateway",
       });
     } else {
       runtime.log(`Deleted agent: ${agentId}`);
+      logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
       for (const failure of gatewayResult.failed ?? []) {
         runtime.error(
           `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
@@ -230,8 +246,10 @@ export async function agentsDeleteCommand(
       sessionsDir,
       removedBindings: result.removedBindings,
       removedAllow: result.removedAllow,
+      clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
     });
   } else {
     runtime.log(`Deleted agent: ${agentId}`);
+    logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
   }
 }

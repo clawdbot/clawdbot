@@ -32,9 +32,15 @@ SenseAudio transcribes inbound audio and voice-note attachments through OpenClaw
     {
       tools: {
         media: {
+          models: [
+            {
+              provider: "senseaudio",
+              model: "senseaudio-asr-pro-1.5-260319",
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [{ provider: "senseaudio", model: "senseaudio-asr-pro-1.5-260319" }],
           },
         },
       },

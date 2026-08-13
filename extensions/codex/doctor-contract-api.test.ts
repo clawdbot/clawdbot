@@ -9,7 +9,7 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {

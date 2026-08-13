@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -219,6 +220,21 @@ describe("Telegram live QA scenario gate", () => {
       expect.objectContaining({
         scenarioIds: expect.not.arrayContaining(["telegram-startup-getme-live"]),
       }),
+    );
+  });
+
+  it("forwards caller-owned gateway config mutation to the flow suite", async () => {
+    const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
+
+    await runQaTelegramSuite({
+      allowFailures: true,
+      mutateConfig,
+      providerMode: "mock-openai",
+      repoRoot: process.cwd(),
+    });
+
+    expect(mocks.runQaFlowSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ mutateConfig }),
     );
   });
 

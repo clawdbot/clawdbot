@@ -1,6 +1,6 @@
 // System launchd ownership tests cover loaded, installed, and unverifiable states.
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -20,9 +20,10 @@ function fsError(code: string, target: string): NodeJS.ErrnoException {
 
 vi.mock("node:fs/promises", () => {
   const mocked = {
-    access: vi.fn(async (target: string) => {
+    constants,
+    access: vi.fn(async (target: string, mode?: number) => {
       const code = state.accessErrors.get(target);
-      if (code) {
+      if (code && mode === constants.R_OK) {
         throw fsError(code, target);
       }
       if (!state.files.has(target)) {
@@ -80,7 +81,10 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hostPlatform = process.platform;
 
-function runRenderedProbe(plistName: string, plistMode: "unlabeled" | "same-label" | "malformed") {
+function runRenderedProbe(
+  plistName: string,
+  plistMode: "unlabeled" | "same-label" | "malformed" | "unreadable",
+) {
   const root = tempDirs.make("openclaw-launchd-probe-");
   const daemonsDir = path.join(root, "daemons");
   const binDir = path.join(root, "bin");
@@ -93,6 +97,12 @@ function runRenderedProbe(plistName: string, plistMode: "unlabeled" | "same-labe
     `#!/bin/sh
 mode=$1
 for last; do :; done
+case "$last" in
+  *unreadable*)
+    printf '%s\\n' "Operation not permitted" >&2
+    exit 1
+    ;;
+esac
 fixture=$(cat "$last")
 if [ "$mode" = "-extract" ]; then
   if [ "$fixture" = "same-label" ]; then
@@ -117,6 +127,9 @@ exit 1
   );
   chmodSync(plutilShim, 0o700);
   chmodSync(launchctlShim, 0o700);
+  if (plistMode === "unreadable") {
+    chmodSync(path.join(daemonsDir, plistName), 0o000);
+  }
   const script = renderSystemLaunchDaemonOwnershipShellProbe("ai.openclaw.gateway")
     .replaceAll("/Library/LaunchDaemons", daemonsDir)
     .replaceAll("/usr/bin/plutil", plutilShim)
@@ -260,17 +273,34 @@ describe("system LaunchDaemon ownership", () => {
     expect(execLaunchctl).toHaveBeenCalledTimes(2);
   });
 
-  it("fails closed on an unreadable noncanonical vendor plist", async () => {
+  it("skips an unreadable foreign plist", async () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
     state.files.set(unrelated, "<plist/>");
     state.accessErrors.set(unrelated, "EACCES");
     state.plutilErrors.set(unrelated, "Operation not permitted");
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "unverifiable",
+      status: "absent",
       serviceTarget: "system/ai.openclaw.gateway",
-      operation: "filesystem",
-      detail: `${unrelated}: EACCES: ${unrelated}`,
+    });
+    await expect(
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("detects a readable owner after an unreadable foreign plist", async () => {
+    const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
+    const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
+    state.files.set(unrelated, "<plist/>");
+    state.accessErrors.set(unrelated, "EACCES");
+    state.plutilErrors.set(unrelated, "Operation not permitted");
+    state.files.set(owner, "<plist/>");
+    state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
+
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
+      status: "installed",
+      serviceTarget: "system/ai.openclaw.gateway",
+      plistPath: owner,
     });
   });
 
@@ -332,6 +362,7 @@ describe("system LaunchDaemon ownership", () => {
       "/usr/bin/find \"$openclaw_system_launchd_dir\" -mindepth 1 -maxdepth 1 -name '*.plist' -print0",
     );
     expect(script).toContain("while IFS= read -r -d '' openclaw_system_launchd_plist");
+    expect(script).toContain('[ ! -r "$openclaw_system_launchd_plist" ]');
     expect(script).toContain('[ ! -x "$openclaw_system_launchd_dir" ]');
     expect(script).not.toContain('"$openclaw_system_launchd_dir"/*.plist');
     expect(script).toContain(
@@ -340,8 +371,9 @@ describe("system LaunchDaemon ownership", () => {
     expect(script).not.toContain("|| true");
   });
 
-  it("executes the rendered probe across unlabeled, same-label, and malformed plists", () => {
+  it("executes the rendered probe across readable and unreadable plists", () => {
     expect(runRenderedProbe("com.google.keystone.daemon.plist", "unlabeled")).toBe("");
+    expect(runRenderedProbe("com.vendor.unreadable.plist", "unreadable")).toBe("");
     expect(runRenderedProbe("vendor-openclaw.plist", "same-label")).toContain(
       "vendor-openclaw.plist",
     );

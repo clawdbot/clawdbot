@@ -28,6 +28,14 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "OpenClawCameraPTZNative",
+            path: "Sources/OpenClawCameraPTZNative",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("IOKit"),
+            ]),
+        .target(
             name: "OpenClawIPC",
             dependencies: [],
             swiftSettings: [
@@ -48,6 +56,7 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClawDiscovery",
+                "OpenClawCameraPTZNative",
                 .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),

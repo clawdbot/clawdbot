@@ -1,25 +1,32 @@
 // Discord tests cover model picker preferences migrations plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { buildLegacyMigrationPreview } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stateMigrations } from "../../doctor-contract-api.js";
 import { detectDiscordLegacyStateMigrations } from "./model-picker-preferences-migrations.js";
 
-const tempDirs: string[] = [];
+let stateWorkspace: TempWorkspace;
 
-async function makeStateDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-migration-"));
-  tempDirs.push(dir);
-  return dir;
-}
+beforeEach(async () => {
+  stateWorkspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-discord-model-picker-migration-",
+  });
+});
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await stateWorkspace.cleanup();
 });
 
 describe("Discord model picker preference migration", () => {
   it("plans legacy command deployment cache deletion without importing hashes", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, "{malformed cache", "utf8");
@@ -50,7 +57,7 @@ describe("Discord model picker preference migration", () => {
   });
 
   it("plans legacy JSON import into plugin state", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(
@@ -97,7 +104,7 @@ describe("Discord model picker preference migration", () => {
   });
 
   it("plans legacy JSON import with max Date timestamps", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(
@@ -136,7 +143,7 @@ describe("Discord model picker preference migration", () => {
   });
 
   it("keeps legacy JSON import order near max Date", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(
@@ -181,7 +188,7 @@ describe("Discord model picker preference migration", () => {
   });
 
   it("plans legacy thread bindings JSON import into plugin state", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     const boundAt = Date.now() - 10_000;
@@ -245,9 +252,10 @@ describe("Discord model picker preference migration", () => {
   });
 
   it("detects model picker and thread binding legacy JSON together", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const discordDir = path.join(stateDir, "discord");
     await fs.mkdir(discordDir, { recursive: true });
+    await fs.writeFile(path.join(discordDir, "command-deploy-cache.json"), "{}");
     await fs.writeFile(
       path.join(discordDir, "model-picker-preferences.json"),
       JSON.stringify({ version: 1, entries: {} }),
@@ -265,15 +273,54 @@ describe("Discord model picker preference migration", () => {
         stateDir,
       }),
     );
+    if (!plans) {
+      throw new Error("expected migration plans");
+    }
 
-    expect(plans?.map((plan) => plan.label)).toEqual([
-      "Discord model picker preferences",
-      "Discord thread bindings",
+    expect(
+      plans?.map((plan) => ({
+        kind: plan.kind,
+        label: plan.label,
+        sourcePath: plan.sourcePath,
+        targetPath: plan.targetPath,
+        namespace: plan.kind === "plugin-state-import" ? plan.namespace : null,
+      })),
+    ).toEqual([
+      {
+        kind: "plugin-state-import",
+        label: "Discord command deployment cache",
+        sourcePath: path.join(discordDir, "command-deploy-cache.json"),
+        targetPath: "plugin state:command-deploy-hashes",
+        namespace: "command-deploy-hashes",
+      },
+      {
+        kind: "plugin-state-import",
+        label: "Discord model picker preferences",
+        sourcePath: path.join(discordDir, "model-picker-preferences.json"),
+        targetPath: "plugin state:model-picker-preferences",
+        namespace: "model-picker-preferences",
+      },
+      {
+        kind: "plugin-state-import",
+        label: "Discord thread bindings",
+        sourcePath: path.join(discordDir, "thread-bindings.json"),
+        targetPath: "plugin state:thread-bindings",
+        namespace: "thread-bindings",
+      },
     ]);
+    await expect(
+      stateMigrations[0]?.detectLegacyState({
+        config: {},
+        env: {},
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+        context: { openPluginStateKeyedStore: () => ({}) } as never,
+      }),
+    ).resolves.toEqual({ preview: plans.map(buildLegacyMigrationPreview) });
   });
 
   it("archives valid empty legacy thread bindings after an empty import", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, JSON.stringify({ version: 1, bindings: {} }));
@@ -296,7 +343,7 @@ describe("Discord model picker preference migration", () => {
   });
 
   it("keeps malformed legacy thread bindings for doctor warning", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, JSON.stringify({ version: 2, bindings: {} }));

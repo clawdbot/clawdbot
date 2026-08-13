@@ -117,9 +117,10 @@ const migrateLegacyNodePairingStore = vi.hoisted(() =>
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
+  tryResolveConfiguredAgentWorkspaceDir: () => "/workspace",
 }));
 
-vi.mock("../agents/subagent-registry.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   initSubagentRegistry: () => initSubagentRegistry(),
 }));
 
@@ -203,6 +204,7 @@ function slackConfig(): OpenClawConfig {
 async function prepareBootstrapWithRuntimeConfig(
   cfg: OpenClawConfig,
   options: {
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     workerProviderIds?: readonly string[];
   } = {},
 ) {
@@ -481,9 +483,11 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     } as OpenClawConfig;
 
     const result = await prepareBootstrapWithRuntimeConfig(cfg, {
+      pluginMetadataSnapshot,
       workerProviderIds: ["static-ssh"],
     });
     expect(result.startupPluginIds).toEqual([]);
+    expect(result.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
     expect(result.pluginLookUpTable).toBeUndefined();
     expect(result.baseGatewayMethods).toEqual(["ping"]);
 

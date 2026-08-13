@@ -60,4 +60,32 @@ describe("SnapshotSchema", () => {
 
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
   });
+
+  it("accepts additive update availability and schedule state", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.1",
+        channel: "dev",
+        currentSha: "1234567890",
+        upstreamRef: "origin/main",
+        upstreamSha: "abcdef1234",
+        commitsBehind: 2,
+      },
+      updateSchedule: {
+        channel: "dev",
+        autoEnabled: true,
+        install: { kind: "git" },
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "abcdef1234",
+          commitsBehind: 2,
+        },
+      },
+    };
+
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+  });
 });

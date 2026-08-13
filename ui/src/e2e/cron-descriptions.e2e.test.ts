@@ -53,68 +53,68 @@ suite.define(() => {
       },
     ] as const;
     const undescribedJob = cronJob("without-description", "Plain task");
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1_280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "cron.list": {
-          jobs: [...jobs, undescribedJob],
-          total: jobs.length + 1,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
-        },
-        "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
-        "cron.status": { enabled: true, jobs: jobs.length + 1, nextWakeAtMs: null },
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1_280 },
       },
-    });
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "cron.list": {
+              jobs: [...jobs, undescribedJob],
+              snapshotRevision: "cron-descriptions-fixture",
+              total: jobs.length + 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            },
+            "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
+            "cron.status": { enabled: true, jobs: jobs.length + 1, nextWakeAtMs: null },
+          },
+        });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator(`[data-test-id="cron-row-${jobs[0].id}"]`).waitFor({ timeout: 10_000 });
+        await page.goto(`${suite.server.baseUrl}cron`);
+        await page.locator(`[data-test-id="cron-row-${jobs[0].id}"]`).waitFor({ timeout: 10_000 });
 
-      for (const job of jobs) {
-        const description = page.locator(`[data-test-id="cron-row-description-${job.id}"]`);
-        expect((await description.textContent())?.trim()).toBe(`· ${job.description.trim()}`);
-        expect(await description.getAttribute("title")).toBe(
-          `Description: ${job.description.trim()}`,
-        );
-      }
-      expect(
-        await page.locator(`[data-test-id="cron-row-description-${undescribedJob.id}"]`).count(),
-      ).toBe(0);
+        for (const job of jobs) {
+          const description = page.locator(`[data-test-id="cron-row-description-${job.id}"]`);
+          expect((await description.textContent())?.trim()).toBe(`· ${job.description.trim()}`);
+          expect(await description.getAttribute("title")).toBe(
+            `Description: ${job.description.trim()}`,
+          );
+        }
+        expect(
+          await page.locator(`[data-test-id="cron-row-description-${undescribedJob.id}"]`).count(),
+        ).toBe(0);
 
-      const describedRow = await page
-        .locator(`[data-test-id="cron-row-${jobs[1].id}"]`)
-        .boundingBox();
-      const undescribedRow = await page
-        .locator(`[data-test-id="cron-row-${undescribedJob.id}"]`)
-        .boundingBox();
-      expect(describedRow?.height).toBe(undescribedRow?.height);
+        const describedRow = await page
+          .locator(`[data-test-id="cron-row-${jobs[1].id}"]`)
+          .boundingBox();
+        const undescribedRow = await page
+          .locator(`[data-test-id="cron-row-${undescribedJob.id}"]`)
+          .boundingBox();
+        expect(describedRow?.height).toBe(undescribedRow?.height);
 
-      for (const job of jobs) {
-        const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
-        await row.locator(".cron-table__name-text").click();
-        const detailDescription = page.locator('[data-test-id="cron-detail-description"]');
-        await detailDescription.waitFor({ state: "visible" });
-        expect((await detailDescription.textContent())?.replace(/\s+/g, " ").trim()).toBe(
-          `Description: ${job.description.trim()}`,
-        );
+        for (const job of jobs) {
+          const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
+          await row.locator(".cron-table__name-text").click();
+          const detailDescription = page.locator('[data-test-id="cron-detail-description"]');
+          await detailDescription.waitFor({ state: "visible" });
+          expect((await detailDescription.textContent())?.replace(/\s+/g, " ").trim()).toBe(
+            `Description: ${job.description.trim()}`,
+          );
 
-        await page.locator('[data-test-id="cron-detail-tab-history"]').click();
-        expect((await detailDescription.textContent())?.replace(/\s+/g, " ").trim()).toBe(
-          `Description: ${job.description.trim()}`,
-        );
-        await page.locator('[data-test-id="cron-back"]').click();
-        await row.waitFor({ timeout: 10_000 });
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+          await page.locator('[data-test-id="cron-detail-tab-history"]').click();
+          expect((await detailDescription.textContent())?.replace(/\s+/g, " ").trim()).toBe(
+            `Description: ${job.description.trim()}`,
+          );
+          await page.locator('[data-test-id="cron-back"]').click();
+          await row.waitFor({ timeout: 10_000 });
+        }
+      },
+    );
   });
 });

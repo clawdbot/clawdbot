@@ -83,7 +83,7 @@
  * expand/collapse the pre-migration skill groups had (cfg-object pattern). */
 .skills-group__summary {
   align-items: center;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   list-style: none;
 }
 
@@ -178,7 +178,7 @@
 }
 
 .plugins-item--clickable {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -196,7 +196,7 @@
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .plugins-item__detail-button:focus-visible {
@@ -226,7 +226,7 @@
   flex: 0 0 40px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--brand-logo-chip-bg);
   object-fit: contain;
 }
 

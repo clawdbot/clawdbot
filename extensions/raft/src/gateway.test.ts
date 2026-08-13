@@ -1,10 +1,12 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedRaftAccount } from "./accounts.js";
 import { startRaftGatewayAccount } from "./gateway.js";
@@ -13,14 +15,7 @@ class FakeBridge extends EventEmitter {
   kill = vi.fn(() => true);
 }
 
-const tempDirs = new Set<string>();
-
-function makeTempDir(prefix: string): string {
-  // openclaw-temp-dir: allow extension tests cannot import root test helpers
-  const dir = mkdtempSync(path.join(tmpdir(), prefix));
-  tempDirs.add(dir);
-  return dir;
-}
+const tempWorkspaces: TempWorkspaceSync[] = [];
 
 function createContext(accountId = "default") {
   const status = {
@@ -142,10 +137,9 @@ async function waitFor<T>(getValue: () => T | undefined): Promise<T> {
 
 afterEach(() => {
   resetPluginStateStoreForTests();
-  for (const dir of tempDirs) {
-    rmSync(dir, { force: true, recursive: true });
+  for (const workspace of tempWorkspaces.splice(0)) {
+    workspace.cleanup();
   }
-  tempDirs.clear();
   vi.restoreAllMocks();
 });
 
@@ -418,7 +412,12 @@ describe("Raft wake gateway", () => {
   });
 
   it("persists accepted wake dedupe across restarts without crossing accounts", async () => {
-    const stateDir = makeTempDir("openclaw-raft-wake-dedupe-");
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-raft-wake-dedupe-",
+    });
+    tempWorkspaces.push(workspace);
+    const stateDir = workspace.dir;
     try {
       const first = createContext();
       Object.defineProperty(first.ctx, "abortSignal", { value: first.controller.signal });

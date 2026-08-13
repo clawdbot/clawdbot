@@ -207,4 +207,22 @@ describe("agents_list tool", () => {
       ],
     });
   });
+
+  it("uses the persisted fixed-store owner for a bare requester key", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    });
+
+    const result = await createAgentsListTool({ agentSessionKey: "global" }).execute("call", {});
+
+    expect(result.details).toMatchObject({
+      requester: "ops",
+      agents: [{ id: "ops", configured: true }],
+    });
+  });
 });

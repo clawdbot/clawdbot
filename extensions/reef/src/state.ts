@@ -3,24 +3,21 @@ import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+// Import from defining modules, not the protocol barrel: index.js re-exports
+// guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
+import { canonicalBytes } from "../protocol/canonical.js";
+import { base64, base64url, decodeUtf8, fromBase64, fromBase64url } from "../protocol/encoding.js";
 import {
-  base64,
-  base64url,
-  canonicalBytes,
-  decodeUtf8,
-  fromBase64,
-  fromBase64url,
-  generateIdentity,
   REEF_ENVELOPE_MAX_AGE_SECONDS,
   validateMessageBody,
   type CompletedReplay,
   type MessageBody,
   type ReplayClaim,
   type ReplayStore,
-  type ReviewApproval,
-  type ReviewRequest,
-  type SignedReceipt,
-} from "../protocol/index.js";
+} from "../protocol/envelope.js";
+import { generateIdentity } from "../protocol/identity.js";
+import type { ReviewApproval, ReviewRequest } from "../protocol/pipeline.js";
+import type { SignedReceipt } from "../protocol/receipts.js";
 import { openReefAuditStore } from "./audit-state.js";
 import { loadReefIdentityBinding, type ReefIdentityBinding } from "./registration-state.js";
 import type { ReefKeys } from "./types.js";

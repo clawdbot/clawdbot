@@ -11,6 +11,16 @@ on:
         description: Full immutable commit SHA resolved from tag
         required: true
         type: string
+    outputs:
+      version:
+        description: Resolved Docker release version without the v prefix
+        value: ${{ jobs.resolve_release_policy.outputs.version }}
+      include_browser:
+        description: Whether the tagged Docker release includes browser images
+        value: ${{ jobs.create-manifest.outputs.browser_supported }}
+      vcr_source_refs:
+        description: Newline-delimited attestation-verified immutable GHCR source refs
+        value: ${{ jobs.verify-attestations.outputs.vcr_source_refs }}
     secrets:
       DOCKERHUB_USERNAME:
         required: true
@@ -631,6 +641,8 @@ jobs:
     permissions:
       packages: write
       contents: read
+    outputs:
+      browser_supported: ${{ steps.tags.outputs.browser_supported }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -687,6 +699,11 @@ jobs:
             exit 1
           fi
           {
+            if [[ "${browser_supported}" == "1" ]]; then
+              echo "browser_supported=true"
+            else
+              echo "browser_supported=false"
+            fi
             echo "value<<EOF"
             printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
@@ -753,6 +770,8 @@ jobs:
     needs: [resolve_release_policy, resolve_build_provenance, create-manifest]
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
+    outputs:
+      vcr_source_refs: ${{ steps.vcr_source_refs.outputs.value }}
     permissions:
       contents: read
       packages: write
@@ -900,6 +919,56 @@ jobs:
           node scripts/verify-docker-attestations.mjs \
             --platform linux/arm64 \
             "${dockerhub_arm64_refs[@]}"
+
+      # Resolve the moving release tags once, then verify the exact immutable
+      # indexes that the VCR publisher will consume. Passing those digest refs
+      # across the job boundary prevents a later tag rewrite from changing the
+      # bytes copied after attestation verification.
+      - name: Resolve and verify immutable VCR source refs
+        id: vcr_source_refs
+        shell: bash
+        env:
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          INCLUDE_BROWSER: ${{ needs.create-manifest.outputs.browser_supported }}
+          VERSION: ${{ needs.resolve_release_policy.outputs.version }}
+        run: |
+          set -euo pipefail
+          aliases=(default slim)
+          tags=("${VERSION}" "${VERSION}-slim")
+          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
+            aliases+=(browser)
+            tags+=("${VERSION}-browser")
+          fi
+
+          source_refs=()
+          immutable_refs=()
+          for index in "${!aliases[@]}"; do
+            tagged_ref="${GHCR_IMAGE}:${tags[$index]}"
+            descriptor="$(
+              docker buildx imagetools inspect \
+                "${tagged_ref}" \
+                --format '{{json .Manifest}}'
+            )"
+            digest="$(
+              jq -er \
+                '.digest | select(type == "string" and test("^sha256:[a-f0-9]{64}$"))' \
+                <<< "${descriptor}"
+            )"
+            immutable_ref="${GHCR_IMAGE}@${digest}"
+            source_refs+=("${aliases[$index]}=${immutable_ref}")
+            immutable_refs+=("${immutable_ref}")
+          done
+
+          node scripts/verify-docker-attestations.mjs \
+            --platform linux/amd64 \
+            --platform linux/arm64 \
+            "${immutable_refs[@]}"
+
+          {
+            echo "value<<EOF"
+            printf '%s\n' "${source_refs[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Promote and verify channel aliases
         if: ${{ needs.resolve_release_policy.outputs.channel != 'beta' }}

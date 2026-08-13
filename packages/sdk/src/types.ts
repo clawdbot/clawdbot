@@ -71,6 +71,7 @@ export type WorkerEnvironmentMetadata = {
   idleMs?: number;
   attachedSessionIds: string[];
   tunnelStatus: WorkerTunnelStatus;
+  error?: string;
 };
 
 export type EnvironmentSummary = {
@@ -78,6 +79,9 @@ export type EnvironmentSummary = {
   type: "local" | "gateway" | "node" | "managed" | "ephemeral" | (string & {});
   label?: string;
   status: "available" | "unavailable" | "starting" | "stopping" | "error";
+  platform?: string;
+  sessionHost?: boolean;
+  trust?: "persistent" | "disposable";
   capabilities?: string[];
   worker?: WorkerEnvironmentMetadata;
 };
@@ -90,6 +94,7 @@ export type EnvironmentCreateParams = {
 export type WorkerEnvironmentProfileSummary = {
   id: string;
   providerId: string;
+  trust?: "persistent" | "disposable";
 };
 
 export type EnvironmentsListResult = {
@@ -194,6 +199,8 @@ export type TaskSummary = {
   startedAt?: RunTimestamp;
   endedAt?: RunTimestamp;
   progressSummary?: string;
+  lastActivity?: string;
+  diffStat?: { files: number; added: number; removed: number };
   terminalSummary?: string;
   error?: string;
 };

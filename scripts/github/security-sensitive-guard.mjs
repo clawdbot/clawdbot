@@ -13,6 +13,7 @@ import {
   guardCommentHeadSha,
   guardTrustedActorCandidates,
   isCommentNewerThan,
+  normalizeGuardLoginSet,
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
 } from "./guard-shared.mjs";
@@ -38,6 +39,16 @@ const securitySensitiveFiles = [
       "Controls ignored secret and local files, including common `.env` files, before they can be accidentally committed.",
   },
 ];
+
+/**
+ * @typedef {{
+ *   body?: string,
+ *   created_at?: string,
+ *   html_url?: string,
+ *   user?: { login?: string },
+ * }} GuardComment
+ * @typedef {{ login: string, source: string }} GuardActorCandidate
+ */
 
 export function securitySensitiveFileDefinitions() {
   return securitySensitiveFiles.map((entry) => ({ ...entry }));
@@ -84,6 +95,14 @@ function* securitySensitiveOverrideCandidates({ comments, expectedSha, newerThan
   }
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => boolean,
+ *   newerThan?: string,
+ * }} options
+ */
 export function findSecuritySensitiveOverrideCommand({
   comments,
   expectedSha,
@@ -102,6 +121,14 @@ export function findSecuritySensitiveOverrideCommand({
   return null;
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => Promise<boolean>,
+ *   newerThan?: string,
+ * }} input
+ */
 export async function findSecuritySensitiveOverrideCommandAsync(input) {
   for (const candidate of securitySensitiveOverrideCandidates(input)) {
     if (await input.isSecurityMember(candidate.login)) {
@@ -144,21 +171,11 @@ export function isSecuritySensitiveGuardTrustedForHead(comment, currentHeadSha) 
 }
 
 export function securityApproverSet(value) {
-  return new Set(
-    String(value ?? "")
-      .split(/[\s,]+/u)
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  return normalizeGuardLoginSet(value);
 }
 
 export function securitySensitiveGuardCommentAuthors(value) {
-  return new Set(
-    String(value ?? "github-actions[bot]")
-      .split(/[\s,]+/u)
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  return normalizeGuardLoginSet(value, "github-actions[bot]");
 }
 
 export function isSecuritySensitiveGuardMarkerComment(comment, trustedAuthors) {
@@ -304,6 +321,12 @@ export function securitySensitiveGuardTrustedActorCandidates({
   return guardTrustedActorCandidates({ pullRequest, event, currentHeadSha });
 }
 
+/**
+ * @param {{
+ *   candidates: GuardActorCandidate[],
+ *   isSecuritySensitiveApprover: (login: string) => Promise<string | null>,
+ * }} options
+ */
 export async function findTrustedSecuritySensitiveGuardActor({
   candidates,
   isSecuritySensitiveApprover,

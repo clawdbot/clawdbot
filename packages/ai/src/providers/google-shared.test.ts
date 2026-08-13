@@ -765,6 +765,23 @@ describe("runGoogleGenerateContentLifecycle", () => {
 
     expect(output.errorMessage).toBe("502: gateway maintenance");
   });
+
+  it("redacts generated video bytes from Google terminal fields", async () => {
+    const media = "QUJDRA==";
+    const error = Object.assign(new Error("502 status code (no body)"), {
+      status: 502,
+      body: { generatedVideos: [{ video: { videoBytes: media, mimeType: "video/mp4" } }] },
+    });
+
+    const { output } = await runGoogleFixture([], {
+      generateContentStream: async () => {
+        throw error;
+      },
+    });
+
+    expect(output.errorCode).toBe("502");
+    expect(JSON.stringify(output)).not.toContain(media);
+  });
 });
 
 describe("buildGoogleGenerateContentParams", () => {

@@ -1,4 +1,5 @@
 import { setImmediate as waitForImmediate } from "node:timers/promises";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RawData, type WebSocket, WebSocketServer } from "ws";
@@ -7,6 +8,7 @@ import {
   GatewayClientRequestTimeoutError,
   type GatewayClientOptions,
 } from "../../../../packages/gateway-client/src/index.js";
+import { createDeferred } from "../../../helpers/promise.js";
 
 type RequestFrame = {
   id: string;
@@ -18,31 +20,8 @@ type RequestFrame = {
 const clients: GatewayClient[] = [];
 let server: WebSocketServer | undefined;
 
-function rawDataToString(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.isBuffer(data)
-    ? data.toString("utf8")
-    : Buffer.from(new Uint8Array(data)).toString("utf8");
-}
-
 function parseRequest(data: RawData): RequestFrame {
   return JSON.parse(rawDataToString(data)) as RequestFrame;
-}
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  reject: (reason?: unknown) => void;
-  resolve: (value: T) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((onResolve, onReject) => {
-    resolve = onResolve;
-    reject = onReject;
-  });
-  return { promise, reject, resolve };
 }
 
 function enableFakeTimeAfterSocketEstablishment(): void {
@@ -262,7 +241,7 @@ describe("GatewayClient transport defaults", () => {
         firstSocket.resolve(socket);
         return;
       }
-      waitForImmediate().then(() => socket.close(1012, "retry"));
+      void waitForImmediate().then(() => socket.close(1012, "retry"));
     });
     const client = new GatewayClient({
       url,

@@ -271,7 +271,6 @@ export function pendingBridgeRequestsReplaySafe(
 function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
-  output: unknown[];
   reservedActiveRunSlot?: boolean;
 }) {
   if (!params.reservedActiveRunSlot) {
@@ -282,6 +281,7 @@ function enforceSnapshotStateLimits(params: {
 
 export function createPendingBridgeStates(params: {
   pendingRequests: PendingBridgeRequest[];
+  config: CodeModeConfig;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
@@ -305,6 +305,7 @@ export function createPendingBridgeStates(params: {
         namespaceRuntime: params.namespaceRuntime,
         parentToolCallId: params.parentToolCallId,
         codeModeRunId: params.codeModeRunId,
+        maxOutputBytes: params.config.maxOutputBytes,
         ctx: params.ctx,
         request,
         signal,

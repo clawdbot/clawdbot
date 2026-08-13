@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
@@ -139,6 +140,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       cfg,
       accountId: opts.accountId,
     });
+    const ownerAgentId =
+      opts.ownerAgentId?.trim() ||
+      resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId });
     const token = opts.token?.trim() || account.token;
     if (!token) {
       throw new Error(
@@ -164,6 +168,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       await startTelegramWebhook({
         token,
         accountId: account.accountId,
+        ownerAgentId,
         config: cfg,
         path: opts.webhookPath,
         port: opts.webhookPort,
@@ -268,6 +273,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         token,
         config: cfg,
         accountId: account.accountId,
+        ownerAgentId,
         runtime: opts.runtime,
         proxyFetch,
         botInfo: opts.botInfo,

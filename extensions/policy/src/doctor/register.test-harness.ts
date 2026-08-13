@@ -95,7 +95,9 @@ export async function runPolicyChecksFixture(
   return runPolicyChecks(ctx(await writePolicyFixture(policy), cfg));
 }
 
-export async function runPolicyDoctorLint(checkCtx: HealthCheckContext) {
+export async function runPolicyDoctorLint(
+  checkCtx: HealthCheckContext,
+): Promise<Awaited<ReturnType<typeof runDoctorLintChecks>>> {
   return runDoctorLintChecks(checkCtx, { checks: registerChecks() });
 }
 

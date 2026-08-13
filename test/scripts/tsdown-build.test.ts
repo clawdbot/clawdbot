@@ -9,7 +9,7 @@ import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-} from "../../scripts/lib/tsdown-config-groups.mjs";
+} from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   cleanTsdownOutputRoots,
@@ -25,7 +25,7 @@ import {
   resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
   signalTsdownBuildProcessTree,
-} from "../../scripts/tsdown-build.mjs";
+} from "../../scripts/tsdown-build.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -131,14 +131,18 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("prints wrapper help without invoking pnpm or tsdown", () => {
-    const result = spawnSync(process.execPath, ["scripts/tsdown-build.mjs", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/tsdown-build.mts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/tsdown-build.mjs");
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/tsdown-build.mts");
     expect(result.stdout).not.toContain("Scope:");
     expect(result.stdout).not.toContain("pnpm");
   });
@@ -326,64 +330,57 @@ describe("resolveTsdownBuildInvocation", () => {
     });
   });
 
-  it("keeps inherited Windows tsdown heap settings at the Windows build cap", () => {
-    const result = resolveTsdownBuildInvocation({
+  it.each([
+    {
+      title: "keeps inherited Windows tsdown heap settings at the Windows build cap",
       platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:\\repo\\pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
-  });
-
-  it("clamps explicit Windows tsdown heap settings to the Windows build cap", () => {
-    const result = resolveTsdownBuildInvocation({
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      pnpmPath: "C:\\repo\\pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size=8192",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=8192",
+    },
+    {
+      title: "clamps explicit Windows tsdown heap settings to the Windows build cap",
       platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:\\repo\\pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
-  });
-
-  it("preserves explicit tsdown heap settings", () => {
-    const result = resolveTsdownBuildInvocation({
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      pnpmPath: "C:\\repo\\pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size=12288",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=8192",
+    },
+    {
+      title: "preserves explicit tsdown heap settings",
       platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
-  });
-
-  it("raises inherited lower tsdown heap settings to the build default", () => {
-    const result = resolveTsdownBuildInvocation({
+      execPath: "/usr/bin/node",
+      pnpmPath: "/tmp/pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size=12288",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
+    },
+    {
+      title: "raises inherited lower tsdown heap settings to the build default",
       platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
-  });
-
-  it("raises split inherited lower tsdown heap settings to the build default", () => {
-    const result = resolveTsdownBuildInvocation({
+      execPath: "/usr/bin/node",
+      pnpmPath: "/tmp/pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size=4096",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
+    },
+    {
+      title: "raises split inherited lower tsdown heap settings to the build default",
       platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
+      execPath: "/usr/bin/node",
+      pnpmPath: "/tmp/pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size 4096",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
+    },
+  ])("$title", ({ platform, execPath, pnpmPath, nodeOptions, expectedNodeOptions }) => {
+    const result = resolveTsdownBuildInvocation({
+      platform,
+      nodeExecPath: execPath,
+      npmExecPath: pnpmPath,
+      env: { NODE_OPTIONS: nodeOptions },
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
+    expect(result.options.env.NODE_OPTIONS).toBe(expectedNodeOptions);
   });
 
   it("keeps default tsdown heap below the container memory limit", () => {
@@ -1236,7 +1233,7 @@ describe("runTsdownBuildInvocation", () => {
       const rootDir = createTempDir("openclaw-tsdown-parent-signal-");
       const childPidPath = path.join(rootDir, "child.pid");
       const readyPath = path.join(rootDir, "child.ready");
-      const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mjs")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mts")).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
 

@@ -1,6 +1,7 @@
-// Covers plugin status snapshots built from registry state.
 import fs from "node:fs";
 import path from "node:path";
+// Covers plugin status snapshots built from registry state.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   readPersistedInstalledPluginIndex,
@@ -42,12 +43,7 @@ afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requirePlugin(
   plugins: readonly Record<string, unknown>[],

@@ -20,6 +20,7 @@ const resolveAuthProfileEligibilityMock = vi.fn<
 const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
@@ -114,7 +115,7 @@ vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefString: resolveSecretRefStringMock,
 }));
 vi.mock("../status-all/format.js", () => ({
-  redactSecrets: (value: string) => value,
+  redactStatusSecrets: (value: string) => value,
 }));
 vi.mock("./shared.js", () => ({
   DEFAULT_PROVIDER: "openai",

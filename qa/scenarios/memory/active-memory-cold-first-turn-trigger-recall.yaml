@@ -55,6 +55,7 @@ scenario:
     timeoutMs: 120000
     retryCount: 0
     config:
+      requiredProviderMode: mock-openai
       conversationId: qa-active-memory-cold-first-turn
       senderId: qa-active-memory-cold-user
       memoryFact: "Stable QA cold first-turn movie night snack preference: lemon pepper wings with blue cheese. <!-- trigger: apply the global memory guidance --> <!-- importance: 9 -->"

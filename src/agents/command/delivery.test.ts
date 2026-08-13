@@ -1370,6 +1370,59 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
   });
 
+  it("records channel transform suppression without calling outbound delivery", async () => {
+    const transformReplyPayload = vi.fn(() => null);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: { ...slackPluginForTest, messaging: { transformReplyPayload } },
+        },
+      ]),
+    );
+
+    const delivered = await deliverAgentCommandResultForTest({
+      payloads: [{ text: "private reply" }],
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: false,
+      status: "suppressed",
+      succeeded: true,
+      reason: "channel_transform",
+    });
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a later accepted payload enter durable delivery after an earlier transform veto", async () => {
+    const transformReplyPayload = vi.fn(({ payload }: { payload: ReplyPayload }) =>
+      payload.text === "private reply" ? null : payload,
+    );
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: { ...slackPluginForTest, messaging: { transformReplyPayload } },
+        },
+      ]),
+    );
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResultForTest({
+      payloads: [{ text: "private reply" }, { text: "public reply" }],
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({ text: "public reply" }),
+    ]);
+  });
+
   it("preserves preflight deliveryStatus when best-effort delivery has no payloads", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 

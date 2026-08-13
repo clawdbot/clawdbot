@@ -218,6 +218,7 @@ export const synologyChatSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Synology Chat environment credentials" },
+      envVars: ["SYNOLOGY_CHAT_TOKEN"],
     },
   },
   legacyAdapter: synologyChatSetupAdapter,

@@ -13,7 +13,7 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { drainPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
+import { drainPendingDeliveriesCore, type DeliverFn } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -151,7 +151,7 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
     const recovered: RecoveredSend[] = [];
     installMatrixAdapter(recoveryPhaseAdapter(recovered, spoolRoot));
     const deliver = vi.fn<DeliverFn>(async (params) => deliverOutboundPayloads(params));
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: "media-directive-test",
       logLabel: "media-directive drain",
       cfg,

@@ -180,4 +180,26 @@ describe("Anthropic OAuth callback host", () => {
     expect(credentials).toMatchObject({ access: "access-token", refresh: "refresh-token" });
     expect(tokenExchange).toHaveBeenCalledOnce();
   });
+
+  it("settles an OAuth error callback immediately", async () => {
+    vi.stubEnv("OPENCLAW_OAUTH_CALLBACK_HOST", "127.0.0.1");
+    let callback: Promise<void> | undefined;
+    const login = anthropicOAuthProvider.login({
+      onAuth: ({ url }) => {
+        const state = new URL(url).searchParams.get("state");
+        if (!state) {
+          throw new Error("authorization URL did not include OAuth state");
+        }
+        callback = getLocalCallback(
+          `http://127.0.0.1:53692/callback?error=access_denied&state=${state}`,
+        );
+      },
+      onPrompt: async () => {
+        throw new Error("error callback did not settle the listener");
+      },
+    });
+
+    await expect(login).rejects.toThrow("Anthropic OAuth error: access_denied");
+    await callback;
+  });
 });

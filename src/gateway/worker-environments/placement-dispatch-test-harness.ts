@@ -46,6 +46,7 @@ export function createHarness(
     destroyFailureState?: "draining" | "destroying";
     terminalizeReclaimOnTunnelDrop?: boolean;
     terminalizedReclaimError?: Error;
+    environmentGeneration?: number;
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -57,7 +58,11 @@ export function createHarness(
   const fail = (stage: DispatchStage) => {
     log.push(stage);
     if (options.failAt === stage) {
-      throw new Error(`${stage} failed`);
+      const error = new Error(`${stage} failed`);
+      if (stage === "preflight") {
+        Object.assign(error, { code: "invalid_state" });
+      }
+      throw error;
     }
   };
   const placements: WorkerDispatchPlacementStore = {
@@ -77,6 +82,7 @@ export function createHarness(
       placementStore.recordWorkspaceResultConflict(claim, conflict),
     claimTurn: (params) => placementStore.claimTurn(params),
     claimReclaimWorkspaceResult: (params) => placementStore.claimReclaimWorkspaceResult(params),
+    closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
     markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
     cancelWorkspaceResultAndReleaseTurn: (claim) =>
@@ -90,6 +96,14 @@ export function createHarness(
         log.push("placement:reclaimed");
       }
       return completed;
+    },
+    failWorkspaceResultAndReleaseTurn: (pending, error) => {
+      const current = placementStore.get(pending.sessionId);
+      if (current?.state === "active") {
+        log.push("placement:draining");
+      }
+      log.push("placement:reconciling", "placement:failed");
+      return placementStore.failWorkspaceResultAndReleaseTurn(pending, error);
     },
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
@@ -156,12 +170,13 @@ export function createHarness(
     },
   };
   const { attached, destroyedEnvironment, environmentId, ready } =
-    createDispatchEnvironmentFixtures();
+    createDispatchEnvironmentFixtures(options.environmentGeneration);
   let currentEnvironment: ReturnType<WorkerDispatchEnvironmentService["get"]> = ready;
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
-    remoteSocketPath: "/worker/gateway.sock",
+    connectionEndpoint: { kind: "unix", socketPath: "/worker/gateway.sock" },
+    launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
       return {
@@ -281,6 +296,10 @@ export function createHarness(
   const environments: WorkerDispatchEnvironmentService = {
     create: vi.fn(async () => {
       fail("create");
+      return currentEnvironment ?? ready;
+    }),
+    createFromProfileSnapshot: vi.fn(async () => {
+      fail("create");
       return ready;
     }),
     get: vi.fn(() => currentEnvironment),
@@ -290,7 +309,10 @@ export function createHarness(
       return minted;
     }),
     startTunnel: vi.fn(async ({ ownerEpoch }) => {
-      fail(ownerEpoch === 1 ? "tunnel:ready" : "tunnel:attached");
+      fail("tunnel:attached");
+      if (ownerEpoch !== currentEnvironment?.ownerEpoch) {
+        throw new Error("tunnel fixture received a stale owner epoch");
+      }
       return tunnelHandle(ownerEpoch);
     }),
     stopTunnel: vi.fn(async () => {
@@ -322,6 +344,9 @@ export function createHarness(
     workspaceOperations: options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => {
       log.push("barrier");
+      if (options.failAt === "preflight") {
+        fail("preflight");
+      }
       const placement = startDispatch();
       if (options.failAt === "barrier") {
         throw new Error("barrier failed");
@@ -366,6 +391,17 @@ export function createHarness(
     reportWorkspaceResultConflict,
     markEnvironmentDestroyed: () => {
       currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
+    },
+    markEnvironmentFailed: () => {
+      currentEnvironment = {
+        ...destroyedEnvironment(currentEnvironment?.ownerEpoch ?? 1),
+        state: "failed",
+        leaseId: null,
+        sshEndpoint: null,
+        sharedHost: null,
+        lastError: "Worker environment disappeared before teardown was requested",
+        error: "Worker environment disappeared before teardown was requested",
+      };
     },
     markEnvironmentOwnerEpoch: (ownerEpoch: number) => {
       currentEnvironment = { ...attached, ownerEpoch };

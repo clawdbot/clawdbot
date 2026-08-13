@@ -290,7 +290,8 @@ describe("createClawWorkspaceFiles", () => {
       action.source = join(plan.claw.packageRoot, "content-link", "AGENTS.md");
 
       await expect(createClawWorkspaceFiles(plan, { env: stateEnv(root) })).rejects.toMatchObject({
-        diagnostics: [expect.objectContaining({ code: "workspace_file_path_alias" })],
+        // fs-safe 0.5.2 rejects the symlinked parent before the alias check runs.
+        diagnostics: [expect.objectContaining({ code: "workspace_file_symlink" })],
       });
       await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).rejects.toThrow();
     },

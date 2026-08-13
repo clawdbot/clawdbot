@@ -10,7 +10,7 @@ import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-ho
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "./api.js";
 import type { MemoryConfig } from "./config.js";
 
@@ -147,7 +147,7 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
 }
 
 function isEmbeddingDimensionsRejectedError(error: unknown): boolean {
-  const record = asRecord(error);
+  const record = asOptionalRecord(error);
   if (record?.status !== 400 && record?.status !== 422) {
     return false;
   }
@@ -170,7 +170,7 @@ function isUnsupportedEmbeddingFieldError(details: string): boolean {
 }
 
 function stringifyEmbeddingApiError(error: unknown): string {
-  const record = asRecord(error);
+  const record = asOptionalRecord(error);
   const parts = error instanceof Error ? [error.message] : [];
   for (const value of [record?.code, record?.type, record?.param, record?.error]) {
     if (typeof value === "string" || typeof value === "number") {
@@ -475,7 +475,7 @@ export async function runWithTimeout<T>(params: {
 export function isMemoryRecallTimeoutError(error: unknown): boolean {
   let current: unknown = error;
   for (let depth = 0; depth < 3 && current !== undefined; depth += 1) {
-    const record = asRecord(current);
+    const record = asOptionalRecord(current);
     const name =
       current instanceof Error ? current.name : typeof record?.name === "string" ? record.name : "";
     const message =

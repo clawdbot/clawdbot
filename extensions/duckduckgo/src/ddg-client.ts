@@ -214,10 +214,8 @@ export async function runDuckDuckGoSearch(params: {
 }
 
 export const testing = {
-  decodeDuckDuckGoUrl,
   decodeHtmlEntities,
   isBotChallenge,
   parseDuckDuckGoHtml,
   readDuckDuckGoHtmlResponse,
 };
-export { testing as __testing };

@@ -6,27 +6,6 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeRuntimeTests {
-    actor AsyncGate {
-        private var isOpen = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
-
-        func wait() async {
-            guard !self.isOpen else { return }
-            await withCheckedContinuation { continuation in
-                self.waiters.append(continuation)
-            }
-        }
-
-        func open() {
-            self.isOpen = true
-            let waiters = self.waiters
-            self.waiters.removeAll()
-            for waiter in waiters {
-                waiter.resume()
-            }
-        }
-    }
-
     private final class LockedCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
@@ -151,11 +130,12 @@ struct MacNodeRuntimeTests {
         var actError: Error?
         var performCallCount = 0
         var releaseCallCount = 0
+        var locationStatus: CLAuthorizationStatus
         var receivedLifecycleGenerations: [UInt64] = []
         var receivedReleaseGenerations: [UInt64] = []
         private let snapshotInspection: SnapshotInspection?
-        private let performEnteredGate: AsyncGate?
-        private let allowPerformGate: AsyncGate?
+        private let performEnteredGate: AsyncTestGate?
+        private let allowPerformGate: AsyncTestGate?
         private var latestLifecycleGeneration: UInt64 = 0
 
         init(
@@ -168,13 +148,15 @@ struct MacNodeRuntimeTests {
             snapshotError: Error? = nil,
             snapshotInspection: SnapshotInspection? = nil,
             actError: Error? = nil,
-            performEnteredGate: AsyncGate? = nil,
-            allowPerformGate: AsyncGate? = nil)
+            locationAuthorizationStatus: CLAuthorizationStatus = .authorizedAlways,
+            performEnteredGate: AsyncTestGate? = nil,
+            allowPerformGate: AsyncTestGate? = nil)
         {
             self.snapshotResult = snapshotResult
             self.snapshotError = snapshotError
             self.snapshotInspection = snapshotInspection
             self.actError = actError
+            self.locationStatus = locationAuthorizationStatus
             self.performEnteredGate = performEnteredGate
             self.allowPerformGate = allowPerformGate
         }
@@ -213,7 +195,7 @@ struct MacNodeRuntimeTests {
         }
 
         func locationAuthorizationStatus() -> CLAuthorizationStatus {
-            .authorizedAlways
+            self.locationStatus
         }
 
         func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
@@ -238,7 +220,7 @@ struct MacNodeRuntimeTests {
             self.performCallCount += 1
             self.receivedParams = params
             self.receivedLifecycleGenerations.append(lifecycleGeneration)
-            await self.performEnteredGate?.open()
+            self.performEnteredGate?.open()
             await self.allowPerformGate?.wait()
             guard lifecycleGeneration >= self.latestLifecycleGeneration else {
                 throw ComputerActionService.ComputerActionError.lifecycleChanged
@@ -474,6 +456,30 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    @Test func `handle location invoke applies authorization required by mode`() async throws {
+        let authorizedWhenInUse = try #require(CLAuthorizationStatus(rawValue: 4))
+        let cases: [(mode: OpenClawLocationMode, status: CLAuthorizationStatus, accepted: Bool)] = [
+            (.whileUsing, authorizedWhenInUse, true),
+            (.always, authorizedWhenInUse, false),
+            (.whileUsing, .authorizedAlways, true),
+            (.always, .authorizedAlways, true),
+        ]
+
+        for testCase in cases {
+            await TestIsolation.withUserDefaultsValues([locationModeKey: testCase.mode.rawValue]) {
+                let services = await MainActor.run {
+                    MainActorServicesProbe(locationAuthorizationStatus: testCase.status)
+                }
+                let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+                let response = await self.invoke(
+                    runtime, "req-location", OpenClawLocationCommand.get.rawValue)
+
+                #expect(response.ok == testCase.accepted)
+            }
+        }
+    }
+
     @Test func `handle invoke screen record uses injected services`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
@@ -606,7 +612,8 @@ struct MacNodeRuntimeTests {
 
     @Test func `concurrent invokes share one main actor services initialization`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
-        let factoryGate = AsyncGate()
+        let factoryGate = AsyncTestGate()
+        defer { factoryGate.open() }
         let factoryCalls = LockedCounter()
         let admissionCalls = LockedCounter()
         let runtime = MacNodeRuntime(
@@ -625,16 +632,16 @@ struct MacNodeRuntimeTests {
         let first = Task {
             await self.invoke(runtime, "req-computer-single-flight-1", OpenClawComputerCommand.act.rawValue, json)
         }
-        #expect(await self.waitForCount(1, counter: factoryCalls))
+        try #require(await self.waitForCount(1, counter: factoryCalls))
         let second = Task {
             await self.invoke(runtime, "req-computer-single-flight-2", OpenClawComputerCommand.act.rawValue, json)
         }
-        #expect(await self.waitForCount(2, counter: admissionCalls))
+        try #require(await self.waitForCount(2, counter: admissionCalls))
         // The actor barrier proves the second invoke reached its first suspension.
         await runtime.updateMainSessionKey("single-flight-barrier")
 
         #expect(factoryCalls.value() == 1)
-        await factoryGate.open()
+        factoryGate.open()
         let firstResponse = await first.value
         let secondResponse = await second.value
         #expect(firstResponse.ok)
@@ -643,7 +650,8 @@ struct MacNodeRuntimeTests {
 
     @Test func `lifecycle release invalidates first invoke awaiting service initialization`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
-        let factoryGate = AsyncGate()
+        let factoryGate = AsyncTestGate()
+        defer { factoryGate.open() }
         let factoryCalls = LockedCounter()
         let runtime = MacNodeRuntime(
             makeMainActorServices: {
@@ -657,10 +665,10 @@ struct MacNodeRuntimeTests {
         let invoke = Task {
             await self.invoke(runtime, "req-computer-release-during-init", OpenClawComputerCommand.act.rawValue, json)
         }
-        #expect(await self.waitForCount(1, counter: factoryCalls))
+        try #require(await self.waitForCount(1, counter: factoryCalls))
 
         await runtime.releaseHeldComputerInput()
-        await factoryGate.open()
+        factoryGate.open()
         let response = await invoke.value
         let counts = await MainActor.run {
             (perform: services.performCallCount, release: services.releaseCallCount)
@@ -674,8 +682,12 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `lifecycle release after runtime admission invalidates service execution`() async throws {
-        let performEntered = AsyncGate()
-        let allowPerform = AsyncGate()
+        let performEntered = AsyncTestGate()
+        let allowPerform = AsyncTestGate()
+        defer {
+            performEntered.open()
+            allowPerform.open()
+        }
         let services = await MainActor.run {
             MainActorServicesProbe(
                 performEnteredGate: performEntered,
@@ -692,7 +704,7 @@ struct MacNodeRuntimeTests {
         await performEntered.wait()
 
         await runtime.releaseHeldComputerInput()
-        await allowPerform.open()
+        allowPerform.open()
         let response = await invoke.value
         let generations = await MainActor.run {
             (

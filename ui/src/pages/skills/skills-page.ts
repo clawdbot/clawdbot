@@ -13,6 +13,8 @@ import {
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { searchClawHub, type ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -23,11 +25,9 @@ import {
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
-  searchClawHub,
   setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
-  type ClawHubSearchResult,
   type ClawHubSkillDetail,
   type ClawHubSkillSecurityVerdict,
   type SkillOperation,
@@ -73,13 +73,13 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillsDetailTab: SkillDetailTab = "overview";
   @state() clawhubSearchQuery = "";
   @state() clawhubDetail: ClawHubSkillDetail | null = null;
-  @state() clawhubDetailSlug: string | null = null;
+  @state() clawhubDetailRef: string | null = null;
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
-    acknowledgeSlug?: string;
+    acknowledgeRef?: string;
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null = null;
@@ -184,7 +184,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsDetailTab = "overview";
     this.debouncedClawHubSearchQuery = "";
     this.clawhubDetail = null;
-    this.clawhubDetailSlug = null;
+    this.clawhubDetailRef = null;
     this.clawhubDetailLoading = false;
     this.clawhubDetailError = null;
     this.clawhubInstallMessage = null;
@@ -327,6 +327,18 @@ class SkillsPage extends OpenClawLightDomElement {
     }
   }
 
+  private canUpdateSkills(): boolean {
+    return canCallGatewayMethod(this.context?.gateway?.snapshot, "skills.update", "operator.admin");
+  }
+
+  private canInstallSkills(): boolean {
+    return canCallGatewayMethod(
+      this.context?.gateway?.snapshot,
+      "skills.install",
+      "operator.admin",
+    );
+  }
+
   private selectHubTab(tab: PluginsHubTab) {
     if (tab === "skills") {
       return;
@@ -368,6 +380,8 @@ class SkillsPage extends OpenClawLightDomElement {
           aria-labelledby="plugins-tab-skills"
         >
           ${renderSkills({
+            canUpdate: this.canUpdateSkills(),
+            canInstall: this.canInstallSkills(),
             connected: this.gateway.connected,
             loading: this.skillsLoading || agents.agentsLoading,
             report: this.skillsReport,
@@ -392,7 +406,7 @@ class SkillsPage extends OpenClawLightDomElement {
             clawhubSearchLoading: this.clawhubSearchLoading,
             clawhubSearchError: this.clawhubSearchError,
             clawhubDetail: this.clawhubDetail,
-            clawhubDetailSlug: this.clawhubDetailSlug,
+            clawhubDetailRef: this.clawhubDetailRef,
             clawhubDetailLoading: this.clawhubDetailLoading,
             clawhubDetailError: this.clawhubDetailError,
             clawhubInstallMessage: this.clawhubInstallMessage,
@@ -400,11 +414,26 @@ class SkillsPage extends OpenClawLightDomElement {
             onFilterChange: (next) => (this.skillsFilter = next),
             onStatusFilterChange: (next) => (this.skillsStatusFilter = next),
             onRefresh: () => void this.refreshPage(),
-            onToggle: (key, enabled) => void updateSkillEnabled(this, key, enabled),
-            onEdit: (key, value) => updateSkillEdit(this, key, value),
-            onSaveKey: (key) => void saveSkillApiKey(this, key),
-            onInstall: (skillKey, name, installId) =>
-              void installSkill(this, skillKey, name, installId),
+            onToggle: (key, enabled) => {
+              if (this.canUpdateSkills()) {
+                void updateSkillEnabled(this, key, enabled, () => this.canUpdateSkills());
+              }
+            },
+            onEdit: (key, value) => {
+              if (this.canUpdateSkills()) {
+                updateSkillEdit(this, key, value);
+              }
+            },
+            onSaveKey: (key) => {
+              if (this.canUpdateSkills()) {
+                void saveSkillApiKey(this, key, () => this.canUpdateSkills());
+              }
+            },
+            onInstall: (skillKey, name, installId) => {
+              if (this.canInstallSkills()) {
+                void installSkill(this, skillKey, name, installId);
+              }
+            },
             onDetailOpen: (key) => {
               this.skillsDetailKey = key;
               this.skillsDetailTab = "overview";
@@ -412,10 +441,13 @@ class SkillsPage extends OpenClawLightDomElement {
             onDetailClose: () => (this.skillsDetailKey = null),
             onDetailTabChange: (tab) => this.changeDetailTab(tab),
             onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
-            onClawHubDetailOpen: (slug) => void loadClawHubDetail(this, slug),
+            onClawHubDetailOpen: (ref) => void loadClawHubDetail(this, ref),
             onClawHubDetailClose: () => closeClawHubDetail(this),
-            onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
-              void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
+            onClawHubInstall: (ref, acknowledgeClawHubRisk, version) => {
+              if (this.canInstallSkills()) {
+                void installFromClawHub(this, ref, acknowledgeClawHubRisk, version);
+              }
+            },
           })}
         </wa-tab-panel>
       `)}

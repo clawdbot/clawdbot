@@ -5,9 +5,11 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   formatErrorMessage,
@@ -27,6 +29,42 @@ const USER_LIST_REQUEST_TIMEOUT_MS = 15_000;
 const POST_REQUEST_TIMEOUT_MS = 30_000;
 let lastSendTime = 0;
 let sendQueue: Promise<void> = Promise.resolve();
+
+const UNPROVEN_TRANSPORT_ERROR_BRANCH = "unproven transport error branch";
+
+function nestedTransportErrorCandidates(current: Record<string, unknown>): unknown[] {
+  const aggregateBranches = Array.isArray(current.errors)
+    ? current.errors.map((branch) => branch ?? UNPROVEN_TRANSPORT_ERROR_BRANCH)
+    : [];
+  const wrappers = [current.cause, current.original, current.error, current.reason].filter(
+    (candidate) => candidate !== undefined && candidate !== null,
+  );
+  return [...aggregateBranches, ...wrappers];
+}
+
+function isProvenPreConnectFailure(error: unknown): boolean {
+  let foundPreConnectLeaf = false;
+  for (const candidate of collectErrorGraphCandidates(error, nestedTransportErrorCandidates)) {
+    const classification = classifyTransientNetworkErrorCode(extractErrorCode(candidate));
+    const nested =
+      candidate && typeof candidate === "object"
+        ? nestedTransportErrorCandidates(candidate as Record<string, unknown>)
+        : [];
+    // A webhook POST is safe to replay only when every terminal transport branch
+    // proves it failed before connect; aggregate summary codes cannot hide a reset.
+    if (nested.length > 0) {
+      if (classification === "ambiguous") {
+        return false;
+      }
+      continue;
+    }
+    if (classification !== "pre-connect") {
+      return false;
+    }
+    foundPreConnectLeaf = true;
+  }
+  return foundPreConnectLeaf;
+}
 
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
@@ -120,19 +158,19 @@ async function sendMessageChunk(
   // The @mention is optional but user_ids is mandatory
   const body = buildWebhookBody({ text }, userId);
 
-  // Retry with exponential backoff (3 attempts, 300ms base)
+  // A webhook POST is non-idempotent. Retry only when the transport proves the
+  // request never connected; replaying an ambiguous failure can duplicate a message.
   const maxRetries = 3;
   const baseDelay = 300;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       await waitForSendSlot();
-      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-      if (ok) {
-        return true;
+      return await doPost(incomingUrl, body, allowInsecureSsl);
+    } catch (error) {
+      if (!isProvenPreConnectFailure(error)) {
+        return false;
       }
-    } catch {
-      // will retry
     }
 
     if (attempt < maxRetries - 1) {

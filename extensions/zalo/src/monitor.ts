@@ -869,7 +869,14 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   } = options;
 
   const core = getZaloRuntime();
-  const effectiveMediaMaxMb = account.config.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
+  // A non-positive cap cannot bound a transfer, so treat it as unset: `??` alone
+  // keeps 0/negatives and turns every inbound download and hosted outbound send
+  // into a 0-byte limit the media core rejects.
+  const configuredMediaMaxMb = account.config.mediaMaxMb;
+  const effectiveMediaMaxMb =
+    typeof configuredMediaMaxMb === "number" && configuredMediaMaxMb > 0
+      ? configuredMediaMaxMb
+      : DEFAULT_MEDIA_MAX_MB;
   const fetcher = fetcherOverride ?? resolveZaloProxyFetch(account.config.proxy);
   const mode = useWebhook ? "webhook" : "polling";
   const effectiveWebhookUrl = normalizeWebhookUrl(webhookUrl ?? account.config.webhookUrl);

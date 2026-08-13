@@ -3,10 +3,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
-import { listNodePairing } from "../../infra/node-pairing.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
+import { isNodeRunnerSessionHost } from "../node-registry-private.js";
+import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
-import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({
@@ -14,13 +16,21 @@ vi.mock("../../infra/device-pairing.js", () => ({
   resolveNodePairingState: vi.fn(),
 }));
 
-vi.mock("../../infra/node-pairing.js", () => ({
+vi.mock("../../infra/device-pairing-node.js", () => ({
   listNodePairing: vi.fn(),
+}));
+
+vi.mock("../node-registry-private.js", () => ({
+  isNodeRunnerSessionHost: vi.fn(() => false),
 }));
 
 const NOW = 10_000;
 
-type TestWorkerRecord = WorkerEnvironmentRecord & { tunnelStatus: WorkerTunnelStatus };
+type TestWorkerRecord = WorkerEnvironmentRecord &
+  Pick<
+    WorkerEnvironmentServiceRecord,
+    "desktopAvailable" | "desktopApps" | "tunnelStatus" | "error"
+  >;
 
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
@@ -28,6 +38,17 @@ type TestWorkerService = {
   create: (profileId: string, idempotencyKey: string) => Promise<TestWorkerRecord>;
   destroy: (environmentId: string) => Promise<TestWorkerRecord>;
   destroyUnattached: (environmentId: string) => Promise<TestWorkerRecord>;
+  observeDesktop: (request: { environmentId: string; control: boolean }) => Promise<{
+    transport: "rfb";
+    wsPath: string;
+    expiresAtMs: number;
+    control: boolean;
+    vncPassword?: string;
+  }>;
+  launchDesktopApp: (request: {
+    environmentId: string;
+    app: "browser" | "terminal";
+  }) => Promise<{ app: "browser" | "terminal"; status: "ready" }>;
 };
 
 function mockContext(
@@ -51,11 +72,24 @@ function mockContext(
           platform: "ios",
           caps: ["camera"],
           commands: ["system.run"],
+          workerRuns: {
+            bundleHash: "a".repeat(64),
+            openclawVersion: "2026.8.12",
+            protocolFeatures: ["worker-heartbeat-v1"],
+          },
           connectedAtMs: 123,
         },
       ],
     },
     workerEnvironmentService,
+    getRuntimeConfig: () => ({
+      cloudWorkers: {
+        profiles: {
+          zeta: { provider: "static-ssh", settings: {} },
+          aws: { provider: "crabbox", settings: {} },
+        },
+      },
+    }),
     ...(workerEnvironmentService
       ? {
           workerPlacementDispatchService: {
@@ -63,14 +97,6 @@ function mockContext(
             forceDestroyEnvironment,
             reconcileActive,
           },
-          getRuntimeConfig: () => ({
-            cloudWorkers: {
-              profiles: {
-                zeta: { provider: "static-ssh", settings: {} },
-                aws: { provider: "crabbox", settings: {} },
-              },
-            },
-          }),
         }
       : {}),
   };
@@ -84,6 +110,8 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision:worker-1",
     leaseId: "lease-1",
+    sharedHost: false,
+    desktop: null,
     sshEndpoint: {
       host: "worker.example.test",
       port: 22,
@@ -99,6 +127,8 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
     idleSinceAtMs: null,
     lastError: null,
     tunnelStatus: "stopped",
+    desktopAvailable: false,
+    desktopApps: [],
     ...overrides,
   } as TestWorkerRecord;
 }
@@ -110,6 +140,13 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
     create: vi.fn(async () => workerRecord()),
     destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
     destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
+    observeDesktop: vi.fn(async ({ control }) => ({
+      transport: "rfb" as const,
+      wsPath: "/desktop/observe?token=abc",
+      expiresAtMs: 70_000,
+      control,
+    })),
+    launchDesktopApp: vi.fn(async ({ app }) => ({ app, status: "ready" as const })),
     ...overrides,
   };
 }
@@ -119,7 +156,9 @@ async function callEnvironmentMethod(
     | "environments.list"
     | "environments.status"
     | "environments.create"
-    | "environments.destroy",
+    | "environments.destroy"
+    | "worker.desktop.observe"
+    | "worker.desktop.launch",
   params: unknown,
   options: {
     service?: TestWorkerService;
@@ -154,6 +193,7 @@ class FakeWorkerServiceError extends Error {
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
+  vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({
     paired: [
@@ -170,7 +210,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
-  it("keeps the existing gateway and node projection unchanged without a worker service", async () => {
+  it("projects live node session-host capability without a worker service", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
     const [ok, payload] = await callEnvironmentMethod("environments.list", {});
 
     expect(ok).toBe(true);
@@ -181,6 +222,9 @@ describe("environment gateway methods", () => {
           type: "local",
           label: "Gateway local",
           status: "available",
+          platform: process.platform,
+          sessionHost: true,
+          trust: "persistent",
           capabilities: ["agent.run", "sessions", "tools", "workspace"],
         },
         {
@@ -188,6 +232,9 @@ describe("environment gateway methods", () => {
           type: "node",
           label: "Live Node",
           status: "available",
+          platform: "ios",
+          sessionHost: true,
+          trust: "persistent",
           capabilities: ["camera", "system.run"],
         },
         {
@@ -195,10 +242,70 @@ describe("environment gateway methods", () => {
           type: "node",
           label: "Offline Node",
           status: "unavailable",
+          sessionHost: false,
+          trust: "persistent",
           capabilities: ["camera.snap", "screen"],
         },
       ],
     });
+  });
+
+  it("marks only the current worker-build node as a session host", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockImplementation(({ nodeId }) => nodeId === "node-live");
+
+    const [ok, payload] = await callEnvironmentMethod("environments.list", {});
+
+    expect(ok).toBe(true);
+    const environments = (payload as { environments: Array<{ id: string; sessionHost?: boolean }> })
+      .environments;
+    expect(environments.find((entry) => entry.id === "node:node-live")?.sessionHost).toBe(true);
+    expect(environments.find((entry) => entry.id === "node:node-offline")?.sessionHost).toBe(false);
+  });
+
+  it("marks only connected, advertised, and explicitly allowed nodes as desktop sources", async () => {
+    const context = mockContext();
+    context.getRuntimeConfig = () =>
+      ({
+        gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
+      }) as never;
+    context.nodeRegistry.listConnectedForPairingStates = () =>
+      [
+        {
+          nodeId: "node-desktop",
+          connId: "conn-desktop",
+          displayName: "Desktop Node",
+          platform: "linux",
+          deviceFamily: "Linux",
+          caps: [],
+          commands: [NODE_DESKTOP_STREAM_COMMAND],
+          connectedAtMs: 123,
+        },
+        {
+          nodeId: "node-without-command",
+          connId: "conn-plain",
+          displayName: "Plain Node",
+          platform: "linux",
+          deviceFamily: "Linux",
+          caps: [],
+          commands: [],
+          connectedAtMs: 123,
+        },
+      ] as never;
+    const respond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: {},
+      respond,
+      context,
+    } as never);
+    const environments = respond.mock.calls[0]?.[1].environments as Array<{
+      id: string;
+      desktop?: boolean;
+    }>;
+    expect(environments.find((entry) => entry.id === "node:node-desktop")?.desktop).toBe(true);
+    expect(
+      environments.find((entry) => entry.id === "node:node-without-command")?.desktop,
+    ).toBeUndefined();
+    expect(environments.find((entry) => entry.id === "node:node-offline")?.desktop).toBeUndefined();
   });
 
   it("appends worker metadata with stable sessions and elapsed times", async () => {
@@ -227,6 +334,7 @@ describe("environment gateway methods", () => {
           id: "worker-1",
           type: "worker",
           status: "available",
+          trust: "disposable",
           worker: {
             providerId: "static-ssh",
             leaseId: "lease-1",
@@ -258,7 +366,48 @@ describe("environment gateway methods", () => {
     expect(summarizeWorkerEnvironment(workerRecord({ state }), NOW).status).toBe(status);
   });
 
+  it("projects trust from recorded worker isolation without guessing unknown leases", () => {
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: true }), NOW).trust).toBe(
+      "persistent",
+    );
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: false }), NOW).trust).toBe(
+      "disposable",
+    );
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: null }), NOW)).not.toHaveProperty(
+      "trust",
+    );
+  });
+
+  it("projects recorded errors only for terminal error states", () => {
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ state: "failed", error: "provider teardown failed" }),
+        NOW,
+      ).worker,
+    ).toMatchObject({ error: "provider teardown failed" });
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ state: "ready", error: "stale transient error" }),
+        NOW,
+      ).worker,
+    ).not.toHaveProperty("error");
+  });
+
+  it("projects desktop metadata only when the service reports it available", () => {
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ desktopAvailable: true, desktopApps: ["browser", "terminal"] }),
+        NOW,
+      ).worker,
+    ).toMatchObject({ desktop: true, desktopApps: ["browser", "terminal"] });
+    expect(
+      summarizeWorkerEnvironment(workerRecord({ desktopAvailable: false, desktopApps: [] }), NOW)
+        .worker,
+    ).not.toHaveProperty("desktopApps");
+  });
+
   it("returns status for one node environment", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
     const [ok, payload] = await callEnvironmentMethod("environments.status", {
       environmentId: "node:node-live",
     });
@@ -269,6 +418,9 @@ describe("environment gateway methods", () => {
       type: "node",
       label: "Live Node",
       status: "available",
+      platform: "ios",
+      sessionHost: true,
+      trust: "persistent",
       capabilities: ["camera", "system.run"],
     });
   });
@@ -286,6 +438,7 @@ describe("environment gateway methods", () => {
     expect(payload).toMatchObject({
       id: "worker-1",
       status: "available",
+      trust: "disposable",
       worker: { state: "attached", ageMs: 9_000 },
     });
     expect(get).toHaveBeenCalledWith("worker-1");
@@ -414,6 +567,147 @@ describe("environment gateway methods", () => {
       code: ErrorCodes.UNAVAILABLE,
       message: "worker environment creation failed",
     });
+  });
+
+  it("starts desktop observation with explicit and default control modes", async () => {
+    const observeDesktop = vi.fn(async ({ control }: { control: boolean }) => ({
+      transport: "rfb" as const,
+      wsPath: "/desktop/observe?token=abc",
+      expiresAtMs: 70_000,
+      control,
+    }));
+    const service = workerService({ observeDesktop });
+    const first = await callEnvironmentMethod(
+      "worker.desktop.observe",
+      { environmentId: "worker-1", control: true },
+      { service },
+    );
+    const second = await callEnvironmentMethod(
+      "worker.desktop.observe",
+      { environmentId: "worker-1" },
+      { service },
+    );
+    expect(first).toEqual([
+      true,
+      {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=abc",
+        expiresAtMs: 70_000,
+        control: true,
+      },
+      undefined,
+    ]);
+    expect(second[1]).toMatchObject({ control: false });
+    expect(observeDesktop).toHaveBeenNthCalledWith(1, {
+      environmentId: "worker-1",
+      control: true,
+    });
+    expect(observeDesktop).toHaveBeenNthCalledWith(2, {
+      environmentId: "worker-1",
+      control: false,
+    });
+  });
+
+  it("maps desktop lifecycle errors to invalid request and hides runtime failures", async () => {
+    const invalidService = workerService({
+      observeDesktop: vi.fn(async () => {
+        throw new FakeWorkerServiceError("invalid_state", "environment has no desktop");
+      }),
+    });
+    const unavailableService = workerService({
+      observeDesktop: vi.fn(async () => {
+        throw new FakeWorkerServiceError("provider_failure", "private SSH failure");
+      }),
+    });
+    expect(
+      await callEnvironmentMethod(
+        "worker.desktop.observe",
+        { environmentId: "worker-1" },
+        { service: invalidService },
+      ),
+    ).toEqual([
+      false,
+      undefined,
+      { code: ErrorCodes.INVALID_REQUEST, message: "environment has no desktop" },
+    ]);
+    expect(
+      await callEnvironmentMethod(
+        "worker.desktop.observe",
+        { environmentId: "worker-1" },
+        { service: unavailableService },
+      ),
+    ).toEqual([
+      false,
+      undefined,
+      { code: ErrorCodes.UNAVAILABLE, message: "worker desktop observe unavailable" },
+    ]);
+  });
+
+  it("launches only a closed advertised desktop app and returns readiness", async () => {
+    const launchDesktopApp = vi.fn(async ({ app }: { app: "browser" | "terminal" }) => ({
+      app,
+      status: "ready" as const,
+    }));
+    const service = workerService({ launchDesktopApp });
+    const result = await callEnvironmentMethod(
+      "worker.desktop.launch",
+      { environmentId: "worker-1", app: "browser" },
+      { service },
+    );
+
+    expect(result).toEqual([true, { app: "browser", status: "ready" }, undefined]);
+    expect(launchDesktopApp).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "worker-1",
+      app: "browser",
+    });
+    const rejected = await callEnvironmentMethod(
+      "worker.desktop.launch",
+      { environmentId: "worker-1", app: "editor" },
+      { service },
+    );
+    expect(rejected[0]).toBe(false);
+    expect(launchDesktopApp).toHaveBeenCalledOnce();
+  });
+
+  it("maps typed desktop launcher errors without exposing unknown runtime details", async () => {
+    const cases = [
+      [
+        "desktop_app_not_found",
+        ErrorCodes.INVALID_REQUEST,
+        "environment does not advertise desktop app: browser",
+      ],
+      [
+        "unsupported_platform",
+        ErrorCodes.INVALID_REQUEST,
+        "desktop app launch is not supported on Windows gateway hosts",
+      ],
+      [
+        "launcher_failure",
+        ErrorCodes.UNAVAILABLE,
+        "worker desktop browser launcher failed; verify the app is installed and retry",
+      ],
+      [
+        "provider_failure",
+        ErrorCodes.UNAVAILABLE,
+        "worker desktop app launch unavailable; try again",
+      ],
+    ] as const;
+    for (const [serviceCode, gatewayCode, message] of cases) {
+      const service = workerService({
+        launchDesktopApp: vi.fn(async () => {
+          throw new FakeWorkerServiceError(
+            serviceCode,
+            serviceCode === "provider_failure" ? "private SSH detail" : message,
+          );
+        }),
+      });
+      const response = await callEnvironmentMethod(
+        "worker.desktop.launch",
+        { environmentId: "worker-1", app: "browser" },
+        { service },
+      );
+      expect(response[2]).toEqual({ code: gatewayCode, message });
+    }
   });
 
   it("destroys an environment idempotently", async () => {

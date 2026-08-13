@@ -144,13 +144,34 @@ export default definePluginEntry({
 
 - `id` must match your `openclaw.plugin.json` manifest.
 - External session catalogs use
-  `openclaw/plugin-sdk/session-catalog` and
-  `api.registerSessionCatalog({ id, label, list, read, continueSession?, archive? })`.
-  Core owns the `sessions.catalog.*` Gateway methods; providers return host,
-  session, and normalized transcript projections without registering RPCs. A
-  list provider should call the optional `onHost(host)` callback as each host
-  settles; the returned host array remains required as the final compatibility
-  snapshot.
+  `openclaw/plugin-sdk/session-catalog` and register a
+  `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
+  provider fields are `id`, `label`, `list`, and `read`; optional hooks are
+  `resolveCreateSession`, `continueSession`, `checkUpstreamActivity`, `archive`,
+  `openTerminal`, and `startTerminalSession`. Core owns the
+  `sessions.catalog.*` Gateway methods; providers return host, session,
+  transcript, and terminal-plan projections without registering RPCs. A list
+  provider should call the optional
+  `onHost(host)` callback as each host settles; the returned host array remains
+  required as the final compatibility snapshot.
+  `resolveCreateSession({ agentId })` must return a config-derived model/runtime
+  target before OpenClaw advertises creation or calls `startTerminalSession`.
+  Use
+  [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#api-runtime-agent)
+  to apply the host's runtime and model-allowlist policy instead of duplicating
+  it.
+
+  `startTerminalSession({ agentId, cwd, initialMessage?, nodeId? })` creates a
+  fresh CLI terminal plan. Return either a local plan (`kind: "local"`, `argv`,
+  and the exact `cwd`, plus optional `env`, `pathEnv`, and `title`) or a paired-node
+  plan (`kind: "node"`, `nodeId`, `command`, `paramsJSON`, and the exact `cwd`).
+  The `sessions.catalog.startTerminal` RPC requires `operator.admin` plus
+  `gateway.cliAgents.enabled` and `gateway.terminal.enabled`. The caller
+  provisions `cwd`; the Gateway requires an existing absolute local directory,
+  rejects a changed plan cwd or host, and applies the normal agent-sandbox,
+  node-pairing, deadline, and connection-ownership checks before opening the
+  PTY.
+
 - `kind` is deprecated: declare an exclusive slot (`"memory"` or
   `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field
   instead. Runtime-entry `kind` remains only as a compatibility fallback for

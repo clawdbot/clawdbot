@@ -1,12 +1,21 @@
-// Telegram plugin module coordinates one inbound message dispatch lifecycle.
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
-import { createTelegramDeliveryController } from "./bot-message-dispatch-delivery.js";
-import { createTelegramDraftController } from "./bot-message-dispatch-draft.js";
-import { createTelegramProgressController } from "./bot-message-dispatch-progress.js";
-import { createTelegramReplyDelivery } from "./bot-message-dispatch-reply.js";
+import {
+  createDeliveryState,
+  deliverFallback,
+  deliverProgressCollapseSummary,
+  finalizePendingAnswerBlockDraft,
+} from "./bot-message-dispatch-delivery.js";
+import {
+  cleanupDrafts,
+  createDraftState,
+  prepareAnswerLaneForToolProgress,
+  waitForDraftEvents,
+} from "./bot-message-dispatch-draft.js";
+import { createProgressState } from "./bot-message-dispatch-progress.js";
+import { createReplyState } from "./bot-message-dispatch-reply.js";
 import {
   createFreshTelegramSessionEntryLoader,
   resolveTelegramReasoningLevel,
@@ -29,8 +38,8 @@ import {
 } from "./bot-message-dispatch.runtime.js";
 import type {
   DispatchTelegramMessageParams,
+  TelegramDispatchTurn,
   TelegramDispatchResult,
-  TelegramDispatchTurnState,
 } from "./bot-message-dispatch.types.js";
 import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
 import {
@@ -73,8 +82,6 @@ function includeStickerDescription(params: {
   if (!current) {
     return params.formattedDescription;
   }
-  // Cached descriptions can already be present from inbound context construction.
-  // Keep that body intact so captions, forwarded text, and supplemental context survive.
   if (params.body.includes(params.formattedDescription)) {
     return params.body;
   }
@@ -142,7 +149,6 @@ function resolveTelegramQuoteContext(params: {
       : undefined;
   return {
     draftReplyToMessageId,
-    hasTelegramQuoteReply: replyToMode !== "off" && replyQuoteText != null,
     replyQuoteByMessageId,
     replyQuoteEntities: Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
       ? context.ctxPayload.ReplyToQuoteEntities
@@ -274,21 +280,22 @@ function scheduleDmTopicLabel(params: {
   })();
 }
 
-export const dispatchTelegramMessage = async ({
-  context,
-  bot,
-  cfg,
-  runtime,
-  replyToMode,
-  streamMode,
-  textLimit,
-  telegramCfg,
-  telegramDeps: injectedTelegramDeps,
-  opts,
-  retryDispatchErrors = false,
-  suppressFailureFallback = false,
-  turnAdoptionLifecycle,
-}: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
+export const dispatchTelegramMessage = async (
+  dispatchParams: DispatchTelegramMessageParams,
+): Promise<TelegramDispatchResult> => {
+  const {
+    context,
+    bot,
+    cfg,
+    runtime,
+    replyToMode,
+    streamMode,
+    telegramCfg,
+    telegramDeps: injectedTelegramDeps,
+    retryDispatchErrors = false,
+    suppressFailureFallback = false,
+    turnAdoptionLifecycle,
+  } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ context });
   const telegramDeps =
@@ -308,8 +315,6 @@ export const dispatchTelegramMessage = async ({
     agentId: dispatchContext.route.agentId,
     loadFreshSessionEntry,
   });
-  const forceBlockStreamingForReasoning =
-    resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
   // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
   // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
@@ -318,87 +323,46 @@ export const dispatchTelegramMessage = async ({
     (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
     (hookRunner?.hasHooks("message_sending") ?? false)
   );
-  // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
-  const dispatchGeneration = 0;
-  const draft = createTelegramDraftController({
-    accountId: dispatchContext.route.accountId,
+  const turnConfig = {
+    ...dispatchParams,
     allowProviderPreview,
-    bot,
-    cfg,
-    chatId: dispatchContext.chatId,
-    draftReplyToMessageId: quote.draftReplyToMessageId,
-    forceBlockStreamingForReasoning,
-    hasTelegramQuoteReply: quote.hasTelegramQuoteReply,
-    isDispatchSuperseded,
-    isRoomEvent,
-    replyToMode,
-    resolvedReasoningLevel,
-    streamMode,
-    tableMode,
-    telegramCfg,
-    telegramDeps,
-    textLimit,
-    threadSpec: dispatchContext.threadSpec,
-  });
-  const progress = createTelegramProgressController({
-    accountId: dispatchContext.route.accountId,
-    chatId: dispatchContext.chatId,
-    draft,
-    statusReactionController: status.controller,
-    streamMode,
-    streamReasoningInProgressDraft: draft.streamReasoningInProgressDraft,
-    telegramCfg,
-    threadId: dispatchContext.threadSpec.id,
-  });
-  const delivery = createTelegramDeliveryController({
-    bot,
-    cfg,
     chunkMode: resolveChunkMode(cfg, "telegram", dispatchContext.route.accountId),
     context: dispatchContext,
     dispatchStartedAt,
-    draft,
     draftReplyToMessageId: quote.draftReplyToMessageId,
-    isDispatchSuperseded,
+    isSuperseded: isDispatchSuperseded,
     loadFreshSessionEntry,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, dispatchContext.route.agentId),
-    opts,
-    progress,
     replyQuoteByMessageId: quote.replyQuoteByMessageId,
     replyQuoteEntities: quote.replyQuoteEntities,
     replyQuoteMessageId: quote.replyQuoteMessageId,
     replyQuotePosition: quote.replyQuotePosition,
     replyQuoteText: quote.replyQuoteText,
-    replyToMode,
-    runtime,
-    streamMode,
+    resolvedReasoningLevel,
+    statusReactionController: status.controller,
     tableMode,
-    telegramCfg,
     telegramDeps,
-    textLimit,
-    threadSpec: dispatchContext.threadSpec,
-  });
-  const state: TelegramDispatchTurnState = {
+  };
+  const draftState = createDraftState(turnConfig);
+  const progressState = createProgressState(
+    turnConfig,
+    draftState,
+    () => turn,
+    async () => await prepareAnswerLaneForToolProgress(turn),
+  );
+  const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
+  const turn: TelegramDispatchTurn = {
+    ...turnConfig,
+    ...draftState,
+    ...progressState,
+    ...deliveryState,
+    ...createReplyState(),
     queuedFinal: false,
     noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
   };
-  const reply = createTelegramReplyDelivery({
-    cfg,
-    context: dispatchContext,
-    delivery,
-    draft,
-    fence: {
-      generation: () => dispatchGeneration,
-      isSuperseded: isDispatchSuperseded,
-    },
-    progress,
-    runtime,
-    state,
-    streamMode,
-    telegramCfg,
-  });
 
   let isFirstTurnInSession = false;
   let dispatchWasSuperseded: boolean;
@@ -427,42 +391,30 @@ export const dispatchTelegramMessage = async ({
       void status.controller.setThinking();
     }
     try {
-      turnDispatched = await runTelegramDispatchTurn({
-        cfg,
-        context: dispatchContext,
-        delivery,
-        draft,
-        turnAdoptionLifecycle,
-        isSuperseded: isDispatchSuperseded,
-        progress,
-        reply,
-        state,
-        statusReactionController: status.controller,
-        streamMode,
-        telegramCfg,
-        telegramDeps,
-      });
+      turnDispatched = await runTelegramDispatchTurn(turn);
     } catch (err) {
-      state.dispatchError = err;
+      turn.dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      progress.cancel();
-      await draft.waitForEvents();
+      // Terminal order: stop producers, drain queued drafts, materialize accepted text,
+      // clean previews, then collapse the progress window.
+      turn.progressCompositor.cancel();
+      await waitForDraftEvents(turn);
       try {
-        await delivery.finalizePendingAnswerBlockDraft(state);
+        await finalizePendingAnswerBlockDraft(turn);
       } catch (err) {
-        state.dispatchError ??= err;
+        turn.dispatchError ??= err;
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
-      await draft.cleanup(isDispatchSuperseded());
+      await cleanupDrafts(turn, isDispatchSuperseded());
       if (
         streamMode === "progress" &&
-        progress.sawProgressFinal() &&
-        !state.dispatchError &&
-        !state.hadErrorReplyFailureOrSkip &&
+        turn.sawProgressFinal &&
+        !turn.dispatchError &&
+        !turn.hadErrorReplyFailureOrSkip &&
         !isDispatchSuperseded()
       ) {
-        await delivery.deliverProgressCollapseSummary();
+        await deliverProgressCollapseSummary(turn);
       }
     }
   } finally {
@@ -479,60 +431,61 @@ export const dispatchTelegramMessage = async ({
     return { kind: "completed" };
   }
 
-  const deliverySummary = delivery.snapshot();
+  const deliverySummary = turn.deliveryState.snapshot();
   let sentFallback = false;
   const shouldSendFailureFallback =
     !isRoomEvent &&
     !suppressFailureFallback &&
-    !progress.finalAnswerDelivered() &&
-    (state.dispatchError ||
+    !turn.finalAnswerDelivered &&
+    (turn.dispatchError ||
       deliverySummary.failedNonSilent > 0 ||
-      (deliverySummary.skippedNonSilent > 0 && !state.suppressSilentReplyFallback));
+      (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
-    const fallbackText = state.dispatchError
+    const fallbackText = turn.dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
-    const result = await delivery.deliverFallback(
+    const result = await deliverFallback(
+      turn,
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
-        (state.dispatchError != null || state.hadErrorReplyFailureOrSkip),
+        (turn.dispatchError != null || turn.hadErrorReplyFailureOrSkip),
     );
     sentFallback = result.delivered;
   }
 
   if (
     !sentFallback &&
-    !state.dispatchError &&
+    !turn.dispatchError &&
     !deliverySummary.delivered &&
-    !state.suppressSilentReplyFallback &&
-    !state.queuedFinal &&
-    state.noVisibleReplyFallbackEligible
+    !turn.suppressSilentReplyFallback &&
+    !turn.queuedFinal &&
+    turn.noVisibleReplyFallbackEligible
   ) {
-    sentFallback = (await delivery.deliverFallback([{ text: EMPTY_RESPONSE_FALLBACK }], false))
+    sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
       .delivered;
     silentReplyDispatchLogger.debug("telegram recovered eligible turn without visible response", {
       hasSessionKey: Boolean(dispatchContext.ctxPayload.SessionKey),
       hasChatId: dispatchContext.chatId != null,
-      queuedFinal: state.queuedFinal,
+      queuedFinal: turn.queuedFinal,
       sentFallback,
     });
   }
 
   const hasFinalResponse =
-    progress.finalAnswerDelivered() ||
+    turn.finalAnswerDelivered ||
     sentFallback ||
-    state.suppressSilentReplyFallback ||
-    state.queuedFinal;
+    turn.suppressSilentReplyFallback ||
+    turn.queuedFinal;
   const hasVisibleResponse =
     deliverySummary.delivered ||
     sentFallback ||
-    state.suppressSilentReplyFallback ||
-    state.queuedFinal;
+    turn.suppressSilentReplyFallback ||
+    turn.queuedFinal;
   const deliveryFailureWithoutFinalResponse =
-    !progress.finalAnswerDelivered() &&
+    !turn.finalAnswerDelivered &&
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
-    state.dispatchError ??
+    turn.dispatchError ??
     (deliveryFailureWithoutFinalResponse
       ? new Error(
           `Telegram reply delivery failed without a final response (failed=${deliverySummary.failedNonSilent}, skipped=${deliverySummary.skippedNonSilent})`,
@@ -544,8 +497,8 @@ export const dispatchTelegramMessage = async ({
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
-    ((state.dispatchError != null && !hasFinalResponse) ||
-      (state.dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
+    ((turn.dispatchError != null && !hasFinalResponse) ||
+      (turn.dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
   if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
@@ -564,7 +517,8 @@ export const dispatchTelegramMessage = async ({
     status.finalizeInBackground(
       {
         outcome:
-          !progress.finalAnswerDelivered() && (state.dispatchError != null || sentFallback)
+          turn.agentRunFailed ||
+          (!turn.finalAnswerDelivered && (turn.dispatchError != null || sentFallback))
             ? "error"
             : "done",
       },

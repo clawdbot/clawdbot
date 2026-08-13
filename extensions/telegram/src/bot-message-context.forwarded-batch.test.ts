@@ -10,10 +10,11 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         message_id: 2,
         chat,
         from: sender,
-        text: "😀 bold\nread docs",
+        text: "😀 quoted\nsecond\nread docs",
         entities: [
-          { type: "bold", offset: 3, length: 4 },
-          { type: "text_link", offset: 13, length: 4, url: "https://docs.example" },
+          { type: "blockquote", offset: 0, length: 16 },
+          { type: "bold", offset: 3, length: 6 },
+          { type: "text_link", offset: 22, length: 4, url: "https://docs.example" },
         ],
       },
       options: {
@@ -23,8 +24,11 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
             date: 1_700_000_000,
             chat,
             from: sender,
-            text: "😀 bold",
-            entities: [{ type: "bold", offset: 3, length: 4 }],
+            text: "😀 quoted\nsecond",
+            entities: [
+              { type: "blockquote", offset: 0, length: 16 },
+              { type: "bold", offset: 3, length: 6 },
+            ],
           },
           {
             message_id: 2,
@@ -38,9 +42,10 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
       },
     });
 
-    expect(context?.ctxPayload.RawBody).toBe("😀 **bold**\nread [docs](https://docs.example)");
-    expect(context?.ctxPayload.BodyForAgent).toBe("😀 **bold**\nread [docs](https://docs.example)");
-    expect(context?.ctxPayload.CommandBody).toBe("😀 **bold**\nread [docs](https://docs.example)");
+    const expected = "> 😀 **quoted**\n> second\n\nread [docs](https://docs.example)";
+    expect(context?.ctxPayload.RawBody).toBe(expected);
+    expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+    expect(context?.ctxPayload.CommandBody).toBe(expected);
   });
 
   it("keeps ordinary text plain while attributing only the forwarded segment", async () => {

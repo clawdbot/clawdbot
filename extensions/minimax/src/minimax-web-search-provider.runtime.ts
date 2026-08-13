@@ -281,4 +281,3 @@ export const testing = {
   resolveMiniMaxRegion,
   readMiniMaxSearchJsonResponse: readProviderJsonResponse<MiniMaxSearchResponse>,
 } as const;
-export { testing as __testing };

@@ -107,6 +107,7 @@ export async function prepareCodexAttemptTurnRequest(
       promptText: turnState.codexTurnPromptText,
       sandboxPolicy: resourceState.codexSandboxPolicy,
       environmentSelection: resourceState.codexEnvironmentSelection,
+      clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,
       ...(usesSupervisionConnection
         ? {}
         : { model: resourceState.thread.model, modelProvider: resourceState.thread.modelProvider }),
@@ -127,6 +128,7 @@ export async function prepareCodexAttemptTurnRequest(
         model: turnStartParams.model,
         effort: turnStartParams.effort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
+        serviceTier: turnStartParams.serviceTier,
       },
     });
     let acceptedTurnId: string | undefined;
