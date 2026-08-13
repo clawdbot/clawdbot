@@ -1756,6 +1756,14 @@ button.chat-reply-preview--message:disabled {
   white-space: nowrap;
 }
 
+.agent-chat__typing-indicator--outside {
+  box-sizing: border-box;
+  width: calc(100% - 36px);
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin: 0 auto -2px;
+  padding-inline: 8px;
+}
+
 @media (max-width: 640px) {
   .session-suggestion {
     grid-template-columns: auto minmax(0, 1fr);
@@ -3770,11 +3778,6 @@ button.chat-reply-preview--message:disabled {
   .agent-chat__input .agent-chat__composer-controls .chat-controls__effort-picker {
     flex: 0 0 auto;
     min-width: 44px;
-  }
-
-  .agent-chat__input .agent-chat__typing-indicator {
-    flex: 1 1 auto;
-    overflow: hidden;
   }
 
   /* The borderless trigger is 30px on desktop; keep a >=44px touch target
