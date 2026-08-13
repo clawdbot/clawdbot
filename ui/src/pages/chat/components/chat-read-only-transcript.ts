@@ -1,9 +1,9 @@
-import type { ChatProps } from "../chat-view.ts";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 
 export function renderReadOnlyTranscript(params: {
-  chat: ChatProps;
+  chat: ChatThreadProps;
   messages: unknown[];
   paneId: string;
   sessionKey: string;
