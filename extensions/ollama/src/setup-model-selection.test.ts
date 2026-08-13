@@ -81,6 +81,34 @@ describe("Ollama onboarding model selection", () => {
     ).toBe("qwen3:0.6b");
   });
 
+  it("prefers the smallest non-reasoning setup model", () => {
+    expect(
+      selectAppGuidedOllamaModelId([
+        {
+          id: "deepseek-r1:8b",
+          contextWindow: 131_072,
+          supportsTools: true,
+          reasoning: true,
+          size: 1_000,
+        },
+        {
+          id: "orieg/gemma3-tools:12b-ft",
+          contextWindow: 131_072,
+          supportsTools: true,
+          reasoning: false,
+          size: 8_000,
+        },
+        {
+          id: "llama3.2:latest",
+          contextWindow: 131_072,
+          supportsTools: true,
+          reasoning: false,
+          size: 2_000,
+        },
+      ]),
+    ).toBe("llama3.2:latest");
+  });
+
   it("aborts pending model discovery with the setup signal", async () => {
     const controller = new AbortController();
     vi.stubGlobal(

@@ -127,6 +127,10 @@
   border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
 }
 
+.model-providers__probe--warning {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+
 .model-providers__probe--error {
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
 }

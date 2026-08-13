@@ -412,14 +412,9 @@ async function discoverAppGuidedOllamaModel(
       ? providerModels.map((candidate) => (candidate.id === model.id ? model : candidate))
       : [...providerModels, model],
   });
-  let ownerValue = connection.existing?.apiKey;
-  if (ownerValue === undefined) {
-    if (connection.accessValue) {
-      ownerValue = "OLLAMA_API_KEY";
-    } else {
-      ownerValue = OLLAMA_DEFAULT_API_KEY;
-    }
-  }
+  const ownerValue =
+    connection.existing?.apiKey ??
+    (connection.accessValue ? "OLLAMA_API_KEY" : OLLAMA_DEFAULT_API_KEY);
   return {
     existing: connection.existing,
     provider: preparedProvider,
@@ -1026,8 +1021,6 @@ export default definePluginEntry({
               }
               // Keep discovery ownership explicit so the live probe and persisted
               // route use the same local marker, env marker, or configured input.
-              const ownerValue = discovered.ownerValue;
-              const ownerAccess = { apiKey: ownerValue };
               return {
                 profiles: [],
                 defaultModel: ctx.modelRef,
@@ -1038,7 +1031,7 @@ export default definePluginEntry({
                       [OLLAMA_PROVIDER_ID]: {
                         ...discovered.existing,
                         ...discovered.provider,
-                        ...ownerAccess,
+                        ...(discovered.ownerValue ? { apiKey: discovered.ownerValue } : {}),
                         models: discovered.provider.models,
                       },
                     },
@@ -1059,22 +1052,24 @@ export default definePluginEntry({
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
             return {
-              profiles: [
-                {
-                  profileId: "ollama:default",
-                  credential: buildApiKeyCredential(
-                    OLLAMA_PROVIDER_ID,
-                    result.credential,
-                    undefined,
-                    result.credentialMode
-                      ? {
-                          secretInputMode: result.credentialMode,
-                          config: ctx.config,
-                        }
-                      : undefined,
-                  ),
-                },
-              ],
+              profiles: result.credential
+                ? [
+                    {
+                      profileId: "ollama:default",
+                      credential: buildApiKeyCredential(
+                        OLLAMA_PROVIDER_ID,
+                        result.credential,
+                        undefined,
+                        result.credentialMode
+                          ? {
+                              secretInputMode: result.credentialMode,
+                              config: ctx.config,
+                            }
+                          : undefined,
+                      ),
+                    },
+                  ]
+                : [],
               configPatch: result.config,
               ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
             };
