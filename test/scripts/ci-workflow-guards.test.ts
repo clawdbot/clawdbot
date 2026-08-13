@@ -3516,6 +3516,17 @@ printf '%s\n' "$((usage + count * 4096))" > "$OPENCLAW_TEST_USAGE_FILE"
       rmSync(path.join(root, ".pnpmfile.cjs"));
       expect(fingerprint()).toBe(baseline);
 
+      writeFileSync(path.join(root, ".pnpmfile.mjs"), "export const hooks = {};\n");
+      const mjsHookFingerprint = fingerprint();
+      expect(mjsHookFingerprint).not.toBe(baseline);
+      writeFileSync(
+        path.join(root, ".pnpmfile.mjs"),
+        "export const hooks = { readPackage: (pkg) => pkg };\n",
+      );
+      expect(fingerprint()).not.toBe(mjsHookFingerprint);
+      rmSync(path.join(root, ".pnpmfile.mjs"));
+      expect(fingerprint()).toBe(baseline);
+
       mkdirSync(path.join(root, "scripts"), { recursive: true });
       writeFileSync(path.join(root, "scripts", "prepare-git-hooks.mjs"), "export {};\n");
       expect(fingerprint()).not.toBe(baseline);

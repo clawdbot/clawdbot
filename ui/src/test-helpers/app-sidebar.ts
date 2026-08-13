@@ -15,7 +15,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
-import type { ApplicationOverlays } from "../app/overlays.ts";
+import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type {
   SidebarWorkboardBoard,
   SidebarWorkboardRenderers,

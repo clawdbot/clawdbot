@@ -306,6 +306,28 @@ export function renderPlaceSelect(params: {
   const nodeIcon = isPhoneFamily(activeNode?.deviceFamily)
     ? icons.monitorSmartphone
     : icons.monitor;
+  const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
+  // Native disabled buttons suppress pointer/focus events in some browsers, so the
+  // repair tooltip keeps only this limited-access state focusable and guards activation.
+  const browseButton = html`<button
+    type="button"
+    class="session-menu__item"
+    data-value="browse"
+    aria-pressed="false"
+    aria-disabled=${browseNeedsAdmin ? "true" : nothing}
+    ?disabled=${params.submitting ||
+    params.pendingCloud ||
+    (!params.browseAvailable && !browseNeedsAdmin)}
+    @click=${() => {
+      if (params.browseAvailable && !params.submitting && !params.pendingCloud) {
+        params.onBrowse(browseTarget);
+      }
+    }}
+  >
+    <span class="session-menu__check" aria-hidden="true"></span>
+    <span class="session-menu__text">${t("newSession.browse")}</span>
+    <span class="new-session-page__menu-chevron" aria-hidden="true">${icons.chevronRight}</span>
+  </button>`;
 
   return html`
     <span class="new-session-page__select">
@@ -515,23 +537,11 @@ export function renderPlaceSelect(params: {
                     })}
                   `
                 : nothing}
-              <button
-                type="button"
-                class="session-menu__item"
-                data-value="browse"
-                aria-pressed="false"
-                title=${params.browseAvailable || params.isAdmin
-                  ? nothing
-                  : t("newSession.browseRequiresAdmin")}
-                ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
-                @click=${() => params.onBrowse(browseTarget)}
-              >
-                <span class="session-menu__text">${t("newSession.browse")}</span>
-                <span class="new-session-page__menu-chevron" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </button>
-
+              ${browseNeedsAdmin
+                ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+                    ${browseButton}
+                  </openclaw-tooltip>`
+                : browseButton}
               ${params.showDestinations
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.thisGateway")}</div>

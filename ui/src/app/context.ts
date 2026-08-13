@@ -15,7 +15,7 @@ import type { ApplicationGateway } from "./gateway.ts";
 import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
-import type { ApplicationOverlays } from "./overlays.ts";
+import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 

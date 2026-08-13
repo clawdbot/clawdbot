@@ -720,6 +720,10 @@ openclaw-session-owner-chip {
   stroke-linejoin: round;
 }
 
+openclaw-github-link-hovercard-provider {
+  display: contents;
+}
+
 .github-link-hovercard {
   position: fixed;
   z-index: 1990;
