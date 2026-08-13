@@ -15,18 +15,8 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     vi.useRealTimers();
   });
 
-  it("attests only explicit historical account locators for Doctor", () => {
-    expect(
-      discordVoiceTranscriptsSourceProvider.inferLegacyOwnership?.({
-        providerId: "discord-voice",
-        accountId: " work ",
-      }),
-    ).toEqual({ ownerChannel: "discord", ownerAccountId: "work" });
-    expect(
-      discordVoiceTranscriptsSourceProvider.inferLegacyOwnership?.({
-        providerId: "discord-voice",
-      }),
-    ).toBeUndefined();
+  it("does not attest model-selected legacy account locators as ownership", () => {
+    expect(discordVoiceTranscriptsSourceProvider.inferLegacyOwnership).toBeUndefined();
   });
 
   it("starts Discord voice in transcripts mode", async () => {
