@@ -56,7 +56,8 @@ export function renderModelPicker(params: ModelPickerParams) {
           option.provider
             ? renderProviderBrandIcon(option.provider, { className: "model-picker__provider-icon" })
             : nothing,
-        onChange: (value, select) => {
+        onChange: params.onChange,
+        onChangeTarget: (value, select) => {
           const wrapper = select.closest(".model-picker");
           const input = wrapper?.querySelector<HTMLInputElement>(".model-picker__custom");
           if (value === customValue && input) {
