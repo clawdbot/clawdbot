@@ -207,7 +207,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
   const rawTarget = heartbeat?.target;
   const implicitDefaultRoute = rawTarget === undefined;
   let target = implicitDefaultRoute ? "owner" : "none";
-  let preparedExplicitPlugin: ChannelPlugin | undefined, preparedExplicitTo: string | undefined;
+  let preparedExplicitPlugin: ChannelPlugin | undefined;
+  let preparedExplicitTo: string | undefined;
   if (rawTarget === "none" || rawTarget === "last" || rawTarget === "owner") {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
@@ -309,15 +310,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   // Bootstrap once after a concrete route exists, then carry the prepared plugin
   // through account validation, target policy, and allow-from comparison.
+  const preparedPlugin = preparedExplicitPlugin ?? ownerRoute?.plugin;
   const plugin =
-    preparedExplicitPlugin ??
-    ownerRoute?.plugin ??
     resolveOutboundChannelPlugin({
       channel: resolvedTarget.channel,
       cfg,
       agentId: params.agentId,
       allowBootstrap: true,
-    });
+    }) ?? preparedPlugin;
 
   if (heartbeatAccountId) {
     const listAccountIds = plugin?.config.listAccountIds;
