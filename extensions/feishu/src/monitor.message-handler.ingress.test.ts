@@ -1,7 +1,4 @@
 // Feishu ingress tests cover debounce ownership and constituent claim settlement.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -11,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import * as dedup from "./dedup.js";
 import type { FeishuMessageEvent } from "./event-types.js";
@@ -26,6 +24,8 @@ type DebounceFlush = ReturnType<
   Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
 >;
 type DebounceFlushFactory = typeof createTestInboundDebounceFlush;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createTextEvent(
   eventId: string,
@@ -384,8 +384,7 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);
     vi.setSystemTime(now);
-    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-abandon-"));
-    const stateDir = await fs.realpath(created);
+    const stateDir = tempDirs.make("openclaw-feishu-abandon-");
     type Queue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
     type Payload = Parameters<Queue["enqueue"]>[1];
     const queue = createChannelIngressQueueForTests<Payload>({
@@ -515,7 +514,6 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       await blockedRestart.stop();
     } finally {
       closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });

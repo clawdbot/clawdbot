@@ -1,9 +1,6 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { once } from "node:events";
-import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import os from "node:os";
-import path from "node:path";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import {
@@ -15,12 +12,15 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 class FakeWebSocket {
   public readonly sent: string[] = [];
@@ -593,8 +593,7 @@ describe("mattermost inbound user posts", () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);
     vi.setSystemTime(now);
-    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mattermost-abandon-"));
-    const stateDir = await fs.realpath(created);
+    const stateDir = tempDirs.make("openclaw-mattermost-abandon-");
     type Payload = { version: 1; receivedAt: number; rawEvent: string };
     const queue = createChannelIngressQueueForTests<Payload>({
       channelId: "mattermost",
@@ -724,7 +723,6 @@ describe("mattermost inbound user posts", () => {
       await Promise.allSettled(activeProviders.map(async (provider) => await provider.stop()));
       mockState.ingressQueue = undefined;
       closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });

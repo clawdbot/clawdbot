@@ -1,14 +1,12 @@
 // Microsoft Teams tests cover durable claim ownership through inbound debounce.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createMSTeamsIngress } from "../msteams-ingress.js";
 import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
@@ -19,6 +17,7 @@ import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { buildChannelActivity, createMessageHandlerDeps } from "./message-handler.test-support.js";
 
 const runtimeApiMockState = getRuntimeApiMockState();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createLifecycle(): MSTeamsIngressLifecycle & {
   adoptedCount: () => number;
@@ -170,8 +169,7 @@ describe("Microsoft Teams drain claim ownership", () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);
     vi.setSystemTime(now);
-    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-abandon-"));
-    const stateDir = await fs.realpath(created);
+    const stateDir = tempDirs.make("openclaw-msteams-abandon-");
     type Queue = NonNullable<Parameters<typeof createMSTeamsIngress>[0]["queue"]>;
     type Payload = Parameters<Queue["enqueue"]>[1];
     const queue = createChannelIngressQueueForTests<Payload>({
@@ -282,7 +280,6 @@ describe("Microsoft Teams drain claim ownership", () => {
         dispatchMock.mockImplementation(priorImplementation);
       }
       closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });

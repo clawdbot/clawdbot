@@ -105,6 +105,28 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(legacyAbandoned).toHaveBeenCalledOnce();
   });
 
+  it("preserves lifecycle receivers while fanning in cancellation", async () => {
+    const createLifecycle = () => ({
+      abortSignal: new AbortController().signal,
+      cancellationCount: 0,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onFailed: vi.fn(async () => {}),
+      async onCancelled() {
+        this.cancellationCount += 1;
+      },
+      onAbandoned: vi.fn(async () => {}),
+    });
+    const first = createLifecycle();
+    const second = createLifecycle();
+
+    await fanInChannelIngressLifecycles([first, second]).lifecycle?.onCancelled?.();
+
+    expect(first.cancellationCount).toBe(1);
+    expect(second.cancellationCount).toBe(1);
+  });
+
   it("can abandon claims after terminal settlement adoption fails", async () => {
     const abandoned = vi.fn(async () => {});
     const combined = fanInChannelIngressLifecycles([

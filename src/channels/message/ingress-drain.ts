@@ -15,6 +15,7 @@ import {
   isLiveLocalIngressDrainOwner,
   registerLiveIngressDrainInstance,
 } from "./ingress-claim-owner.js";
+import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import {
   activeClaimKey,
   IngressAdoptionLostError,
@@ -25,6 +26,7 @@ import {
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
+export { bindIngressLifecycleToReplyOptions } from "./ingress-drain-lifecycle.js";
 export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 import type {
   ChannelIngressQueue,
@@ -45,38 +47,6 @@ export const DEFAULT_INGRESS_ADOPTION_STALL_MS = 5 * 60 * 1000;
 
 /** Bounded tombstone write retries — wedged ownership beats silent double-dispatch. */
 const INGRESS_TOMBSTONE_RETRY_MAX_ATTEMPTS = 8;
-
-/** Full pre-adoption → adoption ownership lifecycle for one claimed event. */
-type ChannelIngressDispatchLifecycle = {
-  /** Pre-adoption only. After adopt the drain treats this signal as inert. */
-  abortSignal: AbortSignal;
-  /**
-   * Fires when recovery-relevant session/run state is durable.
-   * Drain completes (tombstones) the claim here — never at settle.
-   */
-  onAdopted: () => void | Promise<void>;
-  /**
-   * Turn ownership deferred to reply-lane admission (queued followup).
-   * Claim remains held until adopted or abandoned.
-   */
-  onDeferred: () => void;
-  /**
-   * Durable adoption finalization is in progress (e.g. settlement hold while
-   * committing dedupe). Clears the pre-adoption stall watchdog so a timeout
-   * settlement cannot race and dead-letter an about-to-complete claim.
-   * Claim stays held until onAdopted / onAbandoned / fail.
-   */
-  onAdoptionFinalizing: () => void;
-  /** Deferred work terminally failed after dispatch returned. */
-  onFailed?: (error: unknown) => void | Promise<void>;
-  /** Explicit cancellation before adoption; releases without consuming retry budget. */
-  onCancelled?: () => void | Promise<void>;
-  /**
-   * Deferred turn finished without ever owning the reply lane.
-   * Drain releases the claim for retry.
-   */
-  onAbandoned: () => void | Promise<void>;
-};
 
 type DeferredLaneOccupancy = "hold" | "release";
 
@@ -133,34 +103,6 @@ export type ChannelIngressDrain = {
   waitForIdle: () => Promise<void>;
   dispose: () => void;
 };
-
-/**
- * Maps a drain lifecycle onto reply options.
- * Single surface: turnAdoptionLifecycle only.
- * Marks exclusive admission so collect isolation is not inferred from onAbandoned.
- */
-export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDispatchLifecycle): {
-  turnAdoptionLifecycle: {
-    admission: "exclusive";
-    onAdopted: () => void | Promise<void>;
-    onDeferred: () => void;
-    onAbandoned: () => void | Promise<void>;
-    abortSignal: AbortSignal;
-  };
-} {
-  return {
-    turnAdoptionLifecycle: {
-      admission: "exclusive",
-      onAdopted: lifecycle.onAdopted,
-      onDeferred: lifecycle.onDeferred,
-      onAbandoned: lifecycle.onAbandoned,
-      abortSignal: lifecycle.abortSignal,
-    },
-  };
-}
-
-// onAdoptionFinalizing stays drain-only (not reply-options); channels call it
-// via the spooled-replay ALS lifecycle frame during settlement hold.
 
 /** Creates a channel-agnostic durable ingress drain over an existing queue. */
 export function createChannelIngressDrain<
