@@ -125,10 +125,7 @@ const slackIngressIdentity = defineStableChannelIngressIdentity({
   })),
 });
 
-function createSlackIngressSubject(params: {
-  senderId: string;
-  senderName?: string;
-}) {
+function createSlackIngressSubject(params: { senderId: string; senderName?: string }) {
   const senderId = normalizeSlackUserId(params.senderId);
   const senderName = params.senderName?.trim().toLowerCase();
   const senderNameSlug = senderName ? normalizeSlackSlug(senderName) : undefined;
