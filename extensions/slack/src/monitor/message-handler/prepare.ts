@@ -1606,6 +1606,7 @@ export async function prepareSlackMessage(params: {
     threadStarterMedia,
   } = await resolveSlackThreadContextData({
     ctx,
+    agentId: route.agentId,
     account,
     message,
     isGroupDm,
