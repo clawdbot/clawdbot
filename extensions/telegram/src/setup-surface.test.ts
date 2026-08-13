@@ -3,6 +3,7 @@ import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
 import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
+import { telegramSetupContract } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
   ensureTelegramDefaultGroupMentionGate,
@@ -15,6 +16,9 @@ describe("Telegram setup promotion contract", () => {
   it("exposes webhookSecret without widening named-account promotion", () => {
     expect(telegramSetupAdapter.singleAccountKeysToMove).toEqual(["streaming", "webhookSecret"]);
     expect(telegramSetupAdapter.namedAccountPromotionKeys).toEqual(["botToken", "tokenFile"]);
+    expect(
+      telegramSetupContract.metadata.fields.find((field) => field.key === "useEnv"),
+    ).toMatchObject({ kind: "boolean", envVars: ["TELEGRAM_BOT_TOKEN"] });
   });
 });
 

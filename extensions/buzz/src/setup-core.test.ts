@@ -8,6 +8,12 @@ describe("buzzSetupContract", () => {
   });
 
   it("removes a stored private key when switching to BUZZ_PRIVATE_KEY", () => {
+    expect(buzzSetupContract.metadata.fields.find((field) => field.key === "useEnv")).toMatchObject(
+      {
+        kind: "boolean",
+        envVars: ["BUZZ_PRIVATE_KEY"],
+      },
+    );
     vi.stubEnv("BUZZ_PRIVATE_KEY", "22".repeat(32));
     const cfg = {
       channels: {

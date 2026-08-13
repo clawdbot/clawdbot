@@ -105,6 +105,9 @@ describe("slack setup contract", () => {
           useEnv: true,
         },
         beforeTest: () => {
+          expect(
+            slackSetupPlugin.setupContract?.metadata.fields.find((field) => field.key === "useEnv"),
+          ).toMatchObject({ kind: "boolean", envVars: ["SLACK_BOT_TOKEN"] });
           vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
           vi.stubEnv("SLACK_APP_TOKEN", "");
         },

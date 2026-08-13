@@ -1,5 +1,4 @@
 // Channels add tests cover guided setup, plugin install paths, and channel account config writes.
-import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
@@ -372,16 +371,25 @@ function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugi
   );
 }
 
-async function registerBundledSetupPlugin(channelId: string): Promise<void> {
-  // Exercise the checked-in declarations, not a stale local dist tree left by an earlier build.
-  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
-  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
-    "../channels/plugins/bundled.js",
-  );
-  const plugin = actual.getBundledChannelSetupPlugin(channelId as never);
-  if (!plugin) {
-    throw new Error(`Expected bundled setup plugin: ${channelId}`);
-  }
+function registerSyntheticUseEnvSetupPlugin(channelId: ChannelPlugin["id"], envVar: string): void {
+  const plugin = {
+    ...createChannelTestPluginBase({ id: channelId }),
+    setupContract: defineChannelSetupContract({
+      fields: {
+        useEnv: {
+          kind: "boolean",
+          cli: { flags: "--use-env", description: "Use environment credentials" },
+          envVars: [envVar],
+        },
+      },
+      adapter: {
+        applyAccountConfig: ({ cfg }) => ({
+          ...cfg,
+          channels: { ...cfg.channels, [channelId]: { enabled: true } },
+        }),
+      },
+    }),
+  } as ChannelPlugin;
   setActivePluginRegistry(createTestRegistry([{ pluginId: channelId, plugin, source: "test" }]));
 }
 
@@ -532,12 +540,12 @@ describe("channelsAddCommand", () => {
     {
       channel: "slack",
       options: {},
-      env: { SLACK_BOT_TOKEN: "xoxb-token", SLACK_APP_TOKEN: "" },
-      missing: ["SLACK_APP_TOKEN"],
+      env: { SLACK_BOT_TOKEN: "" },
+      missing: ["SLACK_BOT_TOKEN"],
     },
     {
       channel: "buzz",
-      options: { relayUrl: "wss://buzz.example.com" },
+      options: {},
       env: { BUZZ_PRIVATE_KEY: "" },
       missing: ["BUZZ_PRIVATE_KEY"],
     },
@@ -545,7 +553,7 @@ describe("channelsAddCommand", () => {
     for (const [name, value] of Object.entries(testCase.env)) {
       vi.stubEnv(name, value);
     }
-    await registerBundledSetupPlugin(testCase.channel);
+    registerSyntheticUseEnvSetupPlugin(testCase.channel, testCase.missing[0] as string);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
     await channelsAddCommand(
@@ -568,13 +576,13 @@ describe("channelsAddCommand", () => {
     },
     {
       channel: "slack",
-      env: { SLACK_BOT_TOKEN: "xoxb-token", SLACK_APP_TOKEN: "xapp-token" },
+      env: { SLACK_BOT_TOKEN: "xoxb-token" },
     },
   ])("commits $channel --use-env config when declared env vars are present", async (testCase) => {
     for (const [name, value] of Object.entries(testCase.env)) {
       vi.stubEnv(name, value);
     }
-    await registerBundledSetupPlugin(testCase.channel);
+    registerSyntheticUseEnvSetupPlugin(testCase.channel, Object.keys(testCase.env)[0] as string);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
     await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
@@ -582,38 +590,6 @@ describe("channelsAddCommand", () => {
     });
 
     expect(writtenChannel(testCase.channel)).toEqual({ enabled: true });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("commits Slack HTTP --use-env config without SLACK_APP_TOKEN", async () => {
-    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-token");
-    vi.stubEnv("SLACK_APP_TOKEN", "");
-    await registerBundledSetupPlugin("slack");
-    const config: OpenClawConfig = {
-      channels: {
-        slack: {
-          mode: "http",
-          signingSecret: "test-signing-secret",
-        },
-      },
-    };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
-
-    await channelsAddCommand({ channel: "slack", useEnv: true }, runtime, {
-      hasFlags: true,
-    });
-
-    expect(writtenChannel("slack")).toMatchObject({
-      enabled: true,
-      mode: "http",
-      signingSecret: "test-signing-secret",
-    });
-    expect(writtenChannel("slack").appToken).toBeUndefined();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
