@@ -168,7 +168,7 @@ export const desktopPanelStyles = css`
     border: 0;
     padding: 0;
     background: transparent;
-    cursor: pointer;
+    cursor: var(--cursor-action, pointer);
   }
   .desktop-stage__take-control:focus-visible {
     outline: 2px solid var(--accent, #ff5c5c);
