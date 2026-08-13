@@ -4,7 +4,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { html, nothing } from "lit";
 import {
   expandToolGroups,
   normalizeToolPolicyName,
