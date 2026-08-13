@@ -124,16 +124,16 @@ describe("resolveSlackEffectiveAllowFrom", () => {
         includePairingStore: true,
         eventScope: { teamId: "T11111111", client: {} as never },
       }),
-    ).resolves.toEqual(["team:t11111111:user:u11111111"]);
+    ).resolves.toEqual(["uconfig123", "ulegacy123", "team:t11111111:user:u11111111"]);
     await expect(
       resolveSlackEffectiveAllowFrom(ctx, {
         includePairingStore: true,
         eventScope: { teamId: "T22222222", client: {} as never },
       }),
-    ).resolves.toEqual(["team:t22222222:user:u22222222"]);
+    ).resolves.toEqual(["uconfig123", "ulegacy123", "team:t22222222:user:u22222222"]);
     await expect(
       resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual(["uconfig123", "ulegacy123"]);
   });
 
   it("keeps only configured users for the current Enterprise workspace", async () => {
@@ -312,6 +312,37 @@ describe("authorizeSlackSystemEventSender", () => {
     await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
     expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["an org-wide user ID", "w01234567", "W01234567"],
+    ["a prefixed org-wide user ID", "slack:w01234567", "W01234567"],
+    ["a bot ID", "b01234567", "B01234567"],
+    ["a prefixed bot ID", "user:b01234567", "B01234567"],
+  ])(
+    "authorizes bot room messages when %s identifies a present owner",
+    async (_name, entry, id) => {
+      const conversationsMembers = vi.fn(async () => ({
+        members: [id],
+        response_metadata: {},
+      }));
+      const ctx = {
+        allowFrom: [],
+        accountId: "main",
+        allowNameMatching: false,
+        app: { client: { conversations: { members: conversationsMembers } } },
+        botToken: "xoxb-test",
+      } as unknown as SlackMonitorContext;
+
+      await expect(
+        authorizeSlackBotRoomMessage({
+          ctx,
+          channelId: "C1",
+          senderId: "U_BOT",
+          allowFromLower: [entry],
+        }),
+      ).resolves.toBe(true);
+    },
+  );
 
   it("keeps non-interactive channel senders open when only global allowFrom is configured", async () => {
     const result = await authorizeSlackSystemEventSender({
@@ -558,24 +589,27 @@ describe("resolveSlackCommandIngress", () => {
     expect(result.senderAccess.gate?.allowed).toBe(allowed);
   });
 
-  it("does not authorize a bare user ID for an Enterprise workspace event", async () => {
-    const result = await resolveSlackCommandIngress({
-      ctx: makeAuthorizeCtx({
-        installationIdentity: { kind: "enterprise", enterpriseId: "E11111111" },
-      }),
-      teamId: "T11111111",
-      senderId: "U01234567",
-      channelType: "channel",
-      channelId: "C01234567",
-      ownerAllowFromLower: [],
-      channelUsers: ["U01234567"],
-      allowTextCommands: false,
-      hasControlCommand: false,
-    });
+  it.each(["T11111111", "T22222222"])(
+    "authorizes a bare org user ID for an Enterprise event in %s",
+    async (teamId) => {
+      const result = await resolveSlackCommandIngress({
+        ctx: makeAuthorizeCtx({
+          installationIdentity: { kind: "enterprise", enterpriseId: "E11111111" },
+        }),
+        teamId,
+        senderId: "W01234567",
+        channelType: "channel",
+        channelId: "C01234567",
+        ownerAllowFromLower: [],
+        channelUsers: ["W01234567"],
+        allowTextCommands: false,
+        hasControlCommand: false,
+      });
 
-    expect(result.senderAccess.decision).toBe("block");
-    expect(result.senderAccess.gate?.allowed).toBe(false);
-  });
+      expect(result.senderAccess.decision).toBe("allow");
+      expect(result.senderAccess.gate?.allowed).toBe(true);
+    },
+  );
 
   it("does not authorize commands when sender denial stops before the command gate", async () => {
     const result = await resolveSlackCommandIngress({

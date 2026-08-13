@@ -57,7 +57,7 @@ function isWorkspaceScopedSlackChannelEntry(
   return isWorkspaceQualifiedSlackTarget(normalized, "channel");
 }
 
-function isWorkspaceScopedSlackAllowlistUserEntry(value: unknown): boolean {
+function isStableSlackAllowlistUserEntry(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
   }
@@ -65,7 +65,11 @@ function isWorkspaceScopedSlackAllowlistUserEntry(value: unknown): boolean {
   if (normalized === "*") {
     return true;
   }
-  return isWorkspaceQualifiedSlackTarget(normalized, "user");
+  if (isWorkspaceQualifiedSlackTarget(normalized, "user")) {
+    return true;
+  }
+  const prefixed = /^(?:slack|user):([BUW][A-Z0-9]{8,})$/.exec(normalized);
+  return Boolean(prefixed?.[1]) || SLACK_USER_ID_RE.test(normalized);
 }
 
 function isStableSlackToolsBySenderEntry(value: unknown): boolean {
@@ -134,7 +138,7 @@ export function assertEnterpriseSlackPolicyConfig(params: {
   assertStableEntries({
     values: config.allowFrom,
     path: `channels.slack.accounts.${accountId}.allowFrom`,
-    predicate: isWorkspaceScopedSlackAllowlistUserEntry,
+    predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({
     values: config.dm?.groupChannels,
@@ -145,7 +149,7 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     assertStableEntries({
       values: config.reactionAllowlist,
       path: `channels.slack.accounts.${accountId}.reactionAllowlist`,
-      predicate: isWorkspaceScopedSlackAllowlistUserEntry,
+      predicate: isStableSlackAllowlistUserEntry,
     });
   }
   for (const [channelKey, channel] of Object.entries(config.channels ?? {})) {
@@ -157,7 +161,7 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     assertStableEntries({
       values: channel?.users,
       path: `channels.slack.accounts.${accountId}.channels.${channelKey}.users`,
-      predicate: isWorkspaceScopedSlackAllowlistUserEntry,
+      predicate: isStableSlackAllowlistUserEntry,
     });
     assertStableEntries({
       values: Object.keys(channel?.toolsBySender ?? {}),
