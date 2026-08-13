@@ -111,7 +111,7 @@ struct GatewayConnectionTests {
     @Test func `server lease does not retarget after credential replacement`() async throws {
         let session = self.makeSession()
         let (conn, cfg) = try makeConnection(session: session, token: "a")
-        let lease = try await conn.captureRequiredServerLease()
+        let lease = try await conn.acquireServerLease()
 
         cfg.setToken("b")
 

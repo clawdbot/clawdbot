@@ -118,7 +118,7 @@ final class OnboardingConfiguredGatewayProbe {
         guard connectionMode != .unconfigured else { return .unavailable }
         let lease: GatewayConnection.ServerLease
         do {
-            lease = try await self.gateway.captureRequiredServerLease()
+            lease = try await self.gateway.acquireServerLease()
         } catch {
             guard self.isCurrent(attempt) else { return .superseded }
             if connectionMode == .remote,

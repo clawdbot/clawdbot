@@ -882,7 +882,7 @@ struct OnboardingAISetupTests {
                         ? configuredModelResponse(id: request.id)
                         : missingConfiguredModelResponse(id: request.id)
                 case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
-                case "openclaw.setup.detect": reauthenticationDetectedSetupResponse(id: request.id)
+                case "openclaw.setup.detect": detectedSetupResponse(id: request.id)
                 default: nil
                 }
             },
