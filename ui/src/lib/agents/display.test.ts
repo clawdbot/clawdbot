@@ -13,7 +13,9 @@ import {
 import {
   buildAgentContext,
   formatBytes,
+  isAllowedByPolicy,
   listSelectableAgents,
+  matchesList,
   normalizeAgentLabel,
   normalizeAgentTargetLabel,
   resolveEffectiveModelFallbacks,
@@ -425,5 +427,30 @@ describe("buildAgentContext", () => {
 
     expect(context.identityName).toBe("大颖");
     expect(context.identityAvatar).toBe("⚙️");
+  });
+});
+
+describe("tool policy glob matching", () => {
+  it("matches trailing-star globs against dotted tool names", () => {
+    expect(matchesList("exec.command", ["exec*"])).toBe(true);
+    expect(matchesList("exec", ["exec*"])).toBe(true);
+    expect(matchesList("web_search", ["web_*"])).toBe(true);
+    expect(matchesList("web_search", ["exec*"])).toBe(false);
+  });
+
+  it("treats regex metacharacters in patterns literally", () => {
+    expect(matchesList("a.b", ["a.b"])).toBe(true);
+    expect(matchesList("axb", ["a.b"])).toBe(false);
+    expect(matchesList("foo.bar", ["foo*.bar"])).toBe(true);
+    expect(matchesList("fooX.bar", ["foo*.bar"])).toBe(true);
+    expect(matchesList("fooXbar", ["foo*.bar"])).toBe(false);
+    expect(matchesList("fooXbaz", ["foo*.bar"])).toBe(false);
+  });
+
+  it("applies deny globs in isAllowedByPolicy", () => {
+    expect(isAllowedByPolicy("web_search", { deny: ["web_*"] })).toBe(false);
+    expect(isAllowedByPolicy("exec.command", { deny: ["web_*"] })).toBe(true);
+    expect(isAllowedByPolicy("exec.command", { allow: ["exec*"] })).toBe(true);
+    expect(isAllowedByPolicy("web_fetch", { allow: ["exec*"] })).toBe(false);
   });
 });
