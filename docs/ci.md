@@ -202,6 +202,24 @@ for commands and recovery.
 | `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                                                                |
 | `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                                                               |
 
+### Blacksmith outage circuit breaker
+
+The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`. Leave it unset or set it to `blacksmith` for the normal Blacksmith-first routing. During a Blacksmith outage, set it to `github` to send every configurable CI job to that job's existing GitHub-hosted fallback label:
+
+```bash
+gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
+```
+
+Degraded mode uses the same hosted paths exercised by manual dispatches and fork pull requests. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Expect slower builds and test lanes on standard 4-core hosted runners. Blacksmith's runner-registration budget is irrelevant while the breaker is active, but GitHub-hosted concurrency limits apply.
+
+Flip back after the outage by deleting the variable, which restores the default behavior:
+
+```bash
+gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
+```
+
+Scheduled health detection and automatic flipping are an explicit follow-up; `ci.yml` does not probe Blacksmith or mutate this variable.
+
 ## Runner registration budget
 
 OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
@@ -222,7 +240,7 @@ concurrent repositories, retries, and burst overlap.
 
 The changed-target PR plan reduces the common Node test burst from 14 Blacksmith registrations to one. Broad-risk PRs keep the 14-registration compact fallback, so the worst case does not increase.
 
-Canonical-repo CI keeps Blacksmith as the default runner path for pushes and first-attempt same-repo pull-request runs. Pull-request retries of both UI E2E jobs use GitHub-hosted Ubuntu; push retries stay on Blacksmith. All `workflow_dispatch` runs, including `release_gate`, and non-canonical repository runs use GitHub-hosted runners. Normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
+Canonical-repo CI keeps Blacksmith as the default runner path for pushes and first-attempt same-repo pull-request runs. Pull-request retries of both UI E2E jobs use GitHub-hosted Ubuntu; push retries stay on Blacksmith. All `workflow_dispatch` runs, including `release_gate`, and non-canonical repository runs use GitHub-hosted runners. The [Blacksmith outage circuit breaker](#blacksmith-outage-circuit-breaker) provides a manual repository-wide fallback; canonical runs do not probe Blacksmith queue health or flip it automatically.
 
 ## Surface ratchets
 
