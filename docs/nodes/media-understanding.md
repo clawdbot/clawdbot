@@ -54,19 +54,20 @@ Vendor plugins register capability metadata (which provider supports which media
 
 Per-capability (`image`/`audio`/`video`) keys:
 
-| Key              | Type      | Default                                | Notes                                                                |
-| ---------------- | --------- | -------------------------------------- | -------------------------------------------------------------------- |
-| `enabled`        | `boolean` | auto (`false` disables)                | Set `false` to turn off auto-detect for this capability              |
-| `preferredModel` | `string`  | first compatible entry                 | Prefer `provider/model`, model id, `provider:<id>`, or `cli:command` |
-| `prompt`         | `string`  | capability default                     | Default prompt when an entry does not override it                    |
-| `maxChars`       | `number`  | `500` image/video, unset audio         | Default output limit                                                 |
-| `maxBytes`       | `number`  | 10MB image, 20MB audio, 50MB video     | Default input limit                                                  |
-| `timeoutSeconds` | `number`  | `60` image/audio, `120` video          | Default request timeout                                              |
-| `language`       | `string`  | unset                                  | Audio transcription hint                                             |
-| `scope`          | object    | unset                                  | Gate by channel/chat type/source key                                 |
-| `attachments`    | object    | `{ mode: "first", maxAttachments: 1 }` | Select which matching attachments are processed                      |
-| `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
-| `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
+| Key              | Type      | Default                                | Notes                                                                                                                      |
+| ---------------- | --------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`        | `boolean` | auto (`false` disables)                | Set `false` to turn off auto-detect for this capability                                                                    |
+| `preferredModel` | `string`  | first compatible entry                 | Prefer `provider/model`, model id, `provider:<id>`, or `cli:command`                                                       |
+| `prompt`         | `string`  | capability default                     | Default prompt when an entry does not override it                                                                          |
+| `maxChars`       | `number`  | `500` image/video, unset audio         | Default output limit                                                                                                       |
+| `maxBytes`       | `number`  | 10MB image, 20MB audio, 50MB video     | Default input limit                                                                                                        |
+| `timeoutSeconds` | `number`  | `60` image/audio, `120` video          | Default request timeout                                                                                                    |
+| `language`       | `string`  | unset                                  | Audio transcription hint                                                                                                   |
+| `scope`          | object    | unset                                  | Gate by channel/chat type/source key                                                                                       |
+| `attachments`    | object    | `{ mode: "first", maxAttachments: 1 }` | Select which matching attachments are processed                                                                            |
+| `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing                                                                    |
+| `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                                                                               |
+| `echoReply`      | `boolean` | `false`                                | Audio only: reply/quote inbound voice when supported; threads only for `replyToMode` `all`/`batched` (skips `off`/`first`) |
 
 Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured.
 

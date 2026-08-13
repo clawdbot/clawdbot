@@ -121,6 +121,7 @@ describe("transcribeFirstAudio", () => {
       cfg,
       transcript: "hello from dm audio",
       format: "Heard: {transcript}",
+      reply: false,
     });
   });
 });

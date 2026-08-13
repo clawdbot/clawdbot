@@ -88,11 +88,17 @@ export function createChannelPreflightAudio<TAudio>(params: {
       accountId: string;
       originatingTo: string;
       messageThreadId?: string;
+      /** Platform-native inbound message id for optional echo reply threading. */
+      messageId?: string;
+      /** Channel chat type for replyToModeByChatType / adapter policy (e.g. direct|group|channel). */
+      chatType?: string;
     }): Promise<void> {
       const audio = sendParams.cfg.tools?.media?.audio;
       if (!audio?.echoTranscript) {
         return;
       }
+      const messageId = typeof sendParams.messageId === "string" ? sendParams.messageId.trim() : "";
+      const chatType = typeof sendParams.chatType === "string" ? sendParams.chatType.trim() : "";
       await (params.sendTranscriptEcho ?? sendTranscriptEcho)({
         ctx: {
           Provider: params.channel,
@@ -101,12 +107,21 @@ export function createChannelPreflightAudio<TAudio>(params: {
           OriginatingTo: sendParams.originatingTo,
           AccountId: sendParams.accountId,
           MessageThreadId: sendParams.messageThreadId,
+          ...(chatType ? { ChatType: chatType } : {}),
+          ...(messageId
+            ? {
+                MessageSid: messageId,
+                MessageSidFirst: messageId,
+                MessageSidFull: `${params.channel}:${messageId}`,
+              }
+            : {}),
         },
         cfg: sendParams.cfg,
         transcript: sendParams.transcript,
         format: audio.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
         logSuccess: false,
         failureLogPrefix: `${params.channel}: audio transcript echo failed`,
+        reply: audio.echoReply === true,
       });
     },
   };

@@ -291,6 +291,8 @@ export async function resolveTelegramInboundBody(params: {
   if (needsPreflightTranscription) {
     try {
       const { transcribeFirstAudio } = await loadMediaUnderstandingRuntime();
+      const inboundMessageId =
+        typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
       const tempCtx: MsgContext = {
         Provider: "telegram",
         Surface: "telegram",
@@ -298,6 +300,14 @@ export async function resolveTelegramInboundBody(params: {
         OriginatingTo: originatingTo,
         AccountId: accountId,
         MessageThreadId: replyThreadId,
+        // Carry native inbound id so echoReply can thread the preflight transcript.
+        ...(inboundMessageId
+          ? {
+              MessageSid: inboundMessageId,
+              MessageSidFirst: inboundMessageId,
+              MessageSidFull: `telegram:${inboundMessageId}`,
+            }
+          : {}),
         media: materializedMedia,
       };
       preflightTranscript = await transcribeFirstAudio({

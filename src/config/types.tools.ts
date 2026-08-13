@@ -117,6 +117,12 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
    * Default: '📝 "{transcript}"'
    */
   echoFormat?: string;
+  /**
+   * Send the transcript echo as a reply/quote to the inbound voice message when
+   * the channel supports it. Opt-in so existing enabled echoes keep ordinary
+   * send semantics on upgrade. Default: false.
+   */
+  echoReply?: boolean;
 };
 
 /** Per-capability defaults and policy. Models live only in tools.media.models. */

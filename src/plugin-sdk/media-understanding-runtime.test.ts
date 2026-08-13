@@ -123,6 +123,58 @@ describe("createChannelPreflightAudio", () => {
       format: "heard: {transcript}",
       logSuccess: false,
       failureLogPrefix: "test: audio transcript echo failed",
+      reply: false,
+    });
+  });
+
+  it("forwards native message ids, chatType, and echoReply into the shared echo path", async () => {
+    const sendTranscriptEcho = vi.fn<SendTranscriptEcho>().mockResolvedValue(undefined);
+    const preflight = createChannelPreflightAudio({
+      channel: "slack",
+      isAudio: () => true,
+      sendTranscriptEcho,
+    });
+    const cfg = {
+      tools: {
+        media: {
+          audio: {
+            echoTranscript: true,
+            echoReply: true,
+            echoFormat: "heard: {transcript}",
+          },
+        },
+      },
+    };
+
+    await preflight.send({
+      transcript: "threaded",
+      cfg,
+      accountId: "work",
+      originatingTo: "channel:C1",
+      messageThreadId: "1.000",
+      messageId: "1710000.000100",
+      chatType: "direct",
+    });
+
+    expect(sendTranscriptEcho).toHaveBeenCalledWith({
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C1",
+        AccountId: "work",
+        MessageThreadId: "1.000",
+        ChatType: "direct",
+        MessageSid: "1710000.000100",
+        MessageSidFirst: "1710000.000100",
+        MessageSidFull: "slack:1710000.000100",
+      },
+      cfg,
+      transcript: "threaded",
+      format: "heard: {transcript}",
+      logSuccess: false,
+      failureLogPrefix: "slack: audio transcript echo failed",
+      reply: true,
     });
   });
 

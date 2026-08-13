@@ -133,7 +133,9 @@ The provider inventory reports the local fallback winner separately from global 
       audio: {
         enabled: true,
         echoTranscript: true,
-        echoFormat: '📝 "{transcript}"',
+        // Optional: quote the inbound voice note when the channel supports it.
+        echoReply: true,
+        echoFormat: '🎙️ "{transcript}"',
       },
     },
   },
@@ -153,7 +155,7 @@ The provider inventory reports the local fallback winner separately from global 
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
 - OpenAI auto-detect default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
 - Transcript is available to templates as `{{Transcript}}`.
-- `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
+- `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder (default `📝 "{transcript}"`). Reply/quote threading is a separate opt-in via `tools.media.audio.echoReply` (default `false`); when true, the echo replies to the inbound voice message when a channel-valid message id is available and channel replyToMode is `all` or `batched`; `off` and `first` fall back to a normal send so a single-use `first` slot stays available for the agent reply.
 - CLI stdout is capped at 5MB; keep CLI output concise.
 - CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
 - `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.

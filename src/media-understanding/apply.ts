@@ -574,6 +574,7 @@ export async function applyMediaUnderstanding(params: {
             cfg,
             transcript,
             format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+            reply: audioCfg.echoReply === true,
           });
         }
       } else if (originalUserText) {

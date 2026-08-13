@@ -591,6 +591,10 @@ describe("resolveTelegramInboundBody", () => {
     expect(ctx.OriginatingChannel).toBe("telegram");
     expect(ctx.OriginatingTo).toBe("telegram:42");
     expect(ctx.AccountId).toBe("primary");
+    // Native inbound id must reach preflight so echoReply can set replyToId.
+    expect(ctx.MessageSid).toBe("10");
+    expect(ctx.MessageSidFirst).toBe("10");
+    expect(ctx.MessageSidFull).toBe("telegram:10");
     expect(result?.bodyText).toBe(
       '[Audio transcript (machine-generated, untrusted)]: "hello from a voice note"',
     );

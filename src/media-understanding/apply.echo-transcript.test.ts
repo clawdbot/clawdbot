@@ -3,10 +3,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -80,6 +82,7 @@ function createAudioCtxWithProvider(mediaPath: string, extra?: Partial<MsgContex
 function createAudioConfigWithEcho(opts?: {
   echoTranscript?: boolean;
   echoFormat?: string;
+  echoReply?: boolean;
   transcribedText?: string;
 }): {
   cfg: OpenClawConfig;
@@ -94,6 +97,7 @@ function createAudioConfigWithEcho(opts?: {
           maxBytes: 1024 * 1024,
           echoTranscript: opts?.echoTranscript ?? true,
           ...(opts?.echoFormat !== undefined ? { echoFormat: opts.echoFormat } : {}),
+          ...(opts?.echoReply !== undefined ? { echoReply: opts.echoReply } : {}),
         },
       },
     },
@@ -128,8 +132,70 @@ function expectSingleEchoDeliveryCall() {
     to?: string;
     channel?: string;
     accountId?: string;
-    payloads: Array<{ text?: string }>;
+    replyToId?: string;
+    replyToMode?: string;
+    payloads: Array<{ text?: string; replyToId?: string }>;
   };
+}
+
+/** Register a minimal Telegram threading adapter (unset replyToMode → off). */
+function installTelegramThreadingAdapter(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            docsPath: "/channels/telegram",
+            blurb: "test stub.",
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          config: {
+            listAccountIds: () => ["acc1", "default"],
+            resolveAccount: () => ({}),
+          },
+          threading: {
+            // Mirrors extensions/telegram resolveReplyToMode: unset → off.
+            resolveReplyToMode: ({
+              cfg,
+              accountId,
+            }: {
+              cfg: OpenClawConfig;
+              accountId?: string | null;
+            }) => {
+              const accounts = (
+                cfg.channels as
+                  | {
+                      telegram?: {
+                        replyToMode?: string;
+                        accounts?: Record<string, { replyToMode?: string }>;
+                      };
+                    }
+                  | undefined
+              )?.telegram;
+              const id =
+                typeof accountId === "string" && accountId.trim() ? accountId.trim() : undefined;
+              const accountMode = id ? accounts?.accounts?.[id]?.replyToMode : undefined;
+              if (
+                accountMode === "off" ||
+                accountMode === "first" ||
+                accountMode === "all" ||
+                accountMode === "batched"
+              ) {
+                return accountMode;
+              }
+              return accounts?.replyToMode ?? "off";
+            },
+          },
+        },
+      },
+    ]),
+  );
 }
 
 function createAudioConfigWithoutEchoFlag() {
@@ -198,7 +264,11 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       sendDurableMessageBatchCore: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
     }));
     vi.doMock("../utils/message-channel.js", () => ({
-      isDeliverableMessageChannel: (channel: string) => channel === "voicechat",
+      isDeliverableMessageChannel: (channel: string) =>
+        channel === "voicechat" ||
+        channel === "telegram" ||
+        channel === "slack" ||
+        channel === "matrix",
     }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
@@ -239,6 +309,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
   });
 
   beforeEach(() => {
+    installTelegramThreadingAdapter();
     resolveApiKeyForProviderCoreMock.mockClear();
     hasAvailableAuthForProviderMock.mockClear();
     getApiKeyForModelMock.mockClear();
@@ -251,6 +322,10 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       results: [{ channel: "voicechat", messageId: "echo-1" }],
       receipt: { platformMessageIds: ["echo-1"], parts: [], sentAt: 1 },
     });
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
   });
 
   afterAll(async () => {
@@ -299,6 +374,51 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     expect(expectDefined(callArgs.payloads[0], "callArgs.payloads[0] test invariant").text).toBe(
       '📝 "hello world"',
     );
+  });
+
+  it("does NOT thread reply when echoReply is absent (default)", async () => {
+    const mediaPath = await createTempAudioFile();
+    const ctx = createAudioCtxWithProvider(mediaPath, {
+      MessageSid: "73299",
+      MessageSidFirst: "73299",
+    });
+    const { cfg, providers } = createAudioConfigWithEcho({
+      echoTranscript: true,
+      transcribedText: "hello world",
+    });
+
+    await applyMediaUnderstanding({ ctx, cfg, providers });
+
+    const callArgs = expectSingleEchoDeliveryCall();
+    expect(callArgs.replyToId).toBeUndefined();
+    expect(callArgs.payloads[0]?.replyToId).toBeUndefined();
+  });
+
+  it("threads reply on the normal media path when echoReply is true and replyToMode is all", async () => {
+    const mediaPath = await createTempAudioFile();
+    const ctx = createAudioCtxWithProvider(mediaPath, {
+      Provider: "telegram",
+      MessageSid: "73299",
+      MessageSidFirst: "73299",
+      MessageSidFull: "telegram:73299",
+    });
+    const { cfg, providers } = createAudioConfigWithEcho({
+      echoTranscript: true,
+      echoReply: true,
+      transcribedText: "hello world",
+    });
+    // Preserve first-slot for the agent reply; echo threads only under all/batched.
+    (cfg as { channels?: unknown }).channels = {
+      telegram: { replyToMode: "all" },
+    };
+
+    await applyMediaUnderstanding({ ctx, cfg, providers });
+
+    const callArgs = expectSingleEchoDeliveryCall();
+    expect(callArgs.replyToId).toBe("73299");
+    expect(callArgs.payloads[0]?.replyToId).toBeUndefined();
+    expect(callArgs.replyToMode).toBe("all");
+    expect(callArgs.payloads[0]?.text).toBe('📝 "hello world"');
   });
 
   it("does NOT echo when there are no audio attachments", async () => {

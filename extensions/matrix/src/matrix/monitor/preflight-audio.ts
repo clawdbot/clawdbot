@@ -56,6 +56,10 @@ export async function sendMatrixPreflightAudioTranscriptEcho(params: {
   accountId: string;
   originatingTo: string;
   messageThreadId?: string;
+  /** Matrix event id for optional echo reply threading. */
+  messageId?: string;
+  /** direct|channel — required for chat-type reply policy. */
+  chatType?: string;
 }): Promise<void> {
   await matrixPreflightAudio.send(params);
 }

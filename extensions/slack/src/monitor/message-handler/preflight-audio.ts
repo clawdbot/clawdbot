@@ -70,12 +70,33 @@ export async function resolveSlackPreflightAudioTranscript(params: {
   return transcript ? { transcript, mediaIndex } : null;
 }
 
+/**
+ * Slack reply targets must use the root thread_ts when present.
+ * Child message.ts is only valid for top-level (non-thread-reply) messages.
+ */
+export function resolveSlackEchoReplyMessageId(params: {
+  messageTs?: string;
+  /** Root thread reply target from routing (parent thread_ts). */
+  threadReplyToId?: string;
+}): string | undefined {
+  const root = params.threadReplyToId?.trim();
+  if (root) {
+    return root;
+  }
+  const ts = params.messageTs?.trim();
+  return ts || undefined;
+}
+
 export async function sendSlackPreflightAudioTranscriptEcho(params: {
   transcript: string;
   cfg: OpenClawConfig;
   accountId: string;
   originatingTo: string;
   messageThreadId?: string;
+  /** Slack root thread_ts (or top-level message ts) for optional echo reply threading. */
+  messageId?: string;
+  /** direct|group|channel — required for replyToModeByChatType precedence. */
+  chatType?: string;
 }): Promise<void> {
   await slackPreflightAudio.send(params);
 }
