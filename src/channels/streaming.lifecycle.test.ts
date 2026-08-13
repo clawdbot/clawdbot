@@ -15,7 +15,6 @@ import {
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
-  resolveChannelProgressDraftRender,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
@@ -246,11 +245,10 @@ describe("channel-streaming", () => {
 
   it("formats bounded progress draft text", () => {
     const entry = {
-      streaming: { progress: { label: "Shelling", maxLines: 2, maxLineChars: 80, render: "rich" } },
+      streaming: { progress: { label: "Shelling", maxLines: 2, maxLineChars: 80 } },
     };
     expect(resolveChannelProgressDraftMaxLines(entry)).toBe(2);
     expect(resolveChannelProgressDraftMaxLineChars(entry)).toBe(80);
-    expect(resolveChannelProgressDraftRender(entry)).toBe("rich");
     expect(
       formatChannelProgressDraftText({
         entry,

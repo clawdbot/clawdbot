@@ -34,7 +34,6 @@ export const ChannelStreamingProgressSchema = z
     labels: z.array(z.string()).optional(),
     maxLines: z.number().int().positive().optional(),
     maxLineChars: z.number().int().positive().optional(),
-    render: z.enum(["text", "rich"]).optional(),
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
     commentary: z.boolean().optional(),
