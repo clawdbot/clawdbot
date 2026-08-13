@@ -74,7 +74,7 @@ Password-based (token is cached after first login):
 <Warning>
 Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invites, or `autoJoin: "always"` to accept every invite.
 
-`autoJoinAllowlist` accepts only `!roomId:server`, `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
+`autoJoinAllowlist` accepts only `!roomId:server` (or server-less `!roomId`), `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
 </Warning>
 
 ```json5
@@ -94,8 +94,8 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
 ### Allowlist target formats
 
 - DMs (`dm.allowFrom`, `groupAllowFrom`, `groups.<room>.users`): use `@user:server`. Display names are ignored by default (mutable); set `dangerouslyAllowNameMatching: true` only for explicit display-name compatibility.
-- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
-- Invite allowlists (`autoJoinAllowlist`): use `!room:server`, `#alias:server`, or `*`. Plain names are always rejected.
+- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server`, server-less `!room` (exact IDs from homeservers that omit the `:server` suffix), or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
+- Invite allowlists (`autoJoinAllowlist`): use `!room:server`, server-less `!room`, `#alias:server`, or `*`. Plain names are always rejected.
 
 ### Account ID normalization
 
