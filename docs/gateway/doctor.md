@@ -461,7 +461,6 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **Linux volatile state dir**: warns when state resolves to `tmpfs` or `ramfs`, because sessions, credentials, config, and SQLite state (with WAL/journal sidecars) disappear on reboot. Docker `overlay` mounts are intentionally not flagged because their writable layers persist across host reboots while the container remains.
     - **Session dirs missing**: `sessions/` and the session store directory are required to persist history and avoid `ENOENT` crashes.
     - **Transcript mismatch**: warns when recent session entries have missing transcript files.
-    - **Legacy meeting-transcript ownership**: `--fix` records channel/account ownership only when the source provider can prove it from the persisted historical locator. Accountless, partial, unavailable-provider, or otherwise ambiguous rows remain unchanged and local-only.
     - **Main session "1-line JSONL"**: flags when the main transcript has only one line (history is not accumulating).
     - **Multiple state dirs**: warns when multiple `~/.openclaw` folders exist across home directories, or when `OPENCLAW_STATE_DIR` points elsewhere (history can split between installs).
     - **Remote mode reminder**: if `gateway.mode=remote`, doctor reminds you to run it on the remote host (the state lives there).

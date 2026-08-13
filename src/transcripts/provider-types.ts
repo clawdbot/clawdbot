@@ -118,24 +118,22 @@ export type TranscriptImportRequest = {
   speakerLabel?: string;
 };
 
+export type TranscriptSourceAccountOwnership = {
+  /** Ingress channel whose trusted account owns this provider's account namespace. */
+  channelId: string;
+  /** Resolve and validate the canonical account before persistence. */
+  resolveAccountId: (params: {
+    cfg?: OpenClawConfig;
+    source: TranscriptSourceLocator;
+  }) => Result<string | undefined, string>;
+};
+
 /** Provider contract for transcript capture/import integrations. */
 export type TranscriptSourceProvider = {
   id: string;
   aliases?: readonly string[];
-  /** Ingress channel ids whose trusted account owns this provider's account namespace. */
-  accountBindingChannels?: readonly string[];
-  /** Recover a historical owner only from facts this provider persisted before owner metadata. */
-  inferLegacyOwnership?: (source: TranscriptSourceLocator) =>
-    | {
-        ownerChannel: string;
-        ownerAccountId: string;
-      }
-    | undefined;
-  /** Resolve and validate the canonical account before persistence. */
-  resolveAccountId?: (params: {
-    cfg?: OpenClawConfig;
-    source: TranscriptSourceLocator;
-  }) => Result<string | undefined, string>;
+  /** Closed account-ownership contract for providers sharing one inbound channel namespace. */
+  accountOwnership?: TranscriptSourceAccountOwnership;
   name: string;
   sourceKinds: readonly TranscriptSourceKind[];
   start?: (request: TranscriptStartRequest) => Promise<TranscriptsStartResult>;

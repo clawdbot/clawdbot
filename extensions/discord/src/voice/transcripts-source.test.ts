@@ -15,8 +15,8 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     vi.useRealTimers();
   });
 
-  it("does not attest model-selected legacy account locators as ownership", () => {
-    expect(discordVoiceTranscriptsSourceProvider.inferLegacyOwnership).toBeUndefined();
+  it("declares Discord as its account ownership namespace", () => {
+    expect(discordVoiceTranscriptsSourceProvider.accountOwnership?.channelId).toBe("discord");
   });
 
   it("starts Discord voice in transcripts mode", async () => {
@@ -76,10 +76,11 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       },
     };
 
-    const accountResolution = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
-      cfg,
-      source,
-    });
+    const accountResolution =
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+        cfg,
+        source,
+      });
     expect(accountResolution).toEqual({ ok: true, value: "work" });
     const result = await discordVoiceTranscriptsSourceProvider.start?.({
       cfg,
@@ -98,12 +99,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     expect(workJoin).toHaveBeenCalledOnce();
   });
 
-  it("requires an explicit account when multiple accounts can provide voice", () => {
-    const primaryJoin = vi.fn(async () => ({ ok: true, message: "joined primary" }));
-    setDiscordTranscriptsVoiceManager({
-      accountId: "primary",
-      manager: { join: primaryJoin } as unknown as DiscordVoiceManager,
-    });
+  it("uses the configured default when multiple accounts can provide voice", () => {
     const source = {
       providerId: "discord-voice",
       guildId: "g1",
@@ -121,18 +117,18 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       },
     };
 
-    expect(discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toEqual({
-      ok: false,
-      error:
-        'Multiple Discord accounts are enabled for voice ("primary", "work"); specify accountId.',
+    expect(
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({ cfg, source }),
+    ).toEqual({
+      ok: true,
+      value: "primary",
     });
     expect(
-      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
         cfg,
         source: { ...source, accountId: "work" },
       }),
     ).toEqual({ ok: true, value: "work" });
-    expect(primaryJoin).not.toHaveBeenCalled();
   });
 
   it("rejects omitted and explicit accounts that cannot provide voice", () => {
@@ -147,13 +143,15 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     };
     const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
 
-    expect(discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toEqual({
+    expect(
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({ cfg, source }),
+    ).toEqual({
       ok: false,
       error:
         "No Discord account has available credentials and voice enabled; configure credentials and enable voice for an account.",
     });
     expect(
-      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
         cfg,
         source: { ...source, accountId: "primary" },
       }),
@@ -182,12 +180,14 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     } as unknown as OpenClawConfig;
     const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
 
-    expect(discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toEqual({
+    expect(
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({ cfg, source }),
+    ).toEqual({
       ok: true,
       value: "primary",
     });
     expect(
-      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
         cfg,
         source: { ...source, accountId: "work" },
       }),
@@ -217,7 +217,10 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       channels: { discord: { accounts: { work: unavailableAccount } } },
     } as unknown as OpenClawConfig;
     expect(
-      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg: unavailableOnly, source }),
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+        cfg: unavailableOnly,
+        source,
+      }),
     ).toEqual({
       ok: false,
       error:
@@ -235,14 +238,17 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     const cfg = { channels: { discord: { accounts } } };
     const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
 
-    const ambiguous = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
+    const ambiguous = discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+      cfg,
+      source,
+    });
     expect(ambiguous).toMatchObject({ ok: false });
     if (!ambiguous || ambiguous.ok) {
       throw new Error("expected ambiguous account resolution");
     }
     expect(ambiguous.error).toContain("(+1)");
 
-    const rejected = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+    const rejected = discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
       cfg,
       source: { ...source, accountId: `${"z".repeat(200)}\nspoofed` },
     });

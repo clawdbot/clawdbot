@@ -131,20 +131,24 @@ function bindSourceToTurnAccount(params: {
   source: TranscriptSourceLocator;
   owner?: { ownerChannel: string; ownerAccountId: string };
 } {
-  const channel = params.ctx.agentChannel?.trim().toLowerCase();
-  const accountId = params.ctx.agentAccountId?.trim();
-  const providerChannels = (params.provider.accountBindingChannels ?? [])
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-  if (providerChannels.length === 0) {
+  const ownership = params.provider.accountOwnership;
+  if (!ownership) {
     return { source: params.source };
   }
+  const ownerChannel = ownership.channelId.trim().toLowerCase();
+  if (!ownerChannel) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} has an invalid account owner channel`,
+    );
+  }
+  const channel = params.ctx.agentChannel?.trim().toLowerCase();
+  const accountId = params.ctx.agentAccountId?.trim();
   if (!channel) {
     return { source: params.source };
   }
-  if (!providerChannels.includes(channel)) {
+  if (channel !== ownerChannel) {
     throw new Error(
-      `transcripts provider ${params.provider.id} can only ${params.operation} from ${providerChannels.join(", ")} or a channel-less local tool`,
+      `transcripts provider ${params.provider.id} can only ${params.operation} from ${ownerChannel} or a channel-less local tool`,
     );
   }
   if (!accountId) {
@@ -171,14 +175,12 @@ export function resolveTranscriptSourceOwnership(params: {
   owner?: { ownerChannel: string; ownerAccountId: string };
 } {
   const boundSource = bindSourceToTurnAccount(params);
-  const accountBindingChannels = (params.provider.accountBindingChannels ?? [])
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
+  const ownership = params.provider.accountOwnership;
   const trustedAccountId = boundSource.owner?.ownerAccountId;
   const sourceForResolution = trustedAccountId
     ? { ...boundSource.source, accountId: trustedAccountId }
     : boundSource.source;
-  const accountResolution = params.provider.resolveAccountId?.({
+  const accountResolution = ownership?.resolveAccountId({
     cfg: params.ctx.config,
     source: sourceForResolution,
   });
@@ -193,11 +195,11 @@ export function resolveTranscriptSourceOwnership(params: {
       `transcripts provider ${params.provider.id} could not use trusted account ${formatAccountIdForToolText(trustedAccountId)}`,
     );
   }
-  const providerSource = params.provider.resolveAccountId
+  const providerSource = ownership
     ? { ...sourceForResolution, accountId: resolvedAccountId }
     : sourceForResolution;
   const configuredOwner = resolveConfiguredLifecycleOwner({
-    accountBindingChannels,
+    ownerChannel: ownership?.channelId.trim().toLowerCase(),
     accountId: providerSource.accountId?.trim(),
     configuredLifecycle: params.configuredLifecycle,
     providerId: params.provider.id,
@@ -209,12 +211,12 @@ export function resolveTranscriptSourceOwnership(params: {
 }
 
 function resolveConfiguredLifecycleOwner(params: {
-  accountBindingChannels: string[];
+  ownerChannel: string | undefined;
   accountId: string | undefined;
   configuredLifecycle: boolean | undefined;
   providerId: string;
 }): { ownerChannel: string; ownerAccountId: string } | undefined {
-  if (!params.configuredLifecycle || params.accountBindingChannels.length === 0) {
+  if (!params.configuredLifecycle || !params.ownerChannel) {
     return undefined;
   }
   if (!params.accountId) {
@@ -222,14 +224,8 @@ function resolveConfiguredLifecycleOwner(params: {
       `transcripts provider ${params.providerId} could not resolve an account for configured auto-start`,
     );
   }
-  const [ownerChannel] = params.accountBindingChannels;
-  if (!ownerChannel || params.accountBindingChannels.length !== 1) {
-    throw new Error(
-      `transcripts provider ${params.providerId} must declare exactly one account binding channel for configured auto-start`,
-    );
-  }
   return {
-    ownerChannel,
+    ownerChannel: params.ownerChannel,
     ownerAccountId: params.accountId,
   };
 }

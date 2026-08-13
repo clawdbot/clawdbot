@@ -166,7 +166,8 @@ Meeting transcript capture is enabled by default. To opt out globally:
   is the bundled auto-start-capable source and requires `guildId` and
   `channelId`. When exactly one configured Discord account has credentials and
   voice enabled, OpenClaw selects it automatically. When multiple accounts are
-  voice-capable, set `accountId` to the corresponding key under
+  voice-capable, OpenClaw selects a capable `channels.discord.defaultAccount`.
+  Otherwise, set `accountId` to the corresponding key under
   `channels.discord.accounts`; an omitted account is rejected as ambiguous:
 
 ```json

@@ -56,10 +56,7 @@ function ownsTranscriptSession(
   const isLocalMainOperator = ctx.agentId === "main" && !channel;
   const isUnattributedLocalOperator = !ctx.agentId && !channel;
   const provider = resolveSourceProvider(session.source.providerId, ctx);
-  const accountBindingChannels = (provider?.accountBindingChannels ?? [])
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-  const providerUsesAccountOwnership = accountBindingChannels.length > 0;
+  const providerUsesAccountOwnership = Boolean(provider?.accountOwnership);
   const ownerAgentId = session.metadata?.agentId;
   const ownerChannel = session.metadata?.ownerChannel;
   const ownerAccountId = session.metadata?.ownerAccountId;

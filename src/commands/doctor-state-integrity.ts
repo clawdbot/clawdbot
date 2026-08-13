@@ -57,7 +57,6 @@ import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 import { noteMainSessionRecoveryIntegrity } from "./doctor-main-session-recovery.js";
-import { noteMeetingTranscriptOwnership } from "./doctor-meeting-transcript-ownership.js";
 import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
 import { countLabel, formatFilePreview } from "./doctor-state-integrity-format.js";
 
@@ -1315,10 +1314,6 @@ export async function noteStateIntegrity(
       ].join("\n"),
     );
   }
-
-  // Meeting transcripts live in the shared state database, so their migration
-  // must not depend on resolving one default agent for per-agent session repairs.
-  await noteMeetingTranscriptOwnership({ cfg, env, prompter, warnings, changes });
 
   if (!agentId || !sessionsDir || !storePath || !absoluteStorePath || !displaySessionsDir) {
     warnings.push(
