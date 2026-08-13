@@ -505,6 +505,10 @@ describe("native host registration", () => {
     const bundledId = await predictedId(value.bundledDir, value.deps.platform);
     let now = 0;
     let wroteProfile = false;
+    // TEMP DIAGNOSTIC (CI-only failure): tolerate a missing pre-registration
+    // manifest during the wait so the final status (with refusal warnings) can
+    // be dumped before failing. Remove before landing.
+    let manifestReadError: unknown;
     const status = await installChromeExtensionBootstrap({
       bundledDir: value.bundledDir,
       pluginRoot: value.pluginRoot,
@@ -519,7 +523,20 @@ describe("native host registration", () => {
               chromium.nativeManifestDir,
               "ai.openclaw.browser_bootstrap.json",
             );
-            const preRegistration = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+            let manifestRaw: string;
+            try {
+              manifestRaw = await fs.readFile(manifestPath, "utf8");
+            } catch (error) {
+              manifestReadError = error;
+              wroteProfile = true;
+              await writeSecurePreferences({
+                userDataDir: chromium.userDataDir,
+                profile: "Default",
+                entries: { [installedId]: { location: 4, path: installed } },
+              });
+              return;
+            }
+            const preRegistration = JSON.parse(manifestRaw) as {
               allowed_origins: string[];
             };
             expect(preRegistration.allowed_origins).toEqual(
@@ -538,6 +555,11 @@ describe("native host registration", () => {
       },
     });
 
+    if (manifestReadError) {
+      console.error("DIAG manifest read failed:", String(manifestReadError));
+      console.error("DIAG status:", JSON.stringify(status, null, 2));
+      throw manifestReadError;
+    }
     expect(status.manualSetupRequired).toBe(false);
     const registration = status.registrations.find((entry) => entry.product === "chromium");
     expect(registration).toMatchObject({
