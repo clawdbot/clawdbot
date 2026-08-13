@@ -1,7 +1,7 @@
 // Control UI tests cover the Models settings page against a mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Locator } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -38,6 +38,19 @@ function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
 
 function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
+}
+
+function modelPickerValue(locator: Locator) {
+  return locator.evaluate((element) => String((element as HTMLElement & { value?: string }).value));
+}
+
+async function selectModelPicker(locator: Locator, value: string) {
+  await locator.evaluate(async (element, next) => {
+    const select = element as HTMLElement & { value: string; updateComplete: Promise<unknown> };
+    select.value = next;
+    await select.updateComplete;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
 }
 
 describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
@@ -484,7 +497,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await openaiCard.waitFor();
       await expect.poll(async () => openaiCard.textContent()).toContain("API key set in config");
       await expect
-        .poll(async () => page.locator(".model-providers__defaults select").first().inputValue())
+        .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
         .toBe("openai/gpt-5.5");
       if (recordVisuals) {
         await page.screenshot({
@@ -511,9 +524,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       await expect.poll(async () => openaiCard.textContent()).toContain("87 ms");
 
-      const primary = page.locator(".model-providers__defaults select").first();
+      const primary = page.locator(".model-providers__defaults wa-select").first();
       const defaultPatchCount = (await gateway.getRequests("config.patch")).length;
-      await primary.selectOption("anthropic/claude-sonnet-4-5");
+      await selectModelPicker(primary, "anthropic/claude-sonnet-4-5");
       expect((await gateway.getRequests("config.patch")).length).toBe(defaultPatchCount);
       const updatedDefaultsConfig = {
         ...config,

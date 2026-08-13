@@ -175,6 +175,8 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   const finalState = input.readState();
   const cleanupFailure = cleanupError;
   const beforeAgentRunBlocked = finalState.beforeAgentRunBlockedBy !== undefined;
+  const diagnosticTerminalAborted =
+    finalState.aborted || finalState.timedOut || finalState.idleTimedOut;
   input.emitDiagnosticRunCompleted?.(
     cleanupFailure
       ? "error"
@@ -182,10 +184,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
         ? "blocked"
         : finalState.promptError
           ? "error"
-          : finalState.aborted ||
-              finalState.timedOut ||
-              finalState.idleTimedOut ||
-              finalState.timedOutDuringCompaction
+          : diagnosticTerminalAborted
             ? "aborted"
             : "completed",
     cleanupFailure ?? finalState.promptError,

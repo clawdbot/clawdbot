@@ -428,39 +428,6 @@
     inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
 }
 
-.workboard-select__option {
-  color: var(--text);
-}
-
-.workboard-select [slot="start"] {
-  display: inline-flex;
-  align-items: center;
-}
-
-.workboard-select__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 650;
-}
-
-.workboard-select__copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.workboard-select__description {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: normal;
-}
-
 .workboard-field--wide {
   grid-column: 1 / -1;
 }

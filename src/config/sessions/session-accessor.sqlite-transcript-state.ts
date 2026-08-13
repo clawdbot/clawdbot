@@ -82,10 +82,22 @@ export function ensureTranscriptSessionRoot(
   updatedAt: number,
   options: { allowStoredAlias?: boolean } = {},
 ): void {
+  const db = getSessionKysely(database.db);
   if (!options.allowStoredAlias) {
     assertCanonicalSqliteSessionKeysCurrent(database);
     assertCanonicalSessionKeyWriteMatchesDatabase(database, scope.sessionKey);
-    const db = getSessionKysely(database.db);
+    const persistedSessionKey = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_windows")
+        .select("session_key")
+        .where("session_id", "=", scope.sessionId),
+    )?.session_key;
+    if (persistedSessionKey && persistedSessionKey !== scope.sessionKey) {
+      throw new Error(
+        `Transcript session ${scope.sessionId} is owned by ${persistedSessionKey}, not ${scope.sessionKey}; resolve the transcript target again before retrying.`,
+      );
+    }
     const lookupKeys = uniqueStrings([
       scope.sessionKey,
       ...foldedSessionKeyAliasCandidates(normalizeStoreSessionKey(scope.sessionKey)),
@@ -147,7 +159,6 @@ export function ensureTranscriptSessionRoot(
       }
     }
   }
-  const db = getSessionKysely(database.db);
   const insertedNode = executeSqliteQuerySync(
     database.db,
     db
@@ -186,7 +197,6 @@ export function ensureTranscriptSessionRoot(
       })
       .onConflict((conflict) =>
         conflict.column("session_id").doUpdateSet({
-          session_key: scope.sessionKey,
           updated_at: updatedAt,
         }),
       ),

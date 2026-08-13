@@ -3,10 +3,16 @@ import { html, nothing, type TemplateResult } from "lit";
 import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { isActiveTask, taskTimestampMs, taskTitle } from "../../../lib/tasks/data.ts";
+import { canonicalUiSessionKeyForPersistence } from "../../../lib/sessions/session-key.ts";
+import {
+  isActiveTask,
+  taskDetail,
+  taskRuntimeLabel,
+  taskTimestampMs,
+  taskTitle,
+} from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import type { ChatProps } from "../chat-view.ts";
-import { renderTaskInspector } from "./chat-background-task-row.ts";
 import {
   backgroundTaskStatusLabel,
   newestTaskSnapshot,
@@ -16,40 +22,54 @@ import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
 import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
 import {
-  readSubagentTranscript,
-  resetSubagentDetail,
-  type SubagentDetailHost,
-} from "./chat-subagent-detail-state.ts";
+  readTaskTranscript,
+  resetTaskDetail,
+  type TaskDetailHost,
+} from "./chat-task-detail-state.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 
-export function renderSubagentDetailPanel(params: {
+export function renderTaskDetailPanel(params: {
   backgroundTasks: BackgroundTasksProps;
   chat: ChatProps;
-  host: SubagentDetailHost;
+  host: TaskDetailHost;
   task: TaskSummary | undefined;
   transcript: ChatTranscriptController;
 }): TemplateResult {
   const { backgroundTasks, task } = params;
   if (!task) {
-    resetSubagentDetail(params.host);
+    resetTaskDetail(params.host);
     return html`
-      <div class="sidebar-panel chat-subagent-detail" data-subagent-detail-panel>
-        ${renderSubagentHeader(t("chat.backgroundTasks.subagentDetailTitle"))}
-        <div class="sidebar-content chat-subagent-detail__state">
-          ${t("chat.backgroundTasks.subagentUnavailable")}
+      <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
+        ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"))}
+        <div class="sidebar-content chat-task-detail__state">
+          ${t("chat.backgroundTasks.taskUnavailable")}
         </div>
       </div>
     `;
   }
   const detailedTask = backgroundTasks.taskDetails.get(task.id);
   const currentTask = newestTaskSnapshot(task, detailedTask);
-  const childSessionKey = normalizeOptionalString(currentTask.childSessionKey);
-  const content = childSessionKey
-    ? renderSubagentTranscript({ ...params, task: currentTask, sessionKey: childSessionKey })
-    : renderSubagentFallback(currentTask, backgroundTasks, params.host);
+  // A subagent's sessionKey is its requester's conversation, never its own
+  // work; only the child session is that task's transcript.
+  const transcriptSessionKey = normalizeOptionalString(
+    currentTask.runtime === "subagent"
+      ? currentTask.childSessionKey
+      : (currentTask.childSessionKey ?? currentTask.sessionKey),
+  );
+  const canonicalTranscriptKey = canonicalUiSessionKeyForPersistence(
+    params.host,
+    transcriptSessionKey,
+  );
+  const canonicalPaneKey = canonicalUiSessionKeyForPersistence(params.host, params.host.sessionKey);
+  // A task pointing at this pane's canonical session uses the inspector. Mirroring
+  // the current conversation into its own detail sidebar would duplicate the chat.
+  const content =
+    transcriptSessionKey && canonicalTranscriptKey !== canonicalPaneKey
+      ? renderTaskTranscript({ ...params, task: currentTask, sessionKey: transcriptSessionKey })
+      : renderTaskFallback(currentTask, backgroundTasks, params.host);
   return html`
-    <div class="sidebar-panel chat-subagent-detail" data-subagent-detail-panel>
-      ${renderSubagentHeader(taskTitle(currentTask), currentTask, backgroundTasks)} ${content}
+    <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
+      ${renderTaskHeader(taskTitle(currentTask), currentTask, backgroundTasks)} ${content}
     </div>
   `;
 }
@@ -57,7 +77,7 @@ export function renderSubagentDetailPanel(params: {
 // No close button here on purpose: the sidebar region header owns the
 // "Close Details" control for every detail-slot panel (the classic panel is
 // embedded with its own header hidden); a second X 40px away duplicated it.
-function renderSubagentHeader(
+function renderTaskHeader(
   title: string,
   task?: TaskSummary,
   backgroundTasks?: BackgroundTasksProps,
@@ -66,11 +86,11 @@ function renderSubagentHeader(
   const startedMs = task ? taskTimestampMs(task.startedAt ?? task.createdAt) : 0;
   const cancelling = task ? backgroundTasks?.cancellingTaskIds.has(task.id) === true : false;
   return html`
-    <div class="sidebar-header chat-subagent-detail__header">
-      <div class="chat-subagent-detail__heading">
+    <div class="sidebar-header chat-task-detail__header">
+      <div class="chat-task-detail__heading">
         <div class="sidebar-title" title=${title}>${title}</div>
         ${task
-          ? html`<div class="chat-subagent-detail__meta">
+          ? html`<div class="chat-task-detail__meta">
               ${task.status === "running"
                 ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
                 : nothing}
@@ -80,13 +100,15 @@ function renderSubagentHeader(
                 ]}"
                 >${backgroundTaskStatusLabel(task)}</span
               >
+              <span aria-hidden="true">·</span>
+              <span>${taskRuntimeLabel(task)}</span>
               ${active && startedMs > 0
                 ? html`<span aria-hidden="true">·</span>
                     <openclaw-elapsed-time .startMs=${startedMs}></openclaw-elapsed-time>`
                 : nothing}
               ${task.lastToolName
                 ? html`<span aria-hidden="true">·</span>
-                    <span class="chat-subagent-detail__tool">${task.lastToolName}</span>`
+                    <span class="chat-task-detail__tool">${task.lastToolName}</span>`
                 : nothing}
               ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
             </div>`
@@ -109,40 +131,38 @@ function renderSubagentHeader(
   `;
 }
 
-function renderSubagentTranscript(params: {
+function renderTaskTranscript(params: {
   chat: ChatProps;
-  host: SubagentDetailHost;
+  host: TaskDetailHost;
   sessionKey: string;
   task: TaskSummary;
   transcript: ChatTranscriptController;
 }): TemplateResult {
-  const load = readSubagentTranscript(params.host, {
+  const load = readTaskTranscript(params.host, {
     taskId: params.task.id,
     sessionKey: params.sessionKey,
   });
   if (load.status === "loading") {
-    return html`<div class="sidebar-content chat-subagent-detail__state">
+    return html`<div class="sidebar-content chat-task-detail__state">
       ${t("chat.backgroundTasks.transcriptLoading")}
     </div>`;
   }
   if (load.status === "error") {
-    return html`<div
-      class="sidebar-content chat-subagent-detail__state chat-subagent-detail__state--error"
-    >
+    return html`<div class="sidebar-content chat-task-detail__state chat-task-detail__state--error">
       ${t("chat.backgroundTasks.transcriptFailed")}
     </div>`;
   }
   if (load.messages.length === 0) {
-    return html`<div class="sidebar-content chat-subagent-detail__state">
+    return html`<div class="sidebar-content chat-task-detail__state">
       ${t("chat.backgroundTasks.transcriptEmpty")}
     </div>`;
   }
-  return html`<div class="sidebar-content chat-subagent-detail__content">
-    <div class="chat-subagent-detail__transcript">
+  return html`<div class="sidebar-content chat-task-detail__content">
+    <div class="chat-task-detail__transcript">
       ${renderReadOnlyTranscript({
         chat: params.chat,
         messages: load.messages,
-        paneId: `${params.chat.paneId}:subagent-sidebar`,
+        paneId: `${params.chat.paneId}:task-sidebar`,
         sessionKey: params.sessionKey,
         transcript: params.transcript,
       })}
@@ -150,12 +170,12 @@ function renderSubagentTranscript(params: {
   </div>`;
 }
 
-function renderSubagentFallback(
+function renderTaskFallback(
   task: TaskSummary,
   backgroundTasks: BackgroundTasksProps,
-  host: SubagentDetailHost,
+  host: TaskDetailHost,
 ): TemplateResult {
-  resetSubagentDetail(host);
+  resetTaskDetail(host);
   if (
     !backgroundTasks.taskDetails.has(task.id) &&
     !backgroundTasks.taskDetailErrors.has(task.id) &&
@@ -163,7 +183,37 @@ function renderSubagentFallback(
   ) {
     backgroundTasks.onLoadDetail?.(task);
   }
-  return html`<div class="sidebar-content chat-subagent-detail__fallback">
+  return html`<div class="sidebar-content chat-task-detail__fallback">
     ${renderTaskInspector(task, backgroundTasks)}
   </div>`;
+}
+
+function renderTaskInspector(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
+  const detailedTask = props.taskDetails.get(task.id);
+  const newest = newestTaskSnapshot(task, detailedTask);
+  const output = taskDetail(newest);
+  const detailLoading = props.taskDetailLoadingIds.has(task.id);
+  const detailError = props.taskDetailErrors.get(task.id);
+  return html`
+    ${detailError
+      ? html`<div
+          class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
+        >
+          ${detailError}
+        </div>`
+      : nothing}
+    <div class="chat-tasks-rail__detail-blocks">
+      <section class="chat-tasks-rail__task-inspector-block">
+        <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.prompt")}</div>
+        <pre>
+${detailLoading
+            ? t("chat.backgroundTasks.detailLoading")
+            : (detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable"))}</pre>
+      </section>
+      <section class="chat-tasks-rail__task-inspector-block">
+        <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.output")}</div>
+        <pre>${output ?? t("chat.backgroundTasks.outputPending")}</pre>
+      </section>
+    </div>
+  `;
 }

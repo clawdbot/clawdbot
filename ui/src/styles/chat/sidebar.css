@@ -844,24 +844,6 @@ openclaw-chat-sidebar-region,
   white-space: nowrap;
 }
 
-.chat-tasks-rail__back {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  padding: 0;
-  place-items: center;
-}
-
-.chat-tasks-rail__back svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8px;
-}
-
 .chat-tasks-rail__actions {
   display: inline-flex;
   align-items: center;
@@ -894,23 +876,6 @@ openclaw-chat-sidebar-region,
   flex-direction: column;
   min-height: 0;
   overflow: auto;
-}
-
-.chat-tasks-rail__transcript {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.chat-tasks-rail__transcript > .chat-thread {
-  padding: 12px 0 6px;
-  border-radius: 0;
-}
-
-.chat-tasks-rail__transcript .chat-thread-inner {
-  width: calc(100% - 16px);
 }
 
 /* List mode splits scrolling per section: running work owns the rail and the
@@ -997,6 +962,11 @@ openclaw-chat-sidebar-region,
   border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
 }
 
+.chat-tasks-rail__task--open {
+  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
+}
+
 .chat-tasks-rail__task-head {
   display: flex;
   align-items: center;
@@ -1004,7 +974,7 @@ openclaw-chat-sidebar-region,
   min-width: 0;
 }
 
-.chat-tasks-rail__task-disclosure {
+.chat-tasks-rail__task-open {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
@@ -1017,23 +987,6 @@ openclaw-chat-sidebar-region,
   font: inherit;
   text-align: left;
   cursor: var(--cursor-action);
-}
-
-.chat-tasks-rail__task-chevron {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  color: var(--muted);
-}
-
-.chat-tasks-rail__task-chevron svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8px;
 }
 
 /* openclaw-tooltip is display:contents, so the title span itself is the flex
@@ -1104,8 +1057,8 @@ openclaw-chat-sidebar-region,
   stroke-width: 1.8px;
 }
 
-/* One quiet text line replaces the status/runtime pill chips: colored status
-   word, runtime, relative time, trailing transcript link. */
+/* One quiet text line replaces the status/runtime pill chips: colored status,
+   runtime, timing, and tool activity. */
 .chat-tasks-rail__task-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1158,78 +1111,6 @@ openclaw-chat-sidebar-region,
   overflow-wrap: anywhere;
 }
 
-.chat-tasks-rail__detail {
-  display: flex;
-  flex: 1 0 auto;
-  flex-direction: column;
-  gap: 14px;
-  min-width: 0;
-  padding: 14px 12px 18px;
-}
-
-.chat-tasks-rail__detail-summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.chat-tasks-rail__detail-status-line {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: baseline;
-  gap: 7px;
-  min-width: 0;
-}
-
-.chat-tasks-rail__detail-status-line .chat-tasks-rail__task-meta {
-  flex: 1 1 auto;
-}
-
-.chat-tasks-rail__detail-stop {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  padding: 0;
-  place-items: center;
-  color: var(--danger);
-}
-
-.chat-tasks-rail__detail-stop svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8px;
-}
-
-.chat-tasks-rail__detail-activity {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--warn) 24%, var(--border));
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--warn) 6%, transparent);
-}
-
-.chat-tasks-rail__detail-activity span {
-  color: var(--warn);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-}
-
-.chat-tasks-rail__detail-activity strong {
-  color: var(--text);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 550;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
 .chat-tasks-rail__detail-blocks {
   display: grid;
   gap: 12px;
@@ -1278,29 +1159,6 @@ openclaw-chat-sidebar-region,
 .chat-tasks-rail__task-inspector-state--error {
   border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
   color: var(--danger);
-}
-
-/* Quiet by default so a column of rows is not a column of accent links;
-   pushed right to end the meta line like a row action. */
-.chat-tasks-rail__task-transcript {
-  margin-left: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.3;
-  cursor: var(--cursor-action);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
-  text-underline-offset: 2px;
-}
-
-.chat-tasks-rail__task-transcript:hover,
-.chat-tasks-rail__task-transcript:focus-visible {
-  color: var(--accent);
-  text-decoration-color: currentColor;
 }
 
 @keyframes chat-sidebar-fade-in {
@@ -1359,27 +1217,27 @@ openclaw-chat-sidebar-region,
   padding: 16px;
 }
 
-.chat-subagent-detail {
+.chat-task-detail {
   min-height: 0;
 }
 
-.chat-subagent-detail__header {
+.chat-task-detail__header {
   gap: 10px;
 }
 
-.chat-subagent-detail__heading {
+.chat-task-detail__heading {
   display: grid;
   min-width: 0;
   gap: 5px;
 }
 
-.chat-subagent-detail__heading .sidebar-title {
+.chat-task-detail__heading .sidebar-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chat-subagent-detail__meta {
+.chat-task-detail__meta {
   display: flex;
   align-items: center;
   min-width: 0;
@@ -1388,19 +1246,19 @@ openclaw-chat-sidebar-region,
   font-size: var(--control-ui-text-xs);
 }
 
-.chat-subagent-detail__tool {
+.chat-task-detail__tool {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chat-subagent-detail__content {
+.chat-task-detail__content {
   display: flex;
   padding: 0;
   overflow: hidden;
 }
 
-.chat-subagent-detail__transcript {
+.chat-task-detail__transcript {
   display: flex;
   flex: 1 1 0;
   min-width: 0;
@@ -1408,25 +1266,25 @@ openclaw-chat-sidebar-region,
   overflow: hidden;
 }
 
-.chat-subagent-detail__transcript > .chat-thread {
+.chat-task-detail__transcript > .chat-thread {
   padding: 12px 0 6px;
   border-radius: 0;
 }
 
-.chat-subagent-detail__transcript .chat-thread-inner {
+.chat-task-detail__transcript .chat-thread-inner {
   width: calc(100% - 16px);
 }
 
-.chat-subagent-detail__state {
+.chat-task-detail__state {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
-.chat-subagent-detail__state--error {
+.chat-task-detail__state--error {
   color: var(--danger);
 }
 
-.chat-subagent-detail__fallback .chat-tasks-rail__detail-blocks {
+.chat-task-detail__fallback .chat-tasks-rail__detail-blocks {
   gap: 12px;
 }
 

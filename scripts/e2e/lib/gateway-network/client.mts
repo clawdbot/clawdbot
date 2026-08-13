@@ -280,25 +280,23 @@ function assertAdminSuccess(response: GatewayAdminResponse, message: string) {
   return assertRpcSuccess(response.body, message);
 }
 
-export async function verifyPreparedSuspensionSocket(
+async function verifyPreparedSuspensionSocket(
   options: GatewayClientOptions & { deadline: number; suspensionId: string },
-  deps: Pick<GatewayNetworkDeps, "onceFrame" | "openSocket" | "protocolVersion"> = {},
 ) {
   const { deadline, suspensionId, token, url } = options;
-  const onceFrameImpl = deps.onceFrame ?? onceFrame;
-  const ws = await (deps.openSocket ?? openSocket)(url, remainingDeadlineMs(deadline));
+  const ws = await openSocket(url, remainingDeadlineMs(deadline));
   try {
     let requestIndex = 0;
     const request = async (method: string, params: Record<string, unknown> = {}) => {
       const id = `s${++requestIndex}`;
       ws.send(JSON.stringify({ type: "req", id, method, params }));
-      return (await onceFrameImpl(
+      return (await onceFrame(
         ws,
         (frame) => frame?.type === "res" && frame?.id === id,
         remainingDeadlineMs(deadline),
       )) as GatewayFrame;
     };
-    const protocolVersion = deps.protocolVersion ?? (await readProtocolVersion());
+    const protocolVersion = await readProtocolVersion();
     assertRpcSuccess(
       await request("connect", {
         minProtocol: protocolVersion,

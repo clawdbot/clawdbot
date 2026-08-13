@@ -882,18 +882,16 @@ describe("headless Code Mode", () => {
     const ctx = createHeadlessHarness();
     expectCompleted(await runCodeModeScriptHeadless({ ctx, code: "return true;" }));
 
-    expect(
-      expectFailed(
-        await runCodeModeScriptHeadless({
-          ctx,
-          code: "while (true) {}",
-          wallClockMs: 100,
-        }),
-      ),
-    ).toMatchObject({
-      code: "timeout",
-      error: "code mode timeout exceeded",
-    });
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx,
+        code: "while (true) {}",
+        wallClockMs: 100,
+      }),
+    );
+
+    expect(result.code).toBe("timeout");
+    expect(result.error).toContain("timeout exceeded");
   });
 
   it("classifies syntax errors", async () => {

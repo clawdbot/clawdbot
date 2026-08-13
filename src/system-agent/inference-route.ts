@@ -1,12 +1,10 @@
 // Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   listAgentEntries,
-  resolveDefaultAgentId,
+  resolveSystemAgentTargetAgentId,
   toAgentEntriesRecord,
-  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -32,25 +30,6 @@ export type SystemAgentConfiguredRoute = {
       agentHarnessRuntimeOverride?: string;
     }
 );
-
-export function resolveSystemAgentTargetAgentId(
-  config: OpenClawConfig,
-  requestedAgentId?: string,
-): string {
-  const configuredAgentId =
-    normalizeOptionalString(requestedAgentId) ??
-    normalizeOptionalString(config.agents?.defaults?.systemAgent?.agentId);
-  if (configuredAgentId) {
-    return normalizeAgentId(configuredAgentId);
-  }
-  return normalizeAgentId(
-    tryResolveLegacyCompatibilityAgentId(config) ??
-      resolveDefaultAgentId(config, {
-        surface: "system-agent consult routing",
-        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
-      }),
-  );
-}
 
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;

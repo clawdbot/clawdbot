@@ -114,17 +114,10 @@ suite.define(() => {
         await trigger.press("Enter");
       }
 
-      const modelTrigger = composer.locator(".chat-controls__model-picker > summary");
+      const modelTrigger = composer.locator("wa-select.chat-controls__model-picker");
       await outside.focus();
       await modelTrigger.click();
-      expect(await modelTrigger.evaluate((element) => document.activeElement === element)).toBe(
-        true,
-      );
-      expect(
-        await page
-          .locator(".chat-controls__model-search")
-          .evaluate((element) => document.activeElement === element),
-      ).toBe(false);
+      await expect.poll(() => modelTrigger.getAttribute("open")).toBe("");
       await page.keyboard.press("Escape");
 
       await outside.focus();

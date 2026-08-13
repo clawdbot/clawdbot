@@ -45,7 +45,6 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
       terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
     }),
-    view: { kind: "list" },
     cancellingTaskIds: new Set(),
     finishedCollapsed: false,
     taskDetails: new Map(),
@@ -55,10 +54,7 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     onToggleFinished: () => {},
     onRefresh: () => {},
     onCancel: () => {},
-    onOpenSubagentDetail: undefined,
-    onSelectTask: () => {},
-    onBack: () => {},
-    onOpenTranscript: () => {},
+    onOpenTaskDetail: undefined,
     ...overrides,
   };
 }
@@ -98,7 +94,7 @@ afterEach(() => {
 describe("subagent activity rows", () => {
   it("opens the selected subagent from an accessible activity control", () => {
     const task = makeTask({ id: "clickable-subagent" });
-    const onOpenSubagentDetail = vi.fn();
+    const onOpenTaskDetail = vi.fn();
     const container = renderStatusRow({
       tasks: [task],
       subagentActivity: deriveSubagentActivity({
@@ -107,7 +103,7 @@ describe("subagent activity rows", () => {
         terminalObservedAtByTask: new Map(),
         canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
       }),
-      onOpenSubagentDetail,
+      onOpenTaskDetail,
     });
 
     const row = container.querySelector<HTMLButtonElement>(
@@ -116,7 +112,7 @@ describe("subagent activity rows", () => {
     expect(row?.tagName).toBe("BUTTON");
     expect(row?.getAttribute("aria-label")).toBe("Open subagent details for Map codebase");
     row?.click();
-    expect(onOpenSubagentDetail).toHaveBeenCalledWith(task);
+    expect(onOpenTaskDetail).toHaveBeenCalledWith(task);
   });
 
   it("keeps activity rows non-interactive when no open callback is provided", () => {

@@ -430,6 +430,7 @@ enum class GatewayMethod(
   NodePluginSurfaceRefresh("node.pluginSurface.refresh"),
   NodePluginToolsUpdate("node.pluginTools.update"),
   NodeSkillsUpdate("node.skills.update"),
+  NodeProtocolFeaturesUpdate("node.protocolFeatures.update"),
   NodePendingDrain("node.pending.drain"),
   NodePendingEnqueue("node.pending.enqueue"),
   NodeInvoke("node.invoke"),
