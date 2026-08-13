@@ -7,11 +7,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SpawnResult } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
+  applyWizardMetadata,
   formatControlUiSshHint,
   handleReset,
   moveToTrash,
@@ -932,6 +936,22 @@ describe("waitForGatewayReachable", () => {
     });
 
     expect(result).toEqual({ ok: false, detail: "connect failed: timeout" });
+  });
+});
+
+describe("applyWizardMetadata", () => {
+  it("preserves the migrated legacy owner across the config replacement", () => {
+    const cfg = migratePersistedImplicitMainRoster({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+    }).config as OpenClawConfig;
+    expect(tryResolveLegacyCompatibilityAgentId(cfg)).toBe("main");
+
+    const result = applyWizardMetadata(cfg, { command: "doctor", mode: "local" });
+
+    expect(result).not.toBe(cfg);
+    expect(tryResolveLegacyCompatibilityAgentId(result)).toBe("main");
   });
 });
 

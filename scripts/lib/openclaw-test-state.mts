@@ -134,7 +134,10 @@ function scenarioConfig(scenario: string, options: TestStateOptions = {}) {
           },
           contextTokens: 64000,
           skills: ["memory"],
+          authInheritance: { agentId: "main" },
+          heartbeat: { agentId: "main" },
           sessionStore: { agentId: "main" },
+          systemAgent: { agentId: "main" },
         },
         entries: {
           main: {
@@ -157,6 +160,11 @@ function scenarioConfig(scenario: string, options: TestStateOptions = {}) {
           },
         },
       },
+      bindings: [
+        { agentId: "main", match: { channel: "discord", accountId: "*" } },
+        { agentId: "main", match: { channel: "telegram", accountId: "*" } },
+        { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+      ],
       skills: {
         allowBundled: ["memory", "openclaw-testing"],
         limits: {
@@ -480,7 +488,16 @@ OPENCLAW_TEST_STATE_JSON
       "skills": [
         "memory"
       ],
+      "authInheritance": {
+        "agentId": "main"
+      },
+      "heartbeat": {
+        "agentId": "main"
+      },
       "sessionStore": {
+        "agentId": "main"
+      },
+      "systemAgent": {
         "agentId": "main"
       }
     },
@@ -507,6 +524,29 @@ OPENCLAW_TEST_STATE_JSON
       }
     }
   },
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "discord",
+        "accountId": "*"
+      }
+    },
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "telegram",
+        "accountId": "*"
+      }
+    },
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "whatsapp",
+        "accountId": "*"
+      }
+    }
+  ],
   "skills": {
     "allowBundled": [
       "memory",
