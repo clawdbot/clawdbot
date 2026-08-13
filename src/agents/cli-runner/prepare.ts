@@ -1297,7 +1297,7 @@ export async function prepareCliRunContext(
       const { liveSession: _liveSession, ...backend } = preparedBackend.backend;
       return backend;
     })();
-    let preparedBackendFinal = {
+    const preparedBackendFinal = {
       ...preparedBackend,
       backend: {
         ...(isSideQuestion

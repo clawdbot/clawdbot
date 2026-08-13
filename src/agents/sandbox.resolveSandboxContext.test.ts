@@ -17,7 +17,6 @@ const syncSkillsToWorkspaceMock = vi.hoisted(() =>
     async (): Promise<{
       skillUsagePaths: SkillUsagePath[];
       skillsSnapshot: SkillSnapshot;
-      generation: number;
     }> => ({
       skillUsagePaths: [],
       skillsSnapshot: {
@@ -25,7 +24,6 @@ const syncSkillsToWorkspaceMock = vi.hoisted(() =>
         skills: [],
         resolvedSkills: [],
       },
-      generation: 0,
     }),
   ),
 );
@@ -302,7 +300,6 @@ describe("resolveSandboxContext", () => {
       expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({ skillsSnapshot }),
       );
-      expect(readPublishedSandboxSkills(result)).toBeUndefined();
       expect(result).not.toHaveProperty("skillsSnapshot");
 
       const workspace = await ensureSandboxWorkspaceForSession({
@@ -769,7 +766,6 @@ describe("resolveSandboxContext", () => {
     syncSkillsToWorkspaceMock.mockResolvedValueOnce({
       skillUsagePaths,
       skillsSnapshot,
-      generation: 1,
     });
 
     const cfg: OpenClawConfig = {
@@ -816,10 +812,9 @@ describe("resolveSandboxContext", () => {
       remote: { note: "test-remote" },
     });
     expect(result.skillUsagePaths).toEqual(skillUsagePaths);
-    expect(readPublishedSandboxSkills(result)).toBeUndefined();
   }, 15_000);
 
-  it("retains the published catalog on session workspace objects when requested", async () => {
+  it("carries the published catalog on session workspace objects", async () => {
     syncSkillsToWorkspaceMock.mockClear();
     const bundledDir = await createSandboxFixtureDir("bundled");
     const workspaceDir = await createSandboxFixtureDir("workspace");
@@ -831,7 +826,6 @@ describe("resolveSandboxContext", () => {
     syncSkillsToWorkspaceMock.mockResolvedValueOnce({
       skillUsagePaths: [],
       skillsSnapshot,
-      generation: 0,
     });
 
     const cfg: OpenClawConfig = {
