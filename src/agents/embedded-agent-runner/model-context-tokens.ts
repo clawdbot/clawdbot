@@ -11,9 +11,8 @@ type AgentModelWithOptionalContextTokens = Model & {
   contextTokens?: number;
 };
 
-/** Returns finite context-token metadata when a model discovery source provided it. */
 /** Prefer contextTokens, then contextWindow, when present on model metadata. */
 export function readAgentModelContextTokens(model: Model | null | undefined): number | undefined {
-  const value = (model as AgentModelWithOptionalContextTokens | null | undefined)?.contextTokens;
-  return asFiniteNumber(value);
+  const contextTokens = (model as AgentModelWithOptionalContextTokens | null | undefined)?.contextTokens;
+  return asFiniteNumber(contextTokens) ?? asFiniteNumber(model?.contextWindow);
 }
