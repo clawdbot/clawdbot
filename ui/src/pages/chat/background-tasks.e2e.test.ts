@@ -104,6 +104,10 @@ suite.define(() => {
         viewport: { width: 1440, height: 900 },
       },
       async ({ page }) => {
+        // The transcript is compared byte-for-byte across the detail-panel
+        // round-trip below; live relative ages ("11s") tick across second
+        // boundaries on slow runners. Fix Date while keeping timers running.
+        await page.clock.setFixedTime(baseTime);
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {
