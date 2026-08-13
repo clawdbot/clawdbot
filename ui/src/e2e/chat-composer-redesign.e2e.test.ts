@@ -712,7 +712,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("models.list");
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
       const composer = page.locator(".agent-chat__input");
       const picker = composer.locator("details.chat-controls__model-picker");
@@ -720,6 +720,7 @@ suite.define(() => {
         "button[data-chat-model-option]:not([data-chat-model-target])",
       );
       await picker.locator("summary").click();
+      await gateway.waitForRequest("models.list");
       await expect.poll(() => options.count()).toBe(2);
       await expect.poll(() => options.last().isVisible()).toBe(true);
       await expect.poll(() => options.first().textContent()).toContain("GPT-5.6 Sol");
