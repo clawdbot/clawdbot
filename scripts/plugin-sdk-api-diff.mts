@@ -11,10 +11,12 @@ import {
   pluginSdkApiAcknowledgement,
   renderPluginSdkApiRoot,
 } from "../src/plugin-sdk/api-diff.ts";
+import { createPluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
 
 type Args = {
   acknowledgement: string | null;
   base: string;
+  evidencePath: string | null;
   head: string;
   jsonPath: string | null;
   requireAcknowledgement: boolean;
@@ -26,7 +28,7 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
 function usage(): never {
   console.error(
-    "Usage: plugin-sdk-api-diff --base <git-ref> --head <git-ref> [--json <path>] [--summary <path>] [--require-acknowledgement --acknowledge <8-hex-digest>]",
+    "Usage: plugin-sdk-api-diff --base <git-ref> --head <git-ref> [--evidence <path>] [--json <path>] [--summary <path>] [--require-acknowledgement --acknowledge <8-hex-digest>]",
   );
   process.exit(2);
 }
@@ -43,6 +45,7 @@ function readValue(argv: string[], index: number, flag: string): string {
 function parseArgs(argv: string[]): Args {
   let acknowledgement: string | null = null;
   let base = "";
+  let evidencePath: string | null = null;
   let head = "";
   let jsonPath: string | null = null;
   let requireAcknowledgement = false;
@@ -59,6 +62,10 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--base":
         base = readValue(argv, index, arg);
+        index += 1;
+        break;
+      case "--evidence":
+        evidencePath = path.resolve(readValue(argv, index, arg));
         index += 1;
         break;
       case "--head":
@@ -91,7 +98,15 @@ function parseArgs(argv: string[]): Args {
     console.error("--acknowledge must be the 8-character lowercase digest printed by the report.");
     usage();
   }
-  return { acknowledgement, base, head, jsonPath, requireAcknowledgement, summaryPath };
+  return {
+    acknowledgement,
+    base,
+    evidencePath,
+    head,
+    jsonPath,
+    requireAcknowledgement,
+    summaryPath,
+  };
 }
 
 function git(repoRoot: string, args: string[]): string {
@@ -206,6 +221,15 @@ async function main(): Promise<void> {
     process.stdout.write(report);
     if (args.jsonPath) {
       await writeFile(args.jsonPath, `${JSON.stringify(diff, null, 2)}\n`);
+    }
+    if (args.evidencePath) {
+      const evidence = createPluginSdkApiReleaseEvidence({
+        baseRef: args.base,
+        baseSha: baseCommit,
+        diff,
+        headSha: headCommit,
+      });
+      await writeFile(args.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
     }
     if (args.summaryPath) {
       await writeFile(args.summaryPath, report);

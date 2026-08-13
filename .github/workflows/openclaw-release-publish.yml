@@ -422,6 +422,8 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/release-ci-summary.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/plain-gh.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/lib/plain-gh.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/plugin-sdk-api-release-evidence.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/plugin-sdk-api-release-evidence.mjs"
 
       - name: Checkout release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -444,6 +446,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
+          PLUGIN_SDK_API_VALIDATOR: ${{ runner.temp }}/release-validation-tooling/plugin-sdk-api-release-evidence.mjs
         run: |
           set -euo pipefail
           preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
@@ -470,6 +474,11 @@ jobs:
             echo "Preflight manifest npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $npm_dist_tag" >&2
             exit 1
           fi
+          node "$PLUGIN_SDK_API_VALIDATOR" \
+            --manifest "$manifest" \
+            --head "$EXPECTED_SHA" \
+            --target-package package.json \
+            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"
           if [[ -z "$tarball_name" || ! -f "${preflight_dir}/${tarball_name}" ]]; then
             echo "Preflight manifest tarball is missing: $tarball_name" >&2
             exit 1

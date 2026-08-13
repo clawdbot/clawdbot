@@ -26,6 +26,7 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
 import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
@@ -1907,6 +1908,12 @@ async function main() {
     targetSha,
     npmDistTag: options.npmDistTag,
   });
+  const pluginSdkApiValidation = validatePluginSdkApiReleaseEvidence({
+    acknowledgement: options.pluginSdkApiAcknowledgement,
+    evidence: npmManifest.pluginSdkApi,
+    expectedHeadSha: targetSha,
+    targetPackage: readJson("package.json", "release target package manifest"),
+  });
   validateFullManifest(fullManifest, {
     targetSha,
     releaseProfile: options.releaseProfile,
@@ -2000,6 +2007,8 @@ async function main() {
     fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
     npmPreflightSource,
+    pluginSdkApi: npmManifest.pluginSdkApi,
+    pluginSdkApiValidation,
     artifacts: {
       npmPreflight: npmArtifactName,
       fullReleaseValidation: fullArtifactName,
@@ -2040,6 +2049,9 @@ async function main() {
           ]
         : []),
       `- npm preflight artifact: ${npmArtifactName}`,
+      `- Plugin SDK API evidence: ${pluginSdkApiValidation.status}${
+        pluginSdkApiValidation.digest ? ` (${pluginSdkApiValidation.digest})` : ""
+      }`,
       `- full release artifact: ${fullArtifactName}`,
       `- GitHub release notes: ${releaseNotesCheck.status} (${releaseNotesCheck.mode}, ${releaseNotesCheck.characters} characters, ${releaseNotesCheck.bytes} bytes)`,
       releaseNotesProvenance.status === "passed"

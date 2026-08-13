@@ -78,6 +78,7 @@ jobs:
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
       diff_base_revision: ${{ steps.diff_base.outputs.sha }}
+      diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -2597,6 +2598,12 @@ jobs:
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
+      - name: Ensure Plugin SDK API diff head commit
+        if: matrix.group == 'plugin-sdk-api-diff'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
+          fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -2726,6 +2733,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
@@ -2808,12 +2816,22 @@ jobs:
               fi
               ;;
             plugin-sdk-api-diff)
-              mkdir -p .artifacts
-              run_check "plugin-sdk:api:diff" pnpm run plugin-sdk:api:diff -- \
-                --base "${{ needs.preflight.outputs.diff_base_revision }}" \
-                --head "${{ needs.preflight.outputs.checkout_revision }}" \
-                --json .artifacts/plugin-sdk-api-diff.json \
-                --summary "$GITHUB_STEP_SUMMARY"
+              if node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
+                mkdir -p .artifacts
+                run_check "plugin-sdk:api:diff" pnpm run plugin-sdk:api:diff -- \
+                  --base "${{ needs.preflight.outputs.diff_base_revision }}" \
+                  --head "${{ needs.preflight.outputs.diff_head_revision }}" \
+                  --json .artifacts/plugin-sdk-api-diff.json \
+                  --summary "$GITHUB_STEP_SUMMARY"
+              elif [[ "$COMPATIBILITY_TARGET" == "true" ]] && node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:check"] ? 0 : 1);'; then
+                run_check "plugin-sdk:api:check (historical compatibility)" pnpm run plugin-sdk:api:check
+              elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+                echo "::error title=Plugin SDK API check unavailable::Compatibility target provides neither plugin-sdk:api:diff nor plugin-sdk:api:check."
+                failures=1
+              else
+                echo "::error title=Plugin SDK API diff unavailable::Current CI targets must provide plugin-sdk:api:diff."
+                failures=1
+              fi
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile

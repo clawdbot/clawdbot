@@ -334,35 +334,40 @@ jobs:
       # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
       - name: Verify Plugin SDK API changes
         env:
-          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
+          mkdir -p .artifacts
           if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
             echo "Selected historical target predates plugin-sdk:api:diff; skipping unavailable check."
+            head_sha="$(git rev-parse HEAD)"
+            jq -n \
+              --arg schema "openclaw.plugin-sdk-api-release-evidence/v1" \
+              --arg headSha "$head_sha" \
+              '{schema: $schema, status: "unavailable", headSha: $headSha}' \
+              > .artifacts/plugin-sdk-api-release-evidence.json
             exit 0
           fi
           previous_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
           previous_tag="v${previous_version}"
           git rev-parse --verify "${previous_tag}^{commit}" >/dev/null
-          mkdir -p .artifacts
           diff_args=(
             --base "$previous_tag"
             --head HEAD
+            --evidence .artifacts/plugin-sdk-api-release-evidence.json
             --json .artifacts/plugin-sdk-api-release-diff.json
             --summary "$GITHUB_STEP_SUMMARY"
           )
-          if [ -n "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" ]; then
-            diff_args+=(--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT")
-          fi
           pnpm run plugin-sdk:api:diff -- "${diff_args[@]}"
 
       - name: Upload Plugin SDK API release diff
-        if: always() && hashFiles('.artifacts/plugin-sdk-api-release-diff.json') != ''
+        if: always() && hashFiles('.artifacts/plugin-sdk-api-release-evidence.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: plugin-sdk-api-release-diff-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/plugin-sdk-api-release-diff.json
+          path: |
+            .artifacts/plugin-sdk-api-release-diff.json
+            .artifacts/plugin-sdk-api-release-evidence.json
           retention-days: 30
 
       - name: Verify release contents
@@ -631,6 +636,9 @@ jobs:
           ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" AI_PACKAGE_VERSION="$AI_PACKAGE_VERSION" AI_TARBALL_NAME="$AI_TARBALL_NAME" AI_TARBALL_SHA256="$AI_TARBALL_SHA256" GATEWAY_PROTOCOL_PACKAGE_VERSION="$GATEWAY_PROTOCOL_PACKAGE_VERSION" GATEWAY_PROTOCOL_TARBALL_NAME="$GATEWAY_PROTOCOL_TARBALL_NAME" GATEWAY_PROTOCOL_TARBALL_SHA256="$GATEWAY_PROTOCOL_TARBALL_SHA256" GATEWAY_CLIENT_PACKAGE_VERSION="$GATEWAY_CLIENT_PACKAGE_VERSION" GATEWAY_CLIENT_TARBALL_NAME="$GATEWAY_CLIENT_TARBALL_NAME" GATEWAY_CLIENT_TARBALL_SHA256="$GATEWAY_CLIENT_TARBALL_SHA256" node <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
+          const pluginSdkApi = JSON.parse(
+            fs.readFileSync(".artifacts/plugin-sdk-api-release-evidence.json", "utf8"),
+          );
           const manifest = {
             version: 1,
             releaseTag: process.env.RELEASE_TAG,
@@ -640,6 +648,7 @@ jobs:
             packageVersion: process.env.PACKAGE_VERSION,
             tarballName: process.env.TARBALL_NAME,
             tarballSha256: process.env.TARBALL_SHA256,
+            pluginSdkApi,
             corePackageTarballs: [
               ...(process.env.AI_TARBALL_NAME
                 ? [
@@ -957,42 +966,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
-      - name: Verify Plugin SDK API changes
-        env:
-          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-        run: |
-          set -euo pipefail
-          if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
-            echo "Selected historical target predates plugin-sdk:api:diff; skipping unavailable check."
-            exit 0
-          fi
-          previous_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
-          previous_tag="v${previous_version}"
-          if ! git rev-parse --verify "${previous_tag}^{commit}" >/dev/null 2>&1; then
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "refs/tags/${previous_tag}:refs/tags/${previous_tag}"
-          fi
-          mkdir -p .artifacts
-          diff_args=(
-            --base "$previous_tag"
-            --head HEAD
-            --json .artifacts/plugin-sdk-api-release-diff.json
-            --summary "$GITHUB_STEP_SUMMARY"
-            --require-acknowledgement
-          )
-          if [ -n "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" ]; then
-            diff_args+=(--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT")
-          fi
-          pnpm run plugin-sdk:api:diff -- "${diff_args[@]}"
-
-      - name: Upload Plugin SDK API publish diff
-        if: always() && hashFiles('.artifacts/plugin-sdk-api-release-diff.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: plugin-sdk-api-publish-diff-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/plugin-sdk-api-release-diff.json
-          retention-days: 30
-
       - name: Ensure version is not already published
         run: |
           set -euo pipefail
@@ -1114,6 +1087,15 @@ jobs:
 
           download_preflight_artifact
 
+      - name: Download trusted Plugin SDK API evidence validator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/plugin-sdk-api-release-evidence.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${RUNNER_TEMP}/plugin-sdk-api-release-evidence.mjs"
+
       - name: Validate release tag and package metadata
         if: ${{ inputs.preflight_run_id == '' }}
         env:
@@ -1135,6 +1117,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -1166,6 +1149,11 @@ jobs:
             echo "Prepared preflight npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $ARTIFACT_RELEASE_NPM_DIST_TAG" >&2
             exit 1
           fi
+          node "${RUNNER_TEMP}/plugin-sdk-api-release-evidence.mjs" \
+            --manifest "$MANIFEST_FILE" \
+            --head "$EXPECTED_RELEASE_SHA" \
+            --target-package package.json \
+            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"
           if [[ ! -f "$ARTIFACT_TARBALL_PATH" ]]; then
             echo "Prepared preflight tarball named in manifest is missing: $ARTIFACT_TARBALL_NAME" >&2
             exit 1
