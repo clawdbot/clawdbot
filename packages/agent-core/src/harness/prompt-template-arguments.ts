@@ -80,7 +80,7 @@ export function substituteArgs(content: string, args: string[]): string {
     },
   );
   const allArgs = args.join(" ");
-  result = result.replace(/\$ARGUMENTS/g, allArgs);
-  result = result.replace(/\$@/g, allArgs);
+  result = result.replace(/\$ARGUMENTS/g, () => allArgs);
+  result = result.replace(/\$@/g, () => allArgs);
   return result;
 }
