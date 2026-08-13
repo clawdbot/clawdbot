@@ -93,7 +93,12 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
       assertEnterpriseSlackPolicyConfig({
         accountId: "org",
         config: {
-          allowFrom: ["team:T01234567:user:U01234567"],
+          allowFrom: [
+            "U01234567",
+            "slack:W01234567",
+            "user:U12345678",
+            "team:T01234567:user:U01234567",
+          ],
           dm: {
             groupChannels: ["team:T01234567:channel:G01234567"],
           },
@@ -104,7 +109,12 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
           },
           channels: {
             "team:T01234567:channel:C01234567": {
-              users: ["team:T01234567:user:U01234567", "team:T01234567:user:B01234567"],
+              users: [
+                "U01234567",
+                "slack:W01234567",
+                "user:B01234567",
+                "team:T01234567:user:U01234567",
+              ],
               toolsBySender: {
                 U01234567: {},
                 "id:W01234567": {},
@@ -116,7 +126,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
             "*": {},
           },
           reactionNotifications: "allowlist",
-          reactionAllowlist: ["team:T01234567:user:U01234567"],
+          reactionAllowlist: ["W01234567", "team:T01234567:user:U01234567"],
         },
       }),
     ).not.toThrow();
@@ -145,17 +155,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
 
   it.each<[string, SlackAccountConfig]>([
     ["channel ID", { channels: { C01234567: {} } }],
-    ["allowFrom user ID", { allowFrom: ["U01234567"] }],
     ["group DM channel ID", { dm: { groupChannels: ["G01234567"] } }],
-    ["reaction user ID", { reactionNotifications: "allowlist", reactionAllowlist: ["U01234567"] }],
-    [
-      "per-channel user ID",
-      {
-        channels: {
-          "team:T01234567:channel:C01234567": { users: ["U01234567"] },
-        },
-      },
-    ],
   ])("rejects unscoped Enterprise %s", (_label, config) => {
     expect(() => assertEnterpriseSlackPolicyConfig({ accountId: "org", config })).toThrow(
       /Slack Enterprise Grid/,

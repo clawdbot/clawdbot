@@ -25,6 +25,7 @@ import {
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -46,6 +47,7 @@ import {
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import {
   classifyGatewayProbePath,
@@ -63,6 +65,7 @@ import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import {
   runWithGatewayHttpWorkAdmission,
@@ -940,6 +943,8 @@ export function attachGatewayUpgradeHandler(opts: {
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
   desktopSessionRegistry?: DesktopSessionRegistry;
+  nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
 }) {
   const {
     httpServer,
@@ -1117,6 +1122,21 @@ export function attachGatewayUpgradeHandler(opts: {
         handleDesktopObserveUpgrade(req, socket, head, {
           registry: opts.desktopSessionRegistry,
         });
+        return;
+      }
+      if (requestPath === NODE_DESKTOP_ATTACH_PATH) {
+        const context = opts.getGatewayRequestContext?.();
+        if (!opts.nodeDesktopStreamBroker || !context) {
+          writeGatewayUpgradeServiceUnavailable(socket, "node desktop attach unavailable");
+          socket.destroy();
+          return;
+        }
+        if (isGatewayWorkAdmissionClosed()) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          socket.destroy();
+          return;
+        }
+        await opts.nodeDesktopStreamBroker.handleUpgrade(req, socket, head, context.nodeRegistry);
         return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.

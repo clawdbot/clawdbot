@@ -588,6 +588,7 @@ export function filterCurrentDirectChildCompletionRows(
     runId: string;
     childSessionKey: string;
     requesterSessionKey: string;
+    requesterAgentId?: string;
     task: string;
     label?: string;
     createdAt: number;
@@ -600,10 +601,12 @@ export function filterCurrentDirectChildCompletionRows(
   }>,
   params: {
     requesterSessionKey: string;
+    requesterAgentId?: string;
     getLatestSubagentRunByChildSessionKey?: (childSessionKey: string) =>
       | {
           runId: string;
           requesterSessionKey: string;
+          requesterAgentId?: string;
         }
       | null
       | undefined;
@@ -618,7 +621,9 @@ export function filterCurrentDirectChildCompletionRows(
       return true;
     }
     return (
-      latest.runId === child.runId && latest.requesterSessionKey === params.requesterSessionKey
+      latest.runId === child.runId &&
+      latest.requesterSessionKey === params.requesterSessionKey &&
+      (!params.requesterAgentId || latest.requesterAgentId === params.requesterAgentId)
     );
   });
 }

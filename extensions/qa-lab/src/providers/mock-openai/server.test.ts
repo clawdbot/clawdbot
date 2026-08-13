@@ -6396,6 +6396,49 @@ Update and merge these partial structured summaries.`,
     expect(await response.text()).toContain('"name":"read"');
   });
 
+  it("routes the initial model-switch read through Anthropic guest Code Mode", async () => {
+    const server = await startMockServer();
+    const body = (await expectAnthropicMessagesJson(server, {
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { code: { type: "string" } },
+            required: ["code"],
+          },
+        },
+        {
+          name: "wait",
+          input_schema: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      messages: [
+        makeAnthropicUserText(
+          "Read repo/qa/scenarios/index.yaml and summarize the QA scenario pack mission in one clause before any model switch.",
+        ),
+      ],
+    })) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+
+    expect(body.stop_reason).toBe("tool_use");
+    expect(body.content.find((block) => block.type === "tool_use")?.name).toBe("exec");
+
+    const debug = requireRecord(
+      await getJson(server, "/debug/last-request"),
+      "model switch Code Mode debug request",
+    );
+    expect(debug.plannedToolName).toBe("read");
+    expect(debug.plannedWireToolName).toBe("exec");
+    expect(debug.plannedToolArgs).toEqual({ path: "repo/qa/scenarios/index.yaml" });
+  });
+
   it("returns continuity language after the model-switch reread completes", async () => {
     const server = await startMockServer();
 

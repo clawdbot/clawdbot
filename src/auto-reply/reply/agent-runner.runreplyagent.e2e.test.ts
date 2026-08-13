@@ -3439,8 +3439,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     for (const testCase of cases) {
       const sessionEntry = makeSessionEntry({
         providerOverride: "openai",
-        modelOverride: "gpt-5.6-luna",
+        modelOverride: "gpt-5.6-sol",
         modelOverrideSource: "user",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
       });
       await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
       const sessionStore = { main: sessionEntry };
@@ -3451,10 +3453,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
         const { run, onFallbackStep } = args;
         expect(args.provider, testCase.name).toBe("openai");
-        expect(args.model, testCase.name).toBe("gpt-5.6-luna");
+        expect(args.model, testCase.name).toBe("gpt-5.6-sol");
         await onFallbackStep?.({
           fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-5.6-luna",
+          fallbackStepFromModel: "openai/gpt-5.6-sol",
           fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
           fallbackStepFromFailureReason: "rate_limit",
           fallbackStepFinalOutcome: "succeeded",
@@ -3467,7 +3469,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           attempts: [
             {
               provider: "openai",
-              model: "gpt-5.6-luna",
+              model: "gpt-5.6-sol",
               error: "Provider openai is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
@@ -3481,7 +3483,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
-        runOverrides: { provider: "openai", model: "gpt-5.6-luna" },
+        runOverrides: { provider: "openai", model: "gpt-5.6-sol" },
       });
       const phases: string[] = [];
       const off = onAgentEvent((evt) => {
@@ -3499,11 +3501,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload.text, testCase.name).toContain("Model Fallback:");
       expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
       expect(stored.providerOverride, testCase.name).toBe("openai");
-      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-luna");
+      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-sol");
       expect(stored.modelOverrideSource, testCase.name).toBe("user");
-      expect(stored.modelProvider, testCase.name).toBe("deepinfra");
-      expect(stored.model, testCase.name).toBe("moonshotai/Kimi-K2.5");
-      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
+      expect(stored.modelProvider, testCase.name).toBe("openai");
+      expect(stored.model, testCase.name).toBe("gpt-5.6-sol");
+      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-sol");
       expect(stored.fallbackNotice?.activeModel, testCase.name).toBe(
         "deepinfra/moonshotai/Kimi-K2.5",
       );

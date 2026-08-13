@@ -102,6 +102,7 @@ export function createSlackDraftProgressCardRuntime(params: {
     if (!params.draftStream || !params.enabled) {
       return false;
     }
+    await params.draftStream.dropDetachedMessages();
     const terminalStatus = finalStatus === "error" || status === "error" ? "error" : "success";
     if (finalStatus === terminalStatus) {
       return true;
@@ -140,6 +141,9 @@ export function createSlackDraftProgressCardRuntime(params: {
     resolveText,
     resolvePresentation,
     finalize,
+    get hasTerminalized() {
+      return finalStatus !== undefined;
+    },
     setFallbackText(text: string) {
       latestFallbackText = text;
     },

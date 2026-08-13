@@ -19,11 +19,13 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
+import { createGatewayPortalService, type GatewayPortalService } from "./portals/portal-service.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import {
   attachGatewayUpgradeHandler,
@@ -120,6 +122,7 @@ export async function createGatewayHttpTransport(params: {
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
+  nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   clients: Set<GatewayWsClient>;
 }): Promise<{
   httpServer: HttpServer;
@@ -128,6 +131,7 @@ export async function createGatewayHttpTransport(params: {
   startListening: () => Promise<void>;
   wss: WebSocketServer;
   preauthConnectionBudget: PreauthConnectionBudget;
+  portalService: GatewayPortalService;
   getWorkerIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
   getMcpAppSandboxPort: () => number | undefined;
   ensureSandboxHostPort: () => Promise<number>;
@@ -263,6 +267,11 @@ export async function createGatewayHttpTransport(params: {
   const httpServers: HttpServer[] = [];
   const gatewayHttpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
+  const portalService = createGatewayPortalService({
+    httpBindHosts,
+    httpServers,
+    ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
+  });
   for (const _ of bindHosts) {
     const httpServer = createGatewayHttpServer({
       clients: params.clients,
@@ -307,6 +316,8 @@ export async function createGatewayHttpTransport(params: {
       workerIngressEnabled: params.workerIngressEnabled,
       log: params.log,
       desktopSessionRegistry: params.desktopSessionRegistry,
+      nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
+      getGatewayRequestContext: params.getGatewayRequestContext,
     });
     gatewayHttpServers.push(httpServer);
     httpServers.push(httpServer);
@@ -490,6 +501,7 @@ export async function createGatewayHttpTransport(params: {
     startListening,
     wss,
     preauthConnectionBudget,
+    portalService,
     getWorkerIngressEndpoint: () =>
       workerIngressPort === undefined
         ? undefined

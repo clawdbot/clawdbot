@@ -625,9 +625,9 @@ export function resolveMemoryDreamingWorkspaces(
   for (const agentId of agentIds) {
     addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
-  addWorkspace(
-    options.primaryWorkspaceDir ?? undefined,
-    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
-  );
+  const primaryWorkspaceDir = options.primaryWorkspaceDir?.trim();
+  if (primaryWorkspaceDir) {
+    addWorkspace(primaryWorkspaceDir, options.primaryAgentId ?? resolveDefaultAgentId(cfg));
+  }
   return [...byWorkspace.values()];
 }

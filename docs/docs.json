@@ -1115,6 +1115,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/cloudflare",
                   "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
@@ -1724,6 +1725,7 @@
                       "network",
                       "gateway/pairing",
                       "gateway/discovery",
+                      "gateway/portals",
                       "gateway/bonjour"
                     ]
                   }

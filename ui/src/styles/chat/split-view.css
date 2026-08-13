@@ -713,6 +713,34 @@ openclaw-chat-pane {
   overflow-y: auto;
 }
 
+.continue-in-terminal-dialog__card {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+}
+
+.continue-in-terminal-dialog__header h2,
+.continue-in-terminal-dialog__header p,
+.continue-in-terminal-dialog__note {
+  margin: 0;
+}
+
+.continue-in-terminal-dialog__header p,
+.continue-in-terminal-dialog__note {
+  margin-block-start: 6px;
+  color: var(--muted);
+}
+
+.continue-in-terminal-dialog .login-gate__command {
+  min-width: 0;
+}
+
+.continue-in-terminal-dialog .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 /* Plain web shell chrome overlays the first pane header. Expanded navigation
    shows toggle + search; collapsed navigation adds new-thread between them. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)

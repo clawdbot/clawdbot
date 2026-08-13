@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -48,6 +47,10 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
@@ -135,6 +138,7 @@ describe("worker turn launcher", () => {
   });
 
   let root: string;
+  let testState: OpenClawTestState;
   let database: OpenClawStateDatabase;
   let placements: WorkerSessionPlacementStore;
   let sessionFile: string;
@@ -146,8 +150,12 @@ describe("worker turn launcher", () => {
   };
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-turn-"));
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    testState = await createOpenClawTestState({
+      label: "worker-turn",
+      layout: "state-only",
+    });
+    root = testState.root;
+    database = openOpenClawStateDatabase({ env: testState.env });
     placements = createWorkerSessionPlacementStore({ database });
     sessionTarget = {
       agentId: "main",
@@ -168,7 +176,7 @@ describe("worker turn launcher", () => {
     cleanupAdmissionSink = undefined;
     closeOpenClawStateDatabaseForTest();
     resetAgentEventsForTest();
-    await fs.rm(root, { recursive: true, force: true });
+    await testState.cleanup();
   });
 
   function createWorkerSessionTurnPlacementProvider(
@@ -1369,7 +1377,9 @@ describe("worker turn launcher", () => {
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery,
       startTunnel: vi.fn(async () => {
-        throw new Error("tunnel unavailable");
+        throw Object.assign(new Error("device-runner-transport-unimplemented: launch is pending"), {
+          code: "device-runner-transport-unimplemented",
+        });
       }),
       stopTunnel,
       destroy,
@@ -1388,7 +1398,7 @@ describe("worker turn launcher", () => {
         turn("run-tunnel-unavailable"),
         runLocal,
       ),
-    ).rejects.toThrow("tunnel unavailable");
+    ).rejects.toMatchObject({ code: "device-runner-transport-unimplemented" });
 
     expect(runLocal).not.toHaveBeenCalled();
     expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();

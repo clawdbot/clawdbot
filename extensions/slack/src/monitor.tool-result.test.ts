@@ -38,6 +38,7 @@ describe("monitorSlackProvider tool results", () => {
     channel_type: "im" | "channel";
     thread_ts?: string;
     parent_user_id?: string;
+    attachments?: Array<Record<string, unknown>>;
   };
 
   const baseSlackMessageEvent = Object.freeze({
@@ -398,6 +399,48 @@ describe("monitorSlackProvider tool results", () => {
     expect(latestCtx.Body).toContain(CURRENT_MESSAGE_MARKER);
     expect(latestCtx.RawBody).toBe("second");
     expect(latestCtx.CommandBody).toBe("second");
+  });
+
+  it("surfaces forwarded image download failures through the monitor dispatch boundary", async () => {
+    let latestCtx: { RawBody?: string } | undefined;
+    replyMock.mockImplementation(async (ctx: unknown) => {
+      latestCtx = (ctx ?? {}) as { RawBody?: string };
+      return { text: "ack" };
+    });
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => new Response("Not Found", { status: 404 }));
+    globalThis.fetch = mockFetch as typeof fetch;
+
+    try {
+      await runSlackMessageOnce(
+        monitorSlackProvider,
+        {
+          event: makeSlackMessageEvent({
+            text: "caption",
+            attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+          }),
+        },
+        { awaitDispatch: true },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(latestCtx?.RawBody).toBe("caption\n\n[slack forwarded image unavailable]");
+    expect(mockFetch).toHaveBeenCalledOnce();
+
+    if (process.env.OPENCLAW_SLACK_FORWARDED_IMAGE_PROOF === "1") {
+      console.log(
+        JSON.stringify({
+          verdict: "PASS",
+          harness: "Slack monitor provider + mock Slack API + mocked file fetch",
+          entrypoint: "extensions/slack/src/monitor/provider.ts",
+          agentRawBody: latestCtx?.RawBody,
+          slackFetchStatus: 404,
+        }),
+      );
+    }
   });
 
   it("scopes thread history to the thread by default", async () => {

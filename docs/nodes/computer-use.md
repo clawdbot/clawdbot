@@ -16,7 +16,7 @@ The agent emits one uniform command, `computer.act`; it cannot tell how a node f
 - A paired, connected node advertising both `computer.act` and `screen.snapshot`, with `screen.snapshot` returning `displayFrameId`.
 - **macOS fulfiller:** app setting **Allow Computer Control** enabled. It defaults on; an explicit off choice stays off.
 - **macOS fulfiller:** **Accessibility** and Event Posting access granted to OpenClaw (for pointer/keyboard injection), plus **Screen Recording** permission (for `screen.snapshot`).
-- **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled. Its package includes the pinned CUA Driver SDK 0.14.1 runtime; no `cua-driver` executable, daemon, or MCP server is configured.
+- **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled. Its package includes the pinned CUA Driver SDK 0.19.3 runtime; no `cua-driver` executable, daemon, or MCP server is configured.
 - The pairing update that includes `computer.act` approved on the gateway.
 - A vision-capable agent model.
 - Tool policy that exposes `computer`. The default `coding` profile does not. Add `computer` to `tools.alsoAllow`; sandboxed agents also need it in `tools.sandbox.tools.alsoAllow`.
@@ -37,7 +37,7 @@ Screenshots are kept **model-only**: they are never auto-delivered to the chat c
 
 ## Windows and Linux (experimental, via CUA Driver SDK)
 
-The bundled `cua-computer` plugin provides an experimental fulfiller for Windows and Linux node hosts. It is disabled by default and uses the pinned CUA Driver SDK 0.14.1 contract directly:
+The bundled `cua-computer` plugin provides an experimental fulfiller for Windows and Linux node hosts. It is disabled by default and uses the pinned CUA Driver SDK 0.19.3 contract directly:
 
 1. Enable the plugin:
 

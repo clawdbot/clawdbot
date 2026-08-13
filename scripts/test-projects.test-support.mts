@@ -2268,7 +2268,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
-  [/^\.github\/actions\/setup-node-env\/verify-importers\.mjs$/u, [workflowGuards]],
   [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mts$/u, ["test-projects"]],

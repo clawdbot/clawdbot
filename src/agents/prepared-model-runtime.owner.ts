@@ -1,5 +1,6 @@
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -8,14 +9,13 @@ import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   requiresAgentHarnessPluginSelection,
   resolveSelectedAgentHarnessRuntime,
 } from "./harness/runtime-plugin-load-plan.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import {
@@ -215,7 +215,7 @@ export function normalizePreparedModelRuntimeInput(
     ...rest
   } = input;
   const inheritedAuthDir = normalizeOptionalDir(
-    input.inheritedAuthDir ?? resolveDefaultAgentDir(input.config, input.env),
+    input.inheritedAuthDir ?? resolveLegacyInheritedAuthDir(input.config, input.env),
   );
   const workspaceDir = normalizeOptionalDir(input.workspaceDir);
   const env = input.env ? Object.freeze({ ...input.env }) : undefined;
@@ -336,10 +336,10 @@ export function listConfiguredOwnerInputs(
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
 ): PreparedModelRuntimeInput[] {
-  const inheritedAuthDir = resolveDefaultAgentDir(config);
-  const defaultAgentId = resolveDefaultAgentId(config);
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
+  const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
   return listAgentIds(config).map((agentId) => {
-    const preserveWorkspaceDirOnRefresh = agentId === defaultAgentId && defaultWorkspaceDir;
+    const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
     const input: PreparedModelRuntimeInput = {
       agentId,
       agentDir: resolveAgentDir(config, agentId),

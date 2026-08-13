@@ -152,6 +152,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs dead-code reports fail-fast", () => {
+    expect(readPackageJson().scripts["deadcode:report"]).toBe(
+      "pnpm deadcode:full && pnpm deadcode:exports",
+    );
+  });
+
   it("runs runtime postbuild before plugin SDK strict export checks", () => {
     expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
       "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",

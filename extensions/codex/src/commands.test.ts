@@ -446,6 +446,98 @@ describe("codex command", () => {
     expectResultTextContains(result, "openclaw.json");
   });
 
+  it("routes owner-only plugin discovery through the native command boundary with its workspace", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({}, { enabled: false });
+    const codexControlRequest = vi.fn(async () => ({
+      marketplaces: [
+        {
+          name: "company-tools",
+          path: "/company/.agents/plugins/marketplace.json",
+          plugins: [
+            {
+              id: "security-review@company-tools",
+              name: "security-review",
+              installed: false,
+              enabled: false,
+            },
+          ],
+        },
+      ],
+      marketplaceLoadErrors: [],
+      featuredPluginIds: [],
+    }));
+
+    const result = await runCommand(
+      "plugins available",
+      { codexPluginsManagementIo, codexControlRequest },
+      {},
+      { pluginConfig: { appServer: { defaultWorkspaceDir: "/company" } } },
+    );
+
+    expectResultTextContains(result, "security-review@company-tools");
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      { appServer: { defaultWorkspaceDir: "/company" } },
+      "plugin/list",
+      { cwds: ["/company"] },
+      expect.objectContaining({ config: {}, sessionId: "session-1" }),
+    );
+
+    codexControlRequest.mockClear();
+    const denied = await runCommand(
+      "plugins available",
+      { codexPluginsManagementIo, codexControlRequest },
+      { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+    );
+    expectResultTextContains(denied, "Only an owner or operator.admin");
+    expect(codexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("never sends a paired-node workspace to the gateway Codex app-server", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({}, { enabled: false });
+    const codexControlRequest = vi.fn(async () => ({
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      featuredPluginIds: [],
+    }));
+
+    await runCommand(
+      "plugins available",
+      { codexPluginsManagementIo, codexControlRequest },
+      {
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-cli-node-session",
+            version: 1,
+            nodeId: "paired-node",
+            sessionId: "remote-session",
+            cwd: "/remote/node/private-workspace",
+          },
+        }),
+      },
+      { pluginConfig: { appServer: { defaultWorkspaceDir: "/gateway/workspace" } } },
+    );
+
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      { appServer: { defaultWorkspaceDir: "/gateway/workspace" } },
+      "plugin/list",
+      { cwds: ["/gateway/workspace"] },
+      expect.anything(),
+    );
+    expect(codexControlRequest).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "plugin/list",
+      expect.objectContaining({ cwds: ["/remote/node/private-workspace"] }),
+      expect.anything(),
+    );
+  });
+
   it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO({
       "google-calendar": {

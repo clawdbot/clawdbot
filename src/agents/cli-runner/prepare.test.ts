@@ -419,6 +419,34 @@ describe("prepareCliRunContext", () => {
     fixture.cleanup();
   });
 
+  it("carries the session-key-derived workspace owner into prepared params", async () => {
+    const { dir } = fixture.session;
+    const arthurWorkspace = path.join(dir, "workspace-arthur");
+    const normalizeConfig = vi.fn((config: CliBackendPlugin["config"]) => config);
+    setRawCliBackendForPrepareTest({ ...defaultTestCliBackend, normalizeConfig });
+    const config = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: path.join(dir, "workspace-main") },
+          { id: "arthur", workspace: arthurWorkspace },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const context = await fixture.prepare({
+      sessionKey: "agent:arthur:main",
+      workspaceDir: arthurWorkspace,
+      config,
+    });
+
+    expect(normalizeConfig).toHaveBeenCalledWith(expect.any(Object), {
+      backendId: "test-cli",
+      agentId: "arthur",
+      config,
+    });
+    expect(context.params.agentId).toBe("arthur");
+    expect(context.workspaceDir).toBe(arthurWorkspace);
+  });
+
   it("honors an explicit auth agent directory independently of session identity", async () => {
     const { dir } = fixture.session;
     const modelOwnerAgentDir = path.join(dir, "ops-agent");
@@ -2761,9 +2789,11 @@ describe("prepareCliRunContext", () => {
     );
     expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
       "agent:main:test",
+      "main",
     );
     expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
       "agent:main:test",
+      "main",
     );
   });
 
@@ -3116,7 +3146,8 @@ describe("prepareCliRunContext", () => {
       context: {
         sessionKey: "agent:main:telegram:group:chat123",
         runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-        agentId: "worker",
+        runtimePolicyAgentId: "worker",
+        agentId: "main",
         sessionId: "session-test",
         runId: "run-test-room-event-tools",
         workspaceDir: context.workspaceDir,
@@ -3195,7 +3226,8 @@ describe("prepareCliRunContext", () => {
         requireExplicitMessageTarget: true,
         senderIsOwner: false,
         runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-        agentId: "worker",
+        runtimePolicyAgentId: "worker",
+        agentId: "main",
         modelProvider: "anthropic",
         modelId: "test-model",
         execOverrides: {
@@ -4285,7 +4317,7 @@ describe("prepareCliRunContext", () => {
     expect(getLiveSessionGeneration).toHaveBeenCalledWith({
       backendId: "claude-cli",
       agentAccountId: undefined,
-      agentId: undefined,
+      agentId: "main",
       authProfileId: undefined,
       sessionId: "session-test",
       sessionKey: "agent:main:telegram:direct:peer",
@@ -4299,6 +4331,7 @@ describe("prepareCliRunContext", () => {
       mode: "reuse",
       sessionId: "warm-claude-sid",
     });
+    expect(context.params.agentId).toBe("main");
     expect(context.requiredClaudeLiveSessionGeneration).toBe("warm-live-generation");
     expect(context.openClawHistoryPrompt).toContain("earlier warm context");
     expect(context.openClawHistoryPrompt).toContain("warm follow-up");

@@ -1401,6 +1401,7 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, 'thinkingLevel "ultra" is not supported');
     expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
       sessionKey: MAIN_SESSION_KEY,
+      agentId: "main",
       entry: expect.objectContaining({ sessionId: "sess" }),
     });
   });

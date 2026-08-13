@@ -44,6 +44,44 @@ export const DeviceTokenRevokeParamsSchema = closedObject({
   role: NonEmptyString,
 });
 
+/** Requests an approval-bound operator scope upgrade for the calling device. */
+export const ScopeUpgradeRequestSchema = closedObject({
+  scopes: Type.Array(NonEmptyString, { minItems: 1, maxItems: 8, uniqueItems: true }),
+});
+
+/** Identifies the pending scope upgrade observed by the calling device. */
+export const ScopeUpgradeWaitSchema = closedObject({ requestId: NonEmptyString });
+
+/** Registers a pending scope upgrade without exposing device credentials. */
+export const ScopeUpgradeRegistrationSchema = closedObject({ requestId: NonEmptyString });
+
+/** Returns an approved scope upgrade with the freshly rotated credential. */
+export const ScopeUpgradeApprovedSchema = closedObject({
+  status: Type.Literal("approved"),
+  requestId: NonEmptyString,
+  deviceToken: NonEmptyString,
+  scopes: Type.Array(NonEmptyString, { minItems: 1, maxItems: 8, uniqueItems: true }),
+});
+
+/** Reports that an administrator rejected the pending scope upgrade. */
+export const ScopeUpgradeRejectedSchema = closedObject({
+  status: Type.Literal("rejected"),
+  requestId: NonEmptyString,
+});
+
+/** Reports that the pending scope upgrade expired before approval. */
+export const ScopeUpgradeExpiredSchema = closedObject({
+  status: Type.Literal("expired"),
+  requestId: NonEmptyString,
+});
+
+/** Returns the terminal scope-upgrade state to the identity-bound waiter. */
+export const ScopeUpgradeResultSchema = Type.Union([
+  ScopeUpgradeApprovedSchema,
+  ScopeUpgradeRejectedSchema,
+  ScopeUpgradeExpiredSchema,
+]);
+
 /** Event emitted when a client opens or refreshes a pairing request. */
 export const DevicePairRequestedEventSchema = closedObject({
   requestId: NonEmptyString,
@@ -129,3 +167,7 @@ export type DevicePairSetupCodeResult = Static<typeof DevicePairSetupCodeResultS
 export type DevicePairRenameParams = Static<typeof DevicePairRenameParamsSchema>;
 export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
 export type DeviceTokenRevokeParams = Static<typeof DeviceTokenRevokeParamsSchema>;
+export type ScopeUpgradeRequest = Static<typeof ScopeUpgradeRequestSchema>;
+export type ScopeUpgradeWait = Static<typeof ScopeUpgradeWaitSchema>;
+export type ScopeUpgradeRegistration = Static<typeof ScopeUpgradeRegistrationSchema>;
+export type ScopeUpgradeResult = Static<typeof ScopeUpgradeResultSchema>;

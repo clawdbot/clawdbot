@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   resolveSandboxedSessionToolContext: vi.fn(() => ({
     mainKey: "main",
     alias: "main",
-    requesterInternalKey: undefined,
+    requesterInternalKey: undefined as string | undefined,
     restrictToSpawned: false,
   })),
   getSessionStateVersions: vi.fn(
@@ -466,6 +466,11 @@ describe("sessions-list-tool", () => {
               classification: "channel",
               sessionId: "sess-malformed-agent",
             },
+            {
+              key: "Agent::discord:channel:C456",
+              kind: "group",
+              sessionId: "sess-malformed-agent-mixed-case",
+            },
           ],
         };
       }
@@ -557,6 +562,85 @@ describe("sessions-list-tool", () => {
       pinned: false,
     });
     expect(getSessionsListDetails(result).sessions?.[0]).not.toHaveProperty("archivedAt");
+  });
+
+  it("keeps a bare row's gateway owner during transcript hydration", async () => {
+    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
+      mainKey: "main",
+      alias: "global",
+      requesterInternalKey: "global",
+      restrictToSpawned: false,
+    });
+    mocks.gatewayCall
+      .mockResolvedValueOnce({
+        path: "/tmp/shared-sessions.sqlite",
+        sessions: [
+          {
+            key: "global",
+            agentId: "ops",
+            kind: "main",
+            channel: "webchat",
+            archived: false,
+            pinned: false,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ messages: [] });
+    const config: OpenClawConfig = {
+      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    const result = await createSessionsListTool({
+      agentSessionKey: "global",
+      requesterAgentIdOverride: "ops",
+      config,
+    }).execute("owned-row", { messageLimit: 1 });
+
+    expect(getSessionsListDetails(result).sessions?.[0]).toMatchObject({ agentId: "ops" });
+    expect(mocks.gatewayCall).toHaveBeenLastCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "global", agentId: "ops", limit: 1 },
+    });
+  });
+
+  it("does not attribute an ownerless fixed-store bare row to the requester", async () => {
+    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
+      mainKey: "main",
+      alias: "global",
+      requesterInternalKey: "agent:research:main",
+      restrictToSpawned: false,
+    });
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/ownerless-shared.sqlite",
+      sessions: [
+        {
+          key: "global",
+          kind: "main",
+          channel: "webchat",
+          archived: false,
+          pinned: false,
+        },
+      ],
+    });
+
+    const result = await createSessionsListTool({
+      agentSessionKey: "agent:research:main",
+      requesterAgentIdOverride: "research",
+      config: {
+        session: { store: "/tmp/ownerless-shared.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
+      },
+    }).execute("ownerless-row", {});
+
+    expect(getSessionsListDetails(result).sessions).toEqual([]);
   });
 
   it.each([

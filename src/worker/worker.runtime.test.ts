@@ -1559,9 +1559,14 @@ describe("worker reconnect clients", () => {
           timestamp: 1,
         },
       ]);
-      await live.emit(RUN_ID, {
+      live.enqueuePreview(RUN_ID, {
         kind: "assistant",
         payload: { text: "silent live event", delta: "silent live event" },
+      });
+      await waitForFast(() => expect(gateway.liveEventRequests).toHaveLength(2));
+      await live.emitTerminal(RUN_ID, {
+        kind: "lifecycle",
+        payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
       });
       await inference.start({
         runEpoch: OWNER_EPOCH,
@@ -1575,7 +1580,7 @@ describe("worker reconnect clients", () => {
 
       expect(gateway.transcriptRequests).toHaveLength(2);
       expect(gateway.transcriptRequests[1]).toEqual(gateway.transcriptRequests[0]);
-      expect(gateway.liveEventRequests).toHaveLength(2);
+      expect(gateway.liveEventRequests).toHaveLength(3);
       expect(gateway.liveEventRequests[1]).toEqual(gateway.liveEventRequests[0]);
       expect(gateway.inferenceRequests).toHaveLength(2);
       expect(gateway.inferenceRequests[1]).toEqual(gateway.inferenceRequests[0]);
@@ -1623,10 +1628,14 @@ describe("worker reconnect clients", () => {
       await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
 
       live = new WorkerLiveEventClient(connection, { runEpoch: OWNER_EPOCH });
+      live.enqueuePreview(RUN_ID, {
+        kind: "assistant",
+        payload: { text: "late live event", delta: "late live event" },
+      });
       await expect(
-        live.emit(RUN_ID, {
-          kind: "assistant",
-          payload: { text: "late live event", delta: "late live event" },
+        live.emitTerminal(RUN_ID, {
+          kind: "lifecycle",
+          payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
         }),
       ).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
       expect(waitForReady.mock.calls.length).toBeLessThanOrEqual(2);

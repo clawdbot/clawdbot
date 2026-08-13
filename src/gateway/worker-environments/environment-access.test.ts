@@ -3,6 +3,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { VERSION } from "../../version.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -67,6 +68,43 @@ describe("worker environment service", () => {
       state: "destroyed",
       tunnelStatus: "stopped",
     });
+  });
+
+  it("rejects node tunnel startup with the typed milestone gate before SSH", async () => {
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(
+      support.createProvider({
+        provision: async () => ({
+          leaseId: "device-lease",
+          node: { deviceId: "device-1" },
+        }),
+      }),
+      {
+        tunnelManager,
+        resolveNodeWorkerBuild: async () => ({
+          bundleHash: "c".repeat(64),
+          openclawVersion: VERSION,
+          protocolFeatures: ["worker-heartbeat-v1"],
+        }),
+      },
+    );
+    const environment = await workerService.create("development", "device-tunnel-gate");
+
+    await expect(
+      workerService.startTunnel({
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch,
+      }),
+    ).rejects.toMatchObject({
+      code: "device-runner-transport-unimplemented",
+      message: expect.stringContaining("device-runner-transport-unimplemented"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(tunnelManager.start).not.toHaveBeenCalled();
   });
 
   it("reconciles shared-host isolation for a persisted lease before tunnel startup", async () => {

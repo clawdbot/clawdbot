@@ -29,7 +29,6 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import {
-  annotateToolTurnOutcome,
   coalesceToolActivityMessages,
   groupMessages,
   isKeyedAssistantStreamFallbackMessage,
@@ -615,7 +614,5 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
 
-  return annotateToolTurnOutcome(
-    groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items))),
-  );
+  return groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items)));
 }

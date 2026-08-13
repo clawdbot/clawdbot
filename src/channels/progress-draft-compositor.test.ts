@@ -19,7 +19,8 @@ function createTestProgressDraftCompositor(
     ...overrides,
   });
 }
-import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
+
+const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 
 describe("createChannelProgressDraftCompositor", () => {
   it("tracks compact per-turn progress receipts", () => {

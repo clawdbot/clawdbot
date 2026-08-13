@@ -50,11 +50,11 @@ continues after a long pause, the gateway detects the freeze within about 30
 seconds. It restarts channel connections and refreshes cached health and
 presence so clients do not wait for stale sockets or snapshots to expire.
 
-The macOS app cooperates with a local gateway by preparing a short suspension
-lease before the Mac sleeps and resuming it after wake. Remote gateways are not
-suspended when the Mac sleeps. A deliberate suspension through
-`gateway.suspend.*` keeps recovery deferred until the controller resumes the
-gateway.
+The macOS app and Linux companion cooperate with a local gateway by preparing a
+short suspension lease before the host sleeps and resuming it after wake. Remote
+gateways are not suspended when the app host sleeps. A deliberate suspension
+through `gateway.suspend.*` keeps recovery deferred until the controller resumes
+the gateway.
 
 ## How interrupted work is detected
 

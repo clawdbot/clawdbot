@@ -256,12 +256,22 @@ describe("new-session model runtime", () => {
       model: { primary: "openai/gpt-5.6-sol" },
       thinkingDefault: "high",
     });
+    expect(
+      container.querySelector(
+        '[data-chat-model-option="openai/gpt-5.6-sol"][data-chat-model-default="true"]',
+      )?.textContent,
+    ).toContain("GPT-5.6 Sol");
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "GPT-5.6 Sol",
     );
-    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
-      "High",
-    );
+    const thinkingPicker = container.querySelector('[data-chat-thinking-select="true"]');
+    expect(thinkingPicker).not.toBeNull();
+    expect(thinkingPicker?.textContent).toContain("High");
+    expect(
+      container
+        .querySelector('[data-chat-thinking-slider="true"]')
+        ?.getAttribute("data-chat-thinking-values"),
+    ).toContain("high");
     expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
   });

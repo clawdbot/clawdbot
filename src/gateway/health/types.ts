@@ -98,7 +98,7 @@ export type HealthSummary = {
   channelOrder: string[];
   channelLabels: Record<string, string>;
   heartbeatSeconds: number;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   agents: AgentHealthSummary[];
   sessions: {
     path: string;

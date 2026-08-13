@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -64,13 +65,6 @@ function isAbsolutePathValue(value: string): boolean {
     WINDOWS_ABS_PATH_PATTERN.test(value) ||
     WINDOWS_UNC_PATH_PATTERN.test(value)
   );
-}
-
-function parseCsv(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
 }
 
 function parseOptionalPositiveInt(value: string, max: number): number | undefined {
@@ -216,7 +210,7 @@ function assertNoCancel<T>(value: T | symbol, message: string): T {
 const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
 
 function validateEnvNameCsv(value: string): string | undefined {
-  const entries = parseCsv(value);
+  const entries = normalizeCsvOrLooseStringList(value);
   for (const entry of entries) {
     if (!isValidEnvSecretRefId(entry)) {
       return `Invalid env name: ${entry}`;
@@ -237,7 +231,7 @@ async function promptEnvNameCsv(params: {
     }),
     "Secrets configure cancelled.",
   );
-  return parseCsv(raw ?? "");
+  return normalizeCsvOrLooseStringList(raw ?? "");
 }
 
 async function promptOptionalPositiveInt(params: {
@@ -599,7 +593,7 @@ async function promptExecProvider(
       message: "Trusted dirs (comma-separated absolute paths, blank for none)",
       initialValue: base?.trustedDirs?.join(",") ?? "",
       validate: (value) => {
-        const entries = parseCsv(value ?? "");
+        const entries = normalizeCsvOrLooseStringList(value ?? "");
         for (const entry of entries) {
           if (!isAbsolutePathValue(entry)) {
             return `Trusted dir must be absolute: ${entry}`;
@@ -612,7 +606,7 @@ async function promptExecProvider(
   );
 
   const args = await parseArgsInput(normalizeStringifiedOptionalString(argsRaw) ?? "");
-  const trustedDirs = parseCsv(trustedDirsRaw ?? "");
+  const trustedDirs = normalizeCsvOrLooseStringList(trustedDirsRaw ?? "");
 
   return {
     source: "exec",

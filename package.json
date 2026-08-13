@@ -3,7 +3,7 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 6,
+      "state": 7,
       "agent": 17
     }
   },
@@ -58,6 +58,7 @@
     "!dist/plugin-sdk/browser-config.d.ts",
     "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
     "!dist/plugin-sdk/channel-activity-runtime.d.ts",
+    "!dist/plugin-sdk/channel-config-ui-hints.d.ts",
     "!dist/plugin-sdk/channel-config-writes.d.ts",
     "!dist/plugin-sdk/channel-contract-testing.js",
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
@@ -451,10 +452,6 @@
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"
     },
-    "./plugin-sdk/channel-streaming": {
-      "types": "./dist/plugin-sdk/channel-streaming.d.ts",
-      "default": "./dist/plugin-sdk/channel-streaming.js"
-    },
     "./plugin-sdk/channel-streaming-config": {
       "types": "./dist/plugin-sdk/channel-streaming-config.d.ts",
       "default": "./dist/plugin-sdk/channel-streaming-config.js"
@@ -704,10 +701,6 @@
     "./plugin-sdk/thread-bindings-session-runtime": {
       "default": "./dist/plugin-sdk/thread-bindings-session-runtime.js"
     },
-    "./plugin-sdk/text-runtime": {
-      "types": "./dist/plugin-sdk/text-runtime.d.ts",
-      "default": "./dist/plugin-sdk/text-runtime.js"
-    },
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
@@ -744,10 +737,6 @@
     "./plugin-sdk/channel-secret-basic-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-basic-runtime.js"
-    },
-    "./plugin-sdk/channel-secret-runtime": {
-      "types": "./dist/plugin-sdk/channel-secret-runtime.d.ts",
-      "default": "./dist/plugin-sdk/channel-secret-runtime.js"
     },
     "./plugin-sdk/channel-secret-tts-runtime": {
       "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"
@@ -881,10 +870,6 @@
     "./plugin-sdk/account-resolution-runtime": {
       "default": "./dist/plugin-sdk/account-resolution-runtime.js"
     },
-    "./plugin-sdk/agent-config-primitives": {
-      "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
-      "default": "./dist/plugin-sdk/agent-config-primitives.js"
-    },
     "./plugin-sdk/access-groups": {
       "default": "./dist/plugin-sdk/access-groups.js"
     },
@@ -947,10 +932,6 @@
       "types": "./dist/plugin-sdk/discord.d.ts",
       "default": "./dist/plugin-sdk/discord.js"
     },
-    "./plugin-sdk/matrix": {
-      "types": "./dist/plugin-sdk/matrix.d.ts",
-      "default": "./dist/plugin-sdk/matrix.js"
-    },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"
@@ -970,6 +951,9 @@
     "./plugin-sdk/channel-config-helpers": {
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
+    },
+    "./plugin-sdk/channel-config-ui-hints": {
+      "default": "./dist/plugin-sdk/channel-config-ui-hints.js"
     },
     "./plugin-sdk/channel-config-writes": {
       "default": "./dist/plugin-sdk/channel-config-writes.js"
@@ -1019,10 +1003,6 @@
     "./plugin-sdk/channel-inbound-debounce": {
       "types": "./dist/plugin-sdk/channel-inbound-debounce.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound-debounce.js"
-    },
-    "./plugin-sdk/channel-logging": {
-      "types": "./dist/plugin-sdk/channel-logging.d.ts",
-      "default": "./dist/plugin-sdk/channel-logging.js"
     },
     "./plugin-sdk/channel-mention-gating": {
       "default": "./dist/plugin-sdk/channel-mention-gating.js"
@@ -1124,10 +1104,6 @@
     },
     "./plugin-sdk/group-activation": {
       "default": "./dist/plugin-sdk/group-activation.js"
-    },
-    "./plugin-sdk/group-access": {
-      "types": "./dist/plugin-sdk/group-access.d.ts",
-      "default": "./dist/plugin-sdk/group-access.js"
     },
     "./plugin-sdk/global-singleton": {
       "default": "./dist/plugin-sdk/global-singleton.js"
@@ -1472,10 +1448,6 @@
       "types": "./dist/plugin-sdk/web-media.d.ts",
       "default": "./dist/plugin-sdk/web-media.js"
     },
-    "./plugin-sdk/zod": {
-      "types": "./dist/plugin-sdk/zod.d.ts",
-      "default": "./dist/plugin-sdk/zod.js"
-    },
     "./plugin-sdk/agent-core": {
       "default": "./dist/plugin-sdk/agent-core.js"
     },
@@ -1554,7 +1526,6 @@
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import tsx scripts/check-wrapper-shadowing.mts",
-    "check:wrapper-shadowing:gen": "node --import tsx scripts/check-wrapper-shadowing.mts --update-debt-baseline",
     "check:test-types": "pnpm tsgo:test",
     "check:timed": "node --import tsx scripts/check-timed.mts",
     "check:timed:all-types": "node --import tsx scripts/check-timed.mts --include-test-types",
@@ -1583,7 +1554,7 @@
     "deadcode:exports": "node --import tsx scripts/check-deadcode-exports.mts",
     "deadcode:full": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --no-config-hints --exclude duplicates && pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.all-exports.config.ts --no-progress --reporter compact --no-config-hints --exports --exclude duplicates",
     "deadcode:knip": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
-    "deadcode:report": "pnpm deadcode:full; pnpm deadcode:exports",
+    "deadcode:report": "pnpm deadcode:full && pnpm deadcode:exports",
     "deadcode:unused-files": "node --import tsx scripts/check-deadcode-unused-files.mts",
     "deps:root-ownership": "node --import tsx scripts/root-dependency-ownership-audit.mts",
     "deps:root-ownership:check": "node --import tsx scripts/root-dependency-ownership-audit.mts --check",
@@ -1681,7 +1652,6 @@
     "lint:tmp:channel-agnostic-boundaries": "node --import tsx scripts/check-channel-agnostic-boundaries.mts",
     "lint:tmp:dynamic-import-warts": "node --import tsx scripts/check-dynamic-import-warts.mts",
     "lint:tmp:export-name-collisions": "node --import tsx scripts/check-export-name-collisions.mts",
-    "lint:tmp:export-name-collisions:gen": "node --import tsx scripts/check-export-name-collisions.mts --update-debt-baseline",
     "lint:tmp:no-random-messaging": "node --import tsx scripts/check-no-random-messaging-tmp.mts",
     "lint:tmp:no-raw-channel-fetch": "node --import tsx scripts/check-no-raw-channel-fetch.mts",
     "lint:tmp:no-raw-http2-imports": "node --import tsx scripts/check-no-raw-http2-imports.mts",
@@ -1695,7 +1665,6 @@
     "lint:ui:no-raw-window-open": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json ui/src",
     "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/src/**/*.ts\"",
     "lint:web-fetch-provider-boundaries": "node --import tsx scripts/check-web-fetch-provider-boundaries.mts",
-    "lint:web-search-provider-boundaries": "node --import tsx scripts/check-web-search-provider-boundaries.mts",
     "lint:webhook:no-low-level-body-read": "node --import tsx scripts/check-webhook-auth-body-order.mts",
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "bash scripts/package-mac-app.sh",
@@ -1708,8 +1677,7 @@
     "perf:web-fetch": "node --import tsx scripts/bench-web-fetch.ts",
     "perf:kova:summary": "node --import tsx scripts/kova-ci-summary.mts",
     "perf:source:summary": "node --import tsx scripts/openclaw-performance-source-summary.mts",
-    "plugin-sdk:api:check": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
-    "plugin-sdk:api:gen": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
+    "plugin-sdk:api:diff": "node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-api-diff.mts",
     "plugin-sdk:check-exports": "node --import tsx scripts/sync-plugin-sdk-exports.mts --check",
     "plugin-sdk:surface": "node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-surface-report.mts",
     "plugin-sdk:surface:check": "node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-surface-report.mts --check",
@@ -2029,7 +1997,7 @@
     "@openclaw/fs-safe": "0.5.5",
     "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "@trycua/cua-driver": "0.14.1",
+    "@trycua/cua-driver": "0.19.3",
     "acorn": "8.17.0",
     "chalk": "6.0.0",
     "chokidar": "5.0.0",

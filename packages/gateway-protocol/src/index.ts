@@ -48,6 +48,7 @@ export type {
   SecretsStoreMutationResult,
   SecretsStoreSetParams,
 } from "./schema/secrets.js";
+export * from "./schema/portals.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
@@ -298,6 +299,8 @@ export {
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
+  SessionsRecoverParamsSchema,
+  SessionsRecoverResultSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
   SessionsReclaimParamsSchema,

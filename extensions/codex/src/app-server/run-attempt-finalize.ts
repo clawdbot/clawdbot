@@ -323,9 +323,9 @@ export async function finalizeCodexAttempt(
   const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
     mirrorOutcome;
   const shouldCaptureSettledTurnFinalizationContext =
-    turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
-    result.messagesSnapshot.some((message) => message.role === "toolResult");
+    result.messagesSnapshot.some((message) => message.role === "toolResult") &&
+    (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
     ? await captureCodexSettledTurnFinalizationContext({
         ...activeTranscriptTarget,

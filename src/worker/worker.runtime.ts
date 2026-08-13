@@ -149,16 +149,10 @@ export async function runWorkerDescriptor(
           },
         },
         live: {
-          emit: async (event) => {
-            await live.emit(descriptor.assignment.runId, event);
-            if (
-              event.kind === "lifecycle" &&
-              (event.payload.phase === "finishing" ||
-                event.payload.phase === "end" ||
-                event.payload.phase === "error")
-            ) {
-              resultFenceAcked = true;
-            }
+          enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
+          emitTerminal: async (event) => {
+            await live.emitTerminal(descriptor.assignment.runId, event);
+            resultFenceAcked = true;
           },
         },
         sessions: connection,

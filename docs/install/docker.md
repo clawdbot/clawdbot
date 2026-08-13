@@ -180,6 +180,13 @@ After doctor finishes, restart the gateway container with its default command.
 In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
 same PVC, then restart the Deployment or StatefulSet.
 
+After the container is running again, run the read-only deployment preflight
+against the same mounted state:
+
+```bash
+docker compose run --rm openclaw-cli doctor --json
+```
+
 ### Environment variables
 
 Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway container, by `docker-compose.yml` directly):
@@ -200,7 +207,7 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OPENCLAW_SANDBOX`                              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                                            |
 | `OPENCLAW_SKIP_ONBOARDING`                      | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)                                                   |
 | `OPENCLAW_DOCKER_SOCKET`                        | Override the Docker socket path                                                                                   |
-| `OPENCLAW_DISABLE_BONJOUR`                      | Force Bonjour/mDNS advertising on (`0`) or off (`1`); see [Bonjour / mDNS](#bonjour--mdns)                        |
+| `OPENCLAW_DISABLE_BONJOUR`                      | Force Bonjour/mDNS advertising on (`0`) or off (`1`); see [Bonjour / mDNS](/install/docker#bonjour-%2F-mdns)      |
 | `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS`      | Disable bundled plugin source bind-mount overlays                                                                 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                                      |
 | `OTEL_EXPORTER_OTLP_*_ENDPOINT`                 | Signal-specific OTLP endpoints for traces, metrics, or logs                                                       |
@@ -514,25 +521,17 @@ If you installed from the older `scripts/shell-helpers/clawdock-helpers.sh` path
   </Accordion>
 
   <Accordion title="Faster rebuilds">
-    Order your Dockerfile so dependency layers are cached, avoiding a `pnpm install` rerun unless lockfiles change:
+    Use the repo-root `Dockerfile` instead of replacing it with a shortened
+    single-stage example. Its `workspace-deps` stage extracts the package
+    manifests required by `pnpm-workspace.yaml`, then the build stage copies
+    those manifests before `pnpm install --frozen-lockfile`. This keeps the
+    dependency layer cacheable without omitting `packages/*`, selected
+    `extensions/*`, or other required workspace metadata.
 
-    ```dockerfile
-    FROM node:24-bookworm
-    RUN curl -fsSL https://bun.sh/install | bash
-    ENV PATH="/root/.bun/bin:${PATH}"
-    RUN corepack enable
-    WORKDIR /app
-    COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-    COPY ui/package.json ./ui/package.json
-    COPY scripts ./scripts
-    RUN pnpm install --frozen-lockfile
-    COPY . .
-    RUN pnpm build
-    RUN pnpm ui:install
-    RUN pnpm ui:build
-    ENV NODE_ENV=production
-    CMD ["node","dist/index.js"]
-    ```
+    The same Dockerfile preserves the production runtime contract: digest-pinned
+    Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and
+    the `/usr/local/bin/openclaw` symlink. Dependabot refreshes the reviewed base
+    digests; do not replace them with floating `FROM node:24-bookworm` tags.
 
   </Accordion>
 

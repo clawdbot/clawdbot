@@ -7,6 +7,7 @@ import {
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { NodePairingPendingRequest, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
+import { filterPublicNodeCommands } from "../infra/node-commands.js";
 import {
   sameNodeApprovalSurfaceSet,
   sameNodePermissionSurface,
@@ -128,7 +129,7 @@ function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSour
     deviceFamily: entry.deviceFamily,
     modelIdentifier: entry.modelIdentifier,
     caps: entry.caps ?? [],
-    commands: entry.commands ?? [],
+    commands: filterPublicNodeCommands(entry.commands ?? []),
     permissions: entry.permissions,
     approvedAtMs: entry.approvedAtMs,
     lastConnectedAtMs: entry.lastConnectedAtMs,
@@ -152,7 +153,7 @@ function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePend
     deviceFamily: entry.deviceFamily,
     modelIdentifier: entry.modelIdentifier,
     caps: uniqueSortedStrings(entry.caps),
-    commands: uniqueSortedStrings(entry.commands),
+    commands: filterPublicNodeCommands(uniqueSortedStrings(entry.commands)),
     permissions: entry.permissions,
   };
 }
@@ -217,8 +218,9 @@ function buildEffectiveKnownNode(entry: {
   nodePairing?: KnownNodeApprovedSource;
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
+  sessionHost: boolean;
 }): NodeListNode {
-  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live } = entry;
+  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live, sessionHost } = entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   return {
     nodeId,
@@ -278,9 +280,10 @@ function buildEffectiveKnownNode(entry: {
       pendingNodePairing?.remoteIp,
     ),
     caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
-    commands: live
-      ? uniqueSortedStrings(live.commands)
-      : uniqueSortedStrings(nodePairing?.commands),
+    commands: filterPublicNodeCommands(
+      live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
+    ),
+    sessionHost,
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
@@ -327,6 +330,7 @@ export function createKnownNodeCatalog(params: {
   pairedNodes?: readonly PairedDeviceNode[];
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
+  sessionHostNodeIds?: ReadonlySet<string>;
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
@@ -379,6 +383,7 @@ export function createKnownNodeCatalog(params: {
         nodePairing,
         pendingNodePairing,
         live,
+        sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
       }),
     });
   }

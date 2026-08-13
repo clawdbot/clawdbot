@@ -1902,6 +1902,26 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
   });
 
+  it("surfaces forwarded shared image download failures in raw body", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => new Response("Not Found", { status: 404 }));
+    globalThis.fetch = mockFetch as typeof fetch;
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "caption",
+          attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+        }),
+      );
+
+      assertPrepared(prepared);
+      expect(prepared.ctxPayload.RawBody).toBe("caption\n\n[slack forwarded image unavailable]");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each([
     {
       name: "recovers full Slack DM text from top-level rich text blocks when text is only a preview",

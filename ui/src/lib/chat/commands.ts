@@ -31,6 +31,7 @@ export type SlashCommandDef = {
   tier?: SlashCommandTier;
   source?: "native" | "plugin" | "skill";
   skillModelVisible?: boolean;
+  clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
 type LocalArgChoice = string | { value: string; label: string };
@@ -49,6 +50,7 @@ type CommandLike = {
   tier?: string;
   source?: "native" | "plugin" | "skill";
   skillModelVisible?: boolean;
+  clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
@@ -262,6 +264,7 @@ function toSlashCommand(
     ...(command.skillModelVisible !== undefined
       ? { skillModelVisible: command.skillModelVisible }
       : {}),
+    ...(command.clientPresentation ? { clientPresentation: command.clientPresentation } : {}),
   };
 }
 
@@ -319,6 +322,31 @@ function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
       }
       return typeof choice === "string" ? Boolean(choice) : Boolean(choice.value);
     });
+}
+
+function normalizeClientPresentation(
+  value: unknown,
+): NonNullable<CommandEntry["clientPresentation"]> | undefined {
+  const presentation = asRecord(value);
+  if (
+    !presentation ||
+    Object.keys(presentation).length !== 2 ||
+    !Object.hasOwn(presentation, "when") ||
+    !Object.hasOwn(presentation, "action") ||
+    presentation.when !== "no-arguments"
+  ) {
+    return undefined;
+  }
+  const action = asRecord(presentation.action);
+  if (
+    !action ||
+    Object.keys(action).length !== 1 ||
+    !Object.hasOwn(action, "kind") ||
+    action.kind !== "device-pairing"
+  ) {
+    return undefined;
+  }
+  return { when: "no-arguments", action: { kind: "device-pairing" } };
 }
 
 function buildLocalSlashCommands(): SlashCommandDef[] {
@@ -398,6 +426,8 @@ function normalizeCommandEntry(
         : undefined,
     skillModelVisible:
       typeof entry.skillModelVisible === "boolean" ? entry.skillModelVisible : undefined,
+    clientPresentation:
+      entry.source === "plugin" ? normalizeClientPresentation(entry.clientPresentation) : undefined,
   };
 }
 

@@ -714,13 +714,17 @@ describe("doctor provider catalog projection checks", () => {
     });
   });
 
-  it("loads full provider registrations for static catalog validation", async () => {
-    await collectProviderCatalogProjectionFindings({});
+  it("loads full provider registrations without selecting a default workspace", async () => {
+    const cfg = { agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] } };
+    await collectProviderCatalogProjectionFindings(cfg);
 
     expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledWith(
       expect.not.objectContaining({
         discoveryEntriesOnly: true,
       }),
+    );
+    expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: undefined }),
     );
   });
 

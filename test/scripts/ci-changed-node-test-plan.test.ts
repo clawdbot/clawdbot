@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
   hasBuildArtifactAffectingChange,
   hasPromptSnapshotAffectingChange,
@@ -262,6 +263,95 @@ describe("CI changed Node test plan", () => {
     expect(
       createChangedNodeTestShards(["packages/gateway-protocol/src/frame-guards.ts"]),
     ).toBeNull();
+  });
+
+  it("supplements mixed package diffs with the affected extension config", () => {
+    const changedPaths = [
+      "packages/gateway-protocol/src/frame-guards.ts",
+      "extensions/codex/src/session-upstream-marker.ts",
+    ];
+
+    expect(createChangedNodeTestShards(changedPaths)).toBeNull();
+    expect(createChangedExtensionFallbackShards(changedPaths)).toEqual([
+      {
+        checkName: "checks-node-changed-extensions-config",
+        configs: ["test/vitest/vitest.extension-codex.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed-extensions-config",
+      },
+    ]);
+  });
+
+  it("preserves Matrix process bounds in mixed package fallbacks", () => {
+    const shards = createChangedExtensionFallbackShards([
+      "packages/gateway-protocol/src/frame-guards.ts",
+      "extensions/matrix/src/channel.ts",
+    ]);
+    const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+
+    expect(shards.length).toBeGreaterThan(1);
+    expect(
+      shards.every(
+        (shard) =>
+          shard.configs[0] === "test/vitest/vitest.extension-matrix.config.ts" &&
+          (shard.includePatterns?.length ?? 0) > 0 &&
+          (shard.includePatterns?.length ?? 0) <= 40,
+      ),
+    ).toBe(true);
+    expect(targets.length).toBeGreaterThan(40);
+    expect(new Set(targets).size).toBe(targets.length);
+  });
+
+  it("skips extension fallback when no extension paths changed", () => {
+    expect(
+      createChangedExtensionFallbackShards([
+        "packages/gateway-protocol/src/frame-guards.ts",
+        "src/agents/live-model-filter.ts",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("falls back to the affected extension config for deleted sources", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-extension-fallback-"));
+    try {
+      expect(
+        createChangedExtensionFallbackShards(["extensions/codex/src/deleted-session-runtime.ts"], {
+          cwd,
+        }),
+      ).toEqual([
+        {
+          checkName: "checks-node-changed-extensions-config",
+          configs: ["test/vitest/vitest.extension-codex.config.ts"],
+          requiresDist: false,
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+          shardName: "changed-extensions-config",
+        },
+      ]);
+      expect(
+        createChangedExtensionFallbackShards(
+          ["extensions/codex/src/deleted-session-runtime.test.ts"],
+          { cwd },
+        ),
+      ).toEqual([]);
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+    }
+  });
+
+  it("serializes the Memory Core extension fallback config", () => {
+    expect(
+      createChangedExtensionFallbackShards(["extensions/memory-core/src/memory/mmr.ts"]),
+    ).toEqual([
+      {
+        checkName: "checks-node-changed-extensions-config",
+        configs: ["test/vitest/vitest.extension-memory.config.ts"],
+        planConcurrency: 1,
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed-extensions-config",
+      },
+    ]);
   });
 
   it("fails safe when a targeted config needs special shard setup", () => {

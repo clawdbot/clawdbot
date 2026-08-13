@@ -1,6 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Models gateway methods expose model catalog browse results without triggering
 // auth probes or fresh provider discovery on each request.
 import { validateModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -15,10 +17,18 @@ export const modelsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateModelsListParams, "models.list", respond)) {
       return;
     }
-    const agentId = typeof params.agentId === "string" ? params.agentId : undefined;
+    const resolved = resolveAgentIdOrRespondError({
+      rawAgentId: params.agentId,
+      respond,
+      cfg: context.getRuntimeConfig(),
+      normalize: normalizeOptionalString,
+    });
+    if (!resolved) {
+      return;
+    }
     respond(
       true,
-      await buildModelsListResult({ context, params, ...(agentId ? { agentId } : {}) }),
+      await buildModelsListResult({ context, agentId: resolved.agentId, params }),
       undefined,
     );
   },

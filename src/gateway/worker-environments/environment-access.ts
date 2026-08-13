@@ -27,6 +27,7 @@ type WorkerEnvironmentAccessOptions = {
   serviceError: (
     code:
       | "desktop_app_not_found"
+      | "device-runner-transport-unimplemented"
       | "environment_not_found"
       | "invalid_state"
       | "launcher_failure"
@@ -87,10 +88,17 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (
         !inState(record, "ready", "idle", "attached") ||
         record.destroyRequestedAtMs !== null ||
-        !record.leaseId ||
-        !record.sshEndpoint ||
-        !record.bootstrapReceipt
+        !record.leaseId
       ) {
+        throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
+      }
+      if (!record.sshEndpoint) {
+        throw serviceError(
+          "device-runner-transport-unimplemented",
+          "device-runner-transport-unimplemented: device runner launch is not available in this build",
+        );
+      }
+      if (!record.bootstrapReceipt) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
       if (record.sharedHost === null) {
@@ -269,19 +277,19 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           `environment does not advertise desktop app: ${request.app}`,
         );
       }
-      return { app, record };
+      return { app, record, sshEndpoint: record.sshEndpoint };
     };
 
     let startup: Promise<void> | undefined;
     let launchEpoch: number | undefined;
     await withLock(request.environmentId, async () => {
-      const { app, record } = requireLaunchable();
+      const { app, record, sshEndpoint } = requireLaunchable();
       const provider = providerFor(record.providerId);
       launchEpoch = record.ownerEpoch;
       startup = tunnels.desktop.launchApp({
         environmentId: record.environmentId,
         ownerEpoch: record.ownerEpoch,
-        ssh: record.sshEndpoint,
+        ssh: sshEndpoint,
         app,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),
       });

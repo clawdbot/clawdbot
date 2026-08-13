@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -57,7 +58,6 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
-import { parseFilterInteger } from "./page-state.ts";
 
 export type TranscriptSearchState =
   | { status: "idle" }
@@ -638,7 +638,7 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    parseFilterInteger(props.activeMinutes) !== undefined ||
+    parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
     !props.includeGlobal
   );
 }

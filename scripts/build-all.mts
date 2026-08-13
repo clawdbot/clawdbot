@@ -853,6 +853,14 @@ export function restoreBuildAllStepCacheOutputs(
   }
   const fsImpl = params.fs ?? fs;
   const rootDir = params.rootDir ?? process.cwd();
+  const stampedOutputSet = new Set(cacheState.stampedOutputs);
+  // A restored snapshot owns its declared output set. Remove older checkout
+  // outputs first so cache hits cannot combine declarations from two builds.
+  for (const relativeFile of cacheState.relativeOutputFiles ?? []) {
+    if (!stampedOutputSet.has(normalizePortablePath(relativeFile))) {
+      fsImpl.rmSync(path.resolve(rootDir, relativeFile), { force: true });
+    }
+  }
   for (const relativeFile of cacheState.stampedOutputs) {
     copyFileSync(
       fsImpl,

@@ -8,7 +8,6 @@ import {
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
@@ -20,7 +19,8 @@ import {
 
 const TOMBSTONED_SESSION_NOTICE =
   "I couldn't continue this session after a gateway restart. " +
-  "Use /new or /reset to start a replacement session.";
+  "Your transcript is safe. In WebChat, use Resume in new session to continue it; " +
+  "in other channels, use /new or /reset to start a replacement session.";
 
 function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
   const interruptedRunId =
@@ -112,6 +112,7 @@ async function claimMainRestartRecoveryTombstone(params: {
 }
 
 export async function tombstoneMainRestartRecoveryWithNotice(params: {
+  agentId: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
   gatewayRuntime: GatewayRecoveryRuntime;
@@ -142,7 +143,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
       }
       const now = Date.now();
       const notice = await writeRestartRecoveryTombstoneNotice({
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        agentId: params.agentId,
         entry,
         expectedSessionState: buildRestartRecoveryExpectedState(entry, observation),
         sessionKey: params.sessionKey,

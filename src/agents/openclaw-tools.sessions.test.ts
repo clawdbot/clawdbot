@@ -1205,11 +1205,7 @@ describe("sessions tools", () => {
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });
-      expect(calls.map((call) => call.method)).toEqual([
-        "sessions.resolve",
-        "sessions.list",
-        "agent",
-      ]);
+      expect(calls.map((call) => call.method)).toEqual(["agent"]);
     } finally {
       unregister();
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -2232,6 +2228,7 @@ describe("sessions tools", () => {
           sessions: [
             {
               key: targetKey,
+              agentId: "main",
               deliveryContext: {
                 channel: "whatsapp",
                 to: "123@g.us",

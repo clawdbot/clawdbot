@@ -140,6 +140,14 @@ export function createSlackProgressRuntime(runtimeParams: {
     getSnapshot: () => progressDraft.getSnapshot(),
     getThreadTs: () => delivery.usedReplyThreadTs,
   });
+  // Card-only cleanup. Other draft modes abandon a preview holding streamed
+  // assistant text the human already replied to; that message stays visible.
+  const dropDetachedProgressCards = async () => {
+    if (!useDraftProgressCard) {
+      return;
+    }
+    await draftStream?.dropDetachedMessages();
+  };
 
   const waitForNativeProgressStreamStart = async (): Promise<boolean> => {
     if (delivery.streamSession || !delivery.nativeProgressStreamStartPromise) {
@@ -574,6 +582,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     } else {
       await progressCard.finalize("success", priorSnapshot, priorFallbackText);
       draftStream?.forceNewMessage();
+      await dropDetachedProgressCards();
     }
     resetProgressTurnState();
     nativeTaskState = new Map();
@@ -620,6 +629,16 @@ export function createSlackProgressRuntime(runtimeParams: {
           resetDraftDeliveryState();
           resetDraftProgressState();
         };
+  // A queued turn can drain after its dispatch returned, so dispatch closeout is
+  // no longer available to settle the card it published. Leave none in Working.
+  const onQueuedFollowupSettled = !useDraftProgressCard
+    ? undefined
+    : async () => {
+        if (!progressCard.hasTerminalized) {
+          await draftStream?.clear();
+        }
+        await dropDetachedProgressCards();
+      };
 
   return {
     draftStream,
@@ -654,9 +673,11 @@ export function createSlackProgressRuntime(runtimeParams: {
     beginNewProgressTurn,
     buildNativeProgressCompletionChunks,
     collapseProgressReceipt,
+    dropDetachedProgressCards,
     finalizeDraftProgressCard: progressCard.finalize,
     onDraftBoundary,
     onQueuedFollowupAdmitted,
+    onQueuedFollowupSettled,
     pushPlanProgress,
     pushPreviewProgress,
     pushReasoningProgress,

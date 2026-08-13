@@ -28,11 +28,13 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type {
   ChannelRuntimeSnapshot,
@@ -197,6 +199,7 @@ type GatewayKernelContext = {
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
+  scopeUpgradeCoordinator?: ScopeUpgradeCoordinator;
   /** Cancels durable approvals owned by one actively aborted run. */
   cancelRunBoundApprovals?: (runId: string) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
@@ -280,6 +283,7 @@ type GatewayKernelContext = {
 
 /** Socket-bound services and connection state supplied by the Gateway transports. */
 type GatewayTransportContext = {
+  portalService?: GatewayPortalService;
   getMcpAppSandboxPort?: () => number | undefined;
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;

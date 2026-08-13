@@ -7,7 +7,6 @@ import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parsePositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
@@ -209,7 +208,7 @@ function registerSessionsLifecycleCommand(
 }
 
 function parseTimeoutMs(timeout: unknown): number | null | undefined {
-  const parsed = parsePositiveIntOrUndefined(timeout);
+  const parsed = parseStrictPositiveInteger(timeout);
   if (timeout !== undefined && parsed === undefined) {
     defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
     defaultRuntime.exit(1);

@@ -5,9 +5,10 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "./agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
@@ -82,12 +83,12 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
 } {
   const config = params.config ?? getRuntimeConfig();
   const explicitOrDefaultAgentId =
-    params.agentId ?? (params.agentDir === undefined ? resolveDefaultAgentId(config) : undefined);
+    params.agentId ??
+    (params.agentDir === undefined
+      ? (tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config))
+      : undefined);
   const agentDir =
-    params.agentDir ??
-    (explicitOrDefaultAgentId
-      ? resolveAgentDir(config, explicitOrDefaultAgentId)
-      : resolveDefaultAgentDir(config, params.env));
+    params.agentDir ?? resolveAgentDir(config, explicitOrDefaultAgentId as string, params.env);
   const matchingAgentIds =
     params.agentDir === undefined
       ? []
@@ -95,12 +96,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
           (candidateAgentId) => resolveAgentDir(config, candidateAgentId) === agentDir,
         );
   const agentId =
-    explicitOrDefaultAgentId ??
-    (params.agentDir === undefined
-      ? resolveDefaultAgentId(config)
-      : matchingAgentIds.length === 1
-        ? matchingAgentIds[0]
-        : undefined);
+    explicitOrDefaultAgentId ?? (matchingAgentIds.length === 1 ? matchingAgentIds[0] : undefined);
   const explicitWorkspaceDir = params.workspaceDir === undefined ? undefined : params.workspaceDir;
   const activationWorkspaceDir =
     explicitWorkspaceDir ?? (agentId ? resolveAgentWorkspaceDir(config, agentId) : undefined);
@@ -109,7 +105,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     agentDir,
     config,
     ...(params.env ? { env: params.env } : {}),
-    inheritedAuthDir: resolveDefaultAgentDir(config, params.env),
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(config, params.env),
     ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
   };

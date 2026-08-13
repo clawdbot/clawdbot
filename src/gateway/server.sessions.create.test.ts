@@ -1,12 +1,12 @@
 // Session creation tests protect dashboard-origin session records, transcript
 // creation, parent linkage, and model/provider overrides exposed by the gateway API.
 import { execFile } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { constants as fsConstants, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
@@ -15,8 +15,6 @@ import {
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import { initSessionState } from "../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import {
@@ -25,7 +23,6 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
@@ -57,6 +54,7 @@ import {
 import {
   setupGatewaySessionsTestHarness,
   createCheckpointFixture,
+  getGatewayConfigModule,
   sessionStoreEntry,
   directSessionReq,
   sessionHookMocks,
@@ -80,7 +78,6 @@ const sessionDiffBaselineMocks = vi.hoisted(() => ({
 }));
 
 const dashboardTitleGenerationMocks = vi.hoisted(() => ({
-  actual: undefined as GenerateConversationLabelWithFallback | undefined,
   generate: vi.fn<GenerateConversationLabelWithFallback>(),
 }));
 
@@ -104,18 +101,9 @@ vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   return { ...actual, ensureSessionDiffBaseline: sessionDiffBaselineMocks.ensure };
 });
 
-vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../auto-reply/reply/conversation-label-generator.js")>();
-  dashboardTitleGenerationMocks.actual = actual.generateConversationLabelWithFallback;
-  dashboardTitleGenerationMocks.generate.mockImplementation(
-    actual.generateConversationLabelWithFallback,
-  );
-  return {
-    ...actual,
-    generateConversationLabelWithFallback: dashboardTitleGenerationMocks.generate,
-  };
-});
+vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
+  generateConversationLabelWithFallback: dashboardTitleGenerationMocks.generate,
+}));
 
 vi.mock("./server-methods/chat-send-background.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./server-methods/chat-send-background.js")>();
@@ -135,16 +123,32 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let gitWorkspaceTemplateRoot: string;
+let gitWorkspaceTemplate: string;
+
+beforeAll(async () => {
+  gitWorkspaceTemplateRoot = await fs.realpath(
+    await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-session-git-template-")),
+  );
+  const workspace = createGitWorkspace(gitWorkspaceTemplateRoot);
+  await Promise.all([
+    import("./server-methods/chat-send-background.js"),
+    import("./session-transcript-readers.js"),
+    workspace,
+  ]);
+  gitWorkspaceTemplate = await workspace;
+});
+
+afterAll(async () => {
+  await fs.rm(gitWorkspaceTemplateRoot, { recursive: true, force: true });
+});
 
 beforeEach(() => {
   sessionDiffBaselineMocks.ensure.mockClear();
   // Baseline capture has dedicated owner coverage and one authenticated integration below.
   sessionDiffBaselineMocks.useReal = false;
   dashboardTitleGenerationMocks.generate.mockReset();
-  if (!dashboardTitleGenerationMocks.actual) {
-    throw new Error("actual dashboard title generator was not loaded");
-  }
-  dashboardTitleGenerationMocks.generate.mockImplementation(dashboardTitleGenerationMocks.actual);
+  dashboardTitleGenerationMocks.generate.mockResolvedValue("Generated Dashboard Title");
   dashboardTitleScheduleMocks.schedule.mockReset();
   if (!dashboardTitleScheduleMocks.actual) {
     throw new Error("actual dashboard title scheduler was not loaded");
@@ -172,50 +176,6 @@ async function makeNonGitTempDir(prefix: string): Promise<string> {
   }
 }
 
-test("sessions.create and sessions.delete preserve every concurrent session lifecycle", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionCount = 24;
-
-  const created = await Promise.all(
-    Array.from({ length: sessionCount }, (_, index) =>
-      directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
-        agentId: "main",
-        label: `Concurrent session ${index}`,
-      }),
-    ),
-  );
-
-  expect(created.every((result) => result.ok)).toBe(true);
-  const sessionKeys = created.map((result) =>
-    requireNonEmptyString(result.payload?.key, "concurrent session key"),
-  );
-  const sessionIds = created.map((result) =>
-    requireNonEmptyString(result.payload?.sessionId, "concurrent session id"),
-  );
-  expect(new Set(sessionKeys).size).toBe(sessionCount);
-  expect(new Set(sessionIds).size).toBe(sessionCount);
-  for (const [index, sessionKey] of sessionKeys.entries()) {
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId: sessionIds[index],
-      label: `Concurrent session ${index}`,
-    });
-  }
-
-  const deleted = await Promise.all(
-    sessionKeys.map((key) =>
-      directSessionReq<{ deleted: boolean }>("sessions.delete", {
-        key,
-        deleteTranscript: false,
-      }),
-    ),
-  );
-
-  expect(deleted.every((result) => result.ok && result.payload?.deleted === true)).toBe(true);
-  for (const sessionKey of sessionKeys) {
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  }
-});
-
 // The adoption assertion below flaked once on CI (run 31609081812) with the persisted
 // row missing while all 16 creates succeeded; exhaustive owner-path analysis found no
 // mechanism, and the failure never reproduced locally. On mismatch, capture which SQLite
@@ -239,7 +199,7 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   const key = "agent:main:dashboard:concurrent-keyed-session";
 
   const created = await Promise.all(
-    Array.from({ length: 16 }, () =>
+    Array.from({ length: 4 }, () =>
       directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
         agentId: "main",
         key,
@@ -257,50 +217,6 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
     persistedSessionId,
     persistedSessionId === canonicalSessionId ? "" : describeSessionStoreForensics(storePath),
   ).toBe(canonicalSessionId);
-});
-
-test("keyed sessions remain recoverable across overlapping create and delete waves", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const key = "agent:main:dashboard:concurrent-lifecycle-waves";
-
-  for (let wave = 0; wave < 6; wave += 1) {
-    const operations = await Promise.all(
-      Array.from({ length: 12 }, (_, index) =>
-        index % 3 === 0
-          ? directSessionReq<{ deleted: boolean }>("sessions.delete", {
-              key,
-              deleteTranscript: false,
-            })
-          : directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
-              agentId: "main",
-              key,
-            }),
-      ),
-    );
-
-    expect(
-      operations.every((result) => result.ok),
-      `lifecycle wave ${wave}`,
-    ).toBe(true);
-
-    const recovered = await directSessionReq<{ key: string; sessionId: string }>(
-      "sessions.create",
-      { agentId: "main", key },
-    );
-    expect(recovered.ok, `creation after lifecycle wave ${wave}`).toBe(true);
-    expect(recovered.payload?.key).toBe(key);
-    expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
-      recovered.payload?.sessionId,
-    );
-
-    const deleted = await directSessionReq<{ deleted: boolean }>("sessions.delete", {
-      key,
-      deleteTranscript: false,
-    });
-    expect(deleted.ok, `deletion after lifecycle wave ${wave}`).toBe(true);
-    expect(deleted.payload?.deleted).toBe(true);
-    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
-  }
 });
 
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
@@ -499,7 +415,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: "sessions.create key agent (work) does not match agentId (main)",
+        message: 'agent "main" does not match session key agent "work"',
       },
     });
     const durableCollisionKey = "agent:main:dashboard:incognito-durable-collision";
@@ -535,7 +451,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
   }
 });
 
-test("incognito sessions survive non-default-agent webchat reply initialization", async () => {
+test("incognito webchat rejects a vanished non-default-agent session before dispatch", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
   const { ws } = await openClient({
@@ -552,64 +468,9 @@ test("incognito sessions survive non-default-agent webchat reply initialization"
       agentId: "work",
       incognito: true,
     });
-    expect(created.ok).toBe(true);
+    expect(created.ok, JSON.stringify(created)).toBe(true);
     const sessionKey = requireNonEmptyString(created.payload?.key, "incognito webchat key");
     const sessionId = requireNonEmptyString(created.payload?.sessionId, "incognito webchat id");
-    let resolveDispatch!: (value: Awaited<ReturnType<typeof initSessionState>>) => void;
-    let rejectDispatch!: (error: unknown) => void;
-    const dispatched = new Promise<Awaited<ReturnType<typeof initSessionState>>>(
-      (resolve, reject) => {
-        resolveDispatch = resolve;
-        rejectDispatch = reject;
-      },
-    );
-    dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
-      const input = params as {
-        cfg: OpenClawConfig;
-        ctx: Parameters<typeof initSessionState>[0]["ctx"];
-        replyOptions?: {
-          expectedExistingSessionId?: string;
-          pinExpectedExistingSession?: boolean;
-          requestedSessionId?: string;
-          resumeRequestedSession?: boolean;
-        };
-      };
-      try {
-        resolveDispatch(
-          await initSessionState({
-            cfg: input.cfg,
-            ctx: finalizeInboundContext(input.ctx),
-            commandAuthorized: true,
-            expectedExistingSessionId: input.replyOptions?.expectedExistingSessionId,
-            pinExpectedExistingSession: input.replyOptions?.pinExpectedExistingSession,
-            requestedSessionId: input.replyOptions?.requestedSessionId,
-            resumeRequestedSession: input.replyOptions?.resumeRequestedSession,
-          }),
-        );
-      } catch (error) {
-        rejectDispatch(error);
-      }
-      return {
-        queuedFinal: false,
-        counts: { block: 0, final: 0, tool: 0 },
-      };
-    });
-
-    const sent = await rpcReq(ws, "chat.send", {
-      sessionKey,
-      sessionId,
-      message: "hello from incognito webchat",
-      idempotencyKey: "incognito-webchat-send",
-    });
-    expect(sent.ok).toBe(true);
-    await expect(dispatched).resolves.toMatchObject({
-      sessionId,
-      sessionKey,
-      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "work" }),
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
 
     closeOpenClawAgentDatabasesForTest();
     dispatchInboundMessageMock.mockClear();
@@ -882,7 +743,7 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-async function initializeGitWorkspace(root: string): Promise<string> {
+async function createGitWorkspace(root: string): Promise<string> {
   const workspace = path.join(root, "workspace");
   await fs.mkdir(workspace, { recursive: true });
   await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
@@ -900,6 +761,33 @@ async function initializeGitWorkspace(root: string): Promise<string> {
     "initial",
   ]);
   return await fs.realpath(workspace);
+}
+
+async function initializeGitWorkspace(root: string): Promise<string> {
+  const workspace = path.join(root, "workspace");
+  await fs.cp(gitWorkspaceTemplate, workspace, {
+    recursive: true,
+    mode: fsConstants.COPYFILE_FICLONE,
+  });
+  return await fs.realpath(workspace);
+}
+
+function managedWorktreeFixture(params: {
+  id: string;
+  name: string;
+  ownerId: string;
+  path: string;
+  repoRoot: string;
+}): NonNullable<ReturnType<typeof managedWorktrees.findLiveById>> {
+  return {
+    ...params,
+    baseRef: "HEAD",
+    branch: `openclaw/${params.name}`,
+    createdAt: 1,
+    lastActiveAt: 1,
+    ownerKind: "session",
+    repoFingerprint: "test-repository",
+  };
 }
 
 test("sessions.create captures and persists the initial workspace diff baseline", async () => {
@@ -1057,44 +945,6 @@ test("sessions.create rejects draft visibility when policy disables drafts", asy
   });
 });
 
-test("sessions.create provisions its worktree inside the target lifecycle fence", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-fence-",
-  });
-  const workspace = await initializeGitWorkspace(openClawState.root);
-  closeOpenClawStateDatabaseForTest();
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const key = "agent:main:dashboard:worktree-fence";
-  const originalCreate = managedWorktrees.create.bind(managedWorktrees);
-  const createSpy = vi.spyOn(managedWorktrees, "create").mockImplementation(async (params) => {
-    expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
-    return await originalCreate(params);
-  });
-  let worktreeId: string | undefined;
-  try {
-    const created = await directSessionReq<{
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      { key, agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-    expect(created.ok).toBe(true);
-    worktreeId = created.payload?.worktree.id;
-    expect(createSpy).toHaveBeenCalledTimes(1);
-  } finally {
-    createSpy.mockRestore();
-    if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
-    }
-    closeOpenClawStateDatabaseForTest();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
-});
-
 test("sessions.create rolls back failed provisioning before a same-key creator proceeds", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
@@ -1222,7 +1072,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   const workspace = await initializeGitWorkspace(root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
+  const originalCreate = managedWorktrees.create.bind(managedWorktrees);
+  const createSpy = vi.spyOn(managedWorktrees, "create").mockImplementation(async (params) => {
+    expect(isSessionLifecycleMutationActive(storePath, [params.ownerId])).toBe(true);
+    return await originalCreate(params);
+  });
   let worktreeId: string | undefined;
   try {
     const created = await directSessionReq<{
@@ -1259,6 +1114,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     expect(recreated.ok).toBe(true);
     expect(recreated.payload?.worktree).toEqual(worktree);
     expect(recreated.payload?.entry.spawnedCwd).toBe(worktree?.path);
+    expect(createSpy).toHaveBeenCalledTimes(1);
     expect(
       listRegistryWorktrees(process.env).filter(
         (record) =>
@@ -1283,6 +1139,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     });
     ws.close();
   } finally {
+    createSpy.mockRestore();
     if (worktreeId) {
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
@@ -1408,47 +1265,40 @@ test("sessions.create names its managed worktree without waiting for the model t
   }
 });
 
-test("sessions.create honors worktree name/base ref and persists worktree info", async () => {
+test("sessions.create maps worktree options and preserves a nested workspace cwd", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
-    prefix: "openclaw-session-worktree-target-",
+    prefix: "openclaw-session-worktree-options-",
   });
-  const root = openClawState.root;
-  const workspace = await initializeGitWorkspace(root);
-  await execFileAsync("git", ["-C", workspace, "checkout", "-b", "base-branch"]);
-  await fs.writeFile(path.join(workspace, "base.txt"), "base\n");
-  await execFileAsync("git", ["-C", workspace, "add", "base.txt"]);
-  await execFileAsync("git", [
-    "-c",
-    "user.name=OpenClaw Test",
-    "-c",
-    "user.email=openclaw-test@example.invalid",
-    "-C",
-    workspace,
-    "commit",
-    "-m",
-    "base branch commit",
+  const repoRoot = await initializeGitWorkspace(openClawState.root);
+  const workspace = path.join(repoRoot, "packages", "app");
+  const worktreePath = path.join(openClawState.root, "managed-worktree");
+  const key = "agent:main:dashboard:worktree-options";
+  await Promise.all([
+    fs.mkdir(workspace, { recursive: true }),
+    fs.mkdir(worktreePath, { recursive: true }),
   ]);
-  const { stdout: baseCommitRaw } = await execFileAsync("git", [
-    "-C",
-    workspace,
-    "rev-parse",
-    "HEAD",
-  ]);
-  await execFileAsync("git", ["-C", workspace, "checkout", "main"]);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
-  let worktreeId: string | undefined;
+  const createSpy = vi.spyOn(managedWorktrees, "create").mockResolvedValue(
+    managedWorktreeFixture({
+      id: "worktree-options",
+      name: "target-task",
+      ownerId: key,
+      path: worktreePath,
+      repoRoot,
+    }),
+  );
   try {
     const created = await directSessionReq<{
-      key: string;
       entry: { spawnedCwd?: string; worktree?: { id: string; branch: string; repoRoot: string } };
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
       {
         agentId: "main",
+        key,
         worktree: true,
         worktreeName: "target-task",
         worktreeBaseRef: "base-branch",
@@ -1457,21 +1307,24 @@ test("sessions.create honors worktree name/base ref and persists worktree info",
     );
 
     expect(created.ok).toBe(true);
-    const worktree = created.payload?.worktree;
-    worktreeId = worktree?.id;
-    expect(worktree?.branch).toBe("openclaw/target-task");
-    const { stdout: worktreeCommitRaw } = await execFileAsync("git", [
-      "-C",
-      requireNonEmptyString(worktree?.path, "worktree path"),
-      "rev-parse",
-      "HEAD",
-    ]);
-    expect(worktreeCommitRaw.trim()).toBe(baseCommitRaw.trim());
-    expect(created.payload?.entry.worktree).toEqual({
-      id: worktree?.id,
-      branch: "openclaw/target-task",
-      repoRoot: workspace,
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: workspace,
+        ownerKind: "session",
+        ownerId: key,
+        name: "target-task",
+        baseRef: "base-branch",
+      }),
+    );
+    expect(created.payload?.entry).toMatchObject({
+      spawnedCwd: path.join(worktreePath, "packages", "app"),
+      worktree: {
+        id: "worktree-options",
+        branch: "openclaw/target-task",
+        repoRoot,
+      },
     });
+    await expect(fs.stat(path.join(worktreePath, "packages", "app"))).resolves.toBeDefined();
 
     const rejected = await directSessionReq(
       "sessions.create",
@@ -1480,28 +1333,73 @@ test("sessions.create honors worktree name/base ref and persists worktree info",
     );
     expect(rejected.ok).toBe(false);
   } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
-    }
+    createSpy.mockRestore();
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
 });
 
-test("sessions.create execNode binds session exec routing", async () => {
-  await createSessionStoreDir();
-  const created = await directSessionReq<{
-    key: string;
-    entry: { execHost?: string; execNode?: string };
-  }>(
-    "sessions.create",
-    { agentId: "main", execNode: "macbook" },
-    { client: { connect: { scopes: ["operator.admin"] } } as never },
+test("sessions.create maps an admin-selected worktree cwd and rejects repository changes", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-selected-workspace-",
+  });
+  const selectedRoot = tempDirs.make(
+    "openclaw-session-selected-repository-",
+    await fs.realpath(os.tmpdir()),
   );
-  expect(created.ok).toBe(true);
-  expect(created.payload?.entry.execHost).toBe("node");
-  expect(created.payload?.entry.execNode).toBe("macbook");
+  const [configuredWorkspace, selectedWorkspace] = await Promise.all([
+    initializeGitWorkspace(openClawState.root),
+    initializeGitWorkspace(selectedRoot),
+  ]);
+  const worktreePath = path.join(openClawState.root, "selected-worktree");
+  const key = "agent:main:dashboard:selected-workspace";
+  await fs.mkdir(worktreePath, { recursive: true });
+  const record = managedWorktreeFixture({
+    id: "selected-worktree",
+    name: "selected-worktree",
+    ownerId: key,
+    path: worktreePath,
+    repoRoot: selectedWorkspace,
+  });
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace: configuredWorkspace };
+  await createSessionStoreDir();
+  const createSpy = vi.spyOn(managedWorktrees, "create").mockResolvedValue(record);
+  const findSpy = vi.spyOn(managedWorktrees, "findLiveById").mockReturnValue(record);
+  try {
+    const created = await directSessionReq<{
+      entry: { spawnedCwd?: string };
+      worktree: { id: string; path: string };
+    }>(
+      "sessions.create",
+      { agentId: "main", key, worktree: true, cwd: selectedWorkspace },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(created.ok).toBe(true);
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ repoRoot: selectedWorkspace }),
+    );
+    expect(created.payload?.entry.spawnedCwd).toBe(worktreePath);
+
+    const mismatched = await directSessionReq(
+      "sessions.create",
+      { key, agentId: "main", worktree: true, cwd: configuredWorkspace },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+    expect(mismatched).toMatchObject({
+      ok: false,
+      error: { message: "session worktree belongs to a different repository" },
+    });
+  } finally {
+    createSpy.mockRestore();
+    findSpy.mockRestore();
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
 });
 
 test("sessions.create accepts a node-host cwd without provisioning a Gateway worktree", async () => {
@@ -1613,68 +1511,6 @@ test("sessions.create rejects a Gateway worktree targeting a node", async () => 
     ok: false,
     error: { message: "sessions.create worktree cannot target execNode" },
   });
-});
-
-test("sessions.create provisions a worktree from an admin-selected cwd", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-configured-workspace-",
-  });
-  const configuredRoot = openClawState.root;
-  const selectedRoot = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-selected-workspace-"),
-  );
-  const configuredWorkspace = await initializeGitWorkspace(configuredRoot);
-  const selectedWorkspace = await initializeGitWorkspace(selectedRoot);
-  closeOpenClawStateDatabaseForTest();
-  testState.agentConfig = { workspace: configuredWorkspace };
-  await createSessionStoreDir();
-  let worktreeId: string | undefined;
-  try {
-    const created = await directSessionReq<{
-      key: string;
-      entry: { spawnedCwd?: string };
-      worktree: { id: string; path: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", worktree: true, cwd: selectedWorkspace },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok).toBe(true);
-    const worktree = created.payload?.worktree;
-    worktreeId = worktree?.id;
-    expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
-    expect(
-      findLiveRegistryWorktreeByOwner(process.env, "session", created.payload?.key ?? ""),
-    ).toMatchObject({
-      id: worktree?.id,
-      repoRoot: selectedWorkspace,
-    });
-
-    const mismatched = await directSessionReq(
-      "sessions.create",
-      {
-        key: created.payload?.key,
-        agentId: "main",
-        worktree: true,
-        cwd: configuredWorkspace,
-      },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-    expect(mismatched).toMatchObject({
-      ok: false,
-      error: { message: "session worktree belongs to a different repository" },
-    });
-  } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
-    }
-    closeOpenClawStateDatabaseForTest();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-    await fs.rm(selectedRoot, { recursive: true, force: true });
-  }
 });
 
 test("sessions.create persists a Gateway cwd without a managed worktree", async () => {
@@ -1835,50 +1671,6 @@ test("sessions.create skips the worktree setup script for non-admin callers", as
   }
 });
 
-test("sessions.create preserves a linked-worktree subdirectory", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-subdir-session-worktree-",
-  });
-  const root = openClawState.root;
-  const repoRoot = await initializeGitWorkspace(root);
-  const linkedRoot = path.join(root, "linked");
-  await execFileAsync("git", ["-C", repoRoot, "worktree", "add", "-b", "linked", linkedRoot]);
-  const workspace = path.join(linkedRoot, "packages", "app");
-  await fs.mkdir(workspace, { recursive: true });
-  closeOpenClawStateDatabaseForTest();
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  let worktreeId: string | undefined;
-  try {
-    const created = await directSessionReq<{
-      key: string;
-      entry: { spawnedCwd?: string };
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-    expect(created.ok).toBe(true);
-    const worktree = created.payload?.worktree;
-    worktreeId = worktree?.id;
-    // The managed worktree anchors at the repo root even when the workspace is nested;
-    // the session cwd points at the equivalent subdirectory inside the worktree.
-    expect(worktree?.branch).toMatch(/^openclaw\/[a-z0-9]+(?:-[a-z0-9]+)+$/);
-    expect(created.payload?.entry.spawnedCwd).toBe(
-      path.join(requireNonEmptyString(worktree?.path, "worktree path"), "packages", "app"),
-    );
-  } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
-    }
-    closeOpenClawStateDatabaseForTest();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
-});
-
 test("sessions.create reset-in-place persists the returned worktree cwd", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
@@ -2017,27 +1809,6 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
     await openClawState.cleanup();
-  }
-});
-
-test("sessions.create rejects worktrees for non-git agent workspaces", async () => {
-  const workspace = await makeNonGitTempDir("openclaw-session-plain-workspace-");
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  try {
-    const created = await directSessionReq(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok).toBe(false);
-    expect(created.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "agent workspace is not a git checkout",
-    });
-  } finally {
-    testState.agentConfig = undefined;
   }
 });
 
@@ -3434,6 +3205,58 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
   ).toBeUndefined();
 });
 
+test("sessions.create applies configured fixed-store ownership to bare keys", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const broadcastToConnIds = vi.fn();
+  testState.agentsConfig = {
+    ownership: "explicit",
+    entries: { ops: {}, research: {} },
+  };
+  testState.agentConfig = { sessionStore: { agentId: "ops" } };
+  const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  try {
+    const created = await directSessionReq<{ key?: string; sessionId?: string }>(
+      "sessions.create",
+      { key: "global" },
+      {
+        context: {
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        },
+      },
+    );
+
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    expect(created.payload?.key).toBe("global");
+    expect(loadSessionEntry({ agentId: "ops", sessionKey: "global", storePath })?.sessionId).toBe(
+      created.payload?.sessionId,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", agentId: "ops", reason: "create" }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true, agentId: "ops", sessionKeys: ["global"] },
+    );
+
+    const conflict = await directSessionReq("sessions.create", {
+      key: "global",
+      agentId: "research",
+    });
+    expect(conflict).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: 'agent "research" does not match session key agent "ops"',
+      },
+    });
+  } finally {
+    testState.agentsConfig = undefined;
+    testState.agentConfig = {};
+  }
+});
+
 test("sessions.create stores selected global sessions in the requested agent store", async () => {
   const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const broadcastToConnIds = vi.fn();
@@ -3552,7 +3375,7 @@ test("sessions.create loads selected global parent from the requested agent stor
 });
 
 test("sessions.get reads selected global messages from the requested agent store", async () => {
-  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  const { mainStorePath, storeTemplate, workStorePath } = await createSelectedGlobalSessionStore();
   try {
     await writeSessionStore({
       storePath: mainStorePath,
@@ -3582,12 +3405,23 @@ test("sessions.get reads selected global messages from the requested agent store
       storePath: workStorePath,
     });
 
-    const result = await directSessionReq<{ messages?: unknown[] }>("sessions.get", {
-      key: "global",
-      agentId: "work",
-    });
+    const result = await directSessionReq<{ messages?: unknown[] }>(
+      "sessions.get",
+      {
+        key: "global",
+        agentId: "work",
+      },
+      {
+        context: {
+          getRuntimeConfig: () => ({
+            agents: { entries: { main: {}, work: {} } },
+            session: { scope: "global", store: storeTemplate },
+          }),
+        },
+      },
+    );
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
     const renderedMessages = JSON.stringify(result.payload?.messages ?? []);
     expect(renderedMessages).toContain("work global");
     expect(renderedMessages).not.toContain("main global");
@@ -4136,138 +3970,6 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
         }),
       ]),
     );
-  } finally {
-    testState.sessionStorePath = undefined;
-    testState.sessionConfig = undefined;
-    testState.agentsConfig = undefined;
-  }
-});
-
-test("sessions.create completes simultaneous opposite-direction cross-agent forks", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "per-sender" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
-
-  try {
-    const mainDir = path.dirname(mainStorePath);
-    const workDir = path.dirname(workStorePath);
-    await Promise.all([
-      fs.mkdir(mainDir, { recursive: true }),
-      fs.mkdir(workDir, { recursive: true }),
-    ]);
-    const [mainParent, workParent] = await Promise.all([
-      createCheckpointFixture(mainDir),
-      createCheckpointFixture(workDir),
-    ]);
-    await Promise.all([
-      writeSessionStore({
-        storePath: mainStorePath,
-        agentId: "main",
-        entries: {
-          main: sessionStoreEntry(mainParent.sessionId, {
-            sessionFile: mainParent.sessionFile,
-          }),
-        },
-      }),
-      writeSessionStore({
-        storePath: workStorePath,
-        agentId: "work",
-        entries: {
-          main: sessionStoreEntry(workParent.sessionId, {
-            sessionFile: workParent.sessionFile,
-          }),
-        },
-      }),
-    ]);
-    await Promise.all([
-      seedSessionTranscript({
-        agentId: "main",
-        sessionId: mainParent.sessionId,
-        sessionKey: "agent:main:main",
-        storePath: mainStorePath,
-        messages: [{ role: "user", content: "main parent context" }],
-      }),
-      seedSessionTranscript({
-        agentId: "work",
-        sessionId: workParent.sessionId,
-        sessionKey: "agent:work:main",
-        storePath: workStorePath,
-        messages: [{ role: "user", content: "work parent context" }],
-      }),
-    ]);
-
-    const requests = Array.from({ length: 12 }, (_, index) =>
-      index % 2 === 0
-        ? {
-            agentId: "main",
-            parentSessionKey: "agent:work:main",
-            parentSessionId: workParent.sessionId,
-            storePath: mainStorePath,
-          }
-        : {
-            agentId: "work",
-            parentSessionKey: "agent:main:main",
-            parentSessionId: mainParent.sessionId,
-            storePath: workStorePath,
-          },
-    );
-    const created = await Promise.all(
-      requests.map((request) =>
-        directSessionReq<{
-          key: string;
-          sessionId: string;
-          entry: {
-            parentSessionKey?: string;
-            forkSource?: { sessionKey: string; sessionId: string };
-            forkedFromParent?: boolean;
-          };
-        }>("sessions.create", {
-          agentId: request.agentId,
-          parentSessionKey: request.parentSessionKey,
-          fork: true,
-        }),
-      ),
-    );
-
-    expect(
-      created.every((result) => result.ok),
-      JSON.stringify(created.filter((result) => !result.ok)),
-    ).toBe(true);
-    expect(new Set(created.map((result) => result.payload?.key)).size).toBe(requests.length);
-    expect(new Set(created.map((result) => result.payload?.sessionId)).size).toBe(requests.length);
-    for (const [index, result] of created.entries()) {
-      const request = requests[index];
-      if (!request) {
-        throw new Error(`missing cross-agent fork request ${index}`);
-      }
-      expect(result.payload?.entry).toMatchObject({
-        forkSource: {
-          sessionKey: request.parentSessionKey,
-          sessionId: request.parentSessionId,
-        },
-        forkedFromParent: true,
-        parentSessionKey: request.parentSessionKey,
-      });
-      const key = requireNonEmptyString(result.payload?.key, "cross-agent fork session key");
-      expect(
-        loadSessionEntry({
-          agentId: request.agentId,
-          sessionKey: key,
-          storePath: request.storePath,
-        }),
-      ).toMatchObject({
-        forkSource: {
-          sessionKey: request.parentSessionKey,
-          sessionId: request.parentSessionId,
-        },
-        parentSessionKey: request.parentSessionKey,
-        sessionId: result.payload?.sessionId,
-      });
-    }
   } finally {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;

@@ -486,10 +486,10 @@ function makeParams(
     runId: "run-1",
     sessionFile: "session.json",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey: "agent:agent-1:session-1",
     sessionTarget: {
       sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
+      sessionKey: "agent:agent-1:session-1",
       storePath: "openclaw-agent.sqlite",
     },
     timeoutMs: 5000,
@@ -1717,7 +1717,7 @@ describe("runCopilotAttempt", () => {
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
+        sessionKey: "agent:agent-1:session-1",
         workspaceDir: "C:\\workspace",
       }),
     );

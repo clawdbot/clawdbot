@@ -550,7 +550,7 @@ pub fn toggle_quickchat(app: &AppHandle) {
 
 fn show_quickchat(app: &AppHandle) -> Result<(), String> {
     let window = ensure_quickchat_window(app)?;
-    app.state::<GatewayClient>().resume_reconnect();
+    app.state::<GatewayClient>().resume_paused_reconnect();
     window
         .set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT))
         .map_err(|error| format!("Could not reset Quick Chat size: {error}"))?;

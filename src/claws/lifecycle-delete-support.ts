@@ -30,6 +30,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
@@ -482,4 +483,7 @@ export function releaseClawRemoveRows(
         .run(agentId);
     }
   }, options);
+  if (complete) {
+    deleteCachedClawInstallSchemaVersion(agentId, options);
+  }
 }

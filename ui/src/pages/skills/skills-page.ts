@@ -73,13 +73,13 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillsDetailTab: SkillDetailTab = "overview";
   @state() clawhubSearchQuery = "";
   @state() clawhubDetail: ClawHubSkillDetail | null = null;
-  @state() clawhubDetailSlug: string | null = null;
+  @state() clawhubDetailRef: string | null = null;
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
-    acknowledgeSlug?: string;
+    acknowledgeRef?: string;
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null = null;
@@ -184,7 +184,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsDetailTab = "overview";
     this.debouncedClawHubSearchQuery = "";
     this.clawhubDetail = null;
-    this.clawhubDetailSlug = null;
+    this.clawhubDetailRef = null;
     this.clawhubDetailLoading = false;
     this.clawhubDetailError = null;
     this.clawhubInstallMessage = null;
@@ -406,7 +406,7 @@ class SkillsPage extends OpenClawLightDomElement {
             clawhubSearchLoading: this.clawhubSearchLoading,
             clawhubSearchError: this.clawhubSearchError,
             clawhubDetail: this.clawhubDetail,
-            clawhubDetailSlug: this.clawhubDetailSlug,
+            clawhubDetailRef: this.clawhubDetailRef,
             clawhubDetailLoading: this.clawhubDetailLoading,
             clawhubDetailError: this.clawhubDetailError,
             clawhubInstallMessage: this.clawhubInstallMessage,
@@ -441,11 +441,11 @@ class SkillsPage extends OpenClawLightDomElement {
             onDetailClose: () => (this.skillsDetailKey = null),
             onDetailTabChange: (tab) => this.changeDetailTab(tab),
             onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
-            onClawHubDetailOpen: (slug) => void loadClawHubDetail(this, slug),
+            onClawHubDetailOpen: (ref) => void loadClawHubDetail(this, ref),
             onClawHubDetailClose: () => closeClawHubDetail(this),
-            onClawHubInstall: (slug, acknowledgeClawHubRisk, version) => {
+            onClawHubInstall: (ref, acknowledgeClawHubRisk, version) => {
               if (this.canInstallSkills()) {
-                void installFromClawHub(this, slug, acknowledgeClawHubRisk, version);
+                void installFromClawHub(this, ref, acknowledgeClawHubRisk, version);
               }
             },
           })}

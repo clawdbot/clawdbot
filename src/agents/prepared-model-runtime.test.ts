@@ -48,6 +48,24 @@ describe("prepared model runtime snapshots", () => {
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
     mocks.configuredAgentIds = ["default"];
     const stagedConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+    const selectedPluginRegistry = createEmptyPluginRegistry();
+    selectedPluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
+      (params as { selections?: unknown }).selections
+        ? selectedPluginRegistry
+        : createEmptyPluginRegistry(),
+    );
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
     markPreparedModelRuntimeSnapshotsStale("test isolated probe replacement", {
       waitForReplacement: true,
@@ -58,6 +76,7 @@ describe("prepared model runtime snapshots", () => {
       agentDir: "/tmp/setup-probe-agent",
       inheritedAuthDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
     });
     await Promise.resolve();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
@@ -72,6 +91,14 @@ describe("prepared model runtime snapshots", () => {
       agentDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
     });
+    expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
+      "codex",
+    ]);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
+      }),
+    );
     lease.release();
   });
 

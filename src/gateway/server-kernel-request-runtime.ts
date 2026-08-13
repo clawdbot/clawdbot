@@ -31,6 +31,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     sessionObserver,
     getMcpAppSandboxPort,
     ensureSandboxHostPort,
+    getPortalService,
     terminalLaunchPolicy,
     execApprovalManager,
     cancelRunBoundApprovals,
@@ -63,6 +64,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     claimControlUiDeviceAuthMigration,
     releaseControlUiDeviceAuthMigrationClaim,
     nodeRegistry,
+    nodeDesktopService,
     workerEnvironmentService,
     hostDesktopService,
     workerEnvironmentStartup,
@@ -117,6 +119,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       sessionObserver,
       getMcpAppSandboxPort,
       ensureSandboxHostPort,
+      getPortalService,
       resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
       isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       execApprovalManager,
@@ -163,6 +166,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
         releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
+      ...(nodeDesktopService ? { nodeDesktopService } : {}),
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
       ...(hostDesktopService ? { hostDesktopService } : {}),
       ...(workerEnvironmentStartup

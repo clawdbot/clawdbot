@@ -40,7 +40,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
@@ -967,6 +967,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
 }
 
 type ForceClearSessionSnapshot = {
+  agentId: string;
   startedAt?: number;
   storePath: string;
   updatedAt: number;
@@ -977,13 +978,14 @@ function tryLoadForceClearSessionSnapshot(
 ): ForceClearSessionSnapshot | undefined {
   try {
     const cfg = getRuntimeConfig();
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const agentId = resolveSessionAgentId({ config: cfg, sessionKey });
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-    const entry = loadSessionEntry({ sessionKey, storePath });
+    const entry = loadSessionEntry({ agentId, sessionKey, storePath });
     if (!entry || entry.status !== "running") {
       return undefined;
     }
     return {
+      agentId,
       ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
       storePath,
       updatedAt: entry.updatedAt,
@@ -998,6 +1000,7 @@ function tryLoadForceClearSessionSnapshot(
 
 /** Persists terminal state when a forced registry clear cannot emit normal lifecycle. */
 async function persistForceClearedEmbeddedRunTerminalState(params: {
+  agentId: string;
   sessionId: string;
   sessionKey: string;
   startedAt?: number;
@@ -1006,7 +1009,11 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
 }): Promise<void> {
   try {
     await updateSessionEntry(
-      { sessionKey: params.sessionKey, storePath: params.storePath },
+      {
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
       (storedEntry) => {
         const entry = storedEntry as InternalSessionEntry;
         // A replacement can reuse the session id; bind this patch to both owners' exact snapshot.

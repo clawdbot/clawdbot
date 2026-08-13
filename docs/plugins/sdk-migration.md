@@ -576,6 +576,23 @@ Provider plugins should register text-inference providers through
 `ApiRegistry` should register directly on that registry so provider ownership
 and teardown stay scoped to the prepared runtime.
 
+### Deactivate hook alias
+
+The `api.on("deactivate", handler)` compatibility alias was removed. Register
+the same shutdown cleanup with `gateway_stop`:
+
+```typescript
+// Before
+api.on("deactivate", async (event, ctx) => {
+  await stopPluginService(ctx);
+});
+
+// After
+api.on("gateway_stop", async (event, ctx) => {
+  await stopPluginService(ctx);
+});
+```
+
 ### Private testing barrel
 
 `openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package
@@ -660,29 +677,6 @@ timeline for current status.
 
     Affected areas: `inbound_claim`, `message_received`, and any custom
     channel plugin that post-processed the old envelope text.
-
-  </Accordion>
-
-  <Accordion title="deactivate hook -> gateway_stop">
-    **Old**: `api.on("deactivate", handler)`.
-
-    **New**: `api.on("gateway_stop", handler)`. Same shutdown cleanup
-    contract; only the hook name changes.
-
-    ```typescript
-    // Before
-    api.on("deactivate", async (event, ctx) => {
-      await stopPluginService(ctx);
-    });
-
-    // After
-    api.on("gateway_stop", async (event, ctx) => {
-      await stopPluginService(ctx);
-    });
-    ```
-
-    `deactivate` remains wired as a deprecated compatibility alias until it is
-    removed after 2026-08-16.
 
   </Accordion>
 
@@ -1073,9 +1067,16 @@ The July 30 rows were removed after their early maintainer-authorized sweep:
 unused subpaths were deleted, earlier compatibility aliases were deleted, and
 bundled-only modules were demoted to private-local build mappings.
 
+The August 15 compatibility subpaths `agent-config-primitives`,
+`channel-logging`, `channel-secret-runtime`, `channel-streaming`,
+`group-access`, `matrix`, `text-runtime`, and `zod` were retired early by
+explicit SDK-owner approval in August 2026. Use the focused replacements in
+the [Plugin SDK subpath catalog](/plugins/sdk-subpaths), and import `zod`
+directly from the `zod` package. `inbound-reply-dispatch` remains available
+until the next Plugin SDK major.
+
 | Removal gate            | Tier                               | SDK subpaths                                                                                                                                                                        |
 | ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-08-15`            | Earlier compatibility deprecations | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `matrix`, `text-runtime`, `zod`                                        |
 | `2026-09-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
 | `next-plugin-sdk-major` | Major-version compatibility gate   | `inbound-reply-dispatch`                                                                                                                                                            |
 | `2026-10-01`            | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |

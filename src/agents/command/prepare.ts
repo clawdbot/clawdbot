@@ -8,7 +8,6 @@ import {
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
@@ -21,7 +20,6 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
-  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -34,7 +32,6 @@ import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
@@ -52,6 +49,7 @@ import {
   prependInternalEventContext,
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
+import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { createAgentCommandSessionWorkingCopy } from "./session-helpers.js";
 import { resolveSession } from "./session.js";
@@ -85,28 +83,6 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
     throw new Error(`${label} override contains invalid control characters.`);
   }
   return trimmed;
-}
-
-function resolveExplicitAgentCommandSessionKey(params: {
-  rawExplicitSessionKey?: string;
-  agentIdOverride?: string;
-  shouldScopeDefaultAgentKey?: boolean;
-  cfg: OpenClawConfig;
-}): string | undefined {
-  if (
-    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
-    !params.agentIdOverride &&
-    !params.shouldScopeDefaultAgentKey
-  ) {
-    return params.rawExplicitSessionKey;
-  }
-  return scopeLegacySessionKeyToAgent({
-    agentId:
-      params.agentIdOverride ??
-      (params.shouldScopeDefaultAgentKey ? resolveDefaultAgentId(params.cfg) : undefined),
-    sessionKey: params.rawExplicitSessionKey,
-    mainKey: params.cfg.session?.mainKey,
-  });
 }
 
 export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
