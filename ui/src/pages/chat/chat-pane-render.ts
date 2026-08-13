@@ -54,6 +54,7 @@ import {
 } from "./chat-state-route.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
@@ -228,6 +229,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       narrowLayout:
         chatLayoutWidth <
         WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
+      onOpenSubagentDetail: (task) =>
+        state.handleOpenSidebar({ kind: "subagent", taskId: task.id }),
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
     // Only side-docked rails narrow the conversation region.
@@ -603,21 +606,15 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       chat,
       ...(state.sidebarContent
         ? {
-            detail: html`<openclaw-chat-detail-panel
-              class="chat-sidebar"
-              .content=${state.sidebarContent}
-              .loadFullMessage=${fullMessageLoader}
-              .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
-              .embedSandboxMode=${state.embedSandboxMode}
-              .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}
-              .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
-                openSessionWorkspaceFile(state, target)}
-              .onRevealInWorkspace=${(path: string) => revealSessionWorkspaceFile(state, path)}
-              .onOpenImage=${(item: Parameters<typeof state.handleOpenImage>[0]) =>
-                state.handleOpenImage(item, state.beginImageOpen())}
-              .embedded=${true}
-              @chat-detail-panel-close=${() => state.handleCloseSidebar()}
-            ></openclaw-chat-detail-panel>`,
+            detail: renderChatDetailSlot({
+              backgroundTasks,
+              chat: props,
+              content: state.sidebarContent,
+              fullMessageLoader,
+              host: state,
+              layout: sidebarLayout,
+              transcript: this.subagentSidebarTranscript,
+            }),
           }
         : {}),
       ...(discussion
