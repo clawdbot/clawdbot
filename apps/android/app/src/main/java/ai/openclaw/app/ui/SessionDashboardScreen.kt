@@ -5,6 +5,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,9 @@ internal fun SessionDashboardScreen(
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   var showingDesktop by rememberSaveable(sessionKey) { mutableStateOf(false) }
   if (showingDesktop) {
+    // The viewer replaces this screen in place rather than pushing a shell tab, so it must
+    // claim System Back itself; the shell handler would otherwise pop the whole dashboard.
+    BackHandler { showingDesktop = false }
     // Session summaries do not advertise an environment id, so the viewer opens
     // its source picker instead of guessing a gateway or node association.
     DesktopScreen(viewModel = viewModel, source = null, onBack = { showingDesktop = false })
