@@ -95,16 +95,17 @@ function buildMultiAccountTelegramConfig(params: {
   } as OpenClawConfig;
 }
 
-function makeForeignChannelApprovalRequest(params: {
+function makeChannelApprovalRequest(params: {
   id: string;
   sessionKey?: string;
+  turnSourceChannel?: string;
 }): TelegramExecApprovalRequest {
   return {
     id: params.id,
     request: {
       command: "echo hi",
       sessionKey: params.sessionKey ?? "agent:ops:missing",
-      turnSourceChannel: "slack",
+      turnSourceChannel: params.turnSourceChannel ?? "slack",
       turnSourceTo: "channel:C123",
     },
     createdAtMs: 0,
@@ -168,7 +169,7 @@ describe("telegram exec approvals", () => {
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(true);
   });
 
-  it("does not handle foreign-channel approval requests even when command owner identifies the Telegram operator", () => {
+  it("does not require explicit Telegram exec approvers when command owner identifies the operator", () => {
     const cfg = {
       ...buildConfig(),
       commands: {
@@ -179,14 +180,15 @@ describe("telegram exec approvals", () => {
     expect(cfg.channels?.telegram?.execApprovals?.approvers).toBeUndefined();
     expect(getTelegramExecApprovalApprovers({ cfg })).toEqual(["12345"]);
     expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(true);
-    // Cross-channel requests must be rejected even when approvers are inferred
-    // from command owners — fix for #122495.
     expect(
       shouldHandleTelegramExecApprovalRequest({
         cfg,
-        request: makeForeignChannelApprovalRequest({ id: "discord-diagnostics" }),
+        request: makeChannelApprovalRequest({
+          id: "telegram-diagnostics",
+          turnSourceChannel: "telegram",
+        }),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not infer approvers from Telegram chat allowlists", () => {
@@ -254,7 +256,7 @@ describe("telegram exec approvals", () => {
       },
     });
     const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });
-    const request = makeForeignChannelApprovalRequest({
+    const request = makeChannelApprovalRequest({
       id: "req-2",
       sessionKey: "agent:ops:telegram:direct:123",
     });
@@ -273,28 +275,6 @@ describe("telegram exec approvals", () => {
         request,
       }),
     ).toBe(true);
-  });
-
-  it("rejects foreign-channel accounts as unbound route candidates when no explicit target configured", () => {
-    const cfg = buildMultiAccountTelegramConfig({});
-    const request = makeForeignChannelApprovalRequest({ id: "req-3" });
-
-    // Cross-channel requests (e.g. WhatsApp-initiated) must not leak to Telegram
-    // via the single-account fallback — fix for #122495.
-    expect(
-      shouldHandleTelegramExecApprovalRequest({
-        cfg,
-        accountId: "default",
-        request,
-      }),
-    ).toBe(false);
-    expect(
-      shouldHandleTelegramExecApprovalRequest({
-        cfg,
-        accountId: "ops",
-        request,
-      }),
-    ).toBe(false);
   });
 
   it("reports each eligible same-channel account as a raw route candidate", () => {
@@ -317,12 +297,10 @@ describe("telegram exec approvals", () => {
   });
 
   it("rejects unbound foreign-channel approvals even when only one telegram account can handle them", () => {
-    // Previously, single-account Telegram deployments would leak cross-channel
-    // approval requests. This is the regression test for fix #122495.
     const cfg = buildMultiAccountTelegramConfig({
       opsExecApprovals: { enabled: false, approvers: ["123"] },
     });
-    const request = makeForeignChannelApprovalRequest({ id: "req-4" });
+    const request = makeChannelApprovalRequest({ id: "req-4" });
 
     expect(
       shouldHandleTelegramExecApprovalRequest({
@@ -340,7 +318,7 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
   });
 
-  it("rejects foreign-channel requests regardless of request filters (cross-channel leak fix #122495)", () => {
+  it("uses request filters when checking unbound telegram account eligibility", () => {
     const cfg = buildMultiAccountTelegramConfig({
       defaultExecApprovals: {
         enabled: true,
@@ -353,16 +331,18 @@ describe("telegram exec approvals", () => {
         agentFilter: ["other"],
       },
     });
-    const request = makeForeignChannelApprovalRequest({ id: "req-5" });
+    const request = makeChannelApprovalRequest({
+      id: "req-5",
+      turnSourceChannel: "telegram",
+    });
 
-    // Cross-channel source must never fall through to Telegram without explicit target.
     expect(
       shouldHandleTelegramExecApprovalRequest({
         cfg,
         accountId: "default",
         request,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldHandleTelegramExecApprovalRequest({
         cfg,
@@ -466,18 +446,20 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
   });
 
-  it("rejects foreign-channel requests regardless of disabled account state (cross-channel leak fix #122495)", () => {
+  it("ignores disabled telegram accounts when checking unbound account eligibility", () => {
     const cfg = buildMultiAccountTelegramConfig({ opsOverrides: { enabled: false } });
-    const request = makeForeignChannelApprovalRequest({ id: "req-6" });
+    const request = makeChannelApprovalRequest({
+      id: "req-6",
+      turnSourceChannel: "telegram",
+    });
 
-    // Even with only one active Telegram account, cross-channel requests must be rejected.
     expect(
       shouldHandleTelegramExecApprovalRequest({
         cfg,
         accountId: "default",
         request,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldHandleTelegramExecApprovalRequest({
         cfg,

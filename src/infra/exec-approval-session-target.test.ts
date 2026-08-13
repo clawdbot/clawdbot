@@ -90,27 +90,37 @@ describe("native approval account selection", () => {
     ).toBe(false);
   });
 
-  it("rejects cross-channel requests when turnSourceChannel does not match expected channel", () => {
-    const whatsappRequest: ExecApprovalRequest = {
-      id: "req-whatsapp",
-      request: {
-        command: "echo test",
-        sessionKey: "agent:main:main",
-        turnSourceChannel: "whatsapp",
+  it("rejects foreign-channel fallback but preserves explicit forwarding", () => {
+    const request = buildRequest({ turnSourceChannel: "whatsapp" });
+    const explicitTargetConfig: OpenClawConfig = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "owner" }],
+        },
       },
-      createdAtMs: 1000,
-      expiresAtMs: 6000,
     };
     expect(
       doesApprovalRequestSelectChannelAccount({
         cfg: {},
-        request: whatsappRequest,
+        request,
         channel: "telegram",
         accountId: "default",
         defaultAccountId: "default",
         eligibleAccountIds: ["default"],
       }),
     ).toBe(false);
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: explicitTargetConfig,
+        request,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(true);
   });
 
   it("selects the recorded account even when several accounts are eligible", () => {

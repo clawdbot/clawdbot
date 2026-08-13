@@ -261,9 +261,8 @@ export function doesApprovalRequestSelectChannelAccount(params: {
   if (boundAccountId || forwardAccountIds.length > 0) {
     return false;
   }
-  const expectedChannel = normalizeOptionalChannel(params.channel);
   const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
-  if (turnSourceChannel && expectedChannel && turnSourceChannel !== expectedChannel) {
+  if (turnSourceChannel && turnSourceChannel !== normalizeOptionalChannel(params.channel)) {
     return false;
   }
   const eligibleAccountIds = params.eligibleAccountIds
