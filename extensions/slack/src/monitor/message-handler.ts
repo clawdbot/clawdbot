@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
@@ -101,6 +102,24 @@ export function createSlackMessageHandler(params: {
   dispatchReplayGuard?: SlackMessageDispatchReplayGuard;
 }): SlackMessageHandler {
   const { ctx, account, trackEvent, onPrepared } = params;
+  const runtimeContexts = new WeakMap<
+    NonNullable<SlackMonitorContext["cfg"]>,
+    SlackMonitorContext
+  >();
+  const resolveRuntimeContext = (): SlackMonitorContext => {
+    // Channel monitors outlive config reloads; pin one live snapshot per turn without reconnecting.
+    const runtimeConfig = getRuntimeConfigSnapshot();
+    if (!runtimeConfig || runtimeConfig === ctx.cfg) {
+      return ctx;
+    }
+    const cached = runtimeContexts.get(runtimeConfig);
+    if (cached) {
+      return cached;
+    }
+    const runtimeContext = { ...ctx, cfg: runtimeConfig };
+    runtimeContexts.set(runtimeConfig, runtimeContext);
+    return runtimeContext;
+  };
   const dispatchReplayGuard =
     params.dispatchReplayGuard ??
     createSlackMessageDispatchReplayGuard({
@@ -274,8 +293,9 @@ export function createSlackMessageHandler(params: {
               let visibleDrop = false;
               let settlementHandedOff = false;
               try {
+                const runtimeContext = resolveRuntimeContext();
                 prepared = await prepareSlackMessage({
-                  ctx,
+                  ctx: runtimeContext,
                   account,
                   message: syntheticMessage,
                   opts: {
