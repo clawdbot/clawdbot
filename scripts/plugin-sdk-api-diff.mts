@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -122,21 +122,51 @@ function git(repoRoot: string, args: string[]): string {
   return result.stdout.trim();
 }
 
-function installRevisionDependencies(repoRoot: string): void {
-  const result = spawnSync(
-    "pnpm",
-    ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "openclaw"],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: GIT_MAX_BUFFER,
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error(
-      result.stderr.trim() || result.stdout.trim() || "Plugin SDK revision install failed",
-    );
-  }
+async function runAbortableChild(params: {
+  args: string[];
+  command: string;
+  cwd: string;
+  failureMessage: string;
+  signal: AbortSignal;
+}): Promise<void> {
+  let stdout = "";
+  let stderr = "";
+  let spawnError: Error | undefined;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(params.command, params.args, {
+      cwd: params.cwd,
+      signal: params.signal,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk.slice(0, Math.max(0, GIT_MAX_BUFFER - stdout.length));
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk.slice(0, Math.max(0, GIT_MAX_BUFFER - stderr.length));
+    });
+    child.on("error", (error) => {
+      spawnError = error;
+    });
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(spawnError ?? new Error(stderr.trim() || stdout.trim() || params.failureMessage));
+    });
+  });
+}
+
+async function installRevisionDependencies(repoRoot: string, signal: AbortSignal): Promise<void> {
+  await runAbortableChild({
+    command: "pnpm",
+    args: ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "openclaw"],
+    cwd: repoRoot,
+    failureMessage: "Plugin SDK revision install failed",
+    signal,
+  });
 }
 
 async function writeFile(filePath: string, content: string): Promise<void> {
@@ -144,10 +174,15 @@ async function writeFile(filePath: string, content: string): Promise<void> {
   await fs.writeFile(filePath, content, "utf8");
 }
 
-function renderRevision(repoRoot: string, revisionRoot: string, outputPath: string): void {
-  const result = spawnSync(
-    process.execPath,
-    [
+async function renderRevision(
+  repoRoot: string,
+  revisionRoot: string,
+  outputPath: string,
+  signal: AbortSignal,
+): Promise<void> {
+  await runAbortableChild({
+    command: process.execPath,
+    args: [
       "--max-old-space-size=6144",
       "--import",
       "tsx",
@@ -157,15 +192,10 @@ function renderRevision(repoRoot: string, revisionRoot: string, outputPath: stri
       "--output",
       outputPath,
     ],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: GIT_MAX_BUFFER,
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || result.stdout.trim() || "Plugin SDK API render failed");
-  }
+    cwd: repoRoot,
+    failureMessage: "Plugin SDK API render failed",
+    signal,
+  });
 }
 
 async function renderWorker(argv: string[]): Promise<boolean> {
@@ -196,6 +226,8 @@ async function main(): Promise<void> {
     { commit: headCommit, name: "head" },
   ] as const;
   const addedWorktrees: string[] = [];
+  const abortController = new AbortController();
+  let interruptedExitCode: number | undefined;
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= (async () => {
@@ -216,7 +248,8 @@ async function main(): Promise<void> {
     return cleanupPromise;
   };
   const stop = (exitCode: number): void => {
-    void cleanup().finally(() => process.exit(exitCode));
+    interruptedExitCode ??= exitCode;
+    abortController.abort();
   };
   const stopOnInterrupt = (): void => stop(130);
   const stopOnTerminate = (): void => stop(143);
@@ -230,13 +263,23 @@ async function main(): Promise<void> {
       addedWorktrees.push(worktree);
       git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
       git(worktree, ["checkout", "--detach", root.commit]);
-      installRevisionDependencies(worktree);
+      await installRevisionDependencies(worktree, abortController.signal);
     }
 
     const baseRenderPath = path.join(temporaryRoot, "base.json");
     const headRenderPath = path.join(temporaryRoot, "head.json");
-    renderRevision(repoRoot, path.join(temporaryRoot, "base"), baseRenderPath);
-    renderRevision(repoRoot, path.join(temporaryRoot, "head"), headRenderPath);
+    await renderRevision(
+      repoRoot,
+      path.join(temporaryRoot, "base"),
+      baseRenderPath,
+      abortController.signal,
+    );
+    await renderRevision(
+      repoRoot,
+      path.join(temporaryRoot, "head"),
+      headRenderPath,
+      abortController.signal,
+    );
     const before = parsePluginSdkApiDiffSurface(await fs.readFile(baseRenderPath, "utf8"));
     const after = parsePluginSdkApiDiffSurface(await fs.readFile(headRenderPath, "utf8"));
     const diff = diffPluginSdkApi(before, after);
@@ -272,10 +315,17 @@ async function main(): Promise<void> {
         process.exitCode = 1;
       }
     }
+  } catch (error) {
+    if (interruptedExitCode === undefined) {
+      throw error instanceof Error ? error : new Error("Plugin SDK API diff failed");
+    }
   } finally {
     process.off("SIGINT", stopOnInterrupt);
     process.off("SIGTERM", stopOnTerminate);
     await cleanup();
+  }
+  if (interruptedExitCode !== undefined) {
+    process.exitCode = interruptedExitCode;
   }
 }
 
