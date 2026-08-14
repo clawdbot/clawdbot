@@ -23,7 +23,9 @@ describe("agent database media migration error classification", () => {
   it("does not classify similar operator guidance as the migration error", () => {
     expect(
       findOpenClawAgentDatabaseMediaMigrationRequiredError(
-        new Error("OpenClaw agent database is outdated; run openclaw doctor --fix to migrate it."),
+        new Error(
+          "OpenCrustacean agent database is outdated; run openclaw doctor --fix to migrate it.",
+        ),
       ),
     ).toBeUndefined();
   });

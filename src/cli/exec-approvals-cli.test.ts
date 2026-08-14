@@ -563,7 +563,7 @@ describe("exec approvals CLI", () => {
 
     expect(writtenJson().defaultAction).toBe("deny");
     expect(effectivePolicy()).toEqual({
-      note: "This node enforces a host-native exec policy; OpenClaw approvals-file policy math does not apply.",
+      note: "This node enforces a host-native exec policy; OpenCrustacean approvals-file policy math does not apply.",
       scopes: [],
     });
     expect(callGatewayFromCli.mock.calls.map((call) => call[0])).toEqual([
@@ -823,7 +823,7 @@ describe("exec approvals CLI", () => {
       "tools.exec askFallback",
       {
         effective: "deny",
-        source: "OpenClaw default (deny)",
+        source: "OpenCrustacean default (deny)",
       },
     );
 
@@ -840,7 +840,7 @@ describe("exec approvals CLI", () => {
     });
     expectFields(requireRecord(agentScope.askFallback, "agent askFallback"), "agent askFallback", {
       effective: "deny",
-      source: "OpenClaw default (deny)",
+      source: "OpenCrustacean default (deny)",
     });
   });
 

@@ -312,7 +312,7 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("uses the configured workspace only as inference and OpenClaw context", async () => {
+  it("uses the configured workspace only as inference and OpenCrustacean context", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: true,
@@ -718,7 +718,7 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("keeps OpenClaw unavailable until a manual key passes", async () => {
+  it("keeps OpenCrustacean unavailable until a manual key passes", async () => {
     promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
     const text = vi.fn().mockResolvedValueOnce("bad-key").mockResolvedValueOnce("good-key");
     const prompter = createWizardPrompter({
@@ -820,7 +820,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).not.toHaveBeenCalled();
   });
 
-  it("converges remote inference before remote OpenClaw without mutating local config", async () => {
+  it("converges remote inference before remote OpenCrustacean without mutating local config", async () => {
     const localConfig = {
       wizard: { securityAcknowledgedAt: "2026-07-11T00:00:00.000Z" },
       agents: {

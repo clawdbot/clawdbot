@@ -283,7 +283,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
     ).toBe("OpenAI Codex");
   });
 
-  it("reports the owning Codex harness for a locked session with stale OpenClaw metadata", () => {
+  it("reports the owning Codex harness for a locked session with stale OpenCrustacean metadata", () => {
     expect(
       resolveSessionRuntimeLabel({
         cfg: {

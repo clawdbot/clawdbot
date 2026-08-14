@@ -53,13 +53,13 @@ export async function loadValidConfig(
   }
   if (options.json) {
     writeRuntimeJson(runtime, {
-      error: `OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`,
+      error: `OpenCrustacean config is invalid: ${shortenHomePath(snapshot.path)}`,
       issues: normalizeConfigIssues(snapshot.issues),
     });
     runtime.exit(1);
     return snapshot;
   }
-  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
+  runtime.error(`OpenCrustacean config is invalid: ${shortenHomePath(snapshot.path)}`);
   const displayIssues = attachConfigIssueDiagnostics(snapshot.issues, {
     raw: snapshot.raw,
     parsed: snapshot.parsed,

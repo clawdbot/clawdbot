@@ -289,7 +289,7 @@ describe("parseSystemAgentOperation", () => {
     expect(parseSystemAgentOperation("plugin install npm:@example/plugin")).toEqual({
       kind: "none",
       message:
-        "OpenClaw installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.",
+        "OpenCrustacean installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.",
     });
   });
 
@@ -396,14 +396,14 @@ describe("parseSystemAgentOperation", () => {
     await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
   });
 
-  it("reserves the normalized OpenClaw agent identity before any write or audit", async () => {
+  it("reserves the normalized OpenCrustacean agent identity before any write or audit", async () => {
     const tempDir = opTempDirs.make("openclaw-agent-id-reserved-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
     const createAgent = vi.fn();
     const operation = {
       kind: "create-agent" as const,
-      agentId: "OpenClaw",
+      agentId: "OpenCrustacean",
       workspace: "/tmp/work",
     };
 

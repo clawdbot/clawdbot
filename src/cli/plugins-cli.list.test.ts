@@ -653,7 +653,7 @@ describe("plugins cli list", () => {
     );
 
     expect(runtimeErrors.at(-1)).toContain(
-      "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
+      "Skill Workshop is built into OpenCrustacean, not a plugin; configure it under skills.workshop.",
     );
     expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
       config,

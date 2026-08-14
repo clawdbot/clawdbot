@@ -11,7 +11,7 @@ export const GATEWAY_DAEMON_RUNTIME_OPTIONS: Array<{
   {
     value: "node",
     label: "Node",
-    hint: "Required for OpenClaw's SQLite-backed runtime state.",
+    hint: "Required for OpenCrustacean's SQLite-backed runtime state.",
   },
 ];
 

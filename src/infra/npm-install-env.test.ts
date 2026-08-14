@@ -107,7 +107,7 @@ describe("npm project install env", () => {
     });
   });
 
-  it("bypasses npm release-age filters for OpenClaw-managed installs", () => {
+  it("bypasses npm release-age filters for OpenCrustacean-managed installs", () => {
     const env = createNpmProjectInstallEnv(
       {
         NPM_CONFIG_BEFORE: "2026-01-01T00:00:00.000Z",

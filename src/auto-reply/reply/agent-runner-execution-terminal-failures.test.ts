@@ -560,7 +560,7 @@ describe("executeAgentTurn: terminal failures", () => {
   it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
     const recoveryText =
       "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
-      "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
+      "OpenCrustacean run: run-max-turns. OpenCrustacean session: session-1. Claude session: claude-session-1. " +
       "Tool actions may already have run; verify their effects before retrying. " +
       "Retry with a higher --max-turns value or a narrower task.";
     const maxTurns = new FailoverError(recoveryText, {
@@ -649,7 +649,7 @@ describe("executeAgentTurn: terminal failures", () => {
       expect(result.payload.text).toContain("gateway is unaffected");
       if (mode === "overall") {
         expect(result.payload.text).toContain("overall turn limit");
-        expect(result.payload.text).toContain("detached OpenClaw sub-agent");
+        expect(result.payload.text).toContain("detached OpenCrustacean sub-agent");
         expect(result.payload.text).toContain("agents.defaults.timeoutSeconds");
         expect(result.payload.text).not.toContain("noOutputTimeoutMs");
       } else {

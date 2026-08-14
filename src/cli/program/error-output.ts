@@ -60,7 +60,7 @@ export function formatCliParseErrorOutput(
   if (unknownCommand) {
     const command = unknownCommand[1] ?? "";
     return lines(
-      theme.error(`OpenClaw does not know the command ${quote(command)}.`),
+      theme.error(`OpenCrustacean does not know the command ${quote(command)}.`),
       formatCliCommandSuggestions(command),
       formatHelpHint(options.argv, { root: true }),
       `${theme.muted("Plugin command?")} ${theme.command(formatCliCommand("openclaw plugins list"))}`,
@@ -72,7 +72,7 @@ export function formatCliParseErrorOutput(
   if (unknownOption) {
     const option = unknownOption[1] ?? "";
     return lines(
-      theme.error(`OpenClaw does not recognize option ${quote(option)}.`),
+      theme.error(`OpenCrustacean does not recognize option ${quote(option)}.`),
       formatHelpHint(options.argv, { commandPath: options.commandPath }),
     );
   }
@@ -103,7 +103,7 @@ export function formatCliParseErrorOutput(
   }
 
   return lines(
-    theme.error(`OpenClaw could not parse this command: ${message}`),
+    theme.error(`OpenCrustacean could not parse this command: ${message}`),
     formatHelpHint(options.argv, { commandPath: options.commandPath }),
   );
 }

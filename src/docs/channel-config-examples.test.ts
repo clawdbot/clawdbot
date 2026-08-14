@@ -95,7 +95,7 @@ describe("channel docs config examples", () => {
     expect(failures).toStrictEqual([]);
   });
 
-  it("keeps OpenClaw channel config snippets parseable and schema-valid", () => {
+  it("keeps OpenCrustacean channel config snippets parseable and schema-valid", () => {
     const failures: string[] = [];
     for (const docPath of listChannelDocFiles()) {
       const fileName = path.basename(docPath);

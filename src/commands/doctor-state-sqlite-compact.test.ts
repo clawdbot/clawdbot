@@ -266,7 +266,7 @@ describe("runDoctorStateSqliteCompact", () => {
         { env },
         {
           withMaintenanceLock: async () => {
-            throw new Error("Gateway owns this OpenClaw state directory");
+            throw new Error("Gateway owns this OpenCrustacean state directory");
           },
         },
       ),

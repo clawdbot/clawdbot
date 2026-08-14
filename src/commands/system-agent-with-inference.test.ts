@@ -37,7 +37,7 @@ describe("runSystemAgentWithInference", () => {
     exitMocks.requestExitAfterOneShotOutput.mockReturnValue(false);
   });
 
-  it("starts OpenClaw only after live inference succeeds", async () => {
+  it("starts OpenCrustacean only after live inference succeeds", async () => {
     const runSystemAgent = vi.fn(async () => {});
     const verifyInference = vi.fn(async () => workingInference());
     const currentRuntime = runtime();
@@ -161,7 +161,7 @@ describe("runSystemAgentWithInference", () => {
     expect(currentRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("lets interactive OpenClaw execution errors propagate", async () => {
+  it("lets interactive OpenCrustacean execution errors propagate", async () => {
     const currentRuntime = runtime();
 
     await expect(
@@ -221,7 +221,7 @@ describe("runSystemAgentWithInference", () => {
     );
 
     expect(currentRuntime.error).toHaveBeenCalledWith(
-      "OpenClaw needs an interactive TTY. Use --message for one command.",
+      "OpenCrustacean needs an interactive TTY. Use --message for one command.",
     );
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
     expect(verifyInference).not.toHaveBeenCalled();
@@ -239,7 +239,7 @@ describe("runSystemAgentWithInference", () => {
     );
 
     expect(currentRuntime.error).toHaveBeenCalledWith(
-      "OpenClaw --yes requires --message so approval is limited to one request.",
+      "OpenCrustacean --yes requires --message so approval is limited to one request.",
     );
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
     expect(verifyInference).not.toHaveBeenCalled();
@@ -251,7 +251,7 @@ describe("runSystemAgentWithInference", () => {
     await runSystemAgentWithInference({ json: true, yes: true }, currentRuntime);
 
     expect(currentRuntime.log).toHaveBeenCalledWith(
-      expect.stringContaining('"error": "OpenClaw --yes requires --message'),
+      expect.stringContaining('"error": "OpenCrustacean --yes requires --message'),
     );
     expect(currentRuntime.error).not.toHaveBeenCalled();
     expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);

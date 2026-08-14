@@ -81,7 +81,7 @@ export function buildSubagentSystemPrompt(params: {
       ...(acpEnabled
         ? [
             'ACP harness: `sessions_spawn(runtime:"acp")`; set `agentId` unless default. Codex only explicit ACP/acpx.',
-            "`agents_list`/`subagents` = OpenClaw runtime=subagent only; ACP ids from `acp.allowedAgents`.",
+            "`agents_list`/`subagents` = OpenCrustacean runtime=subagent only; ACP ids from `acp.allowedAgents`.",
             "Never ask user for slash/CLI or exec openclaw/acpx when sessions_spawn can act.",
             "Subagent results auto-announce; ACP continues bound thread. No polling.",
           ]

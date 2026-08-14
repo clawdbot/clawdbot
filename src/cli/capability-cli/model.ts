@@ -51,7 +51,7 @@ import {
   resolveTransport,
 } from "./shared.js";
 
-const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
+const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenCrustacean.";
 const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
 async function loadModelCatalogForInspection(cfg: OpenClawConfig) {

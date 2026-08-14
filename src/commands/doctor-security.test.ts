@@ -499,7 +499,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("tools.exec is broader than the host exec policy");
     expect(message).toContain('tools.exec.mode="full"');
     expect(message).toContain('defaults.security="allowlist"');
-    expect(message).not.toContain("OpenClaw default");
+    expect(message).not.toContain("OpenCrustacean default");
   });
 
   it("attributes broader host policy warnings to wildcard agent entries", async () => {

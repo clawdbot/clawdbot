@@ -40,7 +40,7 @@ describe("control-ui-i18n placeholder validation", () => {
 });
 
 describe("control-ui-i18n translation runtime resolution", () => {
-  it("uses the in-tree OpenClaw LLM model catalog", () => {
+  it("uses the in-tree OpenCrustacean LLM model catalog", () => {
     expect(resolveTranslationModel()).toMatchObject({
       id: "gpt-5.6-sol",
       provider: "openai",

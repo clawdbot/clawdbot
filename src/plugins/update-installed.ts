@@ -128,7 +128,7 @@ export async function updateNpmInstalledPlugins(params: {
       options.installedPayloadRunnable === true;
     if (params.disableOnFailure && !params.dryRun && !preserveInstalledPayload) {
       const disabledMessage =
-        `Disabled "${pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
+        `Disabled "${pluginId}" after plugin update failure; OpenCrustacean will continue without it. ` +
         message;
       logger.warn?.(disabledMessage);
       next = disablePluginAfterUpdateFailure(next, pluginId);

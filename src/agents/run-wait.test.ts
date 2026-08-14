@@ -113,7 +113,7 @@ describe("readLatestAssistantReply", () => {
     expect(result).toBe("older output");
   });
 
-  it("skips trailing transcript-only OpenClaw assistant mirrors for normal latest-reply reads", async () => {
+  it("skips trailing transcript-only OpenCrustacean assistant mirrors for normal latest-reply reads", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [
         {

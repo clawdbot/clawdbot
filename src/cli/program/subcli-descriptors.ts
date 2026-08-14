@@ -157,7 +157,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "docs",
-    description: "Search the live OpenClaw docs",
+    description: "Search the live OpenCrustacean docs",
     hasSubcommands: false,
   },
   {
@@ -167,7 +167,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "proxy",
-    description: "Run the OpenClaw debug proxy and inspect captured traffic",
+    description: "Run the OpenCrustacean debug proxy and inspect captured traffic",
     hasSubcommands: true,
     machineOutput: ({ argv }) => isProxyMachineOutput(argv),
   },
@@ -198,7 +198,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "plugins",
-    description: "Manage OpenClaw plugins and extensions",
+    description: "Manage OpenCrustacean plugins and extensions",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -231,7 +231,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "update",
-    description: "Update OpenClaw and inspect update channel status",
+    description: "Update OpenCrustacean and inspect update channel status",
     hasSubcommands: true,
   },
   {

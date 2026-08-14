@@ -130,7 +130,7 @@ export async function resolveNonInteractiveApiKey(params: {
 
   if (flagKey) {
     if (isMalformedApiKeyInput(flagKey)) {
-      params.runtime.error("Paste the API key value, not an OpenClaw onboarding command.");
+      params.runtime.error("Paste the API key value, not an OpenCrustacean onboarding command.");
       params.runtime.exit(1);
       return null;
     }

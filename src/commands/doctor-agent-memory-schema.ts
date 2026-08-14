@@ -69,7 +69,7 @@ function inspectAgentMemoryRecallMetadataMigration(
 ): MemoryRecallMetadataMigrationState | null {
   const stat = fs.lstatSync(pathname);
   if (!stat.isFile()) {
-    throw new Error(`OpenClaw agent database is not a regular file: ${pathname}`);
+    throw new Error(`OpenCrustacean agent database is not a regular file: ${pathname}`);
   }
   const database = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {

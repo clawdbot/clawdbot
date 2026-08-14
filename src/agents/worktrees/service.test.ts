@@ -49,7 +49,7 @@ async function initializeRepository(
   const repo = path.join(root, name);
   await fs.mkdir(repo, { recursive: true });
   await git(repo, "init", "-b", "main", `--template=${gitTemplate}`);
-  await git(repo, "config", "user.name", "OpenClaw Test");
+  await git(repo, "config", "user.name", "OpenCrustacean Test");
   await git(repo, "config", "user.email", "openclaw-test@example.invalid");
   await fs.writeFile(path.join(repo, "README.md"), "base\n");
   await git(repo, "add", "README.md");
@@ -538,7 +538,7 @@ describe("ManagedWorktreeService", () => {
     expect(await git(restored.path, "branch", "--show-current")).toBe(created.branch);
     expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
     expect(await git(restored.path, "log", "--format=%s", created.branch)).not.toContain(
-      "OpenClaw worktree snapshot",
+      "OpenCrustacean worktree snapshot",
     );
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("changed\n");
     expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(

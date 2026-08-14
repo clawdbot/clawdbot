@@ -93,7 +93,7 @@ function resolveOpenClawToolsServeCommand(): { command: string; args: string[] }
     cwd: process.cwd(),
   });
   if (!packageRoot) {
-    throw new Error("openclaw-tools MCP: could not resolve the OpenClaw package root");
+    throw new Error("openclaw-tools MCP: could not resolve the OpenCrustacean package root");
   }
   const distEntry = path.join(packageRoot, "dist", "mcp", "openclaw-tools-serve.js");
   if (fs.existsSync(distEntry)) {

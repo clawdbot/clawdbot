@@ -81,7 +81,7 @@ export function resolveRequiredHomeDir(
     return path.resolve(resolved);
   }
   throw new Error(
-    "Unable to resolve an OpenClaw home: set OPENCLAW_HOME, HOME, or USERPROFILE, or run from an existing directory.",
+    "Unable to resolve an OpenCrustacean home: set OPENCLAW_HOME, HOME, or USERPROFILE, or run from an existing directory.",
   );
 }
 

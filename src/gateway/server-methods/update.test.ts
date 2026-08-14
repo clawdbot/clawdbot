@@ -204,7 +204,7 @@ vi.mock("../../infra/update-managed-service-handoff.js", () => ({
   },
   buildManagedServiceHandoffUnavailableMessage: (command: string) =>
     [
-      "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
+      "OpenCrustacean updates cannot safely run inside the live gateway process without a managed-service handoff.",
       `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host UI.`,
     ].join("\n"),
 }));
@@ -868,7 +868,7 @@ describe("update.run restart scheduling", () => {
       status: "unavailable",
       command: "openclaw update --yes --timeout 1800",
       message:
-        "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.\n" +
+        "OpenCrustacean updates cannot safely run inside the live gateway process without a managed-service handoff.\n" +
         "Run `openclaw update --yes --timeout 1800` from a shell outside the gateway service, or restart/update from the host UI.",
     });
   });

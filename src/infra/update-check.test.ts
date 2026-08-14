@@ -31,7 +31,7 @@ async function runGit(cwd: string, ...args: string[]): Promise<string> {
 async function initGitRepo(root: string): Promise<void> {
   await fs.mkdir(root, { recursive: true });
   await runGit(root, "init", "--initial-branch=main");
-  await runGit(root, "config", "user.name", "OpenClaw Test");
+  await runGit(root, "config", "user.name", "OpenCrustacean Test");
   await runGit(root, "config", "user.email", "test@openclaw.invalid");
 }
 
@@ -52,7 +52,7 @@ describe("compareSemverStrings", () => {
     expect(compareSemverStrings("2026.6.6.beta.2", "2026.6.6-beta.1")).toBe(1);
   });
 
-  it("treats OpenClaw stable correction releases as newer than their base release", () => {
+  it("treats OpenCrustacean stable correction releases as newer than their base release", () => {
     expect(compareSemverStrings("2026.5.3", "2026.5.3-1")).toBe(-1);
     expect(compareSemverStrings("2026.5.3-1", "2026.5.3")).toBe(1);
     expect(compareSemverStrings("2026.5.3-2", "2026.5.3-1")).toBe(1);
@@ -816,7 +816,7 @@ describe("checkUpdateStatus", () => {
     });
   });
 
-  it("detects lockless OpenClaw npm installs despite packed pnpm metadata", async () => {
+  it("detects lockless OpenCrustacean npm installs despite packed pnpm metadata", async () => {
     await withTempDir({ prefix: "openclaw-update-check-lockless-npm-" }, async (base) => {
       const root = path.join(base, "prefix", "node_modules", "openclaw");
       await fs.mkdir(root, { recursive: true });

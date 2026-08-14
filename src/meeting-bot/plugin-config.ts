@@ -60,7 +60,7 @@ type MeetingPluginConfigOptions = {
 const DEFAULT_AUDIO_BUFFER_BYTES = 4_096;
 const DEFAULT_AUDIO_FORMAT: MeetingRealtimeAudioFormat = "pcm16-24khz";
 const DEFAULT_MODE_HELP =
-  "Agent consults OpenClaw, bidi uses direct realtime voice, and transcribe observes only.";
+  "Agent consults OpenCrustacean, bidi uses direct realtime voice, and transcribe observes only.";
 const CHROME_NODE_HELP = "Node id/name/IP that owns Chrome, BlackHole, and SoX.";
 
 function resolveBoolean(value: unknown, fallback: boolean): boolean {
@@ -123,7 +123,7 @@ export function createMeetingPluginConfigSchema(options: MeetingPluginConfigOpti
       audioFormat: DEFAULT_AUDIO_FORMAT,
       audioBufferBytes: DEFAULT_AUDIO_BUFFER_BYTES,
       launch: true,
-      guestName: "OpenClaw Agent",
+      guestName: "OpenCrustacean Agent",
       reuseExistingTab: true,
       autoJoin: true,
       joinTimeoutMs: 30_000,

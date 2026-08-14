@@ -1000,7 +1000,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(attemptParams?.agentHarnessRuntimeOverride).toBe("openclaw");
   });
 
-  it("routes non-empty request stream params through OpenClaw before auth preparation", async () => {
+  it("routes non-empty request stream params through OpenCrustacean before auth preparation", async () => {
     useOpenAIPlatformAuthFixture();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
@@ -2011,7 +2011,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
-  it("keeps missing OpenClaw auth fatal for a Codex harness without owned bootstrap", async () => {
+  it("keeps missing OpenCrustacean auth fatal for a Codex harness without owned bootstrap", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       makeAttemptResult({ assistantTexts: ["ok"] }),
@@ -2993,7 +2993,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
-  it("selects OpenClaw for a profile-to-direct subscription fallback plan", async () => {
+  it("selects OpenCrustacean for a profile-to-direct subscription fallback plan", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const subscriptionLimit = new Error("subscription profile exhausted");
     const normalizedLimit = Object.assign(new Error(subscriptionLimit.message), {
@@ -3333,7 +3333,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
   });
 
-  it("preserves a locked OpenClaw model in overflow compaction context", async () => {
+  it("preserves a locked OpenCrustacean model in overflow compaction context", async () => {
     useOpenAIPlatformAuthFixture();
     mockOverflowRetrySuccess({
       runEmbeddedAttempt: mockedRunEmbeddedAttempt,

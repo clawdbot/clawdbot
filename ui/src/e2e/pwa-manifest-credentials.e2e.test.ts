@@ -94,7 +94,7 @@ async function forwardAuthenticatedRequest(params: {
 
   response.setHeader("Cache-Control", "no-store");
   if (!authorized) {
-    response.writeHead(401, { "WWW-Authenticate": 'Basic realm="OpenClaw PWA E2E"' });
+    response.writeHead(401, { "WWW-Authenticate": 'Basic realm="OpenCrustacean PWA E2E"' });
     response.end("HTTP Basic authentication required");
     return;
   }
@@ -143,7 +143,7 @@ suite.define(() => {
       expect(manifest.url).toBe(new URL("manifest.webmanifest", proxy.baseUrl).href);
       expect(manifest.errors).toEqual([]);
       expect(JSON.parse(manifest.data ?? "null")).toEqual(
-        expect.objectContaining({ display: "standalone", name: "OpenClaw Control" }),
+        expect.objectContaining({ display: "standalone", name: "OpenCrustacean Control" }),
       );
       expect(
         await page.locator('link[rel="manifest"]').evaluate((link) => ({

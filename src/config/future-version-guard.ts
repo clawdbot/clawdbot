@@ -68,7 +68,7 @@ export function resolveFutureConfigActionBlock(
     action: params.action,
     currentVersion,
     touchedVersion,
-    message: `Refusing to ${params.action} because this OpenClaw binary (${currentVersion}) is older than the config last written by OpenClaw ${touchedVersion}.`,
+    message: `Refusing to ${params.action} because this OpenCrustacean binary (${currentVersion}) is older than the config last written by OpenCrustacean ${touchedVersion}.`,
     hints: [
       "Run the newer openclaw binary on PATH, or reinstall the intended gateway service from the newer install.",
       `Set ${ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV}=1 only for an intentional downgrade or recovery action.`,

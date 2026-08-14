@@ -40,7 +40,7 @@ describe("lockWorktreeForProcess", () => {
     const repo = path.join(root, "repo");
     await fs.mkdir(repo, { recursive: true });
     await git(repo, "init", "-b", "main");
-    await git(repo, "config", "user.name", "OpenClaw Test");
+    await git(repo, "config", "user.name", "OpenCrustacean Test");
     await git(repo, "config", "user.email", "openclaw-test@example.invalid");
     await fs.writeFile(path.join(repo, "README.md"), "base\n");
     await git(repo, "add", "README.md");
@@ -61,7 +61,7 @@ describe("lockWorktreeForProcess", () => {
     };
   }
 
-  it("reclaims a lock left behind by a dead OpenClaw process", async () => {
+  it("reclaims a lock left behind by a dead OpenCrustacean process", async () => {
     const record = await setupWorktree();
     const stalePid = await exitedPid();
     await git(
@@ -79,7 +79,7 @@ describe("lockWorktreeForProcess", () => {
     expect(await lockedReason(record.repoRoot, record.path)).toBe(`openclaw pid=${process.pid}`);
   });
 
-  it("keeps a lock held by a live OpenClaw process", async () => {
+  it("keeps a lock held by a live OpenCrustacean process", async () => {
     const record = await setupWorktree();
     // The parent process is alive and is not this process, so the lock must stand.
     const livePid = process.ppid;
@@ -97,7 +97,7 @@ describe("lockWorktreeForProcess", () => {
     expect(await lockedReason(record.repoRoot, record.path)).toBe(`openclaw pid=${livePid}`);
   });
 
-  it("keeps a foreign lock that OpenClaw does not own", async () => {
+  it("keeps a foreign lock that OpenCrustacean does not own", async () => {
     const record = await setupWorktree();
     await git(record.repoRoot, "worktree", "lock", "--reason", "held by hand", record.path);
 

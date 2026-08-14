@@ -612,7 +612,7 @@ describe("cloud target menu", () => {
         selectedId: "",
         submitting: false,
         disabled: true,
-        disabledReason: "Cloud workers require the OpenClaw runtime; codex is selected.",
+        disabledReason: "Cloud workers require the OpenCrustacean runtime; codex is selected.",
         onSelect: vi.fn(),
       }),
       container,
@@ -620,6 +620,8 @@ describe("cloud target menu", () => {
 
     const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
     expect(button?.disabled).toBe(true);
-    expect(button?.title).toBe("Cloud workers require the OpenClaw runtime; codex is selected.");
+    expect(button?.title).toBe(
+      "Cloud workers require the OpenCrustacean runtime; codex is selected.",
+    );
   });
 });

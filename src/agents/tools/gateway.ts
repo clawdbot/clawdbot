@@ -317,7 +317,7 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
       throw new Error(
         [
           "approved node gateway calls require a stable device identity.",
-          "Fix the OpenClaw state directory permissions and retry the approval.",
+          "Fix the OpenCrustacean state directory permissions and retry the approval.",
         ].join(" "),
         { cause: error },
       );
@@ -328,7 +328,7 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     throw new Error(
       [
         "remote approval gateway calls require a stable device identity.",
-        "Fix the OpenClaw state directory permissions or use the local approval-runtime gateway.",
+        "Fix the OpenCrustacean state directory permissions or use the local approval-runtime gateway.",
       ].join(" "),
       { cause: error },
     );
@@ -490,7 +490,7 @@ function isStaleGatewayNodeInvokeTurnSourceRejection(error: unknown): boolean {
 function staleGatewayAgentRuntimeIdentityError(cause: unknown): Error {
   return new Error(
     [
-      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata.",
+      "The running Gateway is from an older OpenCrustacean build and rejected current agent runtime connection metadata.",
       "Restart the Gateway with `openclaw gateway restart`, then retry.",
     ].join(" "),
     { cause },

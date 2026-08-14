@@ -506,7 +506,7 @@ function buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs: number): Securi
     title: "Sandbox browser Docker audit probe timed out",
     detail:
       `Docker did not answer within ${timeoutMs}ms while checking sandbox browser containers. ` +
-      "OpenClaw skipped any remaining sandbox browser container drift checks for this status run.",
+      "OpenCrustacean skipped any remaining sandbox browser container drift checks for this status run.",
     remediation:
       "Retry after Docker is responsive, or recreate sandbox browser containers if drift is suspected.",
   };
@@ -812,7 +812,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
           `Could not parse plugin manifest: ${String(manifestErr)}.\n` +
           "The extension entrypoint list is unavailable. Deep scan will cover the plugin directory but may miss entries declared via `openclaw.extensions`.",
         remediation:
-          "Inspect the plugin package.json for syntax errors. If the plugin is untrusted, remove it from your OpenClaw extensions state directory.",
+          "Inspect the plugin package.json for syntax errors. If the plugin is untrusted, remove it from your OpenCrustacean extensions state directory.",
       });
       // Continue — getCodeSafetySummary below still scans the plugin directory
     }
@@ -877,7 +877,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
         title: `Plugin "${pluginName}" contains dangerous code patterns`,
         detail: `Found ${summary.critical} critical issue(s) in ${summary.scannedFiles} scanned file(s):\n${details}`,
         remediation:
-          "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenClaw extensions state directory.",
+          "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenCrustacean extensions state directory.",
       });
     } else if (summary.warn > 0) {
       const warnFindings = summary.findings.filter((f) => f.severity === "warn");

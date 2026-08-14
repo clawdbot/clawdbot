@@ -253,7 +253,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(section?.textContent).not.toContain("Offline Node");
   });
 
-  it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
+  it("shows a catalog-owned OpenCrustacean session only in its catalog section", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
     const { sidebar } = await mountSidebar(

@@ -26,7 +26,7 @@ afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
 });
 
-describe("transport params runtime contract (embedded OpenClaw/OpenAI path)", () => {
+describe("transport params runtime contract (embedded OpenCrustacean/OpenAI path)", () => {
   it.each(OPENAI_GPT5_TRANSPORT_DEFAULT_CASES)(
     "applies OpenAI GPT-5 transport defaults for $provider/$modelId",
     ({ provider, modelId }) => {

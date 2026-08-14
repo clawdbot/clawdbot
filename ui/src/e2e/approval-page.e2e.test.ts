@@ -299,7 +299,7 @@ describeControlUiE2e("Control UI standalone approval page", () => {
         expectStandaloneApprovalPage(desktop.page),
       ]);
       await expectMobilePendingLayout(mobile.page);
-      expect(await mobile.page.title()).toBe("Command approval — OpenClaw");
+      expect(await mobile.page.title()).toBe("Command approval — OpenCrustacean");
       await waitForStableApprovalPaint(mobile.page);
       await mobile.page.screenshot({
         path: path.join(ARTIFACT_DIR, "01-pending-mobile.png"),
@@ -365,7 +365,7 @@ describeControlUiE2e("Control UI standalone approval page", () => {
       expect(terminalFocus.id).toBe("approval-page-title");
       expect(terminalFocus.top).toBeGreaterThanOrEqual(0);
       expect(terminalFocus.bottom).toBeLessThanOrEqual(terminalFocus.viewportHeight);
-      expect(await mobile.page.title()).toBe("Approved here — OpenClaw");
+      expect(await mobile.page.title()).toBe("Approved here — OpenCrustacean");
       await waitForStableApprovalPaint(mobile.page);
       await mobile.page.screenshot({
         path: path.join(ARTIFACT_DIR, "02-competing-answer-terminal.png"),
@@ -379,7 +379,7 @@ describeControlUiE2e("Control UI standalone approval page", () => {
       expect(terminalReload?.status()).toBe(200);
       await mobile.gateway.waitForRequest("approval.get");
       await mobile.page.getByRole("heading", { name: "Approved", exact: true }).waitFor();
-      expect(await mobile.page.title()).toBe("Approved — OpenClaw");
+      expect(await mobile.page.title()).toBe("Approved — OpenCrustacean");
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
       await expectStandaloneApprovalPage(mobile.page);
       await expectNoDecisionButtons(mobile.page);
@@ -559,7 +559,7 @@ describeControlUiE2e("Control UI standalone approval page", () => {
     expect(await surface.page.getByRole("button", { name: "Allow once" }).isDisabled()).toBe(true);
     await surface.page
       .getByText(
-        "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+        "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
         { exact: true },
       )
       .waitFor();

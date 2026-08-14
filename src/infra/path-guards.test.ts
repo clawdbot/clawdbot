@@ -33,8 +33,11 @@ describe("normalizeWindowsPathPreservingCase", () => {
     ["\\\\?\\C:\\Users\\Peter/Repo", "C:\\Users\\Peter\\Repo"],
     ["\\\\?\\UNC\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
     ["\\\\?\\unc\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
-    ["C:\\Users\\User\\OpenClaw\\src/Components", "C:\\Users\\User\\OpenClaw\\src\\Components"],
-    ["C:\\Users\\User\\OpenClaw  ", "C:\\Users\\User\\OpenClaw"],
+    [
+      "C:\\Users\\User\\OpenCrustacean\\src/Components",
+      "C:\\Users\\User\\OpenCrustacean\\src\\Components",
+    ],
+    ["C:\\Users\\User\\OpenCrustacean  ", "C:\\Users\\User\\OpenCrustacean"],
   ])("normalizes windows path %s without lowercasing", (input, expected) => {
     expect(normalizeWindowsPathPreservingCase(input)).toBe(expected);
   });
@@ -44,9 +47,9 @@ describe("normalizeWindowsPathPreservingCase", () => {
       "\\\\?\\C:\\Users\\Peter/Repo",
       "\\\\?\\UNC\\Server\\Share\\Folder",
       "\\\\?\\unc\\Server\\Share\\Folder",
-      "C:\\Users\\User\\OpenClaw\\src/Components",
-      "C:\\Users\\User\\OpenClaw  ",
-      "  C:\\Users\\User\\OpenClaw  ",
+      "C:\\Users\\User\\OpenCrustacean\\src/Components",
+      "C:\\Users\\User\\OpenCrustacean  ",
+      "  C:\\Users\\User\\OpenCrustacean  ",
     ]) {
       expect(normalizeWindowsPathPreservingCase(input).toLowerCase()).toBe(
         normalizeWindowsPathForComparison(input),

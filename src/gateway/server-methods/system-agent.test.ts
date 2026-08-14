@@ -218,7 +218,7 @@ beforeEach(async () => {
     auditSequence: 0,
   });
   greetingMocks.resolveSystemAgentGreeting.mockReset().mockResolvedValue({
-    text: "I'm OpenClaw. All systems nominal.",
+    text: "I'm OpenCrustacean. All systems nominal.",
     source: "model",
   });
   onboardingWelcomeMocks.buildOnboardingWelcome.mockReset().mockResolvedValue({
@@ -324,7 +324,7 @@ describe("openclaw.setup.activate", () => {
           payload: undefined,
           error: {
             code: "UNAVAILABLE",
-            message: "OpenClaw setup is already in progress; try again when it finishes.",
+            message: "OpenCrustacean setup is already in progress; try again when it finishes.",
             retryable: true,
           },
         },
@@ -474,7 +474,7 @@ describe("openclaw.chat", () => {
       ok: false,
       error: {
         code: "UNAVAILABLE",
-        message: "OpenClaw requires working inference: no configured model",
+        message: "OpenCrustacean requires working inference: no configured model",
         details: {
           code: "system_agent_inference_unavailable",
         },

@@ -1159,7 +1159,7 @@ function handleClaudeLiveControlRequest(
       toolInput,
       decision: {
         behavior: "deny",
-        message: `OpenClaw exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
+        message: `OpenCrustacean exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
       },
     });
     return;
@@ -1198,10 +1198,10 @@ function handleClaudeLiveControlRequest(
               behavior: "deny",
               message:
                 outcome.kind === "deny" && outcome.reason === "policy-oversized"
-                  ? "OpenClaw denied Claude native tool use (Bash): the command is too large to display for out-of-band approval. Split it into smaller commands and retry."
+                  ? "OpenCrustacean denied Claude native tool use (Bash): the command is too large to display for out-of-band approval. Split it into smaller commands and retry."
                   : outcome.kind === "deny" && outcome.reason === "user" && !runAborted
-                    ? `OpenClaw user denied Claude native tool use (${toolName}).`
-                    : `OpenClaw approval was not granted for Claude native tool use (${toolName}).`,
+                    ? `OpenCrustacean user denied Claude native tool use (${toolName}).`
+                    : `OpenCrustacean approval was not granted for Claude native tool use (${toolName}).`,
             },
       });
     } catch {

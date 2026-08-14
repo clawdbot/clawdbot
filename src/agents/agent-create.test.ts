@@ -117,7 +117,7 @@ describe("createAgent", () => {
       status: "error",
       reason: "invalid-name",
     });
-    for (const name of ["main", "OpenClaw", "crestodian"]) {
+    for (const name of ["main", "OpenCrustacean", "crestodian"]) {
       await expect(createAgent({ name })).resolves.toMatchObject({
         status: "error",
         reason: "reserved-id",

@@ -919,7 +919,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       context: this.context,
     });
     return runtime && runtime !== "openclaw"
-      ? t("newSession.cloudRequiresOpenClawRuntime", { runtime })
+      ? t("newSession.cloudRequiresOpenCrustaceanRuntime", { runtime })
       : undefined;
   }
 

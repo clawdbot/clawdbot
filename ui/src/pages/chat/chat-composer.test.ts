@@ -35,7 +35,7 @@ function props(overrides: Partial<ComposerProps> = {}): ComposerProps {
     queue: [],
     draft: "",
     sessions: null,
-    assistantName: "OpenClaw",
+    assistantName: "OpenCrustacean",
     onDraftChange: vi.fn(),
     onSend: vi.fn(),
     onQueueRemove: vi.fn(),

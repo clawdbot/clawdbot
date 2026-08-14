@@ -594,7 +594,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     // (Conversation info / Reply target / …), which room events never carry. So
     // the inline form is byte-identical active vs historical.
     const roomText = [
-      "[OpenClaw room event]",
+      "[OpenCrustacean room event]",
       "inbound_event_kind: room_event",
       "Room context:\n#1 Alice: hi",
     ].join("\n\n");

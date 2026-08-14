@@ -608,7 +608,7 @@ function recordBundleDiagnostics(params: {
       level: "warn",
       pluginId: params.record.id,
       source: params.record.source,
-      message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
+      message: `bundle capability detected but not wired into OpenCrustacean yet: ${capability}`,
     });
   }
   if (

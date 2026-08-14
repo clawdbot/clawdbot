@@ -173,7 +173,7 @@ describe("Skill Workshop history scan", () => {
     }));
     const messages = [
       ...interactive,
-      { role: "user", content: "[OpenClaw heartbeat poll]" },
+      { role: "user", content: "[OpenCrustacean heartbeat poll]" },
       ...Array.from({ length: 100 }, (_, index) => ({
         role: index % 2 === 0 ? "assistant" : "toolResult",
         content: `scheduled heartbeat work ${index}`,

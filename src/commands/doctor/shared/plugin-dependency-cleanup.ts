@@ -255,7 +255,7 @@ function filterLegacyStaleRootCandidates(
     }
     if (!cleanupRootPaths.some((rootPath) => isPathInsideRoot(targetPath, rootPath))) {
       warnings.push(
-        `Skipped legacy plugin dependency state ${targetPath}: outside OpenClaw cleanup roots`,
+        `Skipped legacy plugin dependency state ${targetPath}: outside OpenCrustacean cleanup roots`,
       );
       continue;
     }
@@ -297,7 +297,7 @@ async function resolveSafeRemovalTarget(
   }
   if (!cleanupRoots.some((root) => isPathInsideRoot(realPath, root.realPath))) {
     return {
-      warning: `Skipped legacy plugin dependency state ${targetPath}: resolved outside OpenClaw cleanup roots`,
+      warning: `Skipped legacy plugin dependency state ${targetPath}: resolved outside OpenCrustacean cleanup roots`,
     };
   }
   return { target: targetPath };

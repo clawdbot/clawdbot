@@ -50,7 +50,7 @@ describe("Control UI managed media under a UI base path", () => {
       }
       requests.push({ contentType: "text/html", path: requestPath });
       await route.fulfill({
-        body: "<!doctype html><title>OpenClaw</title>",
+        body: "<!doctype html><title>OpenCrustacean</title>",
         contentType: "text/html",
         status: 200,
       });

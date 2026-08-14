@@ -131,10 +131,10 @@ vi.mock("../config/config.js", () => ({
     if (process.env.OPENCLAW_NIX_MODE === "1") {
       throw new Error(
         [
-          "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
+          "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenCrustacean treats openclaw.json as immutable.",
           "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
           "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
-          "OpenClaw Nix overview: https://docs.openclaw.ai/install/nix",
+          "OpenCrustacean Nix overview: https://docs.openclaw.ai/install/nix",
         ].join("\n"),
       );
     }
@@ -2635,7 +2635,7 @@ describe("update-cli", () => {
           pluginId: "demo",
           status: "skipped",
           message:
-            'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: registry timeout',
+            'Disabled "demo" after plugin update failure; OpenCrustacean will continue without it. Failed to update demo: registry timeout',
         },
       ],
     });
@@ -3171,7 +3171,7 @@ describe("update-cli", () => {
         await updateStatusCommand({ json: false });
       },
       assert: () => {
-        expect(getLogOutput()).toContain("OpenClaw update status");
+        expect(getLogOutput()).toContain("OpenCrustacean update status");
       },
     },
     {
@@ -3602,7 +3602,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.error).not.toHaveBeenCalledWith(
       [
         "Package updates cannot run from inside the gateway service process.",
-        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "That path replaces the active OpenCrustacean dist tree while the live gateway may still lazy-load old chunks.",
         "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
       ].join("\n"),
     );
@@ -3625,7 +3625,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       [
         "Package updates cannot run from inside the gateway service process.",
-        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "That path replaces the active OpenCrustacean dist tree while the live gateway may still lazy-load old chunks.",
         "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
       ].join("\n"),
     );
@@ -3662,7 +3662,7 @@ describe("update-cli", () => {
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         [
           "Package updates cannot run from inside the gateway service process.",
-          "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+          "That path replaces the active OpenCrustacean dist tree while the live gateway may still lazy-load old chunks.",
           "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
         ].join("\n"),
       );
@@ -3686,7 +3686,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       [
         "Package updates cannot run from inside the gateway service process.",
-        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "That path replaces the active OpenCrustacean dist tree while the live gateway may still lazy-load old chunks.",
         "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
       ].join("\n"),
     );
@@ -3780,9 +3780,9 @@ describe("update-cli", () => {
     },
     {
       name: "aliased git package spec",
-      options: { yes: true, tag: "OpenClaw@github:openclaw/openclaw#main" },
+      options: { yes: true, tag: "OpenCrustacean@github:openclaw/openclaw#main" },
       packageSpec: undefined,
-      expectedSpec: "OpenClaw@github:openclaw/openclaw#main",
+      expectedSpec: "OpenCrustacean@github:openclaw/openclaw#main",
     },
     {
       name: "full git URL package spec",
@@ -4789,7 +4789,7 @@ describe("update-cli", () => {
     const localAppData = createCaseDir("openclaw-localappdata");
     const portableGitMingw = path.join(
       localAppData,
-      "OpenClaw",
+      "OpenCrustacean",
       "deps",
       "portable-git",
       "mingw64",
@@ -4797,7 +4797,7 @@ describe("update-cli", () => {
     );
     const portableGitUsr = path.join(
       localAppData,
-      "OpenClaw",
+      "OpenCrustacean",
       "deps",
       "portable-git",
       "usr",
@@ -4919,7 +4919,7 @@ describe("update-cli", () => {
     const logs = getLogOutput();
     expect(logs).toContain(`Targeting managed gateway service package root: ${serviceRoot}`);
     expect(logs).toContain(
-      `Shell OpenClaw root differs from the managed gateway service root: ${shellRoot}`,
+      `Shell OpenCrustacean root differs from the managed gateway service root: ${shellRoot}`,
     );
     expect(logs).toContain("make sure `openclaw` on PATH resolves to the managed service root");
     expect(logs).toContain(`Managed gateway service Node: ${serviceNode}`);

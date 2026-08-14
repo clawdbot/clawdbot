@@ -23,7 +23,7 @@ afterEach(() => {
 
 afterAll(() => cleanupTempDirs(tempDirs));
 
-describe("OpenClaw database schema preflight", () => {
+describe("OpenCrustacean database schema preflight", () => {
   it("keeps package schema support metadata aligned", () => {
     expect(packageJson.openclaw.schemaVersions).toEqual({
       state: OPENCLAW_STATE_SCHEMA_VERSION,

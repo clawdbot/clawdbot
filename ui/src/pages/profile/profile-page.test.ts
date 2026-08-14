@@ -100,7 +100,7 @@ function createConnectedContext(
     config: {
       current: {
         assistantIdentity: {
-          name: "OpenClaw",
+          name: "OpenCrustacean",
           avatar: null,
           avatarSource: null,
           avatarStatus: null,

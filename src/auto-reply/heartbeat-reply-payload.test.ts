@@ -39,7 +39,7 @@ describe("resolveHeartbeatReplyPayload", () => {
   it("skips a trailing reasoning payload and returns the assistant answer", () => {
     const answer: ReplyPayload = { text: "HEARTBEAT_OK" };
     const reasoning: ReplyPayload = {
-      text: "The message is an OpenClaw heartbeat poll. I should check recent chat...",
+      text: "The message is an OpenCrustacean heartbeat poll. I should check recent chat...",
       isReasoning: true,
     };
     expect(resolveHeartbeatReplyPayload([answer, reasoning])).toBe(answer);

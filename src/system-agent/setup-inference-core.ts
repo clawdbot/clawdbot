@@ -305,7 +305,7 @@ export function invalidSetupConfigError(snapshot: {
 }): string {
   const issue = snapshot.issues?.[0];
   const detail = issue ? ` (${issue.path ? `${issue.path}: ` : ""}${issue.message})` : "";
-  return `OpenClaw config ${snapshot.path} is invalid${detail}. Fix it before running setup.`;
+  return `OpenCrustacean config ${snapshot.path} is invalid${detail}. Fix it before running setup.`;
 }
 
 export function resolveCandidatePresentation(

@@ -14,7 +14,7 @@ import { appendChannelPromptContext } from "./channel-prompt-context.js";
 
 const REPLY_MEDIA_HINT =
   "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
-const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
+const ROOM_EVENT_PROMPT = "[OpenCrustacean room event]";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
@@ -176,7 +176,7 @@ function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContex
   const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
   const deliveryDirective = resolvePerTurnDeliveryDirective(params);
   return [
-    "[OpenClaw room event]",
+    "[OpenCrustacean room event]",
     "inbound_event_kind: room_event",
     roomContextBlock,
     `Current event:\n${roomEventBody}`,
@@ -236,7 +236,7 @@ export function buildReplyPromptEnvelopeBase(
   const transcriptBody = params.isHeartbeat
     ? HEARTBEAT_TRANSCRIPT_PROMPT
     : params.isBareSessionReset
-      ? softResetTail || `[OpenClaw session ${params.startupAction}]`
+      ? softResetTail || `[OpenCrustacean session ${params.startupAction}]`
       : isRoomEvent
         ? resolveRoomEventTranscriptBody(params)
         : params.hasUserBody

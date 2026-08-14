@@ -128,7 +128,7 @@ describe("registerBackupCommand", () => {
     ]);
   });
 
-  it("runs SQLite snapshot create for named OpenClaw databases", async () => {
+  it("runs SQLite snapshot create for named OpenCrustacean databases", async () => {
     await runCli([
       "backup",
       "sqlite",

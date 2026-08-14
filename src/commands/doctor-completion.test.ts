@@ -52,7 +52,7 @@ describe("shell completion health mapping", () => {
     await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
     await fs.writeFile(
       path.join(homeDir, ".bash_profile"),
-      `# OpenClaw Completion\n[ -f "${cachePath}" ] && source "${cachePath}"\n`,
+      `# OpenCrustacean Completion\n[ -f "${cachePath}" ] && source "${cachePath}"\n`,
       "utf-8",
     );
 

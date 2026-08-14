@@ -92,7 +92,7 @@ export function acquireClawPackageLifecycleLease(
         );
         if (existing) {
           throw new ClawPackageLifecycleBusyError(
-            `Package ${artifact.ref} is being changed by another OpenClaw lifecycle; retry after ${new Date(existing.expires_at ?? expiresAt).toISOString()}.`,
+            `Package ${artifact.ref} is being changed by another OpenCrustacean lifecycle; retry after ${new Date(existing.expires_at ?? expiresAt).toISOString()}.`,
           );
         }
         executeSqliteQuerySync(

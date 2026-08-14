@@ -183,7 +183,7 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       return { kind: "open-tui" };
     case "quit":
     case "exit":
-      return { kind: "none", message: "OpenClaw retracts into shell. Bye." };
+      return { kind: "none", message: "OpenCrustacean retracts into shell. Bye." };
     default:
       break;
   }
@@ -412,7 +412,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
     case "model-setup":
       return "configure a model provider and default model";
     case "doctor-fix":
-      return "exit OpenClaw and run openclaw doctor --fix";
+      return "exit OpenCrustacean and run openclaw doctor --fix";
     case "plugin-install":
       return `install plugin ${operation.spec}`;
     case "plugin-uninstall":
@@ -450,5 +450,5 @@ function formatSetupPlanDescription(
   operation: Extract<SystemAgentOperation, { kind: "setup" }>,
 ): string {
   const workspace = shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()));
-  return `bootstrap OpenClaw setup for workspace ${workspace}`;
+  return `bootstrap OpenCrustacean setup for workspace ${workspace}`;
 }

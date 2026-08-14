@@ -2756,7 +2756,7 @@ describe("chat voice controls", () => {
   it.each([
     ["connecting", "Connecting voice input..."],
     ["listening", "Listening..."],
-    ["thinking", "Asking OpenClaw..."],
+    ["thinking", "Asking OpenCrustacean..."],
   ] as const)("renders %s voice activity without visible status copy", (status, label) => {
     const inputLevel = new RealtimeTalkLevelSignal();
     inputLevel.set(0.64);
@@ -4871,7 +4871,7 @@ describe("chat welcome", () => {
       canSend: false,
       disabledBanner: {
         kind: "composer-replacement",
-        text: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
+        text: "OpenCrustacean couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
         actionLabel: "Configure a provider",
         onAction: () => undefined,
       },

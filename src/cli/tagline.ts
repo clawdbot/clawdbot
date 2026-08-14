@@ -101,7 +101,7 @@ const TAGLINES: string[] = [
   "If found wandering, please return to ~/.openclaw.",
   "You configured four subagents; I found 120. We're calling it initiative.",
   "No, I can't solve captchas. Yes, that's exactly what a robot would say.",
-  "OpenClaw Support will never DM you first. I, on the other hand, absolutely will.",
+  "OpenCrustacean Support will never DM you first. I, on the other hand, absolutely will.",
   "You'll name me something adorable, then ask me to do DevOps.",
   "Your mom texts me now. We're good, actually.",
   "Four bots roasting each other in a group chat isn't a bug—it's a support group.",

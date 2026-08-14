@@ -165,7 +165,7 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     expectLatestRuntimeJson({
       action: "restart",
       ok: false,
-      error: `Gateway restart blocked: Refusing to restart the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
+      error: `Gateway restart blocked: Refusing to restart the gateway service because this OpenCrustacean binary (${VERSION}) is older than the config last written by OpenCrustacean 9999.1.1.`,
       hints: newerConfigHints,
       hintItems: newerConfigHintItems,
       warnings: undefined,
@@ -310,7 +310,7 @@ describe("runServiceStop future-config guard", () => {
     expectLatestRuntimeJson({
       action: "stop",
       ok: false,
-      error: `Gateway stop blocked: Refusing to stop the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
+      error: `Gateway stop blocked: Refusing to stop the gateway service because this OpenCrustacean binary (${VERSION}) is older than the config last written by OpenCrustacean 9999.1.1.`,
       hints: newerConfigHints,
       hintItems: newerConfigHintItems,
       warnings: undefined,

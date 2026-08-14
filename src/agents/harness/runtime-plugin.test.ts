@@ -566,7 +566,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
-  it("keeps custom OpenAI-compatible providers on embedded OpenClaw when no runtime override is set", async () => {
+  it("keeps custom OpenAI-compatible providers on embedded OpenCrustacean when no runtime override is set", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -587,7 +587,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
 
-  it("keeps official OpenAI providers on embedded OpenClaw when explicitly configured", async () => {
+  it("keeps official OpenAI providers on embedded OpenCrustacean when explicitly configured", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.2",

@@ -731,13 +731,15 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
   });
 
-  it("returns to OpenClaw with an optional request", async () => {
+  it("returns to OpenCrustacean with an optional request", async () => {
     const { handleCommand, addSystem, requestExit, sendChat } = createHarness();
 
     await handleCommand("/openclaw restart gateway");
 
     expect(sendChat).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith("returning to OpenClaw with request: restart gateway");
+    expect(addSystem).toHaveBeenCalledWith(
+      "returning to OpenCrustacean with request: restart gateway",
+    );
     expect(requestExit).toHaveBeenCalledWith({
       exitReason: "return-to-system-agent",
       systemAgentMessage: "restart gateway",
@@ -755,7 +757,7 @@ describe("tui command handlers", () => {
     expect(addSystem).not.toHaveBeenCalled();
   });
 
-  it("leaves a OpenClaw breadcrumb after switching agents", async () => {
+  it("leaves a OpenCrustacean breadcrumb after switching agents", async () => {
     const { handleCommand, addSystem, setSession, state } = createHarness();
 
     await handleCommand("/agent Work");

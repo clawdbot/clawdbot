@@ -437,7 +437,7 @@ export function resolveGatewayScopedTools(params: {
           },
           {
             description:
-              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.",
+              "Execute a shell command on a connected OpenCrustacean node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.",
             displaySummary: "Run commands on a connected node",
             parameters: nodeExecSchema,
           },

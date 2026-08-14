@@ -547,7 +547,7 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "config"]);
 
     expect(createCliProgressMock).toHaveBeenCalledWith({
-      label: "Loading OpenClaw CLI…",
+      label: "Loading OpenCrustacean CLI…",
       indeterminate: true,
       delayMs: 0,
     });
@@ -565,7 +565,7 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "sessions", "--json", "--limit", "all"]);
 
     expect(createCliProgressMock).toHaveBeenCalledWith({
-      label: "Loading OpenClaw CLI…",
+      label: "Loading OpenCrustacean CLI…",
       indeterminate: true,
       delayMs: 0,
       enabled: false,
@@ -3811,7 +3811,7 @@ describe("runCli exit behavior", () => {
 
       expect(process.exitCode).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith(
-        "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
+        "OpenCrustacean TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
       );
       expect(launchTuiCliMock).not.toHaveBeenCalled();
     } finally {
@@ -3864,7 +3864,7 @@ describe("runCli exit behavior", () => {
 
       expect(process.exitCode).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith(
-        "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding.",
+        "OpenCrustacean config is invalid. Run `openclaw doctor --fix` before onboarding.",
       );
       expect(setupWizardCommandMock).not.toHaveBeenCalled();
     } finally {
@@ -4067,7 +4067,7 @@ describe("runCli exit behavior", () => {
     try {
       expect(() => handler(new Error("boom"))).toThrow("process.exit(1)");
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        "[openclaw] OpenClaw hit an unexpected runtime error.",
+        "[openclaw] OpenCrustacean hit an unexpected runtime error.",
       );
       expect(consoleErrorSpy).toHaveBeenCalledWith("[openclaw] Reason: boom");
       expect(restoreTerminalStateMock).toHaveBeenCalledWith("uncaught exception", {

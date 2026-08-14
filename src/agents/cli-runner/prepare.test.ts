@@ -1874,7 +1874,7 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:test",
       agentId: "main",
       trigger: "user",
-      prompt: "[OpenClaw room event]",
+      prompt: "[OpenCrustacean room event]",
       currentInboundEventKind: "room_event",
       currentInboundContext: {
         text: "Room context:\nAlice: lunch?\n\nCurrent event:\nBob: yes",
@@ -1889,7 +1889,7 @@ describe("prepareCliRunContext", () => {
     });
 
     expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-    expect(context.params.prompt).toBe("Current event:\nBob: yes\n\n[OpenClaw room event]");
+    expect(context.params.prompt).toBe("Current event:\nBob: yes\n\n[OpenCrustacean room event]");
     expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
     expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
   });
@@ -2018,7 +2018,9 @@ describe("prepareCliRunContext", () => {
     const context = await fixture.prepare({});
 
     expect(context.params.prompt).toBe("latest ask");
-    expect(context.systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
+    expect(context.systemPrompt).toContain(
+      "You are a personal assistant running inside OpenCrustacean.",
+    );
     expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
     expect(context.systemPrompt).not.toContain("hook exploded");
     expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
@@ -2103,7 +2105,7 @@ describe("prepareCliRunContext", () => {
           hostRequirements: {
             "agent-run": {
               requiredCapabilities: ["assemble-before-prompt"],
-              unsupportedMessage: "Use the native Codex or OpenClaw embedded runtime.",
+              unsupportedMessage: "Use the native Codex or OpenCrustacean embedded runtime.",
             },
           },
         },
@@ -2312,7 +2314,7 @@ describe("prepareCliRunContext", () => {
     });
     expect(context.openClawHistoryPrompt).toBeUndefined();
     expect(context.params.prompt).toContain(
-      "OpenClaw resumed this CLI session after prompt content changed.",
+      "OpenCrustacean resumed this CLI session after prompt content changed.",
     );
     expect(context.params.prompt).toContain("changed=system-prompt");
     expect(context.params.prompt).toContain("latest ask");
@@ -2336,7 +2338,7 @@ describe("prepareCliRunContext", () => {
       invalidatedReason: "system-prompt",
     });
     expect(context.params.prompt).not.toContain(
-      "OpenClaw resumed this CLI session after prompt content changed.",
+      "OpenCrustacean resumed this CLI session after prompt content changed.",
     );
   });
 
@@ -3170,7 +3172,7 @@ describe("prepareCliRunContext", () => {
       toolsAllow: ["read", "web_search"],
     });
     await expect(run).rejects.toThrow(
-      `CLI backend "test-cli" cannot enforce this run's tool cap. Upgrade its plugin and retry; if current, ask its maintainer to add exact-cap support. OpenClaw did not start the run.`,
+      `CLI backend "test-cli" cannot enforce this run's tool cap. Upgrade its plugin and retry; if current, ask its maintainer to add exact-cap support. OpenCrustacean did not start the run.`,
     );
 
     expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
@@ -4239,10 +4241,12 @@ describe("prepareCliRunContext", () => {
 
     expect(context.openClawHistoryPrompt).toBeDefined();
     if (testCase.expectsTruncation) {
-      expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
+      expect(context.openClawHistoryPrompt).toContain("OpenCrustacean reseed history truncated");
     } else {
       expect(context.openClawHistoryPrompt).toContain(testCase.marker);
-      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+      expect(context.openClawHistoryPrompt).not.toContain(
+        "OpenCrustacean reseed history truncated",
+      );
     }
   });
 
@@ -4305,7 +4309,7 @@ describe("prepareCliRunContext", () => {
     expect(context.openClawHistoryPrompt).toBeDefined();
     expect(context.openClawHistoryPrompt).toContain(recentMarker);
     expect(context.openClawHistoryPrompt).toContain("EARLIEST_USER");
-    expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+    expect(context.openClawHistoryPrompt).not.toContain("OpenCrustacean reseed history truncated");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,7 +12,7 @@ import {
 } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
-describe("OpenClaw database maintenance schema validation", () => {
+describe("OpenCrustacean database maintenance schema validation", () => {
   it("accepts the current global and agent schemas", () => {
     const globalDatabase = createGlobalDatabase();
     const agentDatabase = createAgentDatabase();

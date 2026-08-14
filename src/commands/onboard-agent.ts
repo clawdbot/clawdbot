@@ -70,7 +70,7 @@ export async function ensureOnboardingAgent(params: {
   }
   const before = await readConfigFileSnapshot();
   if (before.exists && !before.valid) {
-    throw new Error("Cannot create the first agent from an invalid OpenClaw config.");
+    throw new Error("Cannot create the first agent from an invalid OpenCrustacean config.");
   }
   const effective = before.config;
   const candidateBase = params.baseConfig ?? effective;
@@ -100,7 +100,7 @@ export async function ensureOnboardingAgent(params: {
   }
   const after = await readConfigFileSnapshot();
   if (!after.valid) {
-    throw new Error("Agent creation wrote an invalid OpenClaw config.");
+    throw new Error("Agent creation wrote an invalid OpenCrustacean config.");
   }
   return {
     config: mergeOnboardingCandidate({

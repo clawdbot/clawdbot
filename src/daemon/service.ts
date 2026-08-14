@@ -128,7 +128,7 @@ function collectGatewayServiceStartRepairIssues(
     // reinstall/repair before pretending restart succeeded.
     issues.push({
       code: "version-mismatch",
-      message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
+      message: `service was installed by OpenCrustacean ${serviceVersion}, current CLI is ${VERSION}`,
     });
   }
   const servicePort =

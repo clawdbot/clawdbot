@@ -20,14 +20,14 @@ export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.e
 
 export function formatExternalSupervisorActionRequired(action: string): string {
   return [
-    `OpenClaw gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+    `OpenCrustacean gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
     `Use that supervisor to ${action}.`,
   ].join(" ");
 }
 
 export function formatExternalSupervisorUpdateRequired(): string {
   return [
-    `OpenClaw self-update is disabled while gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+    `OpenCrustacean self-update is disabled while gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
     "Use the external supervisor's update workflow so it can stop the gateway, update and finalize the runtime, then restart it safely.",
   ].join(" ");
 }

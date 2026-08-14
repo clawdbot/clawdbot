@@ -524,7 +524,7 @@ function assertAgentSchemaVersion(
   const userVersion = readSqliteUserVersion(db);
   if (userVersion !== options.version || metadata?.schemaVersion !== options.version) {
     throw new Error(
-      `OpenClaw agent database ${options.pathname} did not converge on schema version ${options.version}.`,
+      `OpenCrustacean agent database ${options.pathname} did not converge on schema version ${options.version}.`,
     );
   }
   assertOpenClawAgentSchemaContains(db, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
@@ -551,7 +551,7 @@ function ensureAgentSchema(
       const previousVersion = readSqliteUserVersion(db);
       if (previousVersion > targetVersion) {
         throw new Error(
-          `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
+          `OpenCrustacean agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
       }
       if (previousVersion === targetVersion) {

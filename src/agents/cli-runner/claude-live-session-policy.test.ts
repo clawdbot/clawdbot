@@ -9,7 +9,7 @@ describe("resolveClaudeLiveMode", () => {
     expect(resolveClaudeLiveMode("full", "off", 1000)).toBe("bypassPermissions");
   });
 
-  it("keeps restrictive OpenClaw policies on Claude default permissions", () => {
+  it("keeps restrictive OpenCrustacean policies on Claude default permissions", () => {
     expect(resolveClaudeLiveMode("allowlist", "on-miss", 1000)).toBe("default");
   });
 });

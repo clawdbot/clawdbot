@@ -282,7 +282,7 @@ describe("backupVerifyCommand", () => {
   it.runIf(process.platform === "win32")(
     "verifies a canonical global SQLite backup beyond MAX_PATH",
     async () => {
-      const stateDir = String.raw`C:\Users\OpenClaw\.openclaw`;
+      const stateDir = String.raw`C:\Users\OpenCrustacean\.openclaw`;
       const stateAssetArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir);
       const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
       const sqlitePayload = await createSqlitePayload((database) => {
@@ -519,7 +519,7 @@ describe("backupVerifyCommand", () => {
 
   it("rejects case-mangled canonical SQLite paths", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
-    const sqliteArchivePath = `${stateAssetArchivePath}/State/OpenClaw.SQLITE`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/State/OpenCrustacean.SQLITE`;
     const sqlitePayload = await createSqlitePayload((database) => {
       database.exec(`
         CREATE TABLE schema_meta (

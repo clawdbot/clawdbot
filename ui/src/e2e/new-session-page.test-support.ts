@@ -116,7 +116,7 @@ export async function replaceGatewayClient(page: Page) {
       runtime?: { context: { gateway: { connect: () => void } } };
     };
     if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
+      throw new Error("OpenCrustacean application runtime is unavailable");
     }
     app.runtime.context.gateway.connect();
   });
@@ -133,7 +133,7 @@ export async function navigateInApp(page: Page, routeId: string, search = "") {
         };
       };
       if (!app.runtime) {
-        throw new Error("OpenClaw application runtime is unavailable");
+        throw new Error("OpenCrustacean application runtime is unavailable");
       }
       app.runtime.context.navigate(targetRouteId, { search: targetSearch });
     },

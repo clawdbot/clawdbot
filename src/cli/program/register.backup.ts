@@ -112,9 +112,9 @@ function registerBackupSqliteCommands(backup: Command): void {
 
   sqlite
     .command("create")
-    .description("Create a compact, verified snapshot of an OpenClaw SQLite database")
-    .option("--global", "Snapshot the shared OpenClaw state database", false)
-    .option("--agent <id>", "Snapshot one per-agent OpenClaw database")
+    .description("Create a compact, verified snapshot of an OpenCrustacean SQLite database")
+    .option("--global", "Snapshot the shared OpenCrustacean state database", false)
+    .option("--agent <id>", "Snapshot one per-agent OpenCrustacean database")
     .requiredOption("--repository <path>", "Snapshot repository directory")
     .option("--json", "Output JSON", false)
     .addHelpText(

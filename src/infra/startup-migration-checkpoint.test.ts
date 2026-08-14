@@ -67,7 +67,7 @@ describe("startup migration checkpoint", () => {
     expect(existsSync(dbPath)).toBe(false);
   });
 
-  it("records the migrated OpenClaw version in shared state", () => {
+  it("records the migrated OpenCrustacean version in shared state", () => {
     const env = {
       OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
     };
@@ -145,7 +145,7 @@ describe("startup migration checkpoint", () => {
     expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(true);
 
     expect(() => acquireStartupMigrationLease({ env, nowMs: 1001, owner: "second" })).toThrow(
-      `OpenClaw startup migrations are already running for this state directory; retry after the other gateway finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
+      `OpenCrustacean startup migrations are already running for this state directory; retry after the other gateway finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
     );
 
     lease.release();
@@ -218,7 +218,7 @@ describe("startup migration checkpoint", () => {
     lease.heartbeat({ nowMs: 300_000 });
 
     expect(() => acquireStartupMigrationLease({ env, nowMs: 301_001, owner: "second" })).toThrow(
-      "OpenClaw startup migrations are already running",
+      "OpenCrustacean startup migrations are already running",
     );
 
     lease.release();

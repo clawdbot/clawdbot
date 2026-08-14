@@ -12,7 +12,7 @@ function createSession(): MeetingSessionRecord<"chrome", "transcribe"> {
     state: "active",
     createdAt: "2026-07-17T00:00:00.000Z",
     updatedAt: "2026-07-17T00:00:00.000Z",
-    participantIdentity: "OpenClaw",
+    participantIdentity: "OpenCrustacean",
     realtime: { enabled: false, toolPolicy: "none" },
     notes: [],
   };

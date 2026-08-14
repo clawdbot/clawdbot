@@ -96,7 +96,7 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
     mockRunCronFallbackPassthrough();
     const unavailableReason =
       "Agent cron job uses ollama/qwen3:32b but the local provider preflight failed at " +
-      "http://127.0.0.1:11434. The candidate is unavailable for this cron run; OpenClaw " +
+      "http://127.0.0.1:11434. The candidate is unavailable for this cron run; OpenCrustacean " +
       "will retry its provider preflight on a later scheduled run. Last error: " +
       "ConnectError: connect ECONNREFUSED (code=ECONNREFUSED)";
     preflightCronModelProviderMock.mockResolvedValueOnce({

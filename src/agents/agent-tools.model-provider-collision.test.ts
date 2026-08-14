@@ -58,7 +58,7 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });
 
-  it("keeps web_search for OpenRouter xAI model ids so OpenClaw tool routing stays authoritative", () => {
+  it("keeps web_search for OpenRouter xAI model ids so OpenCrustacean tool routing stays authoritative", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,

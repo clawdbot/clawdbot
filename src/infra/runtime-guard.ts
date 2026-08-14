@@ -204,7 +204,7 @@ export function assertSupportedRuntime(
       : "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.";
   const retryHint =
     details.kind === "bun"
-      ? "Run OpenClaw with Node; Bun remains supported for installs and package scripts."
+      ? "Run OpenCrustacean with Node; Bun remains supported for installs and package scripts."
       : "Upgrade Node and re-run openclaw.";
 
   runtime.error(

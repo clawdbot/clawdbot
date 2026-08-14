@@ -102,7 +102,7 @@ describe("active tool schema doctor warnings", () => {
         env: { HOME: "/tmp/openclaw-test" },
       }),
     ).toEqual([
-      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema (fuzzplugin_move_angles.parameters.type must be "object"). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema (fuzzplugin_move_angles.parameters.type must be "object"). OpenCrustacean will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
     ]);
     expect(toolState.createTools).toHaveBeenCalledWith(
       expect.objectContaining({ toolPolicyAuditLogLevel: "debug" }),
@@ -132,7 +132,7 @@ describe("active tool schema doctor warnings", () => {
         env: { HOME: "/tmp/openclaw-test" },
       }),
     ).toEqual([
-      '- agents.main: active tool "tool[0]" has unsupported runtime input schema (tool[0] is unreadable). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
+      '- agents.main: active tool "tool[0]" has unsupported runtime input schema (tool[0] is unreadable). OpenCrustacean will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
     ]);
   });
 
@@ -242,7 +242,7 @@ describe("active tool schema doctor warnings", () => {
         env: { HOME: "/tmp/openclaw-test" },
       }),
     ).toEqual([
-      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema (fuzzplugin_move_angles.parameters.properties.target.$dynamicRef). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema (fuzzplugin_move_angles.parameters.properties.target.$dynamicRef). OpenCrustacean will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
     ]);
     expect(toolState.createTools).toHaveBeenCalledWith(
       expect.objectContaining({

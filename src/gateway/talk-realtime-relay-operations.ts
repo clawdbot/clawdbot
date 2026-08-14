@@ -215,7 +215,7 @@ export function submitTalkRealtimeRelayToolResult(params: {
 
   if (cancelledAgentCall) {
     const providerResult = buildRealtimeVoiceAgentCancelProviderResult(
-      "OpenClaw cancelled this consult before completion. Do not restart it.",
+      "OpenCrustacean cancelled this consult before completion. Do not restart it.",
     );
     const submitCancellation = () =>
       submitFinalProviderToolResult({

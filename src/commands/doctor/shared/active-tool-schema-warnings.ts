@@ -70,7 +70,7 @@ function formatDiagnostic(params: {
 }): string {
   const plugin = params.pluginId ? ` from plugin "${params.pluginId}"` : "";
   return sanitizeForLog(
-    `- agents.${params.agentId}: active tool "${params.diagnostic.toolName}"${plugin} has unsupported runtime input schema (${params.diagnostic.violations.join(", ")}). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.`,
+    `- agents.${params.agentId}: active tool "${params.diagnostic.toolName}"${plugin} has unsupported runtime input schema (${params.diagnostic.violations.join(", ")}). OpenCrustacean will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.`,
   );
 }
 

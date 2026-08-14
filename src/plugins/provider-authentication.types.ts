@@ -228,7 +228,7 @@ export type ProviderOAuthProfileIdRepair = {
   /**
    * Legacy OAuth profile id to migrate away from.
    *
-   * When omitted, OpenClaw falls back to `<provider>:default`.
+   * When omitted, OpenCrustacean falls back to `<provider>:default`.
    */
   legacyProfileId?: string;
   /**

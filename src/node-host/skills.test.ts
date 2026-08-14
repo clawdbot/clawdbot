@@ -58,7 +58,7 @@ describe("scanNodeHostedSkills", () => {
     }
   });
 
-  it("uses the active OpenClaw profile skills directory by default", () => {
+  it("uses the active OpenCrustacean profile skills directory by default", () => {
     const stateDir = createRoot();
     const content = writeSkill(path.join(stateDir, "skills"), "profile-skill", "Profile skill");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

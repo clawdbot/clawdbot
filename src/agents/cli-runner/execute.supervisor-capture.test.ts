@@ -495,7 +495,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       name: "FailoverError",
       message:
         "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
-        "OpenClaw run: run-max-turns. OpenClaw session: session-1. " +
+        "OpenCrustacean run: run-max-turns. OpenCrustacean session: session-1. " +
         "Claude session: claude-session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
         "Retry with a higher --max-turns value or a narrower task.",
       sessionId: "session-1",

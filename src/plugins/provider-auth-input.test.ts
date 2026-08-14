@@ -242,9 +242,9 @@ describe("validateApiKeyInput", () => {
     "openclaw onboard --auth-choice=zai-coding-global",
     "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
     "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
-  ])("rejects pasted OpenClaw onboarding command %p", (value) => {
+  ])("rejects pasted OpenCrustacean onboarding command %p", (value) => {
     expect(validateApiKeyInput(value)).toBe(
-      "Paste the API key value, not an OpenClaw onboarding command.",
+      "Paste the API key value, not an OpenCrustacean onboarding command.",
     );
   });
 });
@@ -414,7 +414,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
       "Reference check failed",
     );
     expect(note).toHaveBeenCalledWith(
-      "Validated environment variable MINIMAX_API_KEY. OpenClaw will store a reference, not the key value.",
+      "Validated environment variable MINIMAX_API_KEY. OpenCrustacean will store a reference, not the key value.",
       "Reference validated",
     );
   });

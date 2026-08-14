@@ -186,7 +186,7 @@ describe("AgentRuntimePlan", () => {
     expect(plan.observability.harnessId).toBe("codex");
   });
 
-  it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {
+  it("keeps OpenCrustacean-owned tool-schema normalization reachable from the plan", () => {
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -262,7 +262,7 @@ describe("AgentRuntimePlan", () => {
     expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
   });
 
-  it("forwards OpenAI Codex profiles for explicit OpenAI OpenClaw runs", () => {
+  it("forwards OpenAI Codex profiles for explicit OpenAI OpenCrustacean runs", () => {
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",

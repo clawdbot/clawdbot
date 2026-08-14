@@ -82,7 +82,7 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
           <span slot="icon" class="session-menu__icon" aria-hidden="true"
             >${icons.messageSquare}</span
           >
-          <span class="session-menu__text">${t("chat.catalog.openInOpenClaw")}</span>
+          <span class="session-menu__text">${t("chat.catalog.openInOpenCrustacean")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item
           class="session-menu__item"

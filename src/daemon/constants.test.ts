@@ -38,12 +38,12 @@ describe("resolveGatewaySystemdServiceName", () => {
 describe("resolveGatewayWindowsTaskName", () => {
   it("returns default task name when no profile is set", () => {
     const result = resolveGatewayWindowsTaskName();
-    expect(result).toBe("OpenClaw Gateway");
+    expect(result).toBe("OpenCrustacean Gateway");
   });
 
   it("returns profile-specific task name when profile is set", () => {
     const result = resolveGatewayWindowsTaskName("dev");
-    expect(result).toBe("OpenClaw Gateway (dev)");
+    expect(result).toBe("OpenCrustacean Gateway (dev)");
   });
 });
 
@@ -68,19 +68,19 @@ describe("resolveGatewayProfileSuffix", () => {
 
 describe("resolveGatewayServiceDescription", () => {
   it("returns default description when no profile/version", () => {
-    expect(resolveGatewayServiceDescription({ env: {} })).toBe("OpenClaw Gateway");
+    expect(resolveGatewayServiceDescription({ env: {} })).toBe("OpenCrustacean Gateway");
   });
 
   it("includes profile when set", () => {
     expect(resolveGatewayServiceDescription({ env: { OPENCLAW_PROFILE: "work" } })).toBe(
-      "OpenClaw Gateway (profile: work)",
+      "OpenCrustacean Gateway (profile: work)",
     );
   });
 
   it("includes version when set", () => {
     expect(
       resolveGatewayServiceDescription({ env: { OPENCLAW_SERVICE_VERSION: "2026.1.10" } }),
-    ).toBe("OpenClaw Gateway (v2026.1.10)");
+    ).toBe("OpenCrustacean Gateway (v2026.1.10)");
   });
 
   it("includes profile and version when set", () => {
@@ -88,7 +88,7 @@ describe("resolveGatewayServiceDescription", () => {
       resolveGatewayServiceDescription({
         env: { OPENCLAW_PROFILE: "dev", OPENCLAW_SERVICE_VERSION: "1.2.3" },
       }),
-    ).toBe("OpenClaw Gateway (profile: dev, v1.2.3)");
+    ).toBe("OpenCrustacean Gateway (profile: dev, v1.2.3)");
   });
   it("prefers explicit description override", () => {
     expect(
@@ -105,7 +105,7 @@ describe("resolveGatewayServiceDescription", () => {
         env: { OPENCLAW_PROFILE: "work", OPENCLAW_SERVICE_VERSION: "local" },
         environment: { OPENCLAW_SERVICE_VERSION: "remote" },
       }),
-    ).toBe("OpenClaw Gateway (profile: work, vremote)");
+    ).toBe("OpenCrustacean Gateway (profile: work, vremote)");
   });
 });
 

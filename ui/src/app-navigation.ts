@@ -414,7 +414,7 @@ export function formatDocumentTitle(options: {
 
 export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
   if (routeId === "custodian") {
-    return t("nav.askOpenClaw");
+    return t("nav.askOpenCrustacean");
   }
   return titleForRoute(routeId);
 }

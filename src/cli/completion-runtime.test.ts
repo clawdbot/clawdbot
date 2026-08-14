@@ -170,7 +170,7 @@ describe("completion-runtime", () => {
 
         const profilePath = resolveCompletionProfilePath("powershell");
         const profile = await fs.readFile(profilePath, "utf-8");
-        expect(profile).toBe(`# OpenClaw Completion\n. '${cachePath.replace(/'/g, "''")}'\n`);
+        expect(profile).toBe(`# OpenCrustacean Completion\n. '${cachePath.replace(/'/g, "''")}'\n`);
       });
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });

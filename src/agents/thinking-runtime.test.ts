@@ -46,7 +46,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("codex");
   });
 
-  it("resolves residual auto to OpenClaw when no plugin harness is registered", () => {
+  it("resolves residual auto to OpenCrustacean when no plugin harness is registered", () => {
     expect(
       resolveEffectiveAgentRuntime({
         cfg: {
@@ -87,7 +87,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     expect(supports).not.toHaveBeenCalled();
   });
 
-  it("keeps an authored custom route on OpenClaw before registered harness selection", () => {
+  it("keeps an authored custom route on OpenCrustacean before registered harness selection", () => {
     const supports = vi.fn<AgentHarness["supports"]>(({ provider }) =>
       provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
     );
@@ -155,7 +155,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("openclaw");
   });
 
-  it("lets an explicit OpenClaw override replace configured Codex policy", () => {
+  it("lets an explicit OpenCrustacean override replace configured Codex policy", () => {
     expect(
       resolveEffectiveAgentRuntime({
         cfg: openAIConfig("codex"),

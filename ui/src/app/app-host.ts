@@ -1581,7 +1581,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     } else if (routeId === "custodian") {
-      primaryContext = t("nav.askOpenClaw");
+      primaryContext = t("nav.askOpenCrustacean");
     }
     const title = formatDocumentTitle({
       context: primaryContext,

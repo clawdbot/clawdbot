@@ -1121,7 +1121,7 @@ describe("config observe recovery", () => {
       issue: {
         path: "plugins.entries.feishu",
         message:
-          "plugin feishu: plugin requires OpenClaw >=2026.4.23, but this host is 2026.4.22; skipping load",
+          "plugin feishu: plugin requires OpenCrustacean >=2026.4.23, but this host is 2026.4.22; skipping load",
       },
     },
   ])("$name", async ({ staleConfig, activeConfig, issue }) => {

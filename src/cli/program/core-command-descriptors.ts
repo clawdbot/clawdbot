@@ -11,7 +11,7 @@ type CoreCliCommandDescriptor = NamedCommandDescriptor;
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "setup",
-    description: "Chat with OpenClaw; onboard when setup is incomplete",
+    description: "Chat with OpenCrustacean; onboard when setup is incomplete",
     hasSubcommands: false,
   },
   {
@@ -39,7 +39,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "claws",
-    description: "Inspect and add experimental OpenClaw Claws",
+    description: "Inspect and add experimental OpenCrustacean Claws",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -81,7 +81,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "mcp",
-    description: "Manage OpenClaw mcp.servers config and channel bridge",
+    description: "Manage OpenCrustacean mcp.servers config and channel bridge",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },

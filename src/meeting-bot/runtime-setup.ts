@@ -50,7 +50,7 @@ export function createMeetingRuntimeSetup<Config extends MeetingPluginConfig, Mo
         ok: true,
         message: params.config.chrome.browserProfile
           ? `Chrome node profile configured: ${params.config.chrome.browserProfile}`
-          : "Local Chrome uses the configured OpenClaw browser profile",
+          : "Local Chrome uses the configured OpenCrustacean browser profile",
       },
       { id: "guest-join", ...guestJoin },
       { id: "captions", ok: true, message: options.captionsMessage(mode) },

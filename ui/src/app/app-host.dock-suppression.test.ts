@@ -20,8 +20,8 @@ afterEach(() => {
   resetAppHostTestGlobals();
 });
 
-describe("OpenClaw shell dock suppression", () => {
-  it("keeps Ask OpenClaw on settings pages and suppresses it only on its full page", () => {
+describe("OpenCrustacean shell dock suppression", () => {
+  it("keeps Ask OpenCrustacean on settings pages and suppresses it only on its full page", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal(
       "matchMedia",

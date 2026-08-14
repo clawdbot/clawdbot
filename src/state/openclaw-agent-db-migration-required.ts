@@ -9,7 +9,7 @@ export class OpenClawAgentDatabaseMediaMigrationRequiredError extends Error {
     readonly schemaVersion: number,
   ) {
     super(
-      `OpenClaw agent database ${pathname} uses schema version ${schemaVersion}; run openclaw doctor --fix to migrate persisted media before using it.`,
+      `OpenCrustacean agent database ${pathname} uses schema version ${schemaVersion}; run openclaw doctor --fix to migrate persisted media before using it.`,
     );
     this.name = "OpenClawAgentDatabaseMediaMigrationRequiredError";
   }

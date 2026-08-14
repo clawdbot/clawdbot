@@ -77,7 +77,7 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
     try {
       const response = await page.goto(`${server.baseUrl}custodian`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "OpenCrustacean", exact: true }).waitFor();
       await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(1);
 
       if (captureUiProofEnabled) {
@@ -170,7 +170,7 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
       await gateway.rejectDeferred("openclaw.chat", {
         code: "UNAVAILABLE",
         message:
-          "OpenClaw requires working inference: No agent model is configured. Run `openclaw onboard` first.",
+          "OpenCrustacean requires working inference: No agent model is configured. Run `openclaw onboard` first.",
         retryable: true,
       });
 
@@ -257,7 +257,7 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
           question: {
             id: "access",
             header: "Access",
-            question: "How should OpenClaw work?",
+            question: "How should OpenCrustacean work?",
             options: [{ label: "Full access" }, { label: "Ask first" }],
             isOther: false,
           },
@@ -324,7 +324,7 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
     try {
       const response = await page.goto(`${server.baseUrl}custodian?onboarding=1`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "OpenCrustacean", exact: true }).waitFor();
       await gateway.emitGatewayEvent("health", {
         channelLabels: { telegram: "Telegram" },
         channels: {

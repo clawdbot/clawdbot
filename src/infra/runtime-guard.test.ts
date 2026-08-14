@@ -153,7 +153,7 @@ describe("runtime-guard", () => {
         "Detected: bun 1.3.14 (exec: /usr/bin/bun).",
         "PATH searched: /usr/bin",
         "Install Node: https://nodejs.org/en/download",
-        "Run OpenClaw with Node; Bun remains supported for installs and package scripts.",
+        "Run OpenCrustacean with Node; Bun remains supported for installs and package scripts.",
       ].join("\n"),
     );
   });

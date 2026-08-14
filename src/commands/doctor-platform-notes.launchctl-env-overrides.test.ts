@@ -244,7 +244,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
     expect(findJobs).toHaveBeenCalledTimes(1);
     const [message, title] = requireNoteCall(noteFn);
     expect(title).toBe("Gateway (macOS)");
-    expect(message).toContain("Stale OpenClaw updater launchd job(s) detected");
+    expect(message).toContain("Stale OpenCrustacean updater launchd job(s) detected");
     expect(message).toContain("ai.openclaw.update.2026.5.12");
     expect(message).toContain("ai.openclaw.manual-update.1717168800");
     expect(message).toContain("launchctl remove <label>");

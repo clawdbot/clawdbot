@@ -187,8 +187,8 @@ describe("control UI assets helpers (fs-mocked)", () => {
   });
 
   it("prefers packaged app Control UI assets in Contents/Resources", () => {
-    const execPath = abs("fixtures/OpenClaw.app/Contents/MacOS/OpenClaw");
-    const bundledUiDir = abs("fixtures/OpenClaw.app/Contents/Resources/control-ui");
+    const execPath = abs("fixtures/OpenCrustacean.app/Contents/MacOS/OpenCrustacean");
+    const bundledUiDir = abs("fixtures/OpenCrustacean.app/Contents/Resources/control-ui");
     setFile(path.join(bundledUiDir, "index.html"), "<html></html>\n");
 
     state.realpaths.set(execPath, execPath);

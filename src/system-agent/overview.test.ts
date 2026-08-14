@@ -101,7 +101,7 @@ describe("loadSystemAgentOverview", () => {
       'Next: run "gateway status" or "restart gateway"',
     );
     const startup = formatSystemAgentStartupMessage(overview);
-    expect(startup).toContain("Hi, I'm OpenClaw — caretaker");
+    expect(startup).toContain("Hi, I'm OpenCrustacean — caretaker");
     expect(startup).toContain("Model: openai/gpt-5.2");
     expect(startup).toContain("Gateway: not reachable");
     expect(startup).not.toContain("`gateway status`");

@@ -690,7 +690,7 @@ describe("run-node script", () => {
     });
   });
 
-  it("adds Node CPU profiling flags to the launched OpenClaw child when requested", async () => {
+  it("adds Node CPU profiling flags to the launched OpenCrustacean child when requested", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
@@ -817,7 +817,7 @@ describe("run-node script", () => {
     });
   });
 
-  it("adds Node sync I/O tracing flag to the launched OpenClaw child when requested", async () => {
+  it("adds Node sync I/O tracing flag to the launched OpenCrustacean child when requested", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
@@ -2309,7 +2309,7 @@ describe("run-node script", () => {
     });
   });
 
-  it("does not require OpenClaw SDK alias outputs when dist extensions are absent", async () => {
+  it("does not require OpenCrustacean SDK alias outputs when dist extensions are absent", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
@@ -2348,7 +2348,7 @@ describe("run-node script", () => {
     });
   });
 
-  it("reports missing OpenClaw SDK alias outputs when runtime stamps match HEAD", async () => {
+  it("reports missing OpenCrustacean SDK alias outputs when runtime stamps match HEAD", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
@@ -2388,7 +2388,7 @@ describe("run-node script", () => {
     });
   });
 
-  it("does not require private OpenClaw SDK dist files that package exports omit", async () => {
+  it("does not require private OpenCrustacean SDK dist files that package exports omit", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {

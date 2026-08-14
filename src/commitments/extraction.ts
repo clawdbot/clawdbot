@@ -222,7 +222,7 @@ export function buildCommitmentExtractionPrompt(params: {
     assistantResponse: item.assistantText ?? "",
     existingPendingCommitments: formatExistingPending(item),
   }));
-  return `You are OpenClaw's internal commitment extractor. This is a hidden background classification run. Do not address the user.
+  return `You are OpenCrustacean's internal commitment extractor. This is a hidden background classification run. Do not address the user.
 
 Create inferred follow-up commitments only. Exact user requests such as "remind me tomorrow", "schedule this", or "check in at 3" belong to cron/reminders and must be skipped.
 

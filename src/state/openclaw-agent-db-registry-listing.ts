@@ -95,7 +95,7 @@ export function listOpenClawRegisteredAgentDatabases(
   }
   if (!existsSync(pathname)) {
     if (hasUnavailableMissingSqlitePath(pathname)) {
-      throw new Error(`OpenClaw state database ${pathname} is unavailable.`);
+      throw new Error(`OpenCrustacean state database ${pathname} is unavailable.`);
     }
     registeredAgentDatabasesMemo = { pathname, entries: [] };
     return [];
@@ -106,7 +106,7 @@ export function listOpenClawRegisteredAgentDatabases(
   const entries = withOpenClawStateDatabaseReadOnly(({ db: database }) => {
     if (detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0) {
       throw new Error(
-        `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+        `OpenCrustacean state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
       );
     }
     const registryTable = database
@@ -116,7 +116,7 @@ export function listOpenClawRegisteredAgentDatabases(
       return [];
     }
     if (registryTable.type !== "table") {
-      throw new Error(`OpenClaw state database ${pathname} has an invalid agent registry.`);
+      throw new Error(`OpenCrustacean state database ${pathname} has an invalid agent registry.`);
     }
     const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database);
     const rows = executeSqliteQuerySync(

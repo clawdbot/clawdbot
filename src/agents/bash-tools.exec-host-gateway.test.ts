@@ -1999,7 +1999,7 @@ EOF`,
         "Codex diagnostics sent to OpenAI servers:",
         "Session 1",
         "Channel: telegram",
-        "OpenClaw session id: `session-1`",
+        "OpenCrustacean session id: `session-1`",
         "Codex thread id: `thread-1`",
       ].join("\n"),
     );

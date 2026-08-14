@@ -340,7 +340,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
         }
         resolve({ status, body: getApnsResponseBodyCaptureText(body), responseHeaders });
       });
-      request.end(JSON.stringify({ aps: { alert: "OpenClaw APNs proxy validation" } }));
+      request.end(JSON.stringify({ aps: { alert: "OpenCrustacean APNs proxy validation" } }));
     });
   } finally {
     if (!session.closed && !session.destroyed) {

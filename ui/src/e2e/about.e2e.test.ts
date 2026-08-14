@@ -96,7 +96,9 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
         .toContain("separate from this Control UI build");
 
       const hero = page.locator(".about-hero");
-      await expect.poll(() => hero.locator(".about-hero__name").textContent()).toBe("OpenClaw");
+      await expect
+        .poll(() => hero.locator(".about-hero__name").textContent())
+        .toBe("OpenCrustacean");
       await expect
         .poll(() => hero.locator(".about-hero__version").textContent())
         .toBe("v2026.7.10");

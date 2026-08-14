@@ -58,7 +58,7 @@ describe("CustodianSessionStore", () => {
       .mockRejectedValueOnce(
         new GatewayRequestError({
           code: "UNAVAILABLE",
-          message: "OpenClaw requires working inference: no configured model",
+          message: "OpenCrustacean requires working inference: no configured model",
           details: { code: "system_agent_inference_unavailable" },
         }),
       )

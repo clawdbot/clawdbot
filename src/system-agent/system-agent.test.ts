@@ -327,7 +327,7 @@ describe("runSystemAgent", () => {
     expect(lines).not.toContain("stale reply");
   });
 
-  it("starts interactive OpenClaw in the TUI shell", async () => {
+  it("starts interactive OpenCrustacean in the TUI shell", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let runInteractiveTuiCalls = 0;
     let onReadyCalls = 0;
@@ -415,7 +415,7 @@ describe("runSystemAgent", () => {
 
     expect(runInteractiveTuiCalls).toBe(0);
     expect(lines.join("\n")).toContain(
-      "OpenClaw needs an interactive TTY. Use --message for one command.",
+      "OpenCrustacean needs an interactive TTY. Use --message for one command.",
     );
   });
 });

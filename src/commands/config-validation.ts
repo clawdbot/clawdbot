@@ -25,7 +25,7 @@ export async function requireValidConfigFileSnapshot(
       snapshot.issues.length > 0
         ? formatConfigIssueLines(snapshot.issues, "-").join("\n")
         : "Unknown validation issue.";
-    runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
+    runtime.error(`OpenCrustacean config is invalid: ${snapshot.path}\n${issues}`);
     runtime.error(
       isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
         ? `Fix: ${formatPluginPackagingRuntimeOutputRecoveryHint()}`

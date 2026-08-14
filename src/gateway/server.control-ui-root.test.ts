@@ -32,7 +32,7 @@ async function withGlobalControlUiHardlinkFixture<T>(run: (rootPath: string) => 
 }
 
 describe("gateway.controlUi.root", () => {
-  test("rejects hardlinked index.html when configured root points at global OpenClaw package control-ui", async () => {
+  test("rejects hardlinked index.html when configured root points at global OpenCrustacean package control-ui", async () => {
     await withGlobalControlUiHardlinkFixture(async (rootPath) => {
       testState.gatewayControlUi = { root: rootPath };
       await withGatewayServer(

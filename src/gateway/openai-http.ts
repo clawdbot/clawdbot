@@ -729,13 +729,13 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
 function resolveAgentResponseText(result: unknown): string {
   const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
-    return "No response from OpenClaw.";
+    return "No response from OpenCrustacean.";
   }
   const content = payloads
     .map((p) => (typeof p.text === "string" ? p.text : ""))
     .filter(Boolean)
     .join("\n\n");
-  return content || "No response from OpenClaw.";
+  return content || "No response from OpenCrustacean.";
 }
 
 function resolveAgentResponseCommentary(result: unknown): string {
@@ -1391,7 +1391,7 @@ export async function handleOpenAiHttpRequest(
           resolveAgentResponseCommentary(result) ||
           bufferedReplaceableAssistantContent ||
           resolveAgentResponseText(result) ||
-          "No response from OpenClaw.";
+          "No response from OpenCrustacean.";
 
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {

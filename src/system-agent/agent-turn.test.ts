@@ -276,7 +276,7 @@ describe("runSystemAgentTurn", () => {
     expect(first.sessionManager).toBeUndefined();
   });
 
-  it("uses the default agent CLI route while keeping OpenClaw session identity", async () => {
+  it("uses the default agent CLI route while keeping OpenCrustacean session identity", async () => {
     const stateDir = useTempStateDir();
     const agentDir = path.join(stateDir, "ops-agent");
     const config = {
@@ -341,12 +341,12 @@ describe("runSystemAgentTurn", () => {
       openClaw: ["openclaw"],
     });
     expect(call.toolsAllow).toBeUndefined();
-    expect(requireValue(call.systemAgentTool, "missing CLI OpenClaw tool").proposalRef).toBe(
+    expect(requireValue(call.systemAgentTool, "missing CLI OpenCrustacean tool").proposalRef).toBe(
       session.proposalRef,
     );
   });
 
-  it("rejects an always-on CLI backend before launching OpenClaw", async () => {
+  it("rejects an always-on CLI backend before launching OpenCrustacean", async () => {
     useTempStateDir();
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
@@ -395,7 +395,7 @@ describe("runSystemAgentTurn", () => {
     expect((failure as SystemAgentInferenceUnavailableError).failures).toEqual([
       expect.objectContaining({
         message: expect.stringContaining(
-          "CLI backend google-gemini-cli cannot enforce OpenClaw's exact tool availability",
+          "CLI backend google-gemini-cli cannot enforce OpenCrustacean's exact tool availability",
         ),
       }),
     ]);
@@ -833,9 +833,9 @@ describe("runSystemAgentTurn", () => {
       params: { temperature: 0.2 },
       tools: { allow: ["read"], deny: ["exec"] },
     });
-    expect(requireValue(call.systemAgentTool, "missing embedded OpenClaw tool").proposalRef).toBe(
-      session.proposalRef,
-    );
+    expect(
+      requireValue(call.systemAgentTool, "missing embedded OpenCrustacean tool").proposalRef,
+    ).toBe(session.proposalRef);
   });
 
   it("rejects a low-level session without verified inference before lookup or run", async () => {

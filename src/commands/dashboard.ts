@@ -302,7 +302,7 @@ export async function dashboardCommand(
   const suppressNoOpenHint = options.noOpen === true && fallbackToManualAuth;
 
   if (opened) {
-    runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
+    runtime.log("Opened in your browser. Keep that tab to control OpenCrustacean.");
   } else if (hint && !suppressNoOpenHint) {
     runtime.log(hint);
   }

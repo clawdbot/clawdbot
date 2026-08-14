@@ -100,7 +100,7 @@ beforeAll(async () => {
   verifiedInferenceDeps = fixture.deps;
 });
 
-describe("OpenClaw chat channel setup", () => {
+describe("OpenCrustacean chat channel setup", () => {
   it("runs collected channel hooks after writing config", async () => {
     const engine = new SystemAgentChatEngine({
       verifiedInference,

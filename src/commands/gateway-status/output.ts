@@ -93,7 +93,7 @@ export function buildGatewayStatusWarnings(params: {
   if (params.localTlsLoadError) {
     warnings.push({
       code: "local_tls_runtime_unavailable",
-      message: `Local gateway TLS is enabled but OpenClaw could not load the local certificate fingerprint: ${params.localTlsLoadError}`,
+      message: `Local gateway TLS is enabled but OpenCrustacean could not load the local certificate fingerprint: ${params.localTlsLoadError}`,
       targetIds: ["localLoopback"],
     });
   }

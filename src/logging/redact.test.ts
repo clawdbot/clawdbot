@@ -773,13 +773,13 @@ describe("redactSensitiveText", () => {
     const pomeriumJwt = "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456";
     const apiKey = "shortsecret";
     const input = [
-      `X-OpenClaw-Token: ${openClawToken}`,
+      `X-OpenCrustacean-Token: ${openClawToken}`,
       `x-pomerium-jwt-assertion: ${pomeriumJwt}`,
       `X-Api-Key=${apiKey}`,
     ].join("\n");
     const output = redactSensitiveText(input, { mode: "tools" });
 
-    expect(output).toContain("X-OpenClaw-Token: supers…7890");
+    expect(output).toContain("X-OpenCrustacean-Token: supers…7890");
     expect(output).toContain("x-pomerium-jwt-assertion: eyJhea…3456");
     expect(output).toContain("X-Api-Key=***");
     expect(output).not.toContain(openClawToken);

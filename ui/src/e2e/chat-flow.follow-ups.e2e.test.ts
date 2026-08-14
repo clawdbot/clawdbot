@@ -222,7 +222,7 @@ suite.define(() => {
             {
               id: "ops",
               model: { primary: "openai/startup-model" },
-              name: "OpenClaw",
+              name: "OpenCrustacean",
             },
           ],
           defaultId: "ops",

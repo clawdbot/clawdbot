@@ -147,7 +147,7 @@ async function promptEnvSecretRefForSetup(params: {
   };
   await params.prompter.note(
     params.copy?.envValidatedMessage?.(envVar) ??
-      `Validated environment variable ${envVar}. OpenClaw will store a reference, not the key value.`,
+      `Validated environment variable ${envVar}. OpenCrustacean will store a reference, not the key value.`,
     "Reference validated",
   );
   return { ref, resolvedValue };
@@ -250,7 +250,7 @@ async function promptProviderSecretRefForSetup(params: {
     });
     await params.prompter.note(
       params.copy?.providerValidatedMessage?.(selectedProvider, id, providerEntry.source) ??
-        `Validated ${providerEntry.source} reference ${selectedProvider}:${id}. OpenClaw will store a reference, not the key value.`,
+        `Validated ${providerEntry.source} reference ${selectedProvider}:${id}. OpenCrustacean will store a reference, not the key value.`,
       "Reference validated",
     );
     return { ref, resolvedValue };

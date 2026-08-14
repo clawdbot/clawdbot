@@ -335,7 +335,7 @@ export function buildBuiltinChatCommands(
     }),
     defineChatCommand({
       key: "openclaw",
-      description: "Run the OpenClaw setup and repair helper.",
+      description: "Run the OpenCrustacean setup and repair helper.",
       textAlias: "/openclaw",
       acceptsArgs: true,
       scope: "text",
@@ -646,7 +646,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "mcp",
       nativeName: "mcp",
-      description: "Show or set OpenClaw MCP servers.",
+      description: "Show or set OpenCrustacean MCP servers.",
       textAlias: "/mcp",
       category: "management",
       tier: "power",
@@ -752,7 +752,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "restart",
       nativeName: "restart",
-      description: "Restart OpenClaw.",
+      description: "Restart OpenCrustacean.",
       textAlias: "/restart",
       category: "tools",
       tier: "power",

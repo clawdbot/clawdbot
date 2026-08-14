@@ -49,7 +49,7 @@ export type GuidedOnboardingDeps = {
   /**
    * "hatch" (default) runs the local custodian flow: question zero, quiet
    * failure collection, deterministic setup apply, then the agent TUI.
-   * "chat" preserves the legacy handoff into the OpenClaw system-agent chat —
+   * "chat" preserves the legacy handoff into the OpenCrustacean system-agent chat —
    * remote-gateway onboarding requires it because setup must apply remotely.
    */
   handoffMode?: "hatch" | "chat";
@@ -461,7 +461,7 @@ async function runGuidedOnboardingFlow(
       }
       const appliedSnapshot = await readConfigFileSnapshot();
       if (!appliedSnapshot.valid) {
-        throw new Error("Setup wrote an invalid OpenClaw config.");
+        throw new Error("Setup wrote an invalid OpenCrustacean config.");
       }
       persistedConfig = appliedSnapshot.sourceConfig ?? appliedSnapshot.config;
     } catch (error) {
@@ -490,7 +490,7 @@ async function runGuidedOnboardingFlow(
     if (recommendedConfig !== persistedConfig) {
       const latestSnapshot = await readConfigFileSnapshot();
       if (!latestSnapshot.valid) {
-        throw new Error("App recommendations could not update an invalid OpenClaw config.");
+        throw new Error("App recommendations could not update an invalid OpenCrustacean config.");
       }
       const latestConfig = latestSnapshot.sourceConfig ?? latestSnapshot.config;
       const { mergeWizardConfigOntoLatest, writeWizardConfigFile } =

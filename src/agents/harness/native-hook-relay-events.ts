@@ -173,7 +173,7 @@ async function runNativeHookRelayPreToolUse(params: {
     // Codex app-server may continue with the original params when updatedInput
     // is unsupported, so rewrites must fail closed here.
     return params.adapter.renderPreToolUseBlockResponse(
-      "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      "OpenCrustacean tool policy rewrote Codex app-server approval params; refusing original request.",
     );
   }
   return params.adapter.renderNoopResponse(params.invocation.event);

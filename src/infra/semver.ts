@@ -23,7 +23,7 @@ export function compareOpenClawSemver(left: SemVer, right: SemVer): number {
   return compareBuild(toOpenClawComparableVersion(left), toOpenClawComparableVersion(right));
 }
 
-/** Converts legacy OpenClaw `1.2.3.beta.N` tags into valid SemVer prereleases. */
+/** Converts legacy OpenCrustacean `1.2.3.beta.N` tags into valid SemVer prereleases. */
 export function normalizeLegacyDotBetaVersion(version: string): string {
   const trimmed = version.trim();
   const dotBetaMatch = /^([vV]?[0-9]+\.[0-9]+\.[0-9]+)\.beta(?:\.([0-9A-Za-z.-]+))?$/.exec(trimmed);

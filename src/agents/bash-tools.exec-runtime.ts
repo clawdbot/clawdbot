@@ -458,7 +458,7 @@ function formatExecFailureReason(params: {
         typeof params.timeoutSec === "number" && params.timeoutSec > 0
           ? `Command timed out after ${params.timeoutSec} seconds.`
           : "Command timed out.";
-      return `${appendExecTimeoutRetryGuidance(timeoutText, params.failureKind)}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`;
+      return `${appendExecTimeoutRetryGuidance(timeoutText, params.failureKind)}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenCrustacean can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`;
     }
     case "no-output-timeout":
       return appendExecTimeoutRetryGuidance(

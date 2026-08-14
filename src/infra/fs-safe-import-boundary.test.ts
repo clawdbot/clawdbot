@@ -87,7 +87,7 @@ describe("fs-safe import boundary", () => {
     });
   });
 
-  it("keeps direct fs-safe imports behind OpenClaw policy wrappers", () => {
+  it("keeps direct fs-safe imports behind OpenCrustacean policy wrappers", () => {
     const violations = SCAN_ROOTS.flatMap((root) => listSourceFiles(path.join(REPO_ROOT, root)))
       .map((filePath) => toRepoRelativePath(REPO_ROOT, filePath))
       .filter((filePath) => {

@@ -144,7 +144,7 @@ export async function noteStalePluginRuntimeSymlinks(
   const shortenPath = options.shortenPath ?? shortenHomePath;
   const lines = [
     "- Plugin-runtime symlinks under the global Node prefix point at pruned",
-    `  ${PLUGIN_RUNTIME_DEPS_MARKER} directories from a previous OpenClaw install.`,
+    `  ${PLUGIN_RUNTIME_DEPS_MARKER} directories from a previous OpenCrustacean install.`,
     "- Bundled plugin ESM imports can fail with ERR_MODULE_NOT_FOUND until repaired.",
   ];
   for (const item of stale.slice(0, MAX_REPORTED)) {

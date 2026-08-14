@@ -600,7 +600,7 @@ export async function runSetupInferenceTest(params: {
         ok: false,
         status: "unknown",
         error:
-          "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
+          "Inference succeeded, but its runtime did not report an owner that OpenCrustacean can safely reuse.",
       };
     }
     return {

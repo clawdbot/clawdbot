@@ -405,7 +405,7 @@ describe("context-window-guard", () => {
       runtimeBaseUrl: "http://127.0.0.1:11434/v1",
     });
 
-    expect(message).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+    expect(message).toContain("OpenCrustacean is capped by agents.defaults.contextTokens.");
     expect(message).not.toContain("choose a larger model");
   });
 

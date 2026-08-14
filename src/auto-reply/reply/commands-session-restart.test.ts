@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   })),
   formatDoctorNonInteractiveHint: vi.fn(
     () =>
-      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenCrustacean surface.",
   ),
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
   scheduleGatewaySigusr1Restart: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
@@ -141,7 +141,7 @@ describe("handleRestartCommand", () => {
     expect(sentinelPayload?.message).toBe("/restart");
     expect(sentinelPayload?.continuation).toBeNull();
     expect(sentinelPayload?.doctorHint).toBe(
-      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenCrustacean surface.",
     );
     expect(sentinelPayload?.stats).toEqual({
       mode: "gateway.restart",

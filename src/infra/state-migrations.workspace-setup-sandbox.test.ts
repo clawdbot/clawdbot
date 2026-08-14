@@ -849,7 +849,7 @@ describe("sandbox workspace Doctor migration", () => {
     expect(fs.existsSync(mainPath)).toBe(true);
   });
 
-  it("repairs sandbox workspace copies beneath the configured OpenClaw home", async () => {
+  it("repairs sandbox workspace copies beneath the configured OpenCrustacean home", async () => {
     const context = setup();
     const effectiveHome = path.join(context.homeDir, "effective-openclaw-home");
     setTestEnvValue("OPENCLAW_HOME", effectiveHome);

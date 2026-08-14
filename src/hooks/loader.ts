@@ -177,7 +177,7 @@ export async function loadInternalHooks(
         if (unknownEvents.length > 0) {
           log.warn(
             `Hook '${safeLogValue(entry.hook.name)}' subscribes to event${unknownEvents.length === 1 ? "" : "s"} ` +
-              `${unknownEvents.map((event) => safeLogValue(event)).join(", ")} not emitted by OpenClaw core — ` +
+              `${unknownEvents.map((event) => safeLogValue(event)).join(", ")} not emitted by OpenCrustacean core — ` +
               `likely a typo; unless a plugin emits it, the hook never fires. ` +
               `Known events: https://docs.openclaw.ai/automation/hooks`,
           );
@@ -278,7 +278,7 @@ export async function loadInternalHooks(
       if (!isKnownInternalHookEventKey(handlerConfig.event)) {
         log.warn(
           `Legacy hook handler ${safeLogValue(rawModule)} subscribes to event ` +
-            `${safeLogValue(handlerConfig.event)} not emitted by OpenClaw core — ` +
+            `${safeLogValue(handlerConfig.event)} not emitted by OpenCrustacean core — ` +
             `likely a typo; unless a plugin emits it, the hook never fires. ` +
             `Known events: https://docs.openclaw.ai/automation/hooks`,
         );

@@ -37,7 +37,7 @@ import {
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 
-// OpenAI-compatible `/v1/embeddings` bridge. It maps OpenClaw agent/model
+// OpenAI-compatible `/v1/embeddings` bridge. It maps OpenCrustacean agent/model
 // routing onto configured memory embedding providers while preserving the
 // response shape expected by OpenAI SDK clients.
 type OpenAiEmbeddingsHttpOptions = {

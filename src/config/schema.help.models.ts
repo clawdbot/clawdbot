@@ -31,7 +31,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.region":
     "Optional provider deployment/API region interpreted by providers that expose regional endpoints. Use provider docs for supported values; baseUrl overrides usually take precedence when both are set.",
   "models.providers.*.injectNumCtxForOpenAICompat":
-    "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+    "Controls whether OpenCrustacean injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
   "models.providers.*.params":
     "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
   "models.providers.*.headers":
@@ -39,11 +39,11 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
   "models.providers.*.agentRuntime":
-    "Optional low-level agent runtime policy for this provider. Use provider/model runtime policy instead of agent-wide runtime pins; omitted/default lets OpenClaw choose the runtime for the selected provider.",
+    "Optional low-level agent runtime policy for this provider. Use provider/model runtime policy instead of agent-wide runtime pins; omitted/default lets OpenCrustacean choose the runtime for the selected provider.",
   "models.providers.*.agentRuntime.id":
     'Provider agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli". OpenAI on the official endpoint defaults to the Codex harness when omitted.',
   "models.providers.*.localService":
-    "Optional on-demand local model server process for this provider. OpenClaw probes healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
+    "Optional on-demand local model server process for this provider. OpenCrustacean probes healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
   "models.providers.*.localService.command":
     "Absolute executable path for the local model server process. Keep this path explicit so provider startup is deterministic and does not depend on shell PATH lookup.",
   "models.providers.*.localService.args":
@@ -52,11 +52,11 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.localService.env":
     "Additional environment variables for the local model server process. Values that look secret are redacted from config snapshots.",
   "models.providers.*.localService.healthUrl":
-    "Readiness URL probed before model requests. If omitted, OpenClaw uses the provider baseUrl with /models appended.",
+    "Readiness URL probed before model requests. If omitted, OpenCrustacean uses the provider baseUrl with /models appended.",
   "models.providers.*.localService.readyTimeoutMs":
     "Maximum milliseconds to wait for the local model server readiness probe after starting the process.",
   "models.providers.*.localService.idleStopMs":
-    "Milliseconds to keep an OpenClaw-started local model server alive after the last request finishes. Set 0 to keep it alive until OpenClaw exits.",
+    "Milliseconds to keep an OpenCrustacean-started local model server alive after the last request finishes. Set 0 to keep it alive until OpenCrustacean exits.",
   "models.providers.*.request":
     "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
   "models.providers.*.request.headers":
@@ -94,7 +94,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.request.proxy.tls.insecureSkipVerify":
     "Skips proxy TLS certificate verification. Use only for controlled development environments.",
   proxy:
-    "Operator-managed forward proxy routing for OpenClaw runtime HTTP, HTTPS, WebSocket, and supported raw-egress paths. Use this when central egress control is part of the deployment boundary.",
+    "Operator-managed forward proxy routing for OpenCrustacean runtime HTTP, HTTPS, WebSocket, and supported raw-egress paths. Use this when central egress control is part of the deployment boundary.",
   "proxy.enabled":
     "Explicit managed-proxy override. URL presence enables routing by default; set false to ignore configured or environment proxy URLs without deleting them.",
   "proxy.proxyUrl":
@@ -138,7 +138,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.models[].mediaInput.image.maxSidePx":
     "Maximum image width or height accepted by the provider for this model.",
   "models.providers.*.models[].mediaInput.image.preferredSidePx":
-    "Preferred image resize side for balanced compression. Leave unset to use OpenClaw's conservative default.",
+    "Preferred image resize side for balanced compression. Leave unset to use OpenCrustacean's conservative default.",
   "models.providers.*.models[].mediaInput.image.tokenMode":
     'Provider image token accounting style: "tile", "detail", or "provider".',
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
@@ -170,7 +170,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.experimental":
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.localModelLean":
-    "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
+    "Experimental local-model prompt trim. When enabled, OpenCrustacean drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
   "agents.defaults.startupContext":
     'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
   "agents.defaults.startupContext.enabled":
@@ -262,7 +262,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Memory backend configuration (global).",
   "memory.backend":
-    'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
+    'Selects the global memory engine: "builtin" uses OpenCrustacean memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
   "memory.citations":
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
   "memory.qmd.command":

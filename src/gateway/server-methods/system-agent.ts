@@ -141,7 +141,7 @@ export async function runExclusiveSystemAgentSetupActivation<T>(
 ): Promise<T> {
   if (systemAgentSetupActivationInProgress) {
     throw new SystemAgentSetupActivationBusyError(
-      "OpenClaw setup is already in progress; try again when it finishes.",
+      "OpenCrustacean setup is already in progress; try again when it finishes.",
     );
   }
   systemAgentSetupActivationInProgress = true;
@@ -202,11 +202,11 @@ function queueDelegatedApproval(params: {
   }
   const manager = params.context.systemAgentApprovalManager;
   if (!manager) {
-    throw new Error("OpenClaw approval registry unavailable");
+    throw new Error("OpenCrustacean approval registry unavailable");
   }
   const description = describeSystemAgentPersistentOperation(params.proposal.operation);
   const request: SystemAgentApprovalRequestPayload = {
-    title: "OpenClaw change",
+    title: "OpenCrustacean change",
     description,
     command: description,
     proposalHash: params.proposal.hash,
@@ -246,7 +246,7 @@ function queueDelegatedApproval(params: {
       }
       await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
     },
-    afterDecisionErrorLabel: "OpenClaw approval apply failed",
+    afterDecisionErrorLabel: "OpenCrustacean approval apply failed",
   });
   return record.id;
 }
@@ -513,7 +513,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw caller identity unavailable."),
+            errorShape(ErrorCodes.INVALID_REQUEST, "OpenCrustacean caller identity unavailable."),
           );
           return;
         }
@@ -522,7 +522,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller."),
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "OpenCrustacean session belongs to another caller.",
+            ),
           );
           return;
         }
@@ -559,7 +562,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               undefined,
               errorShape(
                 ErrorCodes.UNAVAILABLE,
-                `OpenClaw requires working inference: ${inference.error}`,
+                `OpenCrustacean requires working inference: ${inference.error}`,
                 {
                   details: buildSystemAgentInferenceUnavailableErrorDetails(),
                 },

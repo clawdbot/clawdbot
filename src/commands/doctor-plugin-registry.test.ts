@@ -867,7 +867,9 @@ describe("maybeRepairPluginRegistryState", () => {
     const linkPath = path.join(managed.packageDir, "node_modules", "openclaw");
     expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain("Repaired OpenClaw host peer link");
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "Repaired OpenCrustacean host peer link",
+    );
   });
 
   it("warns about broken managed npm openclaw peer links without repairing them", async () => {
@@ -900,7 +902,7 @@ describe("maybeRepairPluginRegistryState", () => {
 
     const linkPath = path.join(managed.packageDir, "node_modules", "openclaw");
     const notes = vi.mocked(note).mock.calls.join("\n");
-    expect(notes).toContain("Managed npm OpenClaw host peer links need repair");
+    expect(notes).toContain("Managed npm OpenCrustacean host peer links need repair");
     expect(notes).toContain("codex-plugin");
     expect(notes).toContain("openclaw doctor --fix");
     expect(fs.existsSync(linkPath)).toBe(false);

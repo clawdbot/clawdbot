@@ -881,7 +881,7 @@ describe("runConfigureWizard", () => {
       [
         "Codex-capable models can use native Codex web search instead of a separate provider.",
         "Other models need a separate web search provider.",
-        "If you do not choose one, OpenClaw can select a provider from available credentials; otherwise other models may not have web search.",
+        "If you do not choose one, OpenCrustacean can select a provider from available credentials; otherwise other models may not have web search.",
       ].join("\n"),
       "Codex native search",
     );

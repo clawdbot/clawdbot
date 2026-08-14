@@ -683,7 +683,7 @@ async function initializeGitWorkspace(root: string): Promise<string> {
   await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
   await execFileAsync("git", [
     "-c",
-    "user.name=OpenClaw Test",
+    "user.name=OpenCrustacean Test",
     "-c",
     "user.email=openclaw-test@example.invalid",
     "-C",
@@ -896,7 +896,7 @@ test("sessions.create honors worktree name/base ref and persists worktree info",
   await execFileAsync("git", ["-C", workspace, "add", "base.txt"]);
   await execFileAsync("git", [
     "-c",
-    "user.name=OpenClaw Test",
+    "user.name=OpenCrustacean Test",
     "-c",
     "user.email=openclaw-test@example.invalid",
     "-C",

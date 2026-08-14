@@ -528,7 +528,7 @@ describe("ensureConfigReady", () => {
     const runtime = await runEnsureConfigReady(["message"]);
 
     expect(plainErrorCalls(runtime)).toEqual([
-      "OpenClaw config is invalid",
+      "OpenCrustacean config is invalid",
       "File: /tmp/openclaw.json",
       "Problem:",
       "  - channels.quietchat: invalid",

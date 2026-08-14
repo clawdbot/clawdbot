@@ -591,7 +591,7 @@ describe("runEmbeddedAgent", () => {
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves explicit OpenAI OpenClaw runs through Codex when auth order starts with Codex OAuth", async () => {
+  it("resolves explicit OpenAI OpenCrustacean runs through Codex when auth order starts with Codex OAuth", async () => {
     const sessionFile = nextSessionCompatibilityKey();
     const baseConfig = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     const openAIProvider = baseConfig.models?.providers?.openai;

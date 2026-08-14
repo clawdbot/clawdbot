@@ -376,7 +376,7 @@ function buildSnapshotFile(stdout: string): string | null {
   const exports = parseSafeEnvExports(stdout.slice(envIndex + ENV_MARKER.length).trim());
 
   return [
-    "# OpenClaw exec shell snapshot. Generated; do not edit.",
+    "# OpenCrustacean exec shell snapshot. Generated; do not edit.",
     'if [ -n "${BASH_VERSION:-}" ]; then shopt -s expand_aliases 2>/dev/null || true; fi',
     "unalias -a 2>/dev/null || true",
     shellState,

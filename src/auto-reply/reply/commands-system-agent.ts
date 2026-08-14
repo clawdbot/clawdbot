@@ -27,7 +27,7 @@ export const handleSystemAgentCommand: CommandHandler = async (params, allowText
           commandBody: params.command.commandBodyNormalized,
           agentId: params.agentId,
           isGroup: params.isGroup,
-        })) ?? "OpenClaw did not find a rescue request.",
+        })) ?? "OpenCrustacean did not find a rescue request.",
     },
   };
 };

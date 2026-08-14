@@ -357,7 +357,7 @@ describe("models-config runtime source snapshot", () => {
               ...getOpenAiProvider(runtimeConfig),
               baseUrl: "https://api.openai.com/v1",
               headers: {
-                "X-OpenClaw-Test": "one",
+                "X-OpenCrustacean-Test": "one",
               },
             },
           },
@@ -371,7 +371,7 @@ describe("models-config runtime source snapshot", () => {
               ...getOpenAiProvider(runtimeConfig),
               baseUrl: "https://mirror.example/v1",
               headers: {
-                "X-OpenClaw-Test": "two",
+                "X-OpenCrustacean-Test": "two",
               },
             },
           },
@@ -389,7 +389,7 @@ describe("models-config runtime source snapshot", () => {
         }>(agentDir);
         expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
         expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
-        expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("one");
+        expect(parsed.providers.openai?.headers?.["X-OpenCrustacean-Test"]).toBe("one");
 
         // Header changes still rewrite models.json, but merge mode preserves the existing baseUrl.
         await ensureOpenClawModelsJson(secondCandidate, agentDir);
@@ -401,7 +401,7 @@ describe("models-config runtime source snapshot", () => {
         }>(agentDir);
         expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
         expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
-        expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("two");
+        expect(parsed.providers.openai?.headers?.["X-OpenCrustacean-Test"]).toBe("two");
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();

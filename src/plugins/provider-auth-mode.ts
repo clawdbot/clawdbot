@@ -30,7 +30,7 @@ export async function resolveSecretInputModeForEnvSelection(params: {
       {
         value: "plaintext",
         label: params.copy?.plaintextLabel ?? "Paste API key now",
-        hint: params.copy?.plaintextHint ?? "Stores the key directly in OpenClaw config",
+        hint: params.copy?.plaintextHint ?? "Stores the key directly in OpenCrustacean config",
       },
       {
         value: "ref",

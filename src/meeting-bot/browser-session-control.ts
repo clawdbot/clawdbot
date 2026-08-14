@@ -202,12 +202,12 @@ export async function leaveMeetingWithBrowser<
       if (leaveResult.sessionConflict !== true) {
         return {
           left: false,
-          note: `Browser control could not verify that the ${params.adapter.browserLabel} tab still belongs to this OpenClaw meeting session.`,
+          note: `Browser control could not verify that the ${params.adapter.browserLabel} tab still belongs to this OpenCrustacean meeting session.`,
         };
       }
       return {
         left: true,
-        note: `${params.adapter.browserLabel} tab belongs to another OpenClaw meeting session; left its current call untouched.`,
+        note: `${params.adapter.browserLabel} tab belongs to another OpenCrustacean meeting session; left its current call untouched.`,
       };
     }
     if (leaveResult.urlMatched !== true && !leaveResult.departed) {
@@ -280,7 +280,7 @@ export async function readMeetingTranscriptWithBrowser<
   }
   if (snapshot.sessionMatched === false) {
     throw new Error(
-      `The tracked ${params.adapter.browserLabel} tab now belongs to another OpenClaw meeting session.`,
+      `The tracked ${params.adapter.browserLabel} tab now belongs to another OpenCrustacean meeting session.`,
     );
   }
   return {

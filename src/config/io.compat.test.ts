@@ -194,7 +194,7 @@ describe("config io paths", () => {
     });
   });
 
-  it("explains what to check when config was written by a newer OpenClaw", async () => {
+  it("explains what to check when config was written by a newer OpenCrustacean", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -224,9 +224,9 @@ describe("config io paths", () => {
 
       expect(logger.warn).toHaveBeenCalledWith(
         [
-          `Your OpenClaw config was written by version 9999.1.1, but this command is running ${VERSION}.`,
+          `Your OpenCrustacean config was written by version 9999.1.1, but this command is running ${VERSION}.`,
           "Check: `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
-          "If unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+          "If unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenCrustacean install.",
         ].join("\n"),
       );
     });

@@ -22,7 +22,7 @@ describe("reserved plugin ids", () => {
 
     expect(loadPluginManifest(rootDir, false)).toMatchObject({
       ok: false,
-      error: 'plugin manifest id "node-mcp" is reserved by OpenClaw core',
+      error: 'plugin manifest id "node-mcp" is reserved by OpenCrustacean core',
     });
   });
 });

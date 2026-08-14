@@ -67,13 +67,13 @@ export async function runSystemAgentWithInference(
     failOneShotExecution(
       opts,
       runtime,
-      new Error("OpenClaw --yes requires --message so approval is limited to one request."),
+      new Error("OpenCrustacean --yes requires --message so approval is limited to one request."),
     );
     return;
   }
   const oneShot = isOneShotRequest(opts);
   if (!oneShot && !hasInteractiveTty(opts)) {
-    runtime.error("OpenClaw needs an interactive TTY. Use --message for one command.");
+    runtime.error("OpenCrustacean needs an interactive TTY. Use --message for one command.");
     runtime.exit(1);
     return;
   }
@@ -116,12 +116,12 @@ export async function runSystemAgentWithInference(
       writeRuntimeJson(runtime, {
         ok: false,
         status: inference.status,
-        error: `OpenClaw requires working inference: ${inference.error}`,
+        error: `OpenCrustacean requires working inference: ${inference.error}`,
         guidance,
       });
     } else {
       runtime.error(
-        [`OpenClaw requires working inference: ${inference.error}`, guidance].join("\n"),
+        [`OpenCrustacean requires working inference: ${inference.error}`, guidance].join("\n"),
       );
     }
     if (!requestExitAfterOneShotOutput(runtime, 1)) {
@@ -130,7 +130,7 @@ export async function runSystemAgentWithInference(
     return;
   }
 
-  runtime.log("OpenClaw requires working inference. Starting guided AI setup…");
+  runtime.log("OpenCrustacean requires working inference. Starting guided AI setup…");
   const runGuidedOnboarding =
     deps.runGuidedOnboarding ?? (await import("./onboard-guided.js")).runGuidedOnboarding;
   await runGuidedOnboarding(onboardingOptions, runtime);

@@ -53,7 +53,7 @@ async function runRescue(params: {
   });
 }
 
-describeLive("OpenClaw live rescue channel smoke", () => {
+describeLive("OpenCrustacean live rescue channel smoke", () => {
   afterEach(() => {
     resetPluginStateStoreForTests();
     clearConfigCache();

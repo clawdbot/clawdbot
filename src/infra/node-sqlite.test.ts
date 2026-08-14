@@ -48,7 +48,7 @@ function expectedUnsafeSqliteError(version: string, shared: boolean): string {
     : "Upgrade to Node 22.22.3+, 24.15.0+, or 25.9.0+ before retrying.";
   return (
     "SQLite support is unavailable or unsafe in this Node runtime. " +
-    "OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; " +
+    "OpenCrustacean requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; " +
     `Node ${process.versions.node} ${wording} SQLite ${version}, which is affected by the upstream WAL-reset ` +
     `database corruption bug. ${remediation}`
   );
