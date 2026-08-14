@@ -305,7 +305,9 @@ calls or changes provider credentials.
         action: "warn",
       },
     },
-    list: [{ id: "local", usageBudget: { enabled: false } }],
+    entries: {
+      local: { default: true, usageBudget: { enabled: false } },
+    },
   },
 }
 ```

@@ -17,6 +17,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import {
   buildInlinePluginStatusPayload,
+  hasSuccessfulTerminalSourceReplyDelivery,
   markBeforeAgentRunBlockedPayloads,
   resolvePendingFinalDeliveryRetryText,
   resolveReplyRunDeliveryContext,
@@ -66,6 +67,7 @@ export async function completeReplyAgentRun(input: {
   const {
     activeIsNewSession,
     activeSessionStore,
+    blockReplyPipeline,
     cfg,
     execution,
     followupRun,
@@ -304,7 +306,11 @@ export async function completeReplyAgentRun(input: {
   if (responseUsageLine) {
     finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
   }
-  if (!isHookBlockedRun && finalPayloads.length > 0) {
+  const completedTerminalSourceReplyDelivery = hasSuccessfulTerminalSourceReplyDelivery({
+    blockReplyPipeline,
+    directlySentBlockPayloads: finalPayloads,
+  });
+  if (!isHookBlockedRun && completedTerminalSourceReplyDelivery) {
     const warning = prepareAgentUsageBudgetWarningBestEffort({
       cfg,
       agentId: followupRun.run.agentId,
