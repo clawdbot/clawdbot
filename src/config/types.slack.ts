@@ -60,6 +60,8 @@ type SlackPresenceEventsMode = "off" | "auto" | "on";
 type SlackPresenceEventsConfig = {
   /** Presence wake mode. Default: off. */
   mode?: SlackPresenceEventsMode;
+  /** Override the default presence-event guidance. Empty omits event-specific guidance. */
+  prompt?: string;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";

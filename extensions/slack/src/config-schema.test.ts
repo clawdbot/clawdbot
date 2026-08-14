@@ -157,12 +157,13 @@ describe("slack config schema", () => {
     if (absent.success) {
       expect(absent.data.presenceEvents).toBeUndefined();
     }
-    expectSlackConfigValid({ presenceEvents: { mode: "auto" } });
+    expectSlackConfigValid({ presenceEvents: { mode: "auto", prompt: "Do not greet." } });
     expectSlackConfigValid({
-      accounts: { ops: { presenceEvents: { mode: "on" } } },
-      channels: { C123: { presenceEvents: { mode: "off" } } },
+      accounts: { ops: { presenceEvents: { mode: "on", prompt: "Account guidance" } } },
+      channels: { C123: { presenceEvents: { mode: "off", prompt: "" } } },
     });
     expectSlackConfigIssue({ presenceEvents: { mode: "enabled" } }, "presenceEvents.mode");
+    expectSlackConfigIssue({ presenceEvents: { prompt: false } }, "presenceEvents.prompt");
   });
 
   it("accepts historyLimit overrides per account", () => {

@@ -41,6 +41,7 @@ const SlackDmSchema = z
 const SlackPresenceEventsSchema = z
   .object({
     mode: z.enum(["off", "auto", "on"]).optional(),
+    prompt: z.string().optional(),
   })
   .strict();
 
