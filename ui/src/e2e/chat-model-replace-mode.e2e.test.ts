@@ -42,9 +42,8 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-model-select="true"]').click();
       const hint = composer.locator(".chat-controls__catalog-hint");
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { agentId: "main", view: "configured" } }),
-      ]);
+      const modelsListRequest = await gateway.waitForRequest("models.list");
+      expect(modelsListRequest.params).toEqual({ agentId: "main", view: "configured" });
       await expect
         .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
         .toBe("Replace mode filters models according to your model settings. Manage models");
