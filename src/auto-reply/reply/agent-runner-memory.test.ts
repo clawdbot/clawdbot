@@ -81,6 +81,7 @@ function createReplyOperation(): TestReplyOperation {
   return {
     key: "test",
     sessionId: "session",
+    turnKind: "visible",
     abortSignal: new AbortController().signal,
     staleExpiryReason: undefined,
     resetTriggered: false,

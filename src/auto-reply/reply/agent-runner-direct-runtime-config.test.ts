@@ -131,6 +131,7 @@ function createReplyOperation(): TestReplyOperation {
     get sessionId() {
       return sessionId;
     },
+    turnKind: "visible",
     abortSignal: new AbortController().signal,
     resetTriggered: false,
     phase: "queued",

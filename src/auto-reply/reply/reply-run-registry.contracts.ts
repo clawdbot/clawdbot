@@ -22,6 +22,8 @@ type ReplyBackendKind = "embedded" | "cli";
 
 type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
+export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
+
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
@@ -208,6 +210,7 @@ type ReplyOperationResult =
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
   readonly sessionId: string;
+  readonly turnKind: ReplyTurnKind;
   /** Gateway lifecycle that admitted this process-local owner. */
   readonly lifecycleGeneration?: string;
   readonly routeThreadId?: string | number;

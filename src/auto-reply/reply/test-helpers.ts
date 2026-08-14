@@ -26,6 +26,7 @@ export function createMockReplyOperation(
   const replyOperation: ReplyOperation = {
     key: overrides.key ?? "main",
     sessionId,
+    turnKind: "visible",
     abortSignal: overrides.abortSignal ?? new AbortController().signal,
     resetTriggered: false,
     terminalRecovery: false,
