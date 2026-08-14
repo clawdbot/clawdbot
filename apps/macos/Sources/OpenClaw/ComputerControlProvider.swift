@@ -75,7 +75,7 @@ struct CuaDriverWorkerEndpoint: Encodable, Equatable, Sendable {
     let binaryPath: String
 
     func environmentValue() throws -> String {
-        try String(decoding: JSONEncoder().encode(self), as: UTF8.self)
+        try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
     }
 }
 
