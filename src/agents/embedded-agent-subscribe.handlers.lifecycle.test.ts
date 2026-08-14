@@ -728,7 +728,10 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("marks token-limited terminal text as abandoned before runner finalization", async () => {
+  it("keeps token-limited terminal text replayable before runner finalization", async () => {
+    // The partial answer is delivered, so the turn must not be abandoned or
+    // marked replay-invalid — that is what lets the user ask to continue it
+    // instead of restarting the work.
     const onAgentEvent = vi.fn();
     const ctx = createContext(
       {
@@ -748,8 +751,7 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "end",
         stopReason: "length",
-        livenessState: "abandoned",
-        replayInvalid: true,
+        livenessState: "working",
       },
     });
   });
