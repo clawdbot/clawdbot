@@ -45,6 +45,8 @@ import {
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   createResponsesStreamWithEncryptedContentRetry,
+  isInvalidEncryptedContentError,
+  resolveNextResponsesEncryptedContentAttempt,
   resolveAzureOpenAIApiVersion,
 } from "./openai-responses-replay-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
@@ -339,7 +341,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         let continuationBaseline: ResponsesContinuationRequest | undefined;
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
-          initialAttemptKind: "initial" | "continuation-rejected" = "initial",
+          initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
         ): Promise<AsyncIterable<unknown>> => {
           const {
             stream: rawResponseStream,
@@ -389,6 +391,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             `[responses] websocket_fallback provider=${model.provider} api=${model.api} ` +
               `model=${model.id} reason=${reason}`,
           );
+        const closeWebSocketForFallback = (reason: string) => {
+          finishWebSocket?.({ keep: false });
+          finishWebSocket = undefined;
+          transport = "sse";
+          logWebSocketFallback(reason);
+        };
         if (websocketMode) {
           try {
             const websocket = createOpenAIResponsesWebSocketStream({
@@ -424,15 +432,29 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                   }
                 } catch (error) {
                   if (error instanceof OpenAIResponsesWebSocketSafeRetryError) {
-                    finishWebSocket?.({ keep: false });
-                    finishWebSocket = undefined;
-                    transport = "sse";
-                    logWebSocketFallback(
+                    // Explicit server rejection proves no output was accepted. Resume at the next
+                    // semantic attempt instead of treating this like an ambiguous disconnect.
+                    const encryptedContentRejected = isInvalidEncryptedContentError(error);
+                    const recovery = encryptedContentRejected
+                      ? await resolveNextResponsesEncryptedContentAttempt(
+                          {
+                            kind: "initial",
+                            // WebSocket sanitization removes `stream`; SSE must restore it.
+                            request: { ...websocket.request, stream: true } as typeof params,
+                          },
+                          error,
+                          { buildFullHistoryRequest: () => buildRequest("full-history") },
+                        )
+                      : undefined;
+                    if (encryptedContentRejected && !recovery) {
+                      throw error;
+                    }
+                    closeWebSocketForFallback(
                       `safe_server_error code=${error.code} status=${safeDebugValue(error.status)} param=${safeDebugValue(error.param)}`,
                     );
                     yield* await createSseStream(
-                      await buildRequest("full-history"),
-                      "continuation-rejected",
+                      recovery?.request ?? (await buildRequest("full-history")),
+                      recovery?.kind ?? "continuation-rejected",
                     );
                     return;
                   }
@@ -449,9 +471,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               },
             };
           } catch {
-            finishWebSocket?.({ keep: false });
-            finishWebSocket = undefined;
-            logWebSocketFallback("setup_failure");
+            closeWebSocketForFallback("setup_failure");
             responseStream = await createSseStream();
           }
         } else {
