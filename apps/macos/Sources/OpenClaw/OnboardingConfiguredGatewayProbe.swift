@@ -169,55 +169,10 @@ final class OnboardingConfiguredGatewayProbe {
             guard verifyConfiguredInference else {
                 return .configured(modelRef: model, verification: nil, route: boundRoute)
             }
-
-            guard let supportsVerification = await self.gateway.supportsServerMethod(
-                "openclaw.setup.verify",
-                ifCurrentServerLease: lease),
-                self.isCurrent(attempt)
-            else { return .superseded }
-            // Released Gateways predate the live verifier. Preserve their
-            // config-only handoff until they are upgraded.
-            guard supportsVerification else {
-                return .configured(modelRef: model, verification: nil, route: boundRoute)
-            }
-            let verificationData: Data
-            do {
-                verificationData = try await self.gateway.request(
-                    method: "openclaw.setup.verify",
-                    params: [:],
-                    timeoutMs: self.verificationTimeoutMs,
-                    ifCurrentServerLease: lease)
-            } catch {
-                guard let response = error as? GatewayResponseError,
-                      response.method == "openclaw.setup.verify",
-                      response.missingScope == "operator.admin"
-                else { throw error }
-                guard await self.gateway.isCurrentServerLease(lease),
-                      self.isCurrent(attempt)
-                else { return .superseded }
-                // Released Gateways advertised this method while requiring admin.
-                // Persisted macOS device grants can be write-only after an upgrade.
-                return .configured(modelRef: model, verification: nil, route: boundRoute)
-            }
-            guard await self.gateway.isCurrentServerLease(lease),
-                  self.isCurrent(attempt)
-            else { return .superseded }
-            let verification = try JSONDecoder().decode(
-                OnboardingAISetupModel.ActivateResult.self,
-                from: verificationData)
-            guard verification.ok else {
-                return .verificationFailed(
-                    modelRef: model,
-                    status: verification.status,
-                    error: verification.error,
-                    verification: VerificationProof(
-                        activationOwnershipFingerprint: lease.route.activationOwnershipFingerprint),
-                    route: boundRoute)
-            }
-            return .configured(
-                modelRef: model,
-                verification: VerificationProof(
-                    activationOwnershipFingerprint: lease.route.activationOwnershipFingerprint),
+            return try await self.verifyConfiguredModel(
+                model,
+                lease: lease,
+                attempt: attempt,
                 route: boundRoute)
         } catch is CancellationError {
             guard self.isCurrent(attempt) else { return .superseded }
@@ -236,6 +191,60 @@ final class OnboardingConfiguredGatewayProbe {
 
     func isCurrent(_ route: BoundRoute) async -> Bool {
         await self.gateway.isCurrentRoute(route.route)
+    }
+
+    private func verifyConfiguredModel(
+        _ model: String,
+        lease: GatewayConnection.ServerLease,
+        attempt: Attempt,
+        route: BoundRoute) async throws -> Outcome
+    {
+        guard let supportsVerification = await self.gateway.supportsServerMethod(
+            "openclaw.setup.verify",
+            ifCurrentServerLease: lease),
+            self.isCurrent(attempt)
+        else { return .superseded }
+        // Released Gateways predate the live verifier. Preserve their
+        // config-only handoff until they are upgraded.
+        guard supportsVerification else {
+            return .configured(modelRef: model, verification: nil, route: route)
+        }
+        let verificationData: Data
+        do {
+            verificationData = try await self.gateway.request(
+                method: "openclaw.setup.verify",
+                params: [:],
+                timeoutMs: self.verificationTimeoutMs,
+                ifCurrentServerLease: lease)
+        } catch {
+            guard let response = error as? GatewayResponseError,
+                  response.method == "openclaw.setup.verify",
+                  response.missingScope == "operator.admin"
+            else { throw error }
+            guard await self.gateway.isCurrentServerLease(lease),
+                  self.isCurrent(attempt)
+            else { return .superseded }
+            // Released Gateways advertised this method while requiring admin.
+            // Persisted macOS device grants can be write-only after an upgrade.
+            return .configured(modelRef: model, verification: nil, route: route)
+        }
+        guard await self.gateway.isCurrentServerLease(lease),
+              self.isCurrent(attempt)
+        else { return .superseded }
+        let verification = try JSONDecoder().decode(
+            OnboardingAISetupModel.ActivateResult.self,
+            from: verificationData)
+        let proof = VerificationProof(
+            activationOwnershipFingerprint: lease.route.activationOwnershipFingerprint)
+        guard verification.ok else {
+            return .verificationFailed(
+                modelRef: model,
+                status: verification.status,
+                error: verification.error,
+                verification: proof,
+                route: route)
+        }
+        return .configured(modelRef: model, verification: proof, route: route)
     }
 
     func consumeReconnects(onReconnect: @escaping @MainActor () -> Void) async {
