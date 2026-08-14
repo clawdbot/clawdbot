@@ -78,6 +78,14 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
   }),
 }));
 
+const resolveReadOnlyChannelPluginsForConfigMock = vi.hoisted(() =>
+  vi.fn(() => ({ plugins: [] as unknown[] })),
+);
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  resolveReadOnlyChannelPluginsForConfig: resolveReadOnlyChannelPluginsForConfigMock,
+}));
+
 vi.mock("../secrets/target-registry.js", async () => {
   const { asNullableRecord: readRecord } =
     await import("@openclaw/normalization-core/record-coerce");
@@ -170,6 +178,8 @@ describe("normalizeCompatibilityConfigValues", () => {
 
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    resolveReadOnlyChannelPluginsForConfigMock.mockReset();
+    resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({ plugins: [] });
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
     fs.mkdirSync(tempOauthDir, { recursive: true });
   });
@@ -537,6 +547,62 @@ describe("normalizeCompatibilityConfigValues", () => {
           dmPolicy: "allowlist",
           appToken: "covered-legacy-key",
           customAuth: "keep-at-root",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("promotes declared keys for an external installed channel plugin", () => {
+    resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
+      plugins: [
+        {
+          id: "mattermost",
+          setupContract: { singleAccountKeysToMove: ["botToken", "baseUrl"] },
+        },
+      ],
+    });
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        mattermost: {
+          botToken: "root-bot-token",
+          baseUrl: "https://chat.example.com",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.mattermost as
+      | { botToken?: string; baseUrl?: string; accounts?: Record<string, unknown> }
+      | undefined;
+    expect(channel?.botToken).toBeUndefined();
+    expect(channel?.baseUrl).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      botToken: "root-bot-token",
+      baseUrl: "https://chat.example.com",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true });
+    expect(res.changes).toContain(
+      "Moved channels.mattermost single-account top-level values into channels.mattermost.accounts.default.",
+    );
+  });
+
+  it("still defers uncovered keys when the external plugin declares nothing", () => {
+    resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
+      plugins: [{ id: "mattermost", setupContract: {} }],
+    });
+
+    const config = {
+      channels: {
+        mattermost: {
+          botToken: "root-bot-token",
+          baseUrl: "https://chat.example.com",
           accounts: { work: { enabled: true } },
         },
       },

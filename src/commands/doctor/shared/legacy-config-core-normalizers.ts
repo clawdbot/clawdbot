@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveBundledChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-bundled.js";
+import { createDiscoveredChannelSetupPromotionSurfaceResolver } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -133,6 +133,9 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
 
   let channelsChanged = false;
   const nextChannels = { ...channels };
+  // Resolved lazily: read-only discovery only runs when a channel has root keys
+  // that generic + legacy coverage cannot promote on their own.
+  const resolveFallbackSurface = createDiscoveredChannelSetupPromotionSurfaceResolver(cfg);
   for (const [channelId, rawChannel] of Object.entries(channels)) {
     if (!isRecord(rawChannel)) {
       continue;
@@ -154,7 +157,7 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     const promotion = resolveSingleAccountPromotion({
       channelKey: channelId,
       channel: rawChannel,
-      resolveBundledSurface: resolveBundledChannelSetupPromotionSurface,
+      resolveFallbackSurface,
     });
     // Defer only undeclared keys outside generic + legacy coverage. A partial
     // accounts.default would make later runs skip and permanently strand them at root.

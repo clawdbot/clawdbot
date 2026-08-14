@@ -5,7 +5,7 @@ const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 const getBundledChannelPluginMock = vi.hoisted(() => vi.fn());
 const getBundledChannelSetupPluginMock = vi.hoisted(() => vi.fn());
 const hasBundledChannelPackageSetupFeatureMock = vi.hoisted(() => vi.fn());
-const resolveBundledSurfaceMock = vi.hoisted(() => vi.fn());
+const resolveFallbackSurfaceMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./bundled.js", () => ({
   getBundledChannelPlugin: getBundledChannelPluginMock,
@@ -43,7 +43,7 @@ describe("setup promotion helpers", () => {
     getBundledChannelSetupPluginMock.mockReset();
     hasBundledChannelPackageSetupFeatureMock.mockReset();
     getLoadedChannelPluginMock.mockReset();
-    resolveBundledSurfaceMock.mockReset();
+    resolveFallbackSurfaceMock.mockReset();
   });
 
   it("resolves bundled promotion from the setup-only plugin", () => {
@@ -84,7 +84,7 @@ describe("setup promotion helpers", () => {
 
     expect(keys).toEqual(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
     expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
-    expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
+    expect(resolveFallbackSurfaceMock).not.toHaveBeenCalled();
   });
 
   it("retains the published-reader common tier when no declarations resolve", () => {
@@ -161,7 +161,7 @@ describe("setup promotion helpers", () => {
     getLoadedChannelPluginMock.mockReturnValue({
       setup: { singleAccountKeysToMove: ["loadedKey"] },
     });
-    resolveBundledSurfaceMock.mockReturnValue({ singleAccountKeysToMove: ["bundledKey"] });
+    resolveFallbackSurfaceMock.mockReturnValue({ singleAccountKeysToMove: ["bundledKey"] });
 
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "scoped",
@@ -171,12 +171,12 @@ describe("setup promotion helpers", () => {
         bundledKey: true,
       },
       setupSurface: { singleAccountKeysToMove: ["callerKey"] },
-      resolveBundledSurface: resolveBundledSurfaceMock,
+      resolveFallbackSurface: resolveFallbackSurfaceMock,
     });
 
     expect(keys).toEqual(["callerKey"]);
     expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
-    expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
+    expect(resolveFallbackSurfaceMock).not.toHaveBeenCalled();
   });
 
   it("prefers loaded channel-owned promotion declarations over legacy setup", () => {
@@ -285,11 +285,11 @@ describe("setup promotion helpers", () => {
 
     expect(keys).toEqual(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
     expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("demo");
-    expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
+    expect(resolveFallbackSurfaceMock).not.toHaveBeenCalled();
   });
 
   it("uses an injected bundled surface for non-static migration keys", () => {
-    resolveBundledSurfaceMock.mockReturnValue({ singleAccountKeysToMove: ["customAuth"] });
+    resolveFallbackSurfaceMock.mockReturnValue({ singleAccountKeysToMove: ["customAuth"] });
 
     expect(
       resolveSingleAccountKeysToMove({
@@ -297,10 +297,10 @@ describe("setup promotion helpers", () => {
         channel: {
           customAuth: "secret",
         },
-        resolveBundledSurface: resolveBundledSurfaceMock,
+        resolveFallbackSurface: resolveFallbackSurfaceMock,
       }),
     ).toEqual(["customAuth"]);
-    expect(resolveBundledSurfaceMock).toHaveBeenCalledWith("demo");
+    expect(resolveFallbackSurfaceMock).toHaveBeenCalledWith("demo");
   });
 
   it("honors loaded plugin named-account filters without bundled fallback", () => {
@@ -322,11 +322,11 @@ describe("setup promotion helpers", () => {
     });
 
     expect(keys).toEqual(["token"]);
-    expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
+    expect(resolveFallbackSurfaceMock).not.toHaveBeenCalled();
   });
 
   it("loads bundled setup for named-account filters before registry bootstrap", () => {
-    resolveBundledSurfaceMock.mockReturnValue({ namedAccountPromotionKeys: ["token"] });
+    resolveFallbackSurfaceMock.mockReturnValue({ namedAccountPromotionKeys: ["token"] });
 
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "demo",
@@ -337,11 +337,11 @@ describe("setup promotion helpers", () => {
         token: "secret",
         dmPolicy: "allowlist",
       },
-      resolveBundledSurface: resolveBundledSurfaceMock,
+      resolveFallbackSurface: resolveFallbackSurfaceMock,
     });
 
     expect(keys).toEqual(["token"]);
     expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("demo");
-    expect(resolveBundledSurfaceMock).toHaveBeenCalledWith("demo");
+    expect(resolveFallbackSurfaceMock).toHaveBeenCalledWith("demo");
   });
 });

@@ -28,7 +28,8 @@ type SingleAccountPromotionParams = {
   channel: Record<string, unknown>;
   setupSurface?: ChannelSetupPromotionSurface;
   includeSetupKeys?: boolean;
-  resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
+  /** Last-ditch surface discovery when the loaded plugin registry has no entry. */
+  resolveFallbackSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
 };
 
 // Published undeclared adapters still depend on these keys: Chatu, GroupMe, OneBot,
@@ -89,7 +90,7 @@ export function resolveSingleAccountPromotion(params: SingleAccountPromotionPara
     if (discoveredSetupSurface === undefined) {
       discoveredSetupSurface =
         getLoadedChannelSetupPromotionSurface(params.channelKey) ??
-        params.resolveBundledSurface?.(params.channelKey) ??
+        params.resolveFallbackSurface?.(params.channelKey) ??
         null;
     }
     return discoveredSetupSurface;
@@ -99,6 +100,9 @@ export function resolveSingleAccountPromotion(params: SingleAccountPromotionPara
     : isCommonSingleAccountPromotionKey;
   const isLegacyPromotionKey = (key: string) =>
     isLegacyUndeclaredAdapterPromotionKey(key, params.includeSetupKeys === true);
+  // A surface that declares singleAccountKeysToMove (even as an empty list)
+  // marks the complete account-scoped key set; undeclared root keys under an
+  // explicit declaration are intentional root policy, not a defer trigger.
   const hasUncoveredRootKeys = entries.some(
     (key) => !isGenericPromotionKey(key) && !isLegacyPromotionKey(key),
   );
