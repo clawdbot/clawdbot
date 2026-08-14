@@ -639,7 +639,25 @@ describe("heartbeat-wake", () => {
     });
   });
 
-  it("retries requests-in-flight after the default retry delay", async () => {
+  it("gives scheduled requests-in-flight a 60-second idle grace", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(handler).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expectWakeCall(handler, 1, wake("interval"));
+  });
+
+  it("keeps manual requests-in-flight on the default retry delay", async () => {
     vi.useFakeTimers();
     const handler = vi
       .fn()
@@ -647,9 +665,36 @@ describe("heartbeat-wake", () => {
       .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
     await expectRetryAfterDefaultDelay({
       handler,
-      initialReason: "interval",
-      expectedRetryReason: "interval",
+      initialReason: "manual",
+      expectedRetryReason: "manual",
     });
+  });
+
+  it("retries preempted task work after the idle grace without losing its payload", async () => {
+    vi.useFakeTimers();
+    const tasks = [{ jobId: "job-backup", name: "backup", prompt: "Check backup" }];
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: "preempted" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+    requestHeartbeat({
+      source: "background-task",
+      intent: "task",
+      reason: "heartbeat-task:job-backup",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      tasks,
+      coalesceMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(handler).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]?.[0]).toMatchObject({ tasks });
   });
 
   it.each([HEARTBEAT_SKIP_CRON_IN_PROGRESS, HEARTBEAT_SKIP_LANES_BUSY])(

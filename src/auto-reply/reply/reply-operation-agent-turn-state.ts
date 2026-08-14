@@ -1,6 +1,6 @@
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 
-type ReplyOperationAgentTurnStatus = "ok" | "failed";
+type ReplyOperationAgentTurnStatus = "ok" | "failed" | "superseded";
 
 const agentTurns = new WeakMap<ReplyOperationRunState, ReplyOperationAgentTurnStatus>();
 
