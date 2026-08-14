@@ -1,4 +1,5 @@
 // Covers shared web provider runtime helpers.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -48,12 +49,7 @@ vi.mock("./runtime/load-context.js", () => ({
 let resolvePluginWebProviders: typeof import("./web-provider-runtime-shared.js").resolvePluginWebProviders;
 let resolveRuntimeWebProviders: typeof import("./web-provider-runtime-shared.js").resolveRuntimeWebProviders;
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
   return requireRecord(mock.mock.calls[callIndex]?.[0]);

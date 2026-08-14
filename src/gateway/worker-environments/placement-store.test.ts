@@ -124,6 +124,8 @@ describe("worker session placement store", () => {
       state: "failed",
       generation: 3,
       recoveryError: "workspace synchronization failed",
+      terminalReason: "workspace synchronization failed",
+      terminalAtMs: 1_000,
     });
     expect(() =>
       store.fail({
@@ -133,12 +135,15 @@ describe("worker session placement store", () => {
       }),
     ).toThrow("changed before failure");
     expect(store.get(SESSION.sessionId)?.recoveryError).toBe("workspace synchronization failed");
+    nowMs = 2_000;
     expect(
       store.fail({ sessionId: SESSION.sessionId, recoveryError: "teardown retry failed" }),
     ).toMatchObject({
       state: "failed",
       generation: failed.generation,
       recoveryError: "teardown retry failed",
+      terminalReason: "workspace synchronization failed",
+      terminalAtMs: 1_000,
     });
   });
 
@@ -468,12 +473,10 @@ describe("worker session placement store", () => {
       expectedGeneration: draining.generation,
     });
     expect(
-      store.transition({
+      store.fail({
         sessionId: SESSION.sessionId,
-        from: "reconciling",
-        to: "failed",
         expectedGeneration: reconciling.generation,
-        patch: { recoveryError: "active worker disappeared" },
+        recoveryError: "active worker disappeared",
       }),
     ).toMatchObject({ state: "failed", turnClaim: null });
     expect(store.validateTurnClaim(workerClaim)).toBe(false);
@@ -692,6 +695,9 @@ describe("worker session placement store", () => {
         liveEvent: 8,
       }),
     ).toMatchObject({ lastTranscriptAckCursor: 4, lastLiveEventAckCursor: 9 });
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: SESSION.sessionId, claimId: currentClaim.claimId },
+    ]);
   });
 
   it("advances the workspace manifest only under the exact worker turn claim", () => {
@@ -805,49 +811,6 @@ describe("worker session placement store", () => {
       createWorkerSessionPlacementStore({ database, now: () => nowMs }).get(SESSION.sessionId),
     ).not.toHaveProperty("workspaceResultConflict");
     expect(store.listPendingWorkspaceResults()).toEqual([]);
-  });
-
-  it("atomically reclaims an accepted result after its stale environment is destroyed", () => {
-    const active = advanceToActive();
-    const claim = store.claimTurn({
-      ...SESSION,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      claimId: "recovered-workspace-claim",
-      runId: "recovered-workspace-run",
-    });
-    store.markWorkspaceResultPending(claim);
-    expect(() => store.completeWorkspaceResultAndReleaseTurn(claim, { reclaim: true })).toThrow(
-      "workspace result was not accepted",
-    );
-    store.updateWorkspaceBaseManifest({ claim, manifestRef: `sha256:${"e".repeat(64)}` });
-    store.acceptWorkspaceResult(claim);
-
-    expect(store.completeWorkspaceResultAndReleaseTurn(claim, { reclaim: true })).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
-    });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
-  });
-
-  it("finishes an idle destroyed-worker reclaim in one placement transition", () => {
-    const active = advanceToActive();
-
-    expect(
-      store.finishReclaim({
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: active.generation,
-      }),
-    ).toMatchObject({
-      state: "reclaimed",
-      generation: active.generation + 1,
-      turnClaim: null,
-    });
   });
 
   it("preserves an admitted worker result while its placement is draining", () => {

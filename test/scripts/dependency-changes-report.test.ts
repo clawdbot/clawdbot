@@ -7,13 +7,17 @@ import {
   dependencyDiffPathspecs,
   isDependencyFile,
   parseArgs,
-} from "../../scripts/dependency-changes-report.mjs";
+} from "../../scripts/dependency-changes-report.mts";
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/dependency-changes-report.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/dependency-changes-report.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function expectNoNodeStack(stderr: string) {

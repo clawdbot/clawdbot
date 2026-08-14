@@ -13,6 +13,7 @@ import {
 describe("google-meet CLI", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    process.exitCode = undefined;
   });
 
   afterAll(() => {
@@ -65,10 +66,28 @@ describe("google-meet CLI", () => {
           id: "twilio-voice-call-plugin",
           ok: false,
         });
+        expect(process.exitCode).toBe(1);
       } finally {
         stdout.restore();
       }
     }
+  });
+
+  it("rejects unknown setup mode and transport values", async () => {
+    const setupStatus = vi.fn<NonNullable<GoogleMeetRuntime["setupStatus"]>>();
+    const cli = setupCli({ runtime: { setupStatus } });
+
+    await expect(
+      cli.parseAsync(["googlemeet", "setup", "--mode", "agnt"], { from: "user" }),
+    ).rejects.toThrow("mode must be agent, bidi, transcribe, or realtime; received agnt");
+    await expect(
+      cli.parseAsync(["googlemeet", "setup", "--transport", "definitely-not-a-transport"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(
+      "transport must be chrome, chrome-node, or twilio; received definitely-not-a-transport",
+    );
+    expect(setupStatus).not.toHaveBeenCalled();
   });
 
   it("accepts --json on session status", async () => {

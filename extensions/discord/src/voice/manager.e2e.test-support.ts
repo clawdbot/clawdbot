@@ -1,3 +1,7 @@
+import type {
+  RealtimeVoiceBridgeEvent,
+  RealtimeVoiceResponseOutcome,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -24,6 +28,7 @@ export type TestRealtimeSessionEntry = {
     state: { status: string };
     stop: ReturnType<typeof vi.fn>;
   };
+  playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   realtime?: {
     beginSpeakerTurn: (
@@ -39,13 +44,14 @@ export type TestRealtimeSessionEntry = {
 };
 
 export type TestRealtimeBridgeParams = {
-  audioSink?: { sendAudio: (audio: Buffer) => void };
+  audioSink: { sendAudio: (audio: Buffer) => void };
   autoRespondToAudio?: boolean;
   cfg?: unknown;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
-  onEvent?: (event: { detail?: string; direction: "client" | "server"; type: string }) => void;
+  onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onReady?: () => void;
+  onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (
     event: { args: unknown; callId: string; itemId: string; name: string },
     session: unknown,

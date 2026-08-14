@@ -15,7 +15,8 @@ import {
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import type { AuthProfileStore } from "./types.js";
+import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 describe("persisted auth profile boundary", () => {
   it("normalizes malformed persisted credentials and state before runtime use", () => {
@@ -427,6 +428,47 @@ describe("persisted auth profile boundary", () => {
     });
     expect(merged.order?.anthropic).toEqual([profileId]);
     expect(merged.lastGood?.anthropic).toBe(profileId);
+  });
+
+  it("carries built-in CLI provenance only with the winning external profile", () => {
+    const profileId = "openai:default";
+    const base: RuntimeAuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      runtimeExternalProfileIds: [profileId],
+      runtimeExternalCliProfileIds: [profileId],
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "cli-access",
+          refresh: "cli-refresh",
+          expires: 1,
+        },
+      },
+    };
+    const inherited = mergeAuthProfileStores(
+      base,
+      { version: AUTH_STORE_VERSION, profiles: {} },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+    expect(getRuntimeExternalCliProfileIds(inherited)).toEqual([profileId]);
+
+    const pluginOverride: RuntimeAuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      runtimeExternalProfileIds: [profileId],
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "plugin-access",
+          refresh: "plugin-refresh",
+          expires: 2,
+        },
+      },
+    };
+    const collided = mergeAuthProfileStores(base, pluginOverride);
+    expect(collided.profiles[profileId]).toMatchObject({ access: "plugin-access" });
+    expect(getRuntimeExternalCliProfileIds(collided)).toEqual([]);
   });
 });
 

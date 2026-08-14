@@ -6,10 +6,8 @@ export {
   buildEmbeddingBatchGroupOptions,
   buildRemoteBaseUrlPolicy,
   classifyMemoryMultimodalPath,
-  createLocalEmbeddingProvider,
   createRemoteEmbeddingProvider,
   debugEmbeddingsLog,
-  DEFAULT_LOCAL_MODEL,
   EmbeddingBatchUnavailableError,
   EMBEDDING_BATCH_ENDPOINT,
   enforceEmbeddingMaxInputTokens,
@@ -57,6 +55,7 @@ export {
   listRegisteredMemoryEmbeddingProviderAdapters,
   listRegisteredMemoryEmbeddingProviders,
 } from "../plugins/memory-embedding-provider-runtime.js";
+export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
 export { clearMemoryEmbeddingProviders } from "../plugins/memory-embedding-providers.js";
 /**
  * @deprecated New embedding providers should use `api.registerEmbeddingProvider(...)`

@@ -5,7 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { installPackageDir } from "./install-package-dir.js";
+import {
+  installPackageDir,
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "./install-package-dir.js";
 
 vi.mock("../process/exec.js", async () => {
   const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
@@ -812,4 +816,36 @@ describe("installPackageDir", () => {
       }
     },
   );
+
+  it("restores the previous package when a deferred update rolls back", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("deferred-rollback");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "version.txt"), "v2", "utf8");
+    await fs.writeFile(path.join(targetDir, "version.txt"), "v1", "utf8");
+
+    const result = await installPackageDir(
+      requestDeferredPackageDirInstall({
+        sourceDir,
+        targetDir,
+        mode: "update",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
+    if (!transaction) {
+      throw new Error("expected deferred package transaction");
+    }
+    expect(await fs.readFile(path.join(targetDir, "version.txt"), "utf8")).toBe("v2");
+    await transaction.rollback();
+    expect(await fs.readFile(path.join(targetDir, "version.txt"), "utf8")).toBe("v1");
+  });
 });

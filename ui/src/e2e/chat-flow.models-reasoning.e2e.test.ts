@@ -11,6 +11,92 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("keeps picker menus in the viewport while preferring the space above", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      models: Array.from({ length: 12 }, (_, index) => ({
+        id: `model-${index + 1}`,
+        name: `Model ${index + 1}`,
+        provider: "openai",
+      })),
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const control = page.locator(".chat-composer-model-control");
+      for (const picker of [
+        {
+          menu: ".chat-controls__model-menu",
+          trigger: '[data-chat-model-select="true"]',
+        },
+        {
+          menu: ".chat-controls__effort-menu",
+          trigger: '[data-chat-thinking-select="true"]',
+        },
+      ]) {
+        await page.setViewportSize({ height: 900, width: 1280 });
+        await control.evaluate((element) => {
+          Object.assign((element as HTMLElement).style, {
+            position: "fixed",
+            right: "80px",
+            top: "640px",
+          });
+        });
+        const trigger = control.locator(picker.trigger);
+        const menu = control.locator(picker.menu);
+        await trigger.click();
+        await expect
+          .poll(async () => {
+            const [menuBox, triggerBox] = await Promise.all([
+              menu.boundingBox(),
+              trigger.boundingBox(),
+            ]);
+            return {
+              aboveTrigger:
+                menuBox !== null &&
+                triggerBox !== null &&
+                menuBox.y + menuBox.height <= triggerBox.y - 5,
+              withinViewport:
+                menuBox !== null && menuBox.y >= 8 && menuBox.y + menuBox.height <= 892,
+            };
+          })
+          .toEqual({ aboveTrigger: true, withinViewport: true });
+
+        await page.setViewportSize({ height: 320, width: 1280 });
+        await control.evaluate((element) => {
+          (element as HTMLElement).style.top = "24px";
+        });
+        await expect
+          .poll(async () => {
+            const [menuBox, triggerBox] = await Promise.all([
+              menu.boundingBox(),
+              trigger.boundingBox(),
+            ]);
+            return {
+              belowTrigger:
+                menuBox !== null &&
+                triggerBox !== null &&
+                menuBox.y >= triggerBox.y + triggerBox.height + 5,
+              withinViewport:
+                menuBox !== null && menuBox.y >= 8 && menuBox.y + menuBox.height <= 312,
+            };
+          })
+          .toEqual({ belowTrigger: true, withinViewport: true });
+        await trigger.click();
+        await expect.poll(() => menu.isVisible()).toBe(false);
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("routes runtime-aware model commands through the server directive path", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -62,15 +148,17 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      const modelScroller = main.locator(".chat-controls__provider-models");
       await page.evaluate(() => {
         document.documentElement.style.overflowY = "auto";
         document.body.style.height = "1800px";
         window.scrollTo(0, 300);
       });
       expect(await page.evaluate(() => window.scrollY)).toBe(300);
+
+      const main = page.getByRole("main");
+      await main.locator('[data-chat-model-select="true"]').click();
+      const modelScroller = main.locator(".chat-controls__model-options");
+      await expect.poll(() => modelScroller.isVisible()).toBe(true);
       await modelScroller.hover();
       const outerScrollBeforeFling = await page.evaluate(() => window.scrollY);
       expect(outerScrollBeforeFling).toBeGreaterThan(0);
@@ -106,18 +194,18 @@ suite.define(() => {
 
       const main = page.getByRole("main");
       const openModelSelect = async () => {
-        const trigger = main.locator('[data-chat-model-select="true"]').first();
+        const trigger = main.locator(
+          'openclaw-chat-pane[aria-hidden="false"] [data-chat-model-select="true"]',
+        );
         await trigger.waitFor({ state: "visible", timeout: 10_000 });
         return trigger;
       };
       const selectModel = async (value: string) => {
-        await main.locator('[data-chat-model-select="true"]').click();
-        const provider = value.split("/", 1)[0];
-        await main.locator(`[data-chat-model-provider="${provider}"]`).click();
-        const option = main.locator(`[data-chat-model-option="${value}"]`);
+        const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
+        await activePane.locator('[data-chat-model-select="true"]').click();
+        const option = activePane.locator(`[data-chat-model-option="${value}"]`);
         await option.waitFor({ state: "visible", timeout: 10_000 });
         await option.click();
-        await page.keyboard.press("Escape");
       };
 
       let modelSelect = await openModelSelect();
@@ -238,7 +326,6 @@ suite.define(() => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await modelSelect.click();
-      await main.locator('[data-chat-model-provider="openai"]').click();
       await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params)).toMatchObject({
@@ -247,9 +334,9 @@ suite.define(() => {
       });
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 
-      // The picker stays open after an immediate apply. Return to the default
-      // model's provider and select its real catalog row to clear the override.
-      await main.locator('[data-chat-model-provider="anthropic"]').click();
+      // Model selection closes immediately. Reopen and select the real default
+      // catalog row to clear the session override.
+      await modelSelect.click();
       const defaultModel = main.locator(
         '[data-chat-model-option="anthropic/claude-opus-4-5"][data-chat-model-default="true"]',
       );
@@ -349,17 +436,18 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
-      const modelSelect = main.locator('[data-chat-model-select="true"]').first();
-      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+      const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const modelSelect = activePane.locator('[data-chat-model-select="true"]');
+      const effortSelect = activePane.locator('[data-chat-thinking-select="true"]');
+      const thinkingSlider = activePane.locator('[data-chat-thinking-slider="true"]');
       const expectedThinkingValues = thinkingLevels.map((level) => level.id).join(",");
 
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.textContent()).toContain("GPT-5.6 Sol");
       expect(await modelSelect.textContent()).not.toContain("@openai:");
       await modelSelect.click();
-      await main.locator('[data-chat-model-provider="openai"]').click();
       await expect
-        .poll(() => main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
+        .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
         .toBe(1);
       expect(
         (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
@@ -367,7 +455,7 @@ suite.define(() => {
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
-      const defaultThinkingValue = await modelSelect.getAttribute("data-chat-thinking-value");
+      const defaultThinkingValue = await effortSelect.getAttribute("data-chat-thinking-value");
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/default-sol.png`, fullPage: true });
       }
@@ -382,14 +470,15 @@ suite.define(() => {
         timeout: 10_000,
       });
       await modelSelect.click();
-      await main.locator('[data-chat-model-provider="openai"]').click();
       await expect
-        .poll(() => main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
+        .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
         .toBe(1);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
-      expect(await modelSelect.getAttribute("data-chat-thinking-value")).toBe(defaultThinkingValue);
+      expect(await effortSelect.getAttribute("data-chat-thinking-value")).toBe(
+        defaultThinkingValue,
+      );
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/explicit-sol.png`, fullPage: true });
       }
@@ -424,9 +513,7 @@ suite.define(() => {
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-provider="bedrock"]').click();
       await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
-      await page.keyboard.press("Escape");
       await gateway.waitForRequest("sessions.patch");
 
       const prompt = "send while the model save is pending";
@@ -489,8 +576,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      const picker = main.locator('[data-chat-model-select="true"]').first();
-      await picker.click();
+      const modelPicker = main.locator('[data-chat-model-select="true"]').first();
+      const effortPicker = main.locator('[data-chat-thinking-select="true"]').first();
+      await effortPicker.click();
       const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
       const visibleReasoning = main.locator(
         "[data-chat-thinking-preview-committed]:not([hidden]), " +
@@ -522,33 +610,34 @@ suite.define(() => {
         key: sessionKey,
         thinkingLevel: "ultra",
       });
-      await expect.poll(() => picker.getAttribute("data-chat-thinking-value")).toBe("ultra");
-      await picker.click();
-      await expect.poll(() => picker.textContent()).toContain("Ultra");
-      await picker.click();
+      await expect.poll(() => effortPicker.getAttribute("data-chat-thinking-value")).toBe("ultra");
+      await expect.poll(() => effortPicker.textContent()).toContain("Ultra");
+      await page.keyboard.press("Escape");
 
-      const anthropicProvider = main.locator('[data-chat-model-provider="anthropic"]');
-      const openaiProvider = main.locator('[data-chat-model-provider="openai"]');
-      const anthropicModels = main.locator('[data-chat-model-provider-group="anthropic"]');
-      await anthropicProvider.hover();
-      await expect.poll(() => anthropicModels.isVisible()).toBe(true);
-      await expectRequestCountStable(gateway, "sessions.patch", 1);
-
-      await openaiProvider.focus();
-      await expect.poll(() => anthropicModels.isHidden()).toBe(true);
-      await anthropicProvider.focus();
-      await expect.poll(() => anthropicModels.isVisible()).toBe(true);
-      await page.keyboard.press("Tab");
+      await modelPicker.click();
+      const search = main.locator('[data-chat-model-search="true"]');
       await expect
-        .poll(() => page.locator(":focus").getAttribute("data-chat-model-option"))
-        .toBe("anthropic/claude-fable-5");
-
-      await main.locator('[data-chat-model-option="anthropic/claude-fable-5"]').click();
+        .poll(() => search.evaluate((element) => element === document.activeElement))
+        .toBe(false);
+      await search.focus();
+      await search.fill("anthropic");
+      const anthropicModel = main.locator('[data-chat-model-option="anthropic/claude-fable-5"]');
+      await expect.poll(() => anthropicModel.isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').getAttribute("hidden"),
+        )
+        .toBe("");
+      await expectRequestCountStable(gateway, "sessions.patch", 1);
+      await search.press("Enter");
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: sessionKey,
         model: "anthropic/claude-fable-5",
       });
+      await expect
+        .poll(() => main.locator(".chat-controls__model-picker").getAttribute("open"))
+        .toBe(null);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -608,7 +697,6 @@ suite.define(() => {
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-provider="openai"]').click();
       await main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
 
       const modelPatch = await gateway.waitForRequest("sessions.patch");
@@ -617,7 +705,18 @@ suite.define(() => {
         model: "openai/gpt-5.6-sol",
       });
       const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
-      await expect.poll(() => thinkingSlider.isDisabled()).toBe(true);
+      const effortSelect = main.locator('[data-chat-thinking-select="true"]');
+      await expect
+        .poll(async () => ({
+          effortDisabled: await effortSelect.getAttribute("data-chat-thinking-disabled"),
+          effortAriaDisabled: await effortSelect.getAttribute("aria-disabled"),
+          sliderDisabled: await thinkingSlider.isDisabled(),
+        }))
+        .toEqual({
+          effortDisabled: "true",
+          effortAriaDisabled: "true",
+          sliderDisabled: true,
+        });
       await thinkingSlider.evaluate((input) => {
         const slider = input as HTMLInputElement;
         slider.value = slider.max;
@@ -626,7 +725,12 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "sessions.patch", 1);
 
       await gateway.setMethodResponse("sessions.list", chatSessionListResponse([solSession]));
+      const sessionsListCount = (await gateway.getRequests("sessions.list")).length;
       await gateway.resolveDeferred("sessions.patch");
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(sessionsListCount);
+      await main.locator('[data-chat-thinking-select="true"]').click();
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toContain("ultra");
@@ -703,9 +807,11 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
+      await main.locator('[data-chat-thinking-select="true"]').click();
       await gateway.deferNext("sessions.patch");
-      await main.locator('[data-chat-thinking-slider="true"]').press("ArrowLeft");
+      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
+      await thinkingSlider.press("ArrowLeft");
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params).thinkingLevel).toBe("medium");
 

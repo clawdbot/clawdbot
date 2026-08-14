@@ -6,6 +6,7 @@ scenario:
   coverage:
     primary:
       - agent-runtime.failure-recovery-empty-response-recovery
+      - agent-runtime.progress-visibility-failure-recovery
     secondary:
       - agent-runtime.failure-recovery-retry-policy
   objective: Verify repeated empty GPT turns exhaust each configured model's retry budget after one continuation attempt.
@@ -18,11 +19,13 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
   execution:
     kind: flow
     summary: Verify empty-response retry exhaustion still surfaces a visible failure.
     config:
+      requiredProviderMode: mock-openai
       requiredProvider: mock-openai
       promptSnippet: Empty response exhaustion QA check
       prompt: "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK."

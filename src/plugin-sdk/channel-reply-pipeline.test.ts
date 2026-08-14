@@ -135,14 +135,27 @@ describe("createChannelReplyPipeline", () => {
     expect(pipeline.transformReplyPayload).toBe(transformReplyPayload);
   });
 
-  it("resolves reply transforms from the loaded channel registry", () => {
-    const transformReplyPayload = vi.fn(({ payload }: { payload: { text?: string } }) =>
-      payload.text ? { ...payload, text: `${payload.text} transformed` } : payload,
-    );
+  it.each([
+    { name: "rewrites", veto: false },
+    { name: "vetoes", veto: true },
+  ])("preserves the loaded plugin receiver when it $name a reply", ({ veto }) => {
+    const messaging = {
+      transformReplyPayload: vi.fn(function (
+        this: unknown,
+        { payload }: { payload: { text?: string } },
+      ) {
+        expect(this).toBe(messaging);
+        return veto
+          ? null
+          : payload.text
+            ? { ...payload, text: `${payload.text} transformed` }
+            : payload;
+      }),
+    };
     const channelPlugin = {
       id: "demo-channel",
       meta: {},
-      messaging: { transformReplyPayload },
+      messaging,
     } as unknown as ChannelPlugin;
     setActivePluginRegistry({
       ...createEmptyPluginRegistry(),
@@ -163,10 +176,10 @@ describe("createChannelReplyPipeline", () => {
       accountId: "acct",
     });
 
-    expect(pipeline.transformReplyPayload?.({ text: "reply" })).toEqual({
-      text: "reply transformed",
-    });
-    expect(transformReplyPayload).toHaveBeenCalledWith({
+    expect(pipeline.transformReplyPayload?.({ text: "reply" })).toEqual(
+      veto ? null : { text: "reply transformed" },
+    );
+    expect(messaging.transformReplyPayload).toHaveBeenCalledWith({
       payload: { text: "reply" },
       cfg: {},
       accountId: "acct",

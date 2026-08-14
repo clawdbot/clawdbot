@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
-import { inspectPortUsage } from "../infra/ports.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,

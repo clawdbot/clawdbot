@@ -4,7 +4,7 @@
  * Produces colored line and intra-line highlights for the Pi TUI review surfaces.
  */
 import { diffWords } from "diff";
-import { theme } from "../theme/theme.js";
+import { interactiveAgentTheme as theme } from "../theme/theme.js";
 
 /**
  * Parse diff line to extract prefix, line number, and content.

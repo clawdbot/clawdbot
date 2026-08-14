@@ -1,7 +1,10 @@
 // Provides SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync.js";
+// The cache-state module keeps this lifecycle edge off the kysely value graph
+// so cold control-plane paths using transactions do not load kysely.
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 
 const transactionDepthByDatabase = new WeakMap<DatabaseSync, number>();
 
@@ -33,10 +36,6 @@ type SqliteTransactionMode = "deferred" | "immediate";
 function nextSavepointName(): string {
   nextSavepointId += 1;
   return `openclaw_tx_${nextSavepointId}`;
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return Boolean(value && typeof (value as { then?: unknown }).then === "function");
 }
 
 function assertSyncTransactionResult(value: unknown): void {

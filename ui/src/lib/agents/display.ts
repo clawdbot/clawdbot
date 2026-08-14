@@ -1,9 +1,12 @@
 // Control UI view renders agents utils screen content.
 import { formatByteSize } from "@openclaw/normalization-core";
-import { html, nothing } from "lit";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   expandToolGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
 import type {
@@ -17,12 +20,13 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
-import { resolveAgentConfigEntryTarget } from "../config/index.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
 
 type AgentRosterEntry = {
   id: string;
   kind?: "agent" | "system";
+  name?: string;
+  identity?: { name?: string };
 };
 
 /** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
@@ -319,13 +323,16 @@ type ConfigSnapshot = {
   };
 };
 
-export function normalizeAgentLabel(agent: {
-  id: string;
-  name?: string;
-  identity?: { name?: string };
-}) {
+export function normalizeAgentLabel(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: { name?: string } | null,
+) {
+  // Roster labels own operator target identity; workspace identity only fills gaps.
   return (
-    normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
+    normalizeOptionalString(agent.name) ??
+    normalizeOptionalString(agent.identity?.name) ??
+    normalizeOptionalString(hydratedIdentity?.name) ??
+    agent.id
   );
 }
 
@@ -527,16 +534,10 @@ export function resolveEffectiveModelFallbacks(
   return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
 }
 
-export function parseFallbackList(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 type ConfiguredModelOption = {
   value: string;
   label: string;
+  provider?: string;
 };
 
 function resolveConfiguredModels(
@@ -560,7 +561,12 @@ function resolveConfiguredModels(
           : undefined
         : undefined;
     const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
-    options.push({ value: trimmed, label });
+    const separator = trimmed.indexOf("/");
+    options.push({
+      value: trimmed,
+      label,
+      ...(separator > 0 ? { provider: trimmed.slice(0, separator) } : {}),
+    });
   }
   return options;
 }
@@ -569,26 +575,27 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
-  selected?: string | null,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
   const catalogOptions = new Map<string, ConfiguredModelOption>();
-  const selectedKey = selected ? normalizeLowercaseStringOrEmpty(selected) : null;
-  const addOption = (value: string, label: string) => {
+  const addOption = (value: string, label: string, provider?: string) => {
     const key = normalizeLowercaseStringOrEmpty(value);
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    options.push({ value, label });
+    options.push({ value, label, ...(provider ? { provider } : {}) });
   };
 
   if (catalog) {
     const displayLookup = buildCatalogDisplayLookup(catalog);
     for (const entry of catalog) {
       const option = buildChatModelOptionFromLookup(entry, displayLookup);
-      catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), option);
+      catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), {
+        ...option,
+        provider: entry.provider,
+      });
     }
   }
 
@@ -596,30 +603,27 @@ export function buildModelOptions(
     // Configured options keep their order and fallback aliases; an authoritative
     // catalog match must still expose the same model identity as the chat picker.
     const catalogOption = catalogOptions.get(normalizeLowercaseStringOrEmpty(opt.value));
-    addOption(opt.value, catalogOption?.label ?? opt.label);
+    addOption(
+      opt.value,
+      catalogOption?.label ?? opt.label,
+      catalogOption?.provider ?? opt.provider,
+    );
   }
 
   for (const option of catalogOptions.values()) {
-    addOption(option.value, option.label);
+    addOption(option.value, option.label, option.provider);
   }
 
   if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
-    options.unshift({ value: current, label: `Current (${current})` });
+    const separator = current.indexOf("/");
+    options.unshift({
+      value: current,
+      label: `Current (${current})`,
+      ...(separator > 0 ? { provider: current.slice(0, separator) } : {}),
+    });
   }
 
-  if (options.length === 0) {
-    return nothing;
-  }
-  return options.map(
-    (option) => html`
-      <option
-        value=${option.value}
-        ?selected=${selectedKey === normalizeLowercaseStringOrEmpty(option.value)}
-      >
-        ${option.label}
-      </option>
-    `,
-  );
+  return options;
 }
 
 type CompiledPattern =
@@ -628,7 +632,7 @@ type CompiledPattern =
   | { kind: "regex"; value: RegExp };
 
 function compilePattern(pattern: string): CompiledPattern {
-  const normalized = normalizeToolName(pattern);
+  const normalized = normalizeToolPolicyName(pattern);
   if (!normalized) {
     return { kind: "exact", value: "" };
   }
@@ -672,7 +676,7 @@ export function isAllowedByPolicy(name: string, policy?: ToolPolicy) {
   if (!policy) {
     return true;
   }
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const deny = compilePatterns(policy.deny);
   if (matchesAny(normalized, deny)) {
     return false;
@@ -694,7 +698,7 @@ export function matchesList(name: string, list?: string[]) {
   if (!Array.isArray(list) || list.length === 0) {
     return false;
   }
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const patterns = compilePatterns(list);
   if (matchesAny(normalized, patterns)) {
     return true;

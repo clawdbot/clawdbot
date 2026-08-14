@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
   encodeSessionArchiveContent,
   readSessionArchiveContentSync,
@@ -10,24 +14,66 @@ import {
 import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 
-export type SqliteSessionStateDeletePlan = {
-  archiveDirectory: string;
-  archiveTranscript: boolean;
-  content: string;
-  hadTranscriptState: boolean;
-  reason: "deleted" | "reset";
-  sessionId: string;
+export type SessionStateDeleteSnapshot = {
+  acpParentStreamEventCount: number;
+  generation: string | null;
+  lastSeq: number | null;
+  sessionUpdatedAt: number | null;
+  trajectoryLastSeq: number | null;
+  transcriptUpdatedAt: number | null;
 };
 
-export type MaterializedSqliteSessionStateDeletePlan = SqliteSessionStateDeletePlan & {
+export type SessionStateDeletePlan = {
+  agentId: string;
+  archiveDirectory: string;
+  archiveTranscript: boolean;
+  databasePath: string;
+  reason: "deleted" | "reset";
+  sessionId: string;
+  snapshot: SessionStateDeleteSnapshot;
+};
+
+export type MaterializedSessionStateDeletePlan = SessionStateDeletePlan & {
   archivedTranscript: SessionLifecycleArchivedTranscript | null;
+  /**
+   * Set only when this materialization *created* the archive file, so a caller
+   * that later abandons the delete can remove exactly what it wrote. A reused
+   * archive (an identical one already existed) is somebody else's durable
+   * artifact and must survive our rollback.
+   */
   createdArchivePath: string | null;
 };
 
-type SqliteTranscriptArchiveWrite = {
+export type TranscriptArchiveWorkerPlan = Pick<
+  SessionStateDeletePlan,
+  "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
+>;
+
+export type TranscriptArchiveWorkerResult = {
+  archivedPath: string | null;
+  /** True when the worker wrote this archive rather than reusing a match. */
   created: boolean;
-  path: string;
+  sessionId: string;
 };
+
+export type TranscriptArchiveWorkerMessage = {
+  type: "done";
+  results: TranscriptArchiveWorkerResult[];
+};
+
+export function sqliteSessionStateDeleteSnapshotsEqual(
+  left: SessionStateDeleteSnapshot,
+  right: SessionStateDeleteSnapshot,
+): boolean {
+  return (
+    left.acpParentStreamEventCount === right.acpParentStreamEventCount &&
+    left.generation === right.generation &&
+    left.lastSeq === right.lastSeq &&
+    left.sessionUpdatedAt === right.sessionUpdatedAt &&
+    left.trajectoryLastSeq === right.trajectoryLastSeq &&
+    left.transcriptUpdatedAt === right.transcriptUpdatedAt
+  );
+}
 
 function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
@@ -60,7 +106,7 @@ function findMatchingSqliteTranscriptArchive(params: {
   }
   const prefix = `${params.sessionId}.jsonl.${params.reason}.`;
   for (const entry of entries) {
-    if (!entry.startsWith(prefix)) {
+    if (!entry.startsWith(prefix) || entry.endsWith(".tmp")) {
       continue;
     }
     const archivePath = path.join(params.archiveDirectory, entry);
@@ -83,16 +129,32 @@ function findMatchingSqliteTranscriptArchive(params: {
   return null;
 }
 
-function writeSqliteTranscriptArchiveWithStatus(params: {
+/** Writes or reuses a transcript archive and returns its durable path. */
+/** Writes or reuses a transcript archive and returns its durable path. */
+export function writeTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
   reason: SessionArchiveReason;
   sessionId: string;
-}): SqliteTranscriptArchiveWrite {
+}): string {
+  return writeTranscriptArchiveWithStatus(params).path;
+}
+
+/**
+ * Same as {@link writeTranscriptArchive}, but reports whether this call wrote
+ * the file. Only a caller that created an archive may delete it on rollback;
+ * reusing a pre-existing match must never license removing it.
+ */
+export function writeTranscriptArchiveWithStatus(params: {
+  archiveDirectory: string;
+  content: string;
+  reason: SessionArchiveReason;
+  sessionId: string;
+}): { path: string; created: boolean } {
   fs.mkdirSync(params.archiveDirectory, { recursive: true });
   const existing = findMatchingSqliteTranscriptArchive(params);
   if (existing) {
-    return { created: false, path: existing };
+    return { path: existing, created: false };
   }
   // Archives are the long-lived cold tier; compress when the runtime can so
   // keep-forever retention stays cheap. Plain JSONL is the Bun/older fallback.
@@ -112,14 +174,14 @@ function writeSqliteTranscriptArchiveWithStatus(params: {
       writeDurableFileExclusive(tempPath, encoded.bytes);
       fs.renameSync(tempPath, archivePath);
       syncDirectoryBestEffortSync(params.archiveDirectory);
-      // Full readback is bounded by the same single-generation content the
-      // delete plan already buffers (Node string limits cap both); a partial
+      // Full readback is bounded by the same single-generation content held by
+      // this Worker (Node string limits cap both); a partial
       // or corrupt archive must fail here, before any rows are reclaimed.
       if (readSessionArchiveContentSync(archivePath) !== params.content) {
         fs.rmSync(archivePath, { force: true });
         throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
       }
-      return { created: true, path: archivePath };
+      return { path: archivePath, created: true };
     } catch (error) {
       fs.rmSync(tempPath, { force: true });
       if ((error as { code?: unknown })?.code === "EEXIST") {
@@ -129,16 +191,6 @@ function writeSqliteTranscriptArchiveWithStatus(params: {
     }
   }
   throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
-}
-
-/** Writes or reuses a transcript archive and returns its durable path. */
-export function writeSqliteTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-}): string {
-  return writeSqliteTranscriptArchiveWithStatus(params).path;
 }
 
 // Windows rejects fsync on read-only handles, so keep the exclusive writable
@@ -153,72 +205,171 @@ function writeDurableFileExclusive(filePath: string, content: Buffer): void {
   }
 }
 
-// Runs duplicate probing, archive write, rename, and fsync outside SQLite
-// write transactions; deletion later consumes this durable proof.
-export function materializeSqliteSessionStateDeletePlans(
-  plans: readonly SqliteSessionStateDeletePlan[],
-): MaterializedSqliteSessionStateDeletePlan[] {
-  return dedupeSqliteSessionStateDeletePlans(plans).map((plan) => {
-    // Empty content means no transcript to preserve (e.g. trajectory-only
-    // sessions). Writing a verified-but-empty archive would fake extraction;
-    // trajectory runtime events are diagnostic telemetry and are reclaimed
-    // without an archive artifact.
-    const archive =
-      plan.archiveTranscript && plan.content.length > 0
-        ? writeSqliteTranscriptArchiveWithStatus({
-            archiveDirectory: plan.archiveDirectory,
-            content: plan.content,
-            reason: plan.reason,
-            sessionId: plan.sessionId,
-          })
-        : null;
+function resolveSqliteTranscriptArchiveWorkerUrl(currentModuleUrl = import.meta.url): URL {
+  const currentPath = fileURLToPath(currentModuleUrl);
+  const normalized = currentPath.replaceAll(path.sep, "/");
+  const distMarker = "/dist/";
+  const distIndex = normalized.lastIndexOf(distMarker);
+  if (distIndex >= 0) {
+    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
+    return pathToFileURL(
+      path.join(distRoot, "config", "sessions", "session-accessor.sqlite-archive.worker.js"),
+    );
+  }
+  const extension = path.extname(currentPath) || ".js";
+  return new URL(`./session-accessor.sqlite-archive.worker${extension}`, currentModuleUrl);
+}
+
+function resolveSourceWorkerExecArgv(): string[] {
+  // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
+  // register tsx's ESM resolver inside a Worker. Explicitly register the
+  // supported programmatic API so source-tree .js specifiers map back to .ts.
+  // Built .js workers do not use this development/test-only preload.
+  const tsxApiUrl = import.meta.resolve("tsx/esm/api");
+  const registerTsx = `import { register } from ${JSON.stringify(tsxApiUrl)}; register();`;
+  return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
+}
+
+function spawnSqliteTranscriptArchiveWorker(
+  plans: readonly TranscriptArchiveWorkerPlan[],
+): Promise<TranscriptArchiveWorkerResult[]> {
+  const workerUrl = resolveSqliteTranscriptArchiveWorkerUrl();
+  let worker: Worker;
+  try {
+    const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
+      ? resolveSourceWorkerExecArgv()
+      : undefined;
+    worker = new Worker(workerUrl, {
+      workerData: { type: "sqlite-transcript-archive-v1", plans },
+      execArgv: sourceWorkerExecArgv,
+    });
+  } catch (error) {
+    return Promise.reject(toStringifiedError(error));
+  }
+
+  return new Promise((resolve, reject) => {
+    let results: TranscriptArchiveWorkerResult[] | undefined;
+    let workerError: Error | undefined;
+    worker.once("message", (message: TranscriptArchiveWorkerMessage) => {
+      results = message.results;
+    });
+    worker.once("error", (error) => {
+      // An uncaught Worker error is followed by exit. Wait for that event so
+      // callers never race the Worker's SQLite/file handles on Windows.
+      workerError = toStringifiedError(error);
+    });
+    worker.once("exit", (code) => {
+      worker.removeAllListeners();
+      if (workerError) {
+        reject(workerError);
+        return;
+      }
+      if (code !== 0) {
+        reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
+        return;
+      }
+      if (!results) {
+        reject(new Error("SQLite transcript archive worker exited without results"));
+        return;
+      }
+      resolve(results);
+    });
+  });
+}
+
+// Serialize lifecycle archive Workers so this path cannot multiply
+// whole-buffer usage across several Worker heaps at once.
+const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
+const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
+
+function runSqliteTranscriptArchiveWorker(
+  plans: readonly TranscriptArchiveWorkerPlan[],
+): Promise<TranscriptArchiveWorkerResult[]> {
+  return sqliteTranscriptArchiveWorkerQueue.enqueue(
+    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
+    () => spawnSqliteTranscriptArchiveWorker(plans),
+  );
+}
+
+// Runs duplicate probing, archive write, rename, fsync, and readback outside
+// SQLite write transactions and off the gateway event loop. The lifecycle
+// Worker queue and per-call dedupe prevent concurrent whole-buffer spikes
+// within this path.
+export async function materializeSessionStateDeletePlans(
+  plans: readonly SessionStateDeletePlan[],
+): Promise<MaterializedSessionStateDeletePlan[]> {
+  const deduped = dedupeSqliteSessionStateDeletePlans(plans);
+  const archivePlans = deduped.filter((plan) => plan.archiveTranscript);
+  const workerResults =
+    archivePlans.length > 0 ? await runSqliteTranscriptArchiveWorker(archivePlans) : [];
+  const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
+
+  return deduped.map((plan) => {
+    if (!plan.archiveTranscript) {
+      return Object.assign({}, plan, { archivedTranscript: null, createdArchivePath: null });
+    }
+    const result = resultBySessionId.get(plan.sessionId);
+    if (!result) {
+      throw new Error(`SQLite transcript archive worker omitted ${plan.sessionId}`);
+    }
+    const archivedTranscript = result.archivedPath
+      ? {
+          archivedPath: result.archivedPath,
+          sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
+        }
+      : null;
     return Object.assign({}, plan, {
-      archivedTranscript: archive
-        ? {
-            archivedPath: archive.path,
-            sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
-          }
-        : null,
-      createdArchivePath: archive?.created ? archive.path : null,
+      archivedTranscript,
+      createdArchivePath: result.created ? result.archivedPath : null,
     });
   });
 }
 
 /**
- * Removes only archives created by this materialization attempt.
+ * Removes archives this materialization created, for a caller that decided not
+ * to proceed with the delete after all.
  *
- * Callers use this when authoritative revalidation declines the matching
- * deletion. Reused archives belong to earlier committed cleanup and stay put.
+ * Materialization writes archives *before* the write transaction, so an
+ * abandoned delete would otherwise strand a durable file describing a session
+ * that still exists. Only `createdArchivePath` entries are removed: a reused
+ * archive predates this call and is not ours to discard. Best-effort by design
+ * — a failed unlink leaves a harmless orphan, whereas throwing here would mask
+ * the original reason the caller was rolling back.
  */
-export function discardCreatedSqliteSessionStateArchives(
-  plans: readonly MaterializedSqliteSessionStateDeletePlan[],
+export function discardCreatedSessionStateArchives(
+  plans: readonly MaterializedSessionStateDeletePlan[],
 ): void {
-  const syncedDirectories = new Set<string>();
   for (const plan of plans) {
     if (!plan.createdArchivePath) {
       continue;
     }
-    fs.rmSync(plan.createdArchivePath, { force: true });
-    syncedDirectories.add(path.dirname(plan.createdArchivePath));
-  }
-  for (const directory of syncedDirectories) {
-    syncDirectoryBestEffortSync(directory);
+    try {
+      fs.rmSync(plan.createdArchivePath, { force: true });
+    } catch {
+      // Intentionally ignored; see the note above.
+    }
   }
 }
 
 // Multiple removed entries can point at one transcript session. If any owner
 // asked to keep an archive, the shared row gets exported once.
 function dedupeSqliteSessionStateDeletePlans(
-  plans: readonly SqliteSessionStateDeletePlan[],
-): SqliteSessionStateDeletePlan[] {
-  const deduped = new Map<string, SqliteSessionStateDeletePlan>();
+  plans: readonly SessionStateDeletePlan[],
+): SessionStateDeletePlan[] {
+  const deduped = new Map<string, SessionStateDeletePlan>();
   for (const plan of plans) {
     const existing = deduped.get(plan.sessionId);
     if (!existing) {
       deduped.set(plan.sessionId, plan);
       continue;
     }
-    if (existing.content !== plan.content || existing.reason !== plan.reason) {
+    if (
+      existing.agentId !== plan.agentId ||
+      existing.archiveDirectory !== plan.archiveDirectory ||
+      existing.databasePath !== plan.databasePath ||
+      existing.reason !== plan.reason ||
+      !sqliteSessionStateDeleteSnapshotsEqual(existing.snapshot, plan.snapshot)
+    ) {
       throw new Error(`Conflicting SQLite transcript archive plans for ${plan.sessionId}`);
     }
     if (!existing.archiveTranscript && plan.archiveTranscript) {

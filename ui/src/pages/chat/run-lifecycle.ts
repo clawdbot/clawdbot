@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -16,8 +17,8 @@ import {
   resolveUiGlobalAliasAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
@@ -152,7 +153,8 @@ export function hasAbortableSessionRun(host: {
   return Boolean(
     host.sessionsResult?.sessions.some(
       (session) =>
-        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
+        (isSessionRunActive(session) || session.hasActiveSubagentRun === true),
     ),
   );
 }
@@ -244,6 +246,14 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   // Automatic reconnects retain the browser client. A replacement client may
   // target another Gateway, where the same session key can name unrelated work.
   if (intent.sourceClient !== client) {
+    return false;
+  }
+  const access = readChatSessionActionAccess(
+    { client, hello: host.hello, phase: "connected" },
+    true,
+  ).abort;
+  if (!access.allowed) {
+    setChatError(host, access.reason);
     return false;
   }
   const result = await requestChatAbort(client, intent);

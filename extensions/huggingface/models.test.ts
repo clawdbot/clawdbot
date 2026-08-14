@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildHuggingfaceModelDefinition,
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
@@ -42,18 +41,6 @@ afterEach(() => {
 });
 
 describe("huggingface models", () => {
-  it("buildHuggingfaceModelDefinition returns config with required fields", () => {
-    const entry = expectDefined(HUGGINGFACE_MODEL_CATALOG[0], "first Hugging Face catalog model");
-    const def = buildHuggingfaceModelDefinition(entry);
-    expect(def.id).toBe(entry.id);
-    expect(def.name).toBe(entry.name);
-    expect(def.reasoning).toBe(entry.reasoning);
-    expect(def.input).toEqual(entry.input);
-    expect(def.cost).toEqual(entry.cost);
-    expect(def.contextWindow).toBe(entry.contextWindow);
-    expect(def.maxTokens).toBe(entry.maxTokens);
-  });
-
   it("does not advertise the retired Llama 3.3 Turbo route", () => {
     expect(HUGGINGFACE_MODEL_CATALOG.map((model) => model.id)).not.toContain(
       "meta-llama/Llama-3.3-70B-Instruct-Turbo",

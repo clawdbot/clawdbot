@@ -369,6 +369,17 @@ describe("irc monitor reconnect", () => {
             patch.lifecycle ? [patch.lifecycle as string] : [],
           ),
         ).toEqual(["ready", "recovering", "recovering", "ready"]);
+        for (const [readyPatch] of statusSink.mock.calls.filter(
+          ([statusPatch]) => statusPatch.lifecycle === "ready",
+        )) {
+          expect(readyPatch).toMatchObject({
+            running: true,
+            connected: true,
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
+        }
       } finally {
         if (monitor) {
           await monitor.stop();

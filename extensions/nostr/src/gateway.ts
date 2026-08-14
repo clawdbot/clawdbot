@@ -10,6 +10,7 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
@@ -242,14 +243,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
           connectedRelays.add(normalizeRelayLifecycleKey(relay));
           // Treat >=1 connected relay as ready. This favors partial availability over quorum
           // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
-          ctx.setStatus({
-            accountId: account.accountId,
-            connected: true,
-            lifecycle: "ready",
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            terminalDisconnect: undefined,
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
         onDisconnect: (relay) => {

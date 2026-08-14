@@ -13,7 +13,7 @@ import {
   GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_UNAVAILABLE_REASON,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { createDeferred } from "../../test-utils/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import {
   attachGatewayWsForTest,
@@ -37,7 +37,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       clients,
       socket,
       options: {
-        resolvedAuth: { mode: "token", allowTailscale: false, token: "test-token" },
+        getResolvedAuth: () => ({ mode: "token", allowTailscale: false, token: "test-token" }),
         buildRequestContext: () => createGatewayWsTestRequestContext() as never,
       },
     });
@@ -116,7 +116,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         attach: attachGatewayWsConnectionHandler,
         socket,
         options: {
-          resolvedAuth: { mode: "none", allowTailscale: false },
+          getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
           isStartupPending: () => true,
           logWsControl: logWsControl as never,
           buildRequestContext: () => createGatewayWsTestRequestContext() as never,

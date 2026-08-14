@@ -973,7 +973,8 @@ struct ExecAllowlistTests {
         #expect(resolutions[0].executableName == "env")
     }
 
-    @Test func `approval evaluator resolves shell payload from canonical wrapper text`() async {
+    @Test(.execApprovalsStateIsolated)
+    func `approval evaluator resolves shell payload from canonical wrapper text`() async {
         let command = ["/bin/sh", "-c", "/usr/bin/printf ok"]
         let rawCommand = "/bin/sh -c \"/usr/bin/printf ok\""
         let evaluation = await ExecApprovalEvaluator.evaluate(
@@ -990,7 +991,8 @@ struct ExecAllowlistTests {
         #expect(evaluation.boundCommand == ["/usr/bin/printf", "ok"])
     }
 
-    @Test func `approval evaluator keeps login shell requests non-reusable`() async {
+    @Test(.execApprovalsStateIsolated)
+    func `approval evaluator keeps login shell requests non-reusable`() async {
         let rawCommand = "/usr/bin/printf safe"
         let evaluation = await ExecApprovalEvaluator.evaluate(
             command: ["/bin/sh", "-lc", rawCommand],

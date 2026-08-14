@@ -279,8 +279,8 @@ listed here.
 | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
 | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
 | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
-| `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                       |
-| `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                               |
+| `resolveTransportTurnState`       | Attach native per-turn headers, metadata, or WebSocket policy                                                  | Provider wants generic transports to send provider-native turn identity or tune WebSocket headers and fallback cool-down                      |
+| `resolveWebSocketSessionPolicy`   | Deprecated compatibility hook for WebSocket policy                                                             | Existing plugins migrate WebSocket fields into `resolveTransportTurnState`                                                                    |
 | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
 | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared OpenClaw refreshers                                                                                          |
 | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                      |
@@ -652,15 +652,18 @@ Route fields:
 - `auth`: required, `"gateway"` or `"plugin"`. Use `"gateway"` to require normal gateway auth, or `"plugin"` for plugin-managed auth/webhook verification.
 - `match`: optional. `"exact"` (default) or `"prefix"`.
 - `handleUpgrade`: optional handler for WebSocket upgrade requests on the same route.
-- `replaceExisting`: optional. Allows the same plugin to replace its own existing route registration.
+- `replaceExisting`: optional. Required only for dynamic lifecycle registration to replace its own existing route.
 - `handler`: return `true` when the route handled the request.
 
 Notes:
 
 - `api.registerHttpHandler(...)` was removed and will cause a plugin-load error. Use `api.registerHttpRoute(...)` instead.
 - Plugin routes must declare `auth` explicitly.
-- Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+- Canonically equivalent paths with the same `match` mode occupy one route. Static `api.registerHttpRoute(...)` calls from the same plugin replace that route; another plugin cannot replace it.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
+- Dynamic lifecycle code using `registerPluginHttpRoute(...)` from `openclaw/plugin-sdk/webhook-ingress` must set `replaceExisting: true` to refresh its own canonical route. Named registrations can replace only the same nonempty `pluginId`; when either side sets a route `source`, both must set the same nonempty source. Same-plugin source-less-to-source-less refresh and anonymous-to-anonymous refresh remain supported for shipped SDK callers, but named and anonymous routes cannot replace each other.
+- Treat route `source` as a stable same-plugin sub-owner, not a diagnostic label. Existing source-less callers may keep omitting it; source-aware callers must keep it unchanged across refreshes.
+- Dynamic lifecycle registration logs and returns a no-op unregister callback on rejection by default. Set `throwOnFailure: true` when readiness depends on that route; required bundled webhook transports use strict registration so they cannot report ready without live ingress.
 - `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
 - `auth: "gateway"` routes run inside a Gateway request runtime scope. The default surface (`gatewayRuntimeScopeSurface: "write-default"`) is intentionally conservative:
   - shared-secret bearer auth (`gateway.auth.mode = "token"` / `"password"`) and any non-trusted-proxy auth method get a single `operator.write` scope, even if the caller sends `x-openclaw-scopes`
@@ -694,7 +697,7 @@ plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 
 Runtime and config helpers live under matching focused `*-runtime` subpaths
 (`approval-runtime`, `agent-runtime`, `lazy-runtime`, `directory-runtime`,
-`text-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
+`text-utility-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
 `channel-activity-runtime`, etc.). Prefer `config-contracts`,
 `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
 instead of the broad `config-runtime` compatibility barrel.
@@ -750,6 +753,8 @@ outbound host generic and use the messaging adapter surface for provider rules:
 
 - `messaging.inferTargetChatType({ to })` decides whether a normalized target
   should be treated as `direct`, `group`, or `channel` before directory lookup.
+  Implicit owner heartbeat delivery requires this direct classification; without
+  it, Gateway status reports `waiting for route`.
 - `messaging.targetResolver.looksLikeId(raw, normalized)` tells core whether an
   input should skip straight to id-like resolution instead of directory search.
 - `messaging.targetResolver.reservedLiterals` lists bare words that are

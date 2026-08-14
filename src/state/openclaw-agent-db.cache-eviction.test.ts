@@ -2,47 +2,89 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
+  listOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
-const tempStateDirs: string[] = [];
+const BASE_AGENT_IDS = Array.from(
+  { length: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP },
+  (_, index) => `fixture-${index}`,
+);
+const BASE_AGENT_ID_SET = new Set(BASE_AGENT_IDS);
 
-function createTempStateDir(): string {
-  const stateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-cache-")),
-  );
-  tempStateDirs.push(stateDir);
-  return stateDir;
+let fixtureEnv: NodeJS.ProcessEnv | undefined;
+let fixtureStateDir: string | undefined;
+let baseDatabases: ReturnType<typeof openOpenClawAgentDatabase>[] = [];
+
+function requireFixtureEnv(): NodeJS.ProcessEnv {
+  if (!fixtureEnv) {
+    throw new Error("agent database cache fixture was not initialized");
+  }
+  return fixtureEnv;
 }
 
-function fillAgentDatabaseCache(env: NodeJS.ProcessEnv, prefix: string): void {
-  for (let index = 0; index < OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP; index += 1) {
-    openOpenClawAgentDatabase({ agentId: `${prefix}-${index}`, env });
+function restoreBaseCache(): void {
+  const env = requireFixtureEnv();
+  for (const database of listOpenClawAgentDatabasesForTest()) {
+    if (!BASE_AGENT_ID_SET.has(database.agentId)) {
+      closeOpenClawAgentDatabaseByPath(database.path);
+    }
+  }
+  baseDatabases = BASE_AGENT_IDS.map((agentId) => openOpenClawAgentDatabase({ agentId, env }));
+}
+
+function closeFirstBaseHandle(): void {
+  const first = baseDatabases[0];
+  if (!first || !closeOpenClawAgentDatabaseByPath(first.path)) {
+    throw new Error("first base agent database was not open");
   }
 }
 
-afterEach(() => {
+function evictAfterRefreshingBaseHandles(evictorAgentId: string, env: NodeJS.ProcessEnv): void {
+  for (const database of baseDatabases.slice(1)) {
+    openOpenClawAgentDatabase({ agentId: database.agentId, env });
+  }
+  openOpenClawAgentDatabase({ agentId: evictorAgentId, env });
+}
+
+beforeAll(() => {
+  closeOpenClawAgentDatabasesForTest();
+  fixtureStateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-cache-")),
+  );
+  fixtureEnv = { OPENCLAW_STATE_DIR: fixtureStateDir };
+  restoreBaseCache();
+});
+
+beforeEach(() => {
+  // Reopen only the base handle evicted by the previous case, then refresh cache order by hits.
+  restoreBaseCache();
+});
+
+afterAll(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  for (const stateDir of tempStateDirs.splice(0)) {
-    fs.rmSync(stateDir, { force: true, recursive: true });
+  if (fixtureStateDir) {
+    fs.rmSync(fixtureStateDir, { force: true, recursive: true });
   }
 });
 
 describe("openclaw agent database handle cache", () => {
   it("keeps only the capped number of open handles", () => {
-    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
-    const databases = Array.from({ length: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP + 1 }, (_, index) =>
-      openOpenClawAgentDatabase({ agentId: `worker-${index}`, env }),
-    );
+    const env = requireFixtureEnv();
+    const databases = [
+      ...baseDatabases,
+      openOpenClawAgentDatabase({ agentId: "cap-overflow", env }),
+    ];
     const leastRecentlyUsed = databases[0]!;
 
     expect(databases.filter((database) => database.db.isOpen)).toHaveLength(
@@ -53,15 +95,12 @@ describe("openclaw agent database handle cache", () => {
   });
 
   it("refreshes cache-hit recency before evicting the true LRU handle", () => {
-    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
-    const recentlyUsed = openOpenClawAgentDatabase({ agentId: "recently-used", env });
-    const untouched = Array.from({ length: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP - 1 }, (_, index) =>
-      openOpenClawAgentDatabase({ agentId: `untouched-${index}`, env }),
-    );
-    const leastRecentlyUsed = untouched[0]!;
+    const env = requireFixtureEnv();
+    const recentlyUsed = baseDatabases[0]!;
+    const leastRecentlyUsed = baseDatabases[1]!;
 
-    expect(openOpenClawAgentDatabase({ agentId: "recently-used", env })).toBe(recentlyUsed);
-    openOpenClawAgentDatabase({ agentId: "newest", env });
+    expect(openOpenClawAgentDatabase({ agentId: recentlyUsed.agentId, env })).toBe(recentlyUsed);
+    openOpenClawAgentDatabase({ agentId: "recency-newest", env });
 
     expect(recentlyUsed.db.isOpen).toBe(true);
     expect(isOpenClawAgentDatabaseOpen(recentlyUsed.path)).toBe(true);
@@ -70,15 +109,12 @@ describe("openclaw agent database handle cache", () => {
   });
 
   it("never evicts an LRU handle with an open transaction", () => {
-    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
-    const transactionOwner = openOpenClawAgentDatabase({ agentId: "transaction-owner", env });
+    const env = requireFixtureEnv();
+    const transactionOwner = baseDatabases[0]!;
     transactionOwner.db.exec("BEGIN IMMEDIATE");
     try {
-      const untouched = Array.from({ length: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP - 1 }, (_, index) =>
-        openOpenClawAgentDatabase({ agentId: `untouched-${index}`, env }),
-      );
-      const leastRecentlyUsed = untouched[0]!;
-      openOpenClawAgentDatabase({ agentId: "newest", env });
+      const leastRecentlyUsed = baseDatabases[1]!;
+      openOpenClawAgentDatabase({ agentId: "transaction-newest", env });
 
       expect(transactionOwner.db.isOpen).toBe(true);
       expect(transactionOwner.db.isTransaction).toBe(true);
@@ -91,18 +127,18 @@ describe("openclaw agent database handle cache", () => {
   });
 
   it("reopens an evicted database without losing durable rows", () => {
-    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
-    const evicted = openOpenClawAgentDatabase({ agentId: "evicted", env });
+    const env = requireFixtureEnv();
+    const evicted = baseDatabases[0]!;
     evicted.db
       .prepare(
         "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
       )
       .run("cache-eviction", JSON.stringify({ preserved: true }), 42);
 
-    fillAgentDatabaseCache(env, "filler");
+    openOpenClawAgentDatabase({ agentId: "durability-evictor", env });
     expect(evicted.db.isOpen).toBe(false);
 
-    const reopened = openOpenClawAgentDatabase({ agentId: "evicted", env });
+    const reopened = openOpenClawAgentDatabase({ agentId: evicted.agentId, env });
     expect(reopened).not.toBe(evicted);
     expect(
       reopened.db
@@ -112,9 +148,10 @@ describe("openclaw agent database handle cache", () => {
   });
 
   it("registers a first open without refreshing registry metadata after eviction", () => {
-    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const env = requireFixtureEnv();
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
+      closeFirstBaseHandle();
       const evicted = openOpenClawAgentDatabase({ agentId: "evicted", env });
       expect(
         listOpenClawRegisteredAgentDatabases({ env }).find(
@@ -123,7 +160,7 @@ describe("openclaw agent database handle cache", () => {
       ).toMatchObject({ lastSeenAt: 1_000 });
 
       nowSpy.mockReturnValue(2_000);
-      fillAgentDatabaseCache(env, "registry-filler");
+      evictAfterRefreshingBaseHandles("registry-evictor", env);
       expect(evicted.db.isOpen).toBe(false);
 
       openOpenClawAgentDatabase({ agentId: "evicted", env });
@@ -138,9 +175,10 @@ describe("openclaw agent database handle cache", () => {
   });
 
   it("validates ownership when an evicted path is requested for another agent", () => {
-    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const env = requireFixtureEnv();
+    closeFirstBaseHandle();
     const evicted = openOpenClawAgentDatabase({ agentId: "worker-a", env });
-    fillAgentDatabaseCache(env, "ownership-filler");
+    evictAfterRefreshingBaseHandles("ownership-evictor", env);
     expect(evicted.db.isOpen).toBe(false);
 
     expect(() =>
@@ -149,7 +187,7 @@ describe("openclaw agent database handle cache", () => {
   });
 
   it("revalidates and registers a database after explicit disposal", () => {
-    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const env = requireFixtureEnv();
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const disposed = openOpenClawAgentDatabase({ agentId: "disposed", env });

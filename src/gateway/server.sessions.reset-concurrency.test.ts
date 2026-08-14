@@ -8,12 +8,12 @@ import { writeSessionStore } from "./test-helpers.js";
 import {
   sessionLifecycleHookMocks,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   subagentLifecycleHookMocks,
   threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -54,6 +54,7 @@ test("sessions.reset preserves a concurrent same-id lifecycle replacement", asyn
       key: "main",
       reason: "new",
       commandSource: "gateway:agent",
+      workerPlacementContext: {},
       assertCurrent: () => {
         if (!lifecycleCurrent) {
           throw new Error("stale lifecycle");

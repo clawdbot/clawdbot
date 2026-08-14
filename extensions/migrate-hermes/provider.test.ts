@@ -3,12 +3,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveHomePath } from "./helpers.js";
 import pluginEntry from "./index.js";
 import { HERMES_REASON_INCLUDE_SECRETS } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
+import { makeContext, writeFile } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 function itemById(
   items: Array<{ id: string; [key: string]: unknown }>,
@@ -18,8 +25,15 @@ function itemById(
 }
 
 describe("Hermes migration provider", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-hermes-",
+    });
+  });
+
   afterEach(async () => {
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("registers the Hermes migration provider through the plugin entry", () => {
@@ -43,7 +57,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("detects Hermes sources supported by planning", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     await writeFile(path.join(source, "SOUL.md"), "# Hermes soul\n");
 
@@ -62,7 +76,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("detects archive-only Hermes sources", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     await writeFile(path.join(source, "logs", "run.log"), "log line\n");
 
@@ -81,7 +95,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("detects only memory files in memory-only mode", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(source, "SOUL.md"), "# Hermes soul\n");
@@ -103,7 +117,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("plans only copy items under the Hermes memory import directory", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
@@ -148,7 +162,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("targets the selected agent workspace for memory-only imports", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const defaultWorkspace = path.join(root, "workspace-main");
     const targetWorkspace = path.join(root, "workspace-research");
@@ -177,7 +191,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("marks existing memory import targets as conflicts", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
@@ -205,7 +219,7 @@ describe("Hermes migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "marks a dangling Hermes memory destination symlink as a conflict",
     async () => {
-      const root = await makeTempRoot();
+      const root = testWorkspace.dir;
       const source = path.join(root, "hermes");
       const workspaceDir = path.join(root, "workspace");
       const target = path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md");
@@ -232,7 +246,7 @@ describe("Hermes migration provider", () => {
   );
 
   it("copies memory bytes through the memory migration runtime", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "missing-workspace");
     const stateDir = path.join(root, "state");
@@ -259,7 +273,7 @@ describe("Hermes migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "uses the fs-safe copier for memory-only plans applied without itemKinds",
     async () => {
-      const root = await makeTempRoot();
+      const root = testWorkspace.dir;
       const source = path.join(root, "hermes");
       const workspaceDir = path.join(root, "workspace");
       const stateDir = path.join(root, "state");
@@ -286,7 +300,7 @@ describe("Hermes migration provider", () => {
   );
 
   it("rejects append items mixed into a memory-only copy plan", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
@@ -311,7 +325,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("rejects missing Hermes sources before planning", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "missing-hermes");
 
     const provider = buildHermesMigrationProvider();
@@ -328,7 +342,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("plans model, workspace, memory, skill, and secret items without importing secrets by default", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");

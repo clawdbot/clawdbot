@@ -12,9 +12,9 @@ import {
   validatePluginsUninstallParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
 import {
-  formatManagedPluginLifecycleError,
   installManagedPlugin,
   listManagedPlugins,
   ManagedPluginLifecycleError,
@@ -51,11 +51,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     try {
       respond(true, await listManagedPlugins({ config: context.getRuntimeConfig() }), undefined);
     } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, formatManagedPluginLifecycleError(error)),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
   "plugins.search": async ({ params, respond }) => {
@@ -106,11 +102,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, formatManagedPluginLifecycleError(error)),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
   "plugins.install": async ({ params, respond }) => {
@@ -149,7 +141,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           lifecycleError?.kind === "invalid-request"
             ? ErrorCodes.INVALID_REQUEST
             : ErrorCodes.UNAVAILABLE,
-          formatManagedPluginLifecycleError(error),
+          formatErrorMessage(error),
           details ? { details } : undefined,
         ),
       );
@@ -181,7 +173,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           lifecycleError?.kind === "invalid-request"
             ? ErrorCodes.INVALID_REQUEST
             : ErrorCodes.UNAVAILABLE,
-          formatManagedPluginLifecycleError(error),
+          formatErrorMessage(error),
         ),
       );
     }
@@ -219,7 +211,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           lifecycleError?.kind === "invalid-request"
             ? ErrorCodes.INVALID_REQUEST
             : ErrorCodes.UNAVAILABLE,
-          formatManagedPluginLifecycleError(error),
+          formatErrorMessage(error),
         ),
       );
     }

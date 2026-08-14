@@ -15,15 +15,15 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
-  discardCreatedSqliteSessionStateArchives,
-  materializeSqliteSessionStateDeletePlans,
+  discardCreatedSessionStateArchives,
+  materializeSessionStateDeletePlans,
 } from "./session-accessor.sqlite-archive.js";
-import { deleteSqliteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
-import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
-  deleteMaterializedSqliteSessionStatePlans,
-  planSqliteSessionStateDeleteIfUnreferenced,
-  readReferencedSqliteSessionIds,
+  deleteMaterializedSessionStatePlans,
+  planSessionStateDeleteIfUnreferenced,
+  readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   getSessionKysely,
@@ -31,7 +31,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { isCanonicalSqliteRetainedHistoryPlaceholder } from "./session-canonical-key.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 
@@ -118,7 +118,7 @@ function listCanonicalCronRunTombstones(
     // qualifies when its entry identity fails to parse at all. An old-but-live
     // cron run parses fine and is never a candidate, however far past the gate
     // it is.
-    if (!identified && !(includeUnidentified && parseSqliteSessionEntryJson(node) === null)) {
+    if (!identified && !(includeUnidentified && parseSessionEntryJson(node) === null)) {
       return [];
     }
     return [
@@ -153,7 +153,7 @@ function readProtectedSessionIds(params: {
   database: OpenClawAgentDatabase;
   storePath: string;
 }): Set<string> {
-  const protectedSessionIds = readReferencedSqliteSessionIds(
+  const protectedSessionIds = readReferencedSessionIds(
     params.database,
     new Set([params.candidate.sessionKey]),
   );
@@ -239,7 +239,7 @@ export async function sweepTombstonedCronRunRemnants(params: {
           }
           const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(scope);
           const plans = candidate.generationIds.flatMap((sessionId) => {
-            const plan = planSqliteSessionStateDeleteIfUnreferenced({
+            const plan = planSessionStateDeleteIfUnreferenced({
               archiveDirectory,
               archiveTranscript: true,
               database,
@@ -252,8 +252,8 @@ export async function sweepTombstonedCronRunRemnants(params: {
           if (plans.length !== candidate.generationIds.length) {
             return null;
           }
-          const materialized = materializeSqliteSessionStateDeletePlans(plans);
-          let archivedTranscripts: ReturnType<typeof deleteMaterializedSqliteSessionStatePlans> =
+          const materialized = await materializeSessionStateDeletePlans(plans);
+          let archivedTranscripts: ReturnType<typeof deleteMaterializedSessionStatePlans> =
             [];
           let removed = false;
           try {
@@ -275,7 +275,7 @@ export async function sweepTombstonedCronRunRemnants(params: {
                 if (candidate.generationIds.some((sessionId) => protectedAtDelete.has(sessionId))) {
                   return;
                 }
-                archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
+                archivedTranscripts = deleteMaterializedSessionStatePlans(
                   transactionDb,
                   materialized,
                   protectedAtDelete,
@@ -292,7 +292,7 @@ export async function sweepTombstonedCronRunRemnants(params: {
                 if (remainingGenerationIds.length > 0) {
                   return;
                 }
-                deleteSqliteSessionEntryRows(transactionDb, candidate.sessionKey);
+                deleteSessionEntryRows(transactionDb, candidate.sessionKey);
                 removed =
                   executeSqliteQuerySync(
                     transactionDb.db,
@@ -307,7 +307,7 @@ export async function sweepTombstonedCronRunRemnants(params: {
             );
           } finally {
             if (!removed) {
-              discardCreatedSqliteSessionStateArchives(materialized);
+              discardCreatedSessionStateArchives(materialized);
             }
           }
           if (!removed) {
@@ -324,7 +324,7 @@ export async function sweepTombstonedCronRunRemnants(params: {
     }
     removedNodes += 1;
     sweptTranscriptStates += result.sweptTranscriptStates;
-    emitArchivedSqliteTranscriptUpdates(result.archivedTranscripts);
+    emitArchivedTranscriptUpdates(result.archivedTranscripts);
   }
   return {
     candidates: candidates.length,

@@ -11,6 +11,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
+  type OpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import {
@@ -68,7 +69,7 @@ export function repairCanonicalSessionDeliveryStates(params: {
     const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
     try {
       repaired += runOpenClawAgentWriteTransaction(
-        (database) => applyDeliveryRewrites(database.db),
+        (database) => applyDeliveryRewrites(database),
         { agentId: target.agentId, env: params.env, path: target.sqlitePath },
         { operationLabel: "doctor.canonicalize-session-delivery-state" },
       );
@@ -127,13 +128,13 @@ function collectDeliveryRewrites(database: DatabaseSync): DeliveryRewrite[] {
   });
 }
 
-function applyDeliveryRewrites(database: DatabaseSync): number {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-  const rewrites = collectDeliveryRewrites(database);
+function applyDeliveryRewrites(database: OpenClawAgentDatabase): number {
+  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+  const rewrites = collectDeliveryRewrites(database.db);
   for (const rewrite of rewrites) {
     writeValidatedDoctorSessionEntryJson(database, rewrite.row, rewrite.entryJson);
     executeSqliteQuerySync(
-      database,
+      database.db,
       db
         .updateTable("session_windows")
         .set({ account_id: rewrite.accountId, channel: rewrite.channel })

@@ -663,14 +663,10 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.requestUpdate();
   }
 
-  protected typingLabel(): string | null {
-    const names = [...this.typingActors.values()].map((actor) => actor.label).toSorted();
-    if (names.length === 0) {
-      return null;
-    }
-    return names.length === 1
-      ? t("chat.sessionSuggestions.typing", { name: names[0] ?? "" })
-      : t("chat.sessionSuggestions.typingMany", { names: names.join(", ") });
+  protected typingActorViews(): { id: string; label: string }[] {
+    return [...this.typingActors]
+      .map(([id, actor]) => ({ id, label: actor.label }))
+      .toSorted((left, right) => left.label.localeCompare(right.label));
   }
 
   protected sendTypingState(typing: boolean): void {

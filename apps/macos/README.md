@@ -20,6 +20,32 @@ the `--chat`/`--dashboard` auto-open helpers. Pairing, control-channel, and Mac
 node services still start. Combine it with `--attach-only` when an external
 process owns the local Gateway.
 
+## App profiles
+
+Launch a fully isolated app instance with the same profile name used by the CLI:
+
+```bash
+OPENCLAW_PROFILE=work /Applications/OpenClaw.app/Contents/MacOS/OpenClaw
+```
+
+Profile names use 1–64 lowercase letters, numbers, underscores, or hyphens and
+must start with a letter or number. `default` selects the normal app; `gateway`,
+`mac`, and `node` are reserved LaunchAgent identities.
+
+`scripts/restart-mac.sh` intentionally rejects named profiles because its
+packaging cleanup is host-global. Build/package normally, then launch the named
+profile directly with the command above.
+
+A named profile keeps state in `~/.openclaw-<name>`, uses its own app defaults,
+Keychain services, duplicate-instance lock, and the CLI-managed Gateway service
+`ai.openclaw.<name>`. Unless config or environment selects a port, each profile
+derives a stable port in the profile `20000...59999` range. The app does not
+install or modify the host-global Mac node
+service or OpenClaw login item while a profile is active. The runtime child node
+still runs in process as usual. App relocation, Sparkle updates, and post-update
+service repair are disabled in profile mode; update the installed app through
+the normal default-profile workflow.
+
 ## Packaging flow
 
 ```bash

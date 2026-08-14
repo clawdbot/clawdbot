@@ -133,8 +133,11 @@ describe("nostr gateway lifecycle", () => {
 
     options?.onConnect?.("wss://relay-one.example/");
     expect(statusEvents.at(-1)).toMatchObject({
+      running: true,
       lifecycle: "ready",
       connected: true,
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
       terminalDisconnect: undefined,
     });
     options?.onConnect?.("wss://relay-two.example/");

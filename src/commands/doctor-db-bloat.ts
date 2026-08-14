@@ -3,6 +3,7 @@
 // (multi-hundred-MB stores, blocking vacuums) surfaced only after user harm.
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -58,8 +59,7 @@ function readPragmaNumber(
   pragma: string,
 ): number | null {
   const row = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
-  const value = row?.[pragma];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(row?.[pragma]) ?? null;
 }
 
 function describeBloat(label: string, stats: SqliteBloatStats): string | null {

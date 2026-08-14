@@ -163,6 +163,49 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
+  it("recovers an archived isolated session on the next heartbeat tick", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      const nowMs = Date.now();
+      await seedSessionStore(storePath, isolatedSessionKey, {
+        sessionId: "archived-heartbeat-session-id",
+        updatedAt: nowMs - 1000,
+        archivedAt: nowMs - 500,
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const store = readSessionStoreForTest<{
+        archivedAt?: number;
+        heartbeatIsolatedBaseSessionKey?: string;
+        sessionId?: string;
+      }>(storePath);
+      expect(store[isolatedSessionKey]).toMatchObject({
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      });
+      expect(store[isolatedSessionKey]?.archivedAt).toBeUndefined();
+      expect(store[isolatedSessionKey]?.sessionId).not.toBe("archived-heartbeat-session-id");
+    });
+  });
+
   it("stays stable even with multiply-accumulated suffixes", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
@@ -219,9 +262,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         .mockResolvedValueOnce({ text: "Relay this cron update now" })
         .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
 
-      enqueueSystemEvent("Cron: QMD maintenance completed", {
+      enqueueSystemEvent("Cron: memory maintenance completed", {
         sessionKey: baseSessionKey,
-        contextKey: "cron:qmd-maintenance",
+        contextKey: "cron:memory-maintenance",
       });
 
       await runHeartbeatOnce({
@@ -252,9 +295,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
       expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
       expect(firstCtx.Provider).toBe("cron-event");
-      expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
+      expect(firstCtx.Body).toContain("Cron: memory maintenance completed");
       expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
-      expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
+      expect(secondCtx.Body).not.toContain("Cron: memory maintenance completed");
     });
   });
 

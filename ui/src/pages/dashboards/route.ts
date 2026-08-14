@@ -7,23 +7,26 @@ import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-naviga
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import type { DashboardsRouteData } from "./view.ts";
 
-async function loadDashboardsRoute(context: ApplicationContext): Promise<DashboardsRouteData> {
-  const result = await context.sessions
-    .list({
+export async function loadDashboardsRoute(
+  context: ApplicationContext,
+): Promise<DashboardsRouteData> {
+  let value = null;
+  let error: string | null = null;
+  try {
+    value = await context.sessions.list({
       ...DEFAULT_SESSION_LIST_QUERY,
       boardFace: "dashboard",
       archivedFilter: "all",
       ...(context.agentSelection.state.scopeId
         ? { agentId: context.agentSelection.state.scopeId }
         : {}),
-    })
-    .then(
-      (value) => ({ value, error: null }),
-      (error: unknown) => ({ value: null, error: String(error) }),
-    );
+    });
+  } catch (cause) {
+    error = String(cause);
+  }
   return {
-    result: result.value,
-    error: result.error,
+    result: value,
+    error,
     basePath: context.basePath,
     fallbackAgentId: resolveSessionNavigationAgentId(context),
     mainKey: resolveUiConfiguredMainKey({
@@ -35,12 +38,11 @@ async function loadDashboardsRoute(context: ApplicationContext): Promise<Dashboa
 
 export const page = definePage({
   ...routePageSpec("dashboards"),
-  loaderDeps: (context: ApplicationContext) =>
-    `${context.agentSelection.state.scopeId ?? "all"}\u0000${context.sessions.canonicalListRevision}`,
-  loader: (context: ApplicationContext) => loadDashboardsRoute(context),
+  loader: loadDashboardsRoute,
   component: () =>
-    import("./view.ts").then(({ renderDashboards }) => ({
+    import("./dashboards-page.ts").then(() => ({
       header: true,
-      render: (data: DashboardsRouteData | undefined) => html`${renderDashboards(data)}`,
+      render: (data: DashboardsRouteData | undefined) =>
+        html`<openclaw-dashboards-page .routeData=${data}></openclaw-dashboards-page>`,
     })),
 });

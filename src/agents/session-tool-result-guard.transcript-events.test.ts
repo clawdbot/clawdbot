@@ -6,12 +6,16 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
 import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
-import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const listeners: Array<() => void> = [];
@@ -31,7 +35,7 @@ async function openPersistedSessionManager() {
     ...target,
     entry: { sessionId, updatedAt: Date.now() },
   });
-  return { sessionManager: SessionManager.open(target, root), target };
+  return { root, sessionManager: SessionManager.open(target, root), target };
 }
 
 afterEach(() => {
@@ -43,6 +47,49 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it("records the admission anchor when adopting an ingress-persisted user", async () => {
+    const { root, target } = await openPersistedSessionManager();
+    const message = {
+      role: "user" as const,
+      content: "canonical prompt",
+      idempotencyKey: "canonical-run:user",
+      timestamp: Date.now(),
+    };
+    await appendTranscriptMessage(target, {
+      cwd: root,
+      eventId: "ingress-persisted-user",
+      message,
+      now: message.timestamp,
+    });
+    const recorder = createUserTurnTranscriptRecorder({
+      message,
+      target: {
+        ...target,
+        sessionEntry: { sessionId: target.sessionId, updatedAt: message.timestamp },
+      },
+    });
+    const guarded = guardSessionManager(SessionManager.open(target, root), {
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      preparedUserTurnMessage: message,
+      preparedUserTurnTranscriptRecorder: recorder,
+    });
+
+    expect(recorder.getAdmissionReceipt()).toBeUndefined();
+    guarded.appendMessage({ ...message });
+
+    expect(recorder.hasPersisted()).toBe(true);
+    expect(recorder.getAdmissionReceipt()).toMatchObject({
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+      entryId: "ingress-persisted-user",
+      idempotencyKey: message.idempotencyKey,
+      role: "user",
+    });
+  });
+
   it.each(["active", "side", "setup-metadata"] as const)(
     "adopts an ingress-persisted %s-branch user without broadcasting a duplicate",
     (branch) => {

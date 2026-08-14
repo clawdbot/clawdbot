@@ -1,5 +1,5 @@
 // Gateway Client module implements timeouts behavior.
-function parseStrictPositiveInteger(value: string): number | undefined {
+function parsePositiveTimeoutSetting(value: string): number | undefined {
   const trimmed = value.trim();
   if (!/^\+?\d+$/u.test(trimmed)) {
     return undefined;
@@ -106,7 +106,7 @@ export function getConnectChallengeTimeoutMsFromEnv(
 ): number | undefined {
   const raw = env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
   if (raw) {
-    const parsed = parseStrictPositiveInteger(raw);
+    const parsed = parsePositiveTimeoutSetting(raw);
     if (parsed !== undefined) {
       return resolveSafeTimeoutDelayMs(parsed);
     }
@@ -155,7 +155,7 @@ export function resolvePreauthHandshakeTimeoutMs(params?: {
     env.OPENCLAW_HANDSHAKE_TIMEOUT_MS ||
     (isTestRuntimeEnv(env) ? env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS : undefined);
   if (configuredTimeout) {
-    const parsed = parseStrictPositiveInteger(configuredTimeout);
+    const parsed = parsePositiveTimeoutSetting(configuredTimeout);
     if (parsed !== undefined) {
       return resolveSafeTimeoutDelayMs(parsed);
     }

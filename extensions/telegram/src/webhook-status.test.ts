@@ -24,6 +24,7 @@ describe("createTelegramWebhookStatusPublisher", () => {
     });
     expect(setStatus).toHaveBeenNthCalledWith(2, {
       mode: "webhook",
+      running: true,
       connected: true,
       lastConnectedAt: 1234,
       lastEventAt: 1234,
@@ -33,6 +34,7 @@ describe("createTelegramWebhookStatusPublisher", () => {
     });
     expect(setStatus).toHaveBeenNthCalledWith(3, {
       mode: "webhook",
+      running: true,
       connected: true,
       lastConnectedAt: 2345,
       lastEventAt: 2345,

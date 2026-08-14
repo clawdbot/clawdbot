@@ -1,0 +1,33 @@
+title: Audio proxy and limit handling
+
+scenario:
+  id: audio-proxy-and-limit-handling
+  surface: media-understanding
+  coverage:
+    primary:
+      - media.audio-proxy-and-limit-handling
+  objective: Verify batch audio transcription crosses the configured outbound proxy and rejects oversized input before any proxy or provider request.
+  successCriteria:
+    - applyMediaUnderstanding sends an accepted audio attachment through a real loopback HTTP proxy.
+    - The proxy receives one CONNECT tunnel and the OpenAI-compatible endpoint receives one multipart transcription request over that proxy-owned socket.
+    - No provider request arrives from a socket outside the proxy tunnel.
+    - Audio above maxBytes is rejected before either loopback server receives a request.
+  docsRefs:
+    - docs/nodes/audio.md
+    - docs/nodes/media-understanding.md
+    - docs/tools/media-overview.md
+  codeRefs:
+    - src/media-understanding/apply.ts
+    - src/media-understanding/runner.entries.ts
+    - src/media-understanding/openai-compatible-audio.ts
+    - src/media-understanding/attachments.cache.ts
+    - src/infra/net/proxy-fetch.ts
+    - extensions/openai/media-understanding-provider.ts
+    - test/e2e/qa-lab/media/audio-proxy-and-limit-handling.e2e.test.ts
+  regressionRefs:
+    - https://github.com/openclaw/openclaw/pull/73817
+    - https://github.com/openclaw/openclaw/pull/97280
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/media/audio-proxy-and-limit-handling.e2e.test.ts
+    summary: Run the apply-to-provider audio path against loopback proxy and provider servers, then prove maxBytes rejection performs no network IO.

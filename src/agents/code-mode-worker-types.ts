@@ -92,7 +92,6 @@ export type CodeModeWorkerThreadResult =
         | "invalid_input"
         | "runtime_unavailable"
         | "timeout"
-        | "output_limit_exceeded"
         | "snapshot_limit_exceeded"
         | "internal_error";
       failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;

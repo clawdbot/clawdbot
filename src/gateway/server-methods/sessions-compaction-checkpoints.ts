@@ -16,10 +16,8 @@ import {
   createFileBackedCompactionCheckpointStore,
   getSessionCompactionCheckpoint,
 } from "../session-compaction-checkpoints.js";
-import {
-  buildDashboardSessionKey,
-  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
-} from "../session-create-service.js";
+import { buildDashboardSessionKey } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { interruptSessionRunIfActive } from "./sessions-messaging.js";
 import {
@@ -35,6 +33,22 @@ import { assertValidParams } from "./validation.js";
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 const MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE =
   "Checkpoint branch and restore are unavailable while model selection is locked.";
+
+function respondCheckpointConflict(
+  key: string,
+  action: "branch" | "restore",
+  respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
+): void {
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `Session ${key} changed before checkpoint ${action}. Retry.`,
+      { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
+    ),
+  );
+}
 
 export const sessionCheckpointHandlers: GatewayRequestHandlers = {
   "sessions.compaction.branch": async ({ params, respond, context }) => {
@@ -91,6 +105,10 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     const nextKey = buildDashboardSessionKey(target.agentId);
     const branchedSession = await compactionCheckpointStore.branchCheckpointSession({
       agentId: target.agentId,
+      expectedState: {
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      },
       storePath,
       sourceKey: canonicalKey,
       sourceStoreKey: sessionStoreKey,
@@ -124,6 +142,10 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (branchedSession.status === "conflict") {
+      respondCheckpointConflict(key, "branch", respond);
+      return;
+    }
     if (branchedSession.status === "failed") {
       respond(
         false,
@@ -147,9 +169,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     );
     emitSessionsChanged(context, {
       sessionKey: canonicalKey,
-      ...(canonicalKey === "global" && requestedAgent.agentId
-        ? { agentId: requestedAgent.agentId }
-        : {}),
+      agentId: requestedAgent.agentId,
       reason: "checkpoint-branch",
     });
     emitSessionsChanged(context, {
@@ -366,6 +386,10 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
 
         const restoredSession = await compactionCheckpointStore.restoreCheckpointSession({
           agentId: requestedAgent.agentId,
+          expectedState: {
+            sessionId: current.entry.sessionId,
+            lifecycleRevision: current.entry.lifecycleRevision,
+          },
           storePath,
           sessionKey: current.canonicalKey,
           sessionStoreKey: current.sessionStoreKey,
@@ -398,6 +422,10 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        if (restoredSession.status === "conflict") {
+          respondCheckpointConflict(key, "restore", respond);
+          return;
+        }
         if (restoredSession.status === "failed") {
           respond(
             false,
@@ -420,9 +448,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
         );
         emitSessionsChanged(context, {
           sessionKey: current.canonicalKey,
-          ...(current.canonicalKey === "global" && requestedAgent.agentId
-            ? { agentId: requestedAgent.agentId }
-            : {}),
+          agentId: requestedAgent.agentId,
           reason: "checkpoint-restore",
         });
       },

@@ -776,7 +776,7 @@ extension OpenClawChatViewModel {
             // The store owner no longer matches the active gateway route.
             // Leave every row queued; the replacement view model owns the
             // new gateway and a later matching reconnect can resume this one.
-            if case let .unavailable(reason) = routeResult, let reason {
+            if case let .unavailable(reason, _) = routeResult, let reason {
                 self.errorText = reason
             }
             self.applyTransportHealth(false)

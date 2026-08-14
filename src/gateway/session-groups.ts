@@ -186,11 +186,12 @@ export function putSessionGroups(
 export function ensureSessionGroupRegistered(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
-): void {
+): boolean {
   const normalized = normalizeOptionalString(name);
   if (!normalized) {
-    return;
+    return false;
   }
+  let inserted = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = kyselyFor(db);
@@ -201,6 +202,7 @@ export function ensureSessionGroupRegistered(
       if (existing) {
         return;
       }
+      inserted = true;
       const maxRow = executeSqliteQuerySync(
         db,
         kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
@@ -216,6 +218,7 @@ export function ensureSessionGroupRegistered(
     },
     { env },
   );
+  return inserted;
 }
 
 function renameCatalogEntry(from: string, to: string, env: NodeJS.ProcessEnv): void {

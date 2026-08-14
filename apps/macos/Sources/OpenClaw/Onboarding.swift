@@ -26,10 +26,30 @@ struct RemoteGatewayAdvanceDecision: Equatable {
     let shouldProbe: Bool
 }
 
+@MainActor
+@Observable
+final class OnboardingFinishState {
+    var didFinish = false
+}
+
 enum OnboardingSystemAgentResumeStore {
     struct ActivationOwner: Equatable {
         let id: String
         let routeFingerprint: String
+
+        /// Keychain-unavailable attempts carry a random per-attempt lease id
+        /// with this sentinel instead of an auth-bound fingerprint: live
+        /// matching stays attempt-exact, while relaunch reconciliation refuses
+        /// the receipt. Real fingerprints are 64-char HMAC hex, never this.
+        static let unboundFingerprint = "unbound"
+
+        static func unbound() -> ActivationOwner {
+            ActivationOwner(id: UUID().uuidString, routeFingerprint: self.unboundFingerprint)
+        }
+
+        var isUnbound: Bool {
+            self.routeFingerprint == Self.unboundFingerprint
+        }
     }
 
     enum PendingState: Equatable {
@@ -131,7 +151,7 @@ enum OnboardingSystemAgentResumeStore {
 
     static func isPending(
         for routeIdentity: String?,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
         self.pendingState(for: routeIdentity, defaults: defaults, now: now) != .none
@@ -142,7 +162,7 @@ enum OnboardingSystemAgentResumeStore {
         routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
         activationTimeoutMs: Double = OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
         -> Date?
     {
@@ -163,7 +183,7 @@ enum OnboardingSystemAgentResumeStore {
         routeIdentity: String,
         activationOwner: ActivationOwner? = nil,
         deadline: Date,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
         guard let routeIdentity = normalized(routeIdentity) else { return }
@@ -179,7 +199,7 @@ enum OnboardingSystemAgentResumeStore {
     static func markVerified(
         ifOwnedBy routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
         guard let routeIdentity = normalized(routeIdentity) else { return }
@@ -199,7 +219,7 @@ enum OnboardingSystemAgentResumeStore {
     static func markCompleted(
         ifOwnedBy routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
         guard let routeIdentity = normalized(routeIdentity) else { return false }
@@ -218,7 +238,7 @@ enum OnboardingSystemAgentResumeStore {
 
     static func activationOwner(
         for routeIdentity: String?,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> ActivationOwner?
     {
         guard let routeIdentity = normalized(routeIdentity) else { return nil }
@@ -228,7 +248,7 @@ enum OnboardingSystemAgentResumeStore {
     static func isOwned(
         by activationOwner: ActivationOwner,
         for routeIdentity: String?,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
         guard let routeIdentity = normalized(routeIdentity),
@@ -239,7 +259,7 @@ enum OnboardingSystemAgentResumeStore {
 
     static func pendingState(
         for routeIdentity: String?,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> PendingState
     {
         guard let routeIdentity = normalized(routeIdentity),
@@ -262,7 +282,7 @@ enum OnboardingSystemAgentResumeStore {
     static func clear(
         ifOwnedBy routeIdentity: String,
         activationOwner: ActivationOwner? = nil,
-        defaults: UserDefaults = .standard) -> Bool
+        defaults: UserDefaults = AppDefaults.standard) -> Bool
     {
         guard let routeIdentity = normalized(routeIdentity) else { return false }
         var records = self.loadRecords(defaults: defaults)
@@ -274,7 +294,7 @@ enum OnboardingSystemAgentResumeStore {
         return true
     }
 
-    static func clear(defaults: UserDefaults = .standard) {
+    static func clear(defaults: UserDefaults = AppDefaults.standard) {
         defaults.removeObject(forKey: onboardingSystemAgentPendingKey)
         defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
     }
@@ -517,8 +537,8 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     var busyReason: String?
 
     static func markComplete() {
-        UserDefaults.standard.set(true, forKey: onboardingSeenKey)
-        UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+        AppDefaults.standard.set(true, forKey: onboardingSeenKey)
+        AppDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
         AppStateStore.shared.onboardingSeen = true
         DashboardManager.shared.handleOnboardingCompletion()
     }
@@ -615,11 +635,9 @@ struct OnboardingView: View {
     }
 
     @State var currentPage = 0
-    @State var isRequesting = false
     @State var installingCLI = false
     @State var cliInstallPhase: CLIInstallPhase = .idle
     @State var cliStatus: String?
-    @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
     @State var cliExecutableReady = false
     @State var cliInstalled = false
@@ -635,18 +653,16 @@ struct OnboardingView: View {
     @State var remoteAuthIssue: RemoteGatewayAuthIssue?
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
-    @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var systemAgentState = OnboardingSystemAgentChatState()
+    @State var finishState = OnboardingFinishState()
     @State var aiSetup = OnboardingAISetupModel()
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
-    @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
     @Bindable var state: AppState
-    var permissionMonitor: PermissionMonitor
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
+    let dashboardOnboardingOpener: @MainActor () -> Void
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -656,10 +672,7 @@ struct OnboardingView: View {
     let connectionPageIndex = 1
     let cliPageIndex = 2
     let aiPageIndex = 3
-    let onboardingChatPageIndex = 8
     let readyPageIndex = 9
-
-    let permissionsPageIndex = 5
 
     var heroFrameHeight: CGFloat {
         145
@@ -793,26 +806,47 @@ struct OnboardingView: View {
     }
 
     struct LocalGatewayProbe: Equatable {
-        let port: Int
-        let pid: Int32
-        let command: String
-        let expected: Bool
+        let subtitle: String
+
+        init(
+            port: Int,
+            pid: Int32,
+            command: String,
+            profile: AppProfile,
+            managedServicePID: Int32?)
+        {
+            let expectedTokens = ["node", "openclaw", "tsx", "pnpm", "bun"]
+            let looksLikeGateway = expectedTokens.contains { command.lowercased().contains($0) }
+            let process = command.isEmpty ? "" : " (\(command) pid \(pid))"
+            guard GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+                profile: profile,
+                listenerPID: pid,
+                managedServicePID: managedServicePID)
+            else {
+                let profile = profile.name.map { " for profile \($0)" } ?? ""
+                self.subtitle = "Port \(port) already in use\(process). Choose a different Gateway port\(profile)."
+                return
+            }
+            let base = looksLikeGateway ? "Existing gateway detected" : "Port \(port) already in use"
+            self.subtitle = "\(base)\(process). Will attach."
+        }
     }
 
     init(
         state: AppState = AppStateStore.shared,
-        permissionMonitor: PermissionMonitor = .shared,
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),
         aiSetupGateway: GatewayConnection = .shared,
-        systemAgentDefaults: UserDefaults = .standard,
+        systemAgentDefaults: UserDefaults = AppDefaults.standard,
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
-        gatewaySelectionPersister: (@MainActor () -> Bool)? = nil)
+        gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
+        dashboardOnboardingOpener: @escaping @MainActor () -> Void = {
+            AppNavigationActions.openDashboardOnboarding()
+        })
     {
         self.state = state
-        self.permissionMonitor = permissionMonitor
         self.systemAgentDefaults = systemAgentDefaults
         let routeIdentityProvider = aiSetupRouteIdentityProvider ?? {
             OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: state)
@@ -821,6 +855,7 @@ struct OnboardingView: View {
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
+        self.dashboardOnboardingOpener = dashboardOnboardingOpener
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)

@@ -3,7 +3,7 @@ import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-e
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import type {
   EmbeddingProvider,
   EmbeddingProviderAdapter,
@@ -254,13 +254,7 @@ export type MemoryFlushPlanResolver = (params: {
 
 export type RegisteredMemorySearchManager = MemorySearchManager;
 
-type MemoryRuntimeQmdConfig = {
-  command?: string;
-};
-
-type MemoryRuntimeBackendConfig =
-  | { backend: "builtin" }
-  | { backend: "qmd"; qmd?: MemoryRuntimeQmdConfig };
+type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
 export type MemoryPluginRuntime = {
   getMemorySearchManager(params: {
@@ -270,19 +264,9 @@ export type MemoryPluginRuntime = {
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
     debug?: {
-      backend?: "builtin" | "qmd";
+      backend?: "builtin";
       purpose?: "default" | "status" | "cli";
       managerMs?: number;
-      managerCacheState?:
-        | "cached-full-hit"
-        | "cached-full-miss"
-        | "transient-cli"
-        | "transient-status"
-        | "pending-create-wait"
-        | "fallback-builtin"
-        | "recent-failure-cooldown";
-      qmdIdentityHash?: string;
-      failureCode?: "qmd-unavailable";
     };
     error?: string;
   }>;
@@ -290,6 +274,14 @@ export type MemoryPluginRuntime = {
     cfg: OpenClawConfig;
     agentId: string;
   }): MemoryRuntimeBackendConfig;
+  /** Authorize raw hits before caller-visible use; absent runtimes must not expose session hits. */
+  authorizeSearchHits?(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    requesterSessionKey: string | undefined;
+    sandboxed: boolean;
+    hits: MemorySearchResult[];
+  }): Promise<MemorySearchResult[]>;
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };
@@ -330,8 +322,8 @@ export type SessionDiscussionInfo = {
 
 export type SessionDiscussionProvider = {
   id: string;
-  info(params: { sessionKey: string }): Promise<SessionDiscussionInfo>;
-  open(params: { sessionKey: string }): Promise<SessionDiscussionInfo>;
+  info(params: { sessionKey: string; agentId: string }): Promise<SessionDiscussionInfo>;
+  open(params: { sessionKey: string; agentId: string }): Promise<SessionDiscussionInfo>;
 };
 
 export type ResolvedPluginRuntimeArtifact = { source: string; rootDir: string };

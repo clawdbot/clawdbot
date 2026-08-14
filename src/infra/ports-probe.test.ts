@@ -38,17 +38,19 @@ async function withListeningServer(
 
 describe("tryListenOnPort", () => {
   it("can bind and release an ephemeral loopback port", async () => {
-    let listened;
+    let port;
     try {
-      await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
-      listened = true;
+      port = await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EPERM") {
         return;
       }
       throw err;
     }
-    expect(listened).toBe(true);
+    expect(port).toBeGreaterThan(0);
+    await expect(
+      tryListenOnPort({ port, host: "127.0.0.1", exclusive: true }),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects when the port is already in use", async () => {

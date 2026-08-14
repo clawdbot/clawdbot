@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue } from "./protocol.js";
 import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
@@ -17,10 +17,6 @@ type ProjectedMessageGroup = {
   results: ProjectedToolReference[];
   bytes: number;
 };
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
 
 function readBoundedText(
   value: unknown,
@@ -49,7 +45,7 @@ function responseItemBytes(item: JsonValue): number {
 }
 
 function requireCallId(value: unknown): string {
-  const callId = readNonEmptyString(value);
+  const callId = normalizeOptionalString(value);
   if (!callId || callId.length > 256) {
     throw new Error("Codex settled-turn projection found an invalid tool call id");
   }
@@ -57,7 +53,7 @@ function requireCallId(value: unknown): string {
 }
 
 function requireToolName(value: unknown): string {
-  const name = readNonEmptyString(value);
+  const name = normalizeOptionalString(value);
   if (!name || !TOOL_NAME_PATTERN.test(name)) {
     throw new Error("Codex settled-turn projection found an invalid tool name");
   }
@@ -207,7 +203,7 @@ function projectToolResult(message: Record<string, unknown>): {
       throw new Error("Codex settled-turn projection found malformed tool result content");
     }
     if (value.type === "image") {
-      const mimeType = readNonEmptyString(value.mimeType) ?? "unknown type";
+      const mimeType = normalizeOptionalString(value.mimeType) ?? "unknown type";
       // The finalizer selects by text capability. Preserve image evidence as
       // metadata without embedding an executable or oversized multimodal payload.
       parts.push(`[Image tool result: ${mimeType}]`);

@@ -29,10 +29,9 @@ Wake words and routing rules live in the Gateway state database, `~/.openclaw/st
 
 ### Routing (trigger to target)
 
-| Method                  | Params                               | Result                               |
-| ----------------------- | ------------------------------------ | ------------------------------------ |
-| `voicewake.routing.get` | none                                 | `{ config: VoiceWakeRoutingConfig }` |
-| `voicewake.routing.set` | `{ config: VoiceWakeRoutingConfig }` | `{ config: VoiceWakeRoutingConfig }` |
+| Method                  | Params | Result                               |
+| ----------------------- | ------ | ------------------------------------ |
+| `voicewake.routing.get` | none   | `{ config: VoiceWakeRoutingConfig }` |
 
 ```json
 {

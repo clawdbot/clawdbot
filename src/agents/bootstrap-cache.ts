@@ -3,7 +3,12 @@
  * Reuses unchanged bootstrap file arrays while refreshing each turn so edits
  * become visible to long-lived agent sessions.
  */
-import { loadWorkspaceBootstrapFiles, type WorkspaceBootstrapFile } from "./workspace.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import {
+  loadWorkspaceBootstrapFiles,
+  type WorkspaceBootstrapFile,
+  workspaceFileSourceIdentitiesMatch,
+} from "./workspace.js";
 
 type BootstrapSnapshot = {
   workspaceDir: string;
@@ -28,19 +33,12 @@ function bootstrapFilesEqual(
       file.name === updated.name &&
       file.path === updated.path &&
       file.content === updated.content &&
-      file.missing === updated.missing
+      file.missing === updated.missing &&
+      // Equal bytes at a replaced inode or symlink target must carry the newly
+      // opened source identity instead of reusing stale file objects.
+      workspaceFileSourceIdentitiesMatch(file, updated)
     );
   });
-}
-
-function pruneOldestBootstrapSnapshots(): void {
-  while (cache.size > MAX_BOOTSTRAP_SNAPSHOTS) {
-    const oldestKey = cache.keys().next().value;
-    if (typeof oldestKey !== "string") {
-      return;
-    }
-    cache.delete(oldestKey);
-  }
 }
 
 /** Load bootstrap files for a session, reusing the prior snapshot when content is unchanged. */
@@ -48,7 +46,7 @@ export async function getOrLoadBootstrapFiles(params: {
   workspaceDir: string;
   sessionKey: string;
 }): Promise<WorkspaceBootstrapFile[]> {
-  pruneOldestBootstrapSnapshots();
+  pruneMapToMaxSize(cache, MAX_BOOTSTRAP_SNAPSHOTS);
   const existing = cache.get(params.sessionKey);
   // Refresh per turn so long-lived sessions pick up edits; loadWorkspaceBootstrapFiles
   // handles unchanged file content through its guarded inode/mtime cache.
@@ -64,7 +62,7 @@ export async function getOrLoadBootstrapFiles(params: {
   }
 
   cache.set(params.sessionKey, { workspaceDir: params.workspaceDir, files });
-  pruneOldestBootstrapSnapshots();
+  pruneMapToMaxSize(cache, MAX_BOOTSTRAP_SNAPSHOTS);
   return files;
 }
 

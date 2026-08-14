@@ -9,10 +9,10 @@ import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test.each([
   {
@@ -115,6 +115,7 @@ test("sessions.reset rechecks plugin ownership inside lifecycle admission", asyn
     key: sessionKey,
     reason: "reset",
     commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
     authorizedPluginId: "memory-core",
     assertCurrent: () => {
       if (replaced) {
@@ -249,7 +250,11 @@ test("sessions.delete protects the archived session generation from a replacemen
 
   const archived = await directSessionReq<{
     entry: { sessionId: string; lifecycleRevision?: string };
-  }>("sessions.patch", { key: sessionKey, archived: true }, { client: pluginClient });
+  }>(
+    "sessions.patch",
+    { key: sessionKey, archived: true, expectedSessionId: originalSessionId },
+    { client: pluginClient },
+  );
 
   expect(archived.ok, JSON.stringify(archived.error)).toBe(true);
   expect(archived.payload?.entry.sessionId).toBe(originalSessionId);

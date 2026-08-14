@@ -7,13 +7,16 @@ import officialExternalPluginCatalog from "../../scripts/lib/official-external-p
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
+  getOfficialExternalChannelSecretContract,
   type HostedOfficialExternalPluginCatalogSnapshot,
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
   type OfficialExternalPluginCatalogFeed,
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
   isOfficialExternalPluginCatalogFeed,
+  listOfficialExternalChannelEnvVars,
   listOfficialExternalPluginCatalogEntries,
   loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
@@ -22,6 +25,7 @@ import {
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLegacyIds,
 } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
@@ -265,6 +269,21 @@ describe("official external plugin catalog", () => {
       npmSpec: "@openclaw/codex",
       defaultChoice: "npm",
     });
+  });
+
+  it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
+    const entry = getOfficialExternalPluginCatalogEntryForPackage("@openclaw/fish-audio-speech");
+    expect(entry).toBeDefined();
+    expect(resolveOfficialExternalPluginId(entry!)).toBe("fish-audio-speech");
+    expect(resolveOfficialExternalPluginLegacyIds(entry!)).toEqual(["fish-audio"]);
+    expect(resolveOfficialExternalPluginInstall(entry!)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/fish-audio-speech",
+      npmSpec: "@openclaw/fish-audio-speech",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(getOfficialExternalPluginCatalogEntry("fish-audio-speech")).toBe(entry);
+    expect(getOfficialExternalPluginCatalogEntry("fish-audio")).toBeUndefined();
   });
 
   it("curates featured external plugins with ClawHub install alternatives", () => {
@@ -1900,6 +1919,8 @@ describe("official external plugin catalog", () => {
     const wecomByChannel = expectCatalogEntry("wecom");
     const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");
     const yuanbaoByChannel = expectCatalogEntry("yuanbao");
+    const qqbotByChannel = expectCatalogEntry("qqbot");
+    const qqbotByPlugin = expectCatalogEntry("openclaw-qqbot");
 
     expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
@@ -1910,6 +1931,27 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
       "openclaw-plugin-yuanbao@2.15.0",
     );
+    expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
+    expect(qqbotByPlugin).toBe(qqbotByChannel);
+    expect(
+      getOfficialExternalPluginCatalogManifest(qqbotByChannel)?.channel?.doctorCapabilities,
+    ).toEqual({ openDmRequiresAllowFromWildcard: false });
+    expect(resolveOfficialExternalPluginInstall(qqbotByChannel)).toEqual({
+      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      defaultChoice: "npm",
+      expectedIntegrity:
+        "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
+    });
+    expect(getOfficialExternalChannelSecretContract("qqbot")).toEqual({
+      channelId: "qqbot",
+      fields: [
+        {
+          field: "clientSecret",
+          activationField: "appId",
+          activationEnv: "QQBOT_APP_ID",
+        },
+      ],
+    });
   });
 
   it("keeps official launch package specs on the production package names", () => {
@@ -2243,6 +2285,15 @@ describe("official external plugin catalog", () => {
       minHostVersion: ">=2026.7.2",
       allowInvalidConfigRecovery: true,
     });
+  });
+
+  it("projects channel environment variables from generated configured-state metadata", () => {
+    const envVarsByChannel = new Map(
+      listOfficialExternalChannelEnvVars().map((entry) => [entry.channelId, entry.envVars]),
+    );
+
+    expect(envVarsByChannel.get("clickclack")).toEqual(["CLICKCLACK_BOT_TOKEN"]);
+    expect(envVarsByChannel.get("mattermost")).toEqual(["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]);
   });
 
   it.each([

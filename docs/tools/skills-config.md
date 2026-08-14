@@ -168,16 +168,9 @@ skills, skill dependency installers, and plugin install/update sources.
   Optional allowlist of directories that may contain the policy executable.
 </ParamField>
 
-<ParamField path="security.installPolicy.exec.allowInsecurePath" type="boolean" default="false">
-  Bypasses command path ownership and permission checks. Use only when the
-  path is protected by another mechanism.
-</ParamField>
-
-<ParamField path="security.installPolicy.exec.allowSymlinkCommand" type="boolean" default="false">
-  Allows the configured command path to be a symlink. The resolved target
-  must still satisfy the other path checks. Interpreter script arguments must
-  be direct regular files, not symlinks.
-</ParamField>
+The policy command and interpreter script arguments must be direct regular
+files with trusted ownership, restricted permissions, and verifiable parent
+directories. Symlinks and insecure paths are rejected.
 
 The policy receives one JSON object on stdin with `protocolVersion: 1`,
 `openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
@@ -301,11 +294,11 @@ different visible skill set per agent.
     defaults: {
       skills: ["github", "weather"], // shared baseline
     },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults entirely
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { default: true }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults entirely
+      "locked-down": { skills: [] }, // no skills
+    },
   },
 }
 ```
@@ -340,8 +333,9 @@ different visible skill set per agent.
   `off` disables autonomous capture while keeping the durable-instruction
   suggestion nudge. `propose` creates pending proposals from corrections and
   substantial completed work. `auto` sends the same captures through the normal
-  scanner-gated Workshop apply path. User-prompted skill creation, `/learn`, and
-  manual history scan continue to work in every mode.
+  scanner-gated Workshop apply path and runs daily collection cleanup that can
+  rewrite or drop eligible writable skills. User-prompted skill creation,
+  `/learn`, and manual history scan continue to work in every mode.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,

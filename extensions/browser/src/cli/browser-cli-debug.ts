@@ -3,13 +3,15 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { runCommandWithRuntime } from "../core-api.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
+  printBrowserJsonResult as printJsonResult,
+  resolveBrowserProfileQuery as resolveProfileQuery,
+  runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
+import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
 const BROWSER_DEBUG_TIMEOUT_MS = 20000;
 
@@ -20,20 +22,13 @@ type DebugContext = {
   profile?: string;
 };
 
-function runBrowserDebug(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
-}
-
 async function withDebugContext(
   cmd: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
   action: (context: DebugContext) => Promise<void>,
 ) {
   const parent = parentOpts(cmd);
-  await runBrowserDebug(() =>
+  await runBrowserCliCommand(() =>
     action({
       parent,
       profile: parent.browserProfile,
@@ -41,23 +36,11 @@ async function withDebugContext(
   );
 }
 
-function printJsonResult(parent: BrowserParentOpts, result: unknown): boolean {
-  if (!parent.json) {
-    return false;
-  }
-  defaultRuntime.writeJson(result);
-  return true;
-}
-
 async function callDebugRequest<T>(
   parent: BrowserParentOpts,
   params: BrowserRequestParams,
 ): Promise<T> {
   return callBrowserRequest<T>(parent, params, { timeoutMs: BROWSER_DEBUG_TIMEOUT_MS });
-}
-
-function resolveProfileQuery(profile?: string) {
-  return profile ? { profile } : undefined;
 }
 
 function resolveDebugQuery(params: {

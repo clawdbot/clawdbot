@@ -30,6 +30,7 @@ import {
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
+import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
 import { markdownToWhatsAppChunks, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
@@ -147,14 +148,7 @@ export async function sendMessageWhatsApp(
     audioAsVoice?: boolean;
     forceDocument?: boolean;
     accountId?: string;
-    quotedMessageKey?: {
-      id: string;
-      remoteJid: string;
-      fromMe: boolean;
-      participant?: string;
-      messageText?: string;
-      media?: import("openclaw/plugin-sdk/channel-inbound").MediaPlaceholderTextFact;
-    };
+    quotedMessageKey?: WhatsAppQuotedMessageKey;
     preserveLeadingWhitespace?: boolean;
     /** Report each accepted internal platform send before the next fallible send. */
     onDeliveryResult?: (result: { messageId: string; toJid: string }) => Promise<void> | void;

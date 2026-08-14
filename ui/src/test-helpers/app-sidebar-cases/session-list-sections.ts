@@ -5,74 +5,10 @@ import {
   createSessions,
   createSessionsHarness,
   mountSidebar,
-  type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session section visibility", () => {
-  it("renders an active draft first inside an expanded empty Threads section", async () => {
-    localStorage.setItem(
-      "openclaw:sidebar:sessions:collapsed-sections",
-      JSON.stringify(["ungrouped"]),
-    );
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const draftSidebar = sidebar as SidebarLifecycleState & { draftSessionAgentId: string };
-    draftSidebar.draftSessionAgentId = "main";
-    draftSidebar.requestUpdate();
-    await draftSidebar.updateComplete;
-
-    const section = draftSidebar.querySelector('[data-session-section="ungrouped"]');
-    const list = section?.querySelector(".sidebar-recent-sessions__list");
-    expect(section).not.toBeNull();
-    expect(
-      section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-expanded"),
-    ).toBe("true");
-    expect(list?.firstElementChild?.classList.contains("sidebar-recent-session--draft")).toBe(true);
-    expect(list?.querySelector(".sidebar-recent-session--draft")?.textContent?.trim()).toBe(
-      "New thread",
-    );
-    expect(
-      list?.querySelectorAll(".sidebar-recent-session:not(.sidebar-recent-session--draft)"),
-    ).toHaveLength(0);
-
-    // The draft expands the section for real, so the header toggle keeps
-    // working: collapsing during a draft hides it and persists honestly.
-    section?.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
-    await draftSidebar.updateComplete;
-    expect(
-      draftSidebar
-        .querySelector('[data-session-section="ungrouped"] .sidebar-session-group-toggle')
-        ?.getAttribute("aria-expanded"),
-    ).toBe("false");
-    expect(draftSidebar.querySelector(".sidebar-recent-session--draft")).toBeNull();
-  });
-
-  it("keeps normal pagination when a draft overrides collapsed Threads", async () => {
-    localStorage.setItem(
-      "openclaw:sidebar:sessions:collapsed-sections",
-      JSON.stringify(["ungrouped"]),
-    );
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", [
-        "agent:main:main",
-        ...Array.from({ length: 12 }, (_, index) => `agent:main:thread-${index}`),
-      ]),
-    );
-    const draftSidebar = sidebar as SidebarLifecycleState & { draftSessionAgentId: string };
-    draftSidebar.draftSessionAgentId = "main";
-    draftSidebar.requestUpdate();
-    await draftSidebar.updateComplete;
-
-    const section = draftSidebar.querySelector('[data-session-section="ungrouped"]');
-    expect(
-      section?.querySelectorAll(".sidebar-recent-session:not(.sidebar-recent-session--draft)"),
-    ).toHaveLength(10);
-    expect(draftSidebar.querySelector('[aria-label="Show more"]')).not.toBeNull();
-  });
-
   it("paginates each expanded section independently", async () => {
     const threadKeys = Array.from({ length: 12 }, (_, index) => `agent:main:thread-${index}`);
     const categoryKeys = Array.from({ length: 12 }, (_, index) => `agent:main:alpha-${index}`);
@@ -136,9 +72,9 @@ describe("AppSidebar session section visibility", () => {
     expect(threads).not.toBeNull();
     expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
 
-    const sort = threads?.querySelector<HTMLButtonElement>('[aria-label="Sort threads"]');
+    const sort = threads?.querySelector<HTMLButtonElement>('[aria-label="Sort sessions"]');
     expect(sort).not.toBeNull();
-    expect(threads?.querySelector('[aria-label="New thread"]')).not.toBeNull();
+    expect(threads?.querySelector('[aria-label="New session"]')).not.toBeNull();
     sort?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
@@ -166,5 +102,47 @@ describe("AppSidebar session section visibility", () => {
     sidebar.requestUpdate();
     await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).not.toBeNull();
+  });
+
+  it("renders no chat rows when only the main session exists", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    await sidebar.updateComplete;
+
+    // The identity card is the main-session entry; the list stays empty.
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
+    expect(sidebar.querySelector("openclaw-sidebar-agent-card")).not.toBeNull();
+  });
+
+  it("keeps a selected child reachable when its parent is outside the loaded window", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:child"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:child",
+            spawnedBy: "agent:main:missing-parent",
+            kind: "direct",
+            label: "Reachable orphan",
+            updatedAt: 2,
+            status: "done",
+          },
+        ],
+      },
+    });
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    sidebar.sessionKey = "agent:main:child";
+    await sidebar.updateComplete;
+
+    const row = sidebar.querySelector('[data-session-key="agent:main:child"]');
+    expect(row?.textContent).toContain("Reachable orphan");
+    expect(row?.classList.contains("sidebar-recent-session--child")).toBe(false);
   });
 });

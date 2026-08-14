@@ -41,17 +41,65 @@ private final class DashboardBrowserImportGate {
     }
 }
 
+private final class DashboardWindowGestureSpy: NSWindow {
+    private(set) var dragCount = 0
+    private(set) var zoomCount = 0
+
+    override func performDrag(with _: NSEvent) {
+        self.dragCount += 1
+    }
+
+    override func performZoom(_: Any?) {
+        self.zoomCount += 1
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct DashboardWindowSmokeTests {
+    @Test func `dashboard frame routes single click to drag and double click to zoom`() throws {
+        let window = DashboardWindowGestureSpy(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false)
+        let dragRegion = DashboardWindowDragRegionView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 12))
+        window.contentView = dragRegion
+        let mouseDownEvent: (Int) -> NSEvent? = { clickCount in
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 100, y: 6),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: clickCount,
+                clickCount: clickCount,
+                pressure: 1)
+        }
+
+        dragRegion.mouseDown(with: try #require(mouseDownEvent(1)))
+
+        #expect(window.dragCount == 1)
+        #expect(window.zoomCount == 0)
+
+        dragRegion.mouseDown(with: try #require(mouseDownEvent(2)))
+
+        #expect(window.dragCount == 1)
+        #expect(window.zoomCount == 1)
+    }
+
     @Test func `dashboard window controller shows and closes`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/#token=device-token"))
+        let windowAutosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
                 gatewayUrl: "ws://127.0.0.1:18789/control/",
                 token: "device-token",
-                password: nil))
+                password: nil),
+            windowAutosaveName: windowAutosaveName)
         controller.show()
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
@@ -69,7 +117,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
-        #expect(controller.window?.frameAutosaveName == DashboardWindowLayout.windowFrameAutosaveName)
+        #expect(controller.window?.frameAutosaveName == windowAutosaveName)
         controller.closeDashboard()
     }
 

@@ -10,11 +10,11 @@ import {
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { sweepTombstonedCronRunRemnants } from "./cleanup-tombstones.js";
 import { replaceSessionEntry } from "./session-accessor.js";
-import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import { deleteSqliteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
-import { planSqliteSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -24,10 +24,14 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    materializeSqliteSessionStateDeletePlans: (
-      plans: Parameters<typeof actual.materializeSqliteSessionStateDeletePlans>[0],
+    // Must await: materialization is worker-backed and async, and the hook
+    // exists to inject a late live reference *after* archives are on disk.
+    // Firing it against the unresolved promise would invert the ordering the
+    // rollback tests are asserting.
+    materializeSessionStateDeletePlans: async (
+      plans: Parameters<typeof actual.materializeSessionStateDeletePlans>[0],
     ) => {
-      const materialized = actual.materializeSqliteSessionStateDeletePlans(plans);
+      const materialized = await actual.materializeSessionStateDeletePlans(plans);
       materializedHook.run?.();
       return materialized;
     },
@@ -74,11 +78,11 @@ describe("sweepTombstonedCronRunRemnants", () => {
     const key = params.key ?? CRON_RUN_KEY;
     const sessionId = params.sessionId ?? "cron-session";
     await replaceSessionEntry({ sessionKey: key, storePath }, { sessionId, updatedAt: NOW_MS });
-    await replaceSqliteTranscriptEvents({ sessionKey: key, sessionId, storePath }, [
+    replaceTranscriptEventsSync({ sessionKey: key, sessionId, storePath }, [
       { type: "session", id: sessionId, content: "cron run transcript" },
     ]);
     const database = openDatabase();
-    deleteSqliteSessionEntryRows(database, key);
+    deleteSessionEntryRows(database, key);
     const updatedAt = NOW_MS - (params.ageMs ?? 20 * DAY_MS);
     const db = getSessionKysely(database.db);
     executeSqliteQuerySync(
@@ -276,7 +280,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
   it("keeps a reused archive when final revalidation finds a late live reference", async () => {
     const sessionId = await seedCanonicalPlaceholder({});
     const database = openDatabase();
-    const plan = planSqliteSessionStateDeleteIfUnreferenced({
+    const plan = planSessionStateDeleteIfUnreferenced({
       archiveDirectory: path.dirname(storePath),
       archiveTranscript: true,
       database,
@@ -285,7 +289,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
       sessionId,
     });
     expect(plan).not.toBeNull();
-    materializeSqliteSessionStateDeletePlans(plan ? [plan] : []);
+    await materializeSessionStateDeletePlans(plan ? [plan] : []);
     const existingArchives = archiveNames(sessionId);
     expect(existingArchives).toHaveLength(1);
     materializedHook.run = () => {

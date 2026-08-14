@@ -162,11 +162,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
       ? { defaultTimeoutMs: options.defaultTimeoutMs }
       : {}),
     models: [...options.models],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: options.id,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: options.id, ...ctx }),
     capabilities: options.capabilities,
     async generateImage(req): Promise<ImageGenerationResult> {
       const inputImages = req.inputImages ?? [];

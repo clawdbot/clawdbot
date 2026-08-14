@@ -10,12 +10,18 @@ import {
 } from "../channels/plugins/setup-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
+import {
+  isInstalledPluginIndexInstallOwnerAmbiguous,
+  resolveInstalledPluginIndexInstallOwner,
+} from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
@@ -104,19 +110,9 @@ function rememberInstalledPackageMetadata(
 ): InstalledPackageMetadata {
   if (key) {
     installedPackageMetadataCache.set(key, metadata);
-    trimBoundedCache(installedPackageMetadataCache, MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES);
+    pruneMapToMaxSize(installedPackageMetadataCache, MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES);
   }
   return metadata;
-}
-
-function trimBoundedCache<Value>(cache: Map<string, Value>, maxEntries: number): void {
-  while (cache.size > maxEntries) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    cache.delete(oldest);
-  }
 }
 
 function buildInstalledPackageMetadataCacheKey(
@@ -149,7 +145,7 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
-    plugins: index.plugins,
+    plugins: index.plugins.map(({ doctorContractFile: _doctorContractFile, ...plugin }) => plugin),
   });
   if (isDeepFrozenJsonLike(index)) {
     installedManifestRegistryIndexFingerprintCache.set(index, fingerprint);
@@ -249,6 +245,7 @@ function normalizePackageChannelDoctorCapabilities(
     normalized.groupModel = groupModel;
   }
   for (const key of [
+    "openDmRequiresAllowFromWildcard",
     "groupAllowFromFallbackToAllowFrom",
     "warnOnEmptyGroupSenderAllowlist",
   ] as const) {
@@ -352,6 +349,19 @@ function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["set
         key,
         kind,
         ...(value.sensitive === true ? { sensitive: true } : {}),
+        cli,
+      });
+      continue;
+    }
+    if (kind === "boolean") {
+      const envVars = normalizeOptionalTrimmedStringList(value.envVars);
+      const envVarMode =
+        value.envVarMode === "any" || value.envVarMode === "all" ? value.envVarMode : undefined;
+      fields.push({
+        key,
+        kind,
+        ...(envVars?.length ? { envVars } : {}),
+        ...(envVars?.length && envVarMode ? { envVarMode } : {}),
         cli,
       });
       continue;
@@ -516,27 +526,32 @@ function toPluginCandidate(
 ): PluginCandidate {
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageMetadata = resolveInstalledPackageMetadata(record, realpathCache);
-  return {
-    idHint: record.pluginId,
-    source: record.source ?? resolveFallbackPluginSource(record),
-    ...(record.setupSource ? { setupSource: record.setupSource } : {}),
-    rootDir,
-    origin: record.origin,
-    ...(record.format ? { format: record.format } : {}),
-    ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
-    ...(record.packageName ? { packageName: record.packageName } : {}),
-    ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
-    ...(packageMetadata.packageManifest
-      ? { packageManifest: packageMetadata.packageManifest }
-      : {}),
-    ...(packageMetadata.packageDependencies
-      ? { packageDependencies: packageMetadata.packageDependencies }
-      : {}),
-    ...(packageMetadata.packageOptionalDependencies
-      ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
-      : {}),
-    packageDir: rootDir,
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: record.pluginId,
+      effectivePluginId: record.pluginId,
+      source: record.source ?? resolveFallbackPluginSource(record),
+      ...(record.setupSource ? { setupSource: record.setupSource } : {}),
+      rootDir,
+      origin: record.origin,
+      ...(record.format ? { format: record.format } : {}),
+      ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
+      ...(record.packageName ? { packageName: record.packageName } : {}),
+      ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
+      ...(packageMetadata.packageManifest
+        ? { packageManifest: packageMetadata.packageManifest }
+        : {}),
+      ...(packageMetadata.packageDependencies
+        ? { packageDependencies: packageMetadata.packageDependencies }
+        : {}),
+      ...(packageMetadata.packageOptionalDependencies
+        ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
+        : {}),
+      packageDir: rootDir,
+    },
+    resolveInstalledPluginIndexInstallOwner(record),
+    isInstalledPluginIndexInstallOwnerAmbiguous(record),
+  );
 }
 
 export function loadPluginManifestRegistryForInstalledIndex(params: {
@@ -582,7 +597,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
         .map((plugin) => toPluginCandidate(plugin, realpathCache));
-      return loadPluginManifestRegistry({
+      return loadPluginManifestRegistryCore({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,
