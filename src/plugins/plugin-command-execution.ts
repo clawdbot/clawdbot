@@ -86,7 +86,7 @@ type PluginCommandLlmCompleteParams = Parameters<
 function buildRuntimeContext(
   command: RegisteredPluginCommand,
   params: PluginCommandDispatchContext,
-  isInvocationOpen: () => boolean,
+  invocationSignal: AbortSignal,
 ): PluginCommandContext["runtimeContext"] {
   const sessionKey = params.sessionKey?.trim();
   const agentId = resolveBoundAgentIdForSession({
@@ -126,11 +126,13 @@ function buildRuntimeContext(
       ? {
           // Command capabilities require this live invocation; retained references fail closed.
           compactCurrent: async () => {
-            if (!isInvocationOpen()) {
+            if (invocationSignal.aborted) {
               return blockedCompaction("command invocation closed");
             }
-            const result = await compactCurrent();
-            return isInvocationOpen() ? result : blockedCompaction("command invocation closed");
+            const result = await compactCurrent(invocationSignal);
+            return invocationSignal.aborted
+              ? blockedCompaction("command invocation closed")
+              : result;
           },
         }
       : {}),
@@ -197,7 +199,7 @@ export async function executeRegisteredPluginCommand(
     command.pluginId === normalizeLowercaseStringOrEmpty(command.name);
   const senderIsOwner =
     canExposeSenderIsOwner(command) || trustedReservedOwner ? params.senderIsOwner : undefined;
-  let commandInvocationOpen = true;
+  const commandInvocationAbort = new AbortController();
   const ctx: PluginCommandContext = {
     senderId,
     channel,
@@ -219,7 +221,7 @@ export async function executeRegisteredPluginCommand(
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
-    runtimeContext: buildRuntimeContext(command, params, () => commandInvocationOpen),
+    runtimeContext: buildRuntimeContext(command, params, commandInvocationAbort.signal),
     ...(trustedReservedOwner && params.diagnosticsUploadApproved !== undefined
       ? { diagnosticsUploadApproved: params.diagnosticsUploadApproved }
       : {}),
@@ -280,6 +282,6 @@ export async function executeRegisteredPluginCommand(
     logVerbose(`Plugin command /${command.name} error: ${(error as Error).message}`);
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
-    commandInvocationOpen = false;
+    commandInvocationAbort.abort("command invocation closed");
   }
 }

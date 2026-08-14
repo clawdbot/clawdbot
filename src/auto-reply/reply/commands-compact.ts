@@ -213,16 +213,6 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
-  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
-    runtime.abortEmbeddedAgentRun(sessionId);
-    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
-    if (!drained) {
-      return compactionUnavailable(
-        "the previous run is still stopping",
-        "⚙️ Compaction unavailable: the previous run is still stopping.",
-      );
-    }
-  }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({
         sessionKey: params.sessionKey,
@@ -262,19 +252,46 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       params.storePath ??
       resolveSessionStorePathCore(params.cfg.session?.store, { agentId: sessionAgentId }),
   });
+  let expectedSession = targetSessionEntry;
   const isCurrentSession = () =>
     runtime.isCurrentSessionEntry({
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       storePath: compactionStorePath,
-      expected: targetSessionEntry,
+      expected: expectedSession,
     });
+  const authorityFailure = () => {
+    const reason = params.commandInvocationSignal?.aborted
+      ? "command invocation closed"
+      : !isCurrentSession()
+        ? "command session changed"
+        : undefined;
+    return reason
+      ? compactionUnavailable(reason, `⚙️ Compaction unavailable: ${reason}.`)
+      : undefined;
+  };
+  let failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
+  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
+    runtime.abortEmbeddedAgentRun(sessionId);
+    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    failure = authorityFailure();
+    if (failure) {
+      return failure;
+    }
+    if (!drained) {
+      return compactionUnavailable(
+        "the previous run is still stopping",
+        "⚙️ Compaction unavailable: the previous run is still stopping.",
+      );
+    }
+  }
   const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
-  if (!isCurrentSession()) {
-    return compactionUnavailable(
-      "command session changed",
-      "⚙️ Compaction unavailable: command session changed.",
-    );
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
   }
   const result = await runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
@@ -331,11 +348,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       senderIsOwner: params.command.senderIsOwner,
     }),
   });
-  if (!isCurrentSession()) {
-    return compactionUnavailable(
-      "command session changed",
-      "⚙️ Compaction unavailable: command session changed.",
-    );
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
   }
 
   const tokensAfterCompaction = result.result?.tokensAfter;
@@ -365,7 +380,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
       compactionKind: result.compactionKind,
+      expectedSession: targetSessionEntry,
+      authorize: () => params.commandInvocationSignal?.aborted !== true,
     });
+    if (result.result?.sessionId) {
+      expectedSession = { ...expectedSession, sessionId: result.result.sessionId };
+    }
+    failure = authorityFailure();
+    if (failure) {
+      return failure;
+    }
   }
   const totalTokens = didCompact
     ? tokensAfterCompaction

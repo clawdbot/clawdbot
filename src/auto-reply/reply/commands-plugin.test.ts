@@ -203,6 +203,53 @@ describe("handlePluginCommand", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it("closes unawaited session compaction when the command handler settles", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-compact-detached-"));
+    const sessionKey = "agent:main:whatsapp:direct:test-user";
+    const storePath = path.join(tempDir, "sessions.json");
+    const entry = { sessionId: "session-plugin-command", updatedAt: Date.now() };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    let releasePreparation = () => {};
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let detached:
+      | ReturnType<
+          NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>
+        >
+      | undefined;
+    registerTestCommand(undefined, {
+      handler: async (ctx) => {
+        detached = expectDefined(ctx.runtimeContext?.compactCurrent, "compact capability")();
+        return { text: "started" };
+      },
+    });
+
+    const params = buildPluginParams("/card", {
+      commands: { text: true },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = { [sessionKey]: entry };
+    params.resolveDefaultThinkingLevel = async () => {
+      await preparation;
+      return "medium";
+    };
+
+    try {
+      await handlePluginCommand(params, true);
+      releasePreparation();
+      await expect(expectDefined(detached, "detached compact result")).resolves.toEqual({
+        compacted: false,
+        reason: "command invocation closed",
+      });
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    } finally {
+      releasePreparation();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects session compaction when the bound session disappeared", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-compact-gone-"));
     const sessionKey = "agent:main:whatsapp:direct:test-user";

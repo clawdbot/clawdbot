@@ -85,6 +85,8 @@ export type HandleCommandsParams = {
   skillCommands?: SkillCommandSpec[];
   loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
   typing?: TypingController;
+  /** Invocation authority for host-bound plugin command capabilities. */
+  commandInvocationSignal?: AbortSignal;
 };
 
 /** Result returned by a command handler. */

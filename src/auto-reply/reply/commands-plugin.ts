@@ -104,9 +104,20 @@ export const handlePluginCommand: CommandHandler = async (
     ...(sessionTarget
       ? {
           runtimeContext: {
-            compactCurrent: async () =>
+            compactCurrent: async (invocationSignal) =>
               (await handleCompactCommand(
-                { ...params, command: { ...params.command, commandBodyNormalized: "/compact" } },
+                {
+                  ...params,
+                  command: { ...params.command, commandBodyNormalized: "/compact" },
+                  commandInvocationSignal: invocationSignal,
+                  opts: {
+                    ...params.opts,
+                    abortSignal:
+                      invocationSignal && params.opts?.abortSignal
+                        ? AbortSignal.any([invocationSignal, params.opts.abortSignal])
+                        : (invocationSignal ?? params.opts?.abortSignal),
+                  },
+                },
                 true,
               ))!.sessionCompaction!,
           },
