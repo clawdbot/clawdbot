@@ -1,4 +1,4 @@
-import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/transports";
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 /**
  * Agent transcript redaction helpers.
  *

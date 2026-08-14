@@ -1,5 +1,5 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
-import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/transports";
+import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
