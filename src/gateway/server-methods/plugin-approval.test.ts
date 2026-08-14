@@ -330,8 +330,14 @@ describe("createPluginApprovalHandlers", () => {
           // Bidi override + zero-width space: the classic reviewer-spoof pair.
           title: "Deploy‮yolped",
           description: "safe​text",
-          detail: "line‪one",
+          // Passes the protocol's 16,384 raw cap but expands past it once
+          // invisibles become \u{...} escapes — the storage cap must re-apply.
+          detail: `line‪one${"‮".repeat(2_100)}`,
           severity: "warning",
+          // Metadata is interpolated into channel approval text lines.
+          pluginId: "plug‮in",
+          toolName: "tool​run",
+          agentId: "agent‪x",
           twoPhase: true,
         },
         { respond },
@@ -344,7 +350,13 @@ describe("createPluginApprovalHandlers", () => {
       const stored = manager.getSnapshot(approvalId)?.request;
       expect(stored?.title).toBe("Deploy\\u{202E}yolped");
       expect(stored?.description).toBe("safe\\u{200B}text");
-      expect(stored?.detail).toBe("line\\u{202A}one");
+      expect(stored?.detail?.startsWith("line\\u{202A}one")).toBe(true);
+      // Stored detail is capped like the durable presentation's copy.
+      expect(Array.from(stored?.detail ?? "").length).toBeLessThanOrEqual(16_384);
+      expect(stored?.detail?.endsWith("…[truncated]")).toBe(true);
+      expect(stored?.pluginId).toBe("plug\\u{202E}in");
+      expect(stored?.toolName).toBe("tool\\u{200B}run");
+      expect(stored?.agentId).toBe("agent\\u{202A}x");
       // The live broadcast payload is built from the stored record, so it is
       // now safe for channels/push/web without per-surface re-sanitizing.
       const requestedBroadcast = broadcastCall(opts);

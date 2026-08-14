@@ -22,6 +22,7 @@ import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   resolvePluginApprovalTimeoutMs,
+  truncatePluginApprovalDetail,
 } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -167,13 +168,23 @@ export function createPluginApprovalHandlers(
         return;
       }
       const rawDetail = normalizeTrimmedString(p.detail);
+      // Untrusted display metadata gets the same escape as title/description:
+      // pluginId/toolName/agentId are interpolated into channel approval text.
+      // Host-minted runtime identity values stay authoritative and unescaped.
+      const sanitizeMeta = (value?: string | null): string | null =>
+        normalizeTrimmedString(value) === null
+          ? null
+          : sanitizeExecApprovalDisplayText(normalizeTrimmedString(value)!);
       const request: PluginApprovalRequestPayload = {
-        pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? p.pluginId ?? null,
+        pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
         description: sanitizedDescription,
-        detail: rawDetail === null ? null : sanitizeExecApprovalWarningText(rawDetail),
+        detail:
+          rawDetail === null
+            ? null
+            : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
-        toolName: p.toolName ?? null,
+        toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
         ...(Array.isArray(p.allowedDecisions)
           ? {
@@ -184,7 +195,7 @@ export function createPluginApprovalHandlers(
           : {}),
         agentId:
           trustedAgentRuntime?.agentId ??
-          (sessionOwner?.ok ? sessionOwner.agentId : (p.agentId ?? null)),
+          (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
         sessionKey,
         runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
         turnSourceChannel: trustedAgentRuntime
