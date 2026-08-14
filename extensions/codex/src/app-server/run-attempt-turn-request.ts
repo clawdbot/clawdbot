@@ -128,6 +128,7 @@ export async function prepareCodexAttemptTurnRequest(
         model: turnStartParams.model,
         effort: turnStartParams.effort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
+        serviceTier: turnStartParams.serviceTier,
       },
     });
     let acceptedTurnId: string | undefined;

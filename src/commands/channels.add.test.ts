@@ -1,6 +1,6 @@
 // Channels add tests cover guided setup, plugin install paths, and channel account config writes.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { defineChannelSetupContract } from "../channels/plugins/setup-contract.js";
@@ -45,6 +45,10 @@ const registryRefreshMocks = vi.hoisted(() => ({
 
 const pluginInstallRecordCommitMocks = vi.hoisted(() => ({
   commitConfigWithPendingPluginInstalls: vi.fn(),
+}));
+
+const terminalMocks = vi.hoisted(() => ({
+  isTerminalInteractive: vi.fn(() => true),
 }));
 
 const channelWizardMocks = vi.hoisted(() => {
@@ -98,6 +102,8 @@ vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
 vi.mock("../plugins/install-record-commit.js", () => pluginInstallRecordCommitMocks);
+
+vi.mock("../cli/terminal-interactivity.js", () => terminalMocks);
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => channelWizardMocks.prompter,
@@ -365,6 +371,38 @@ function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugi
   );
 }
 
+function registerEnvContractTestPlugin(channelId: string, envVars: readonly string[]): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: channelId,
+        plugin: {
+          ...createChannelTestPluginBase({ id: channelId, label: channelId }),
+          setupContract: defineChannelSetupContract({
+            fields: {
+              useEnv: {
+                kind: "boolean",
+                cli: { flags: "--use-env", description: "Use environment credentials" },
+                envVars,
+              },
+            },
+            adapter: {
+              applyAccountConfig: ({ cfg }) => ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  [channelId]: { enabled: true },
+                },
+              }),
+            },
+          }),
+        } as ChannelPlugin,
+        source: "test",
+      },
+    ]),
+  );
+}
+
 type SignalAfterAccountConfigWritten = NonNullable<
   NonNullable<ChannelPlugin["setup"]>["afterAccountConfigWritten"]
 >;
@@ -450,6 +488,7 @@ describe("channelsAddCommand", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
     catalogMocks.getChannelPluginCatalogEntry.mockClear();
     catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     catalogMocks.listChannelPluginCatalogEntries.mockClear();
@@ -482,6 +521,100 @@ describe("channelsAddCommand", () => {
       async (...args: unknown[]) => args[0] as OpenClawConfig,
     );
     setMinimalChannelsAddRegistryForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("fails fast before guided setup when no interactive terminal is available", async () => {
+    terminalMocks.isTerminalInteractive.mockReturnValue(false);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "telegram" }, runtime, { hasFlags: false });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("channels add --channel <id> --use-env"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      channel: "single-env-chat",
+      env: { SINGLE_CHAT_TOKEN: "" },
+      missing: ["SINGLE_CHAT_TOKEN"],
+    },
+    {
+      channel: "multi-env-chat",
+      env: { MULTI_CHAT_TOKEN: "token", MULTI_CHAT_SECOND_TOKEN: "" },
+      missing: ["MULTI_CHAT_SECOND_TOKEN"],
+    },
+    {
+      channel: "private-key-chat",
+      env: { PRIVATE_CHAT_KEY: "" },
+      missing: ["PRIVATE_CHAT_KEY"],
+    },
+  ])("rejects $channel --use-env when declared env vars are missing", async (testCase) => {
+    for (const [name, value] of Object.entries(testCase.env)) {
+      vi.stubEnv(name, value);
+    }
+    registerEnvContractTestPlugin(testCase.channel, Object.keys(testCase.env));
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    for (const missing of testCase.missing) {
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(missing));
+    }
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      channel: "single-env-chat",
+      env: { SINGLE_CHAT_TOKEN: "token" },
+    },
+    {
+      channel: "multi-env-chat",
+      env: { MULTI_CHAT_TOKEN: "token", MULTI_CHAT_SECOND_TOKEN: "second-token" },
+    },
+  ])("commits $channel --use-env config when declared env vars are present", async (testCase) => {
+    for (const [name, value] of Object.entries(testCase.env)) {
+      vi.stubEnv(name, value);
+    }
+    registerEnvContractTestPlugin(testCase.channel, Object.keys(testCase.env));
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel(testCase.channel)).toEqual({ enabled: true });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not demand env vars outside the selected setup contract", async () => {
+    vi.stubEnv("DECLARED_TOKEN", "declared-token");
+    vi.stubEnv("CONDITIONAL_TOKEN", "");
+    registerEnvContractTestPlugin("conditional-chat", ["DECLARED_TOKEN"]);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "conditional-chat", useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel("conditional-chat")).toMatchObject({
+      enabled: true,
+    });
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("CONDITIONAL_TOKEN"));
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("keeps guided channel setup lazy until the user selects a channel", async () => {
@@ -1100,6 +1233,53 @@ describe("channelsAddCommand", () => {
     expect(refreshCall().reason).toBe("source-changed");
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("normalizes external channel compatibility before a non-interactive write", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "openclaw-qqbot",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "qqbot", label: "QQ Bot" }),
+            setup: {
+              applyAccountConfig: ({ cfg, input }: ApplyAccountConfigParams) => {
+                const [appId, clientSecret] = input.token?.split(":") ?? [];
+                return {
+                  ...cfg,
+                  channels: {
+                    ...cfg.channels,
+                    qqbot: {
+                      appId,
+                      clientSecret,
+                      allowFrom: ["*"],
+                    },
+                  },
+                };
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsAddCommand(
+      {
+        channel: "qqbot",
+        token: "app-id:secret",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(writtenChannel("qqbot")).toMatchObject({
+      appId: "app-id",
+      clientSecret: "secret",
+      dmPolicy: "open",
+      allowFrom: ["openclaw:approval-disabled"],
+    });
   });
 
   it("uses setup-entry snapshots when an already loaded channel plugin has no setup adapter", async () => {

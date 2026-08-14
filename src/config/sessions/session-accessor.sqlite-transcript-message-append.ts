@@ -39,7 +39,7 @@ function messagesMatchForIdempotentReplay(stored: unknown, candidate: unknown): 
   return isDeepStrictEqual(serializedShape(stored), serializedShape(candidate));
 }
 
-export function appendSqliteTranscriptMessageInTransaction<TMessage>(
+export function appendTranscriptMessageInTransaction<TMessage>(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage> & { messageAlreadyRedacted?: boolean },

@@ -6,11 +6,19 @@ import {
   zalouserAuthAdapter,
   zalouserGroupsAdapter,
   zalouserMessageActions,
+  zalouserMessagingAdapter,
   zalouserOutboundAdapter,
   zalouserPairingTextAdapter,
   zalouserResolverAdapter,
   zalouserSecurityAdapter,
 } from "./channel.adapters.js";
+
+describe("zalouser target classification", () => {
+  it("distinguishes users from groups", () => {
+    expect(zalouserMessagingAdapter.inferTargetChatType({ to: "user:123" })).toBe("direct");
+    expect(zalouserMessagingAdapter.inferTargetChatType({ to: "group:456" })).toBe("group");
+  });
+});
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import {

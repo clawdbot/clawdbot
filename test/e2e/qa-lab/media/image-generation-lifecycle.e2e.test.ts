@@ -58,12 +58,12 @@ async function startControlledImageProvider() {
       ],
     });
   };
-  const server = createServer(async (request, response) => {
-    if (request.method !== "POST" || request.url !== "/v1/images/generations") {
-      writeJson(response, 404, { error: "not found" });
-      return;
-    }
-    try {
+  const server = createServer((request, response) => {
+    void (async () => {
+      if (request.method !== "POST" || request.url !== "/v1/images/generations") {
+        writeJson(response, 404, { error: "not found" });
+        return;
+      }
       const body = JSON.parse(await readRequestBody(request)) as Record<string, unknown>;
       requests.push(body);
       if (released) {
@@ -71,11 +71,11 @@ async function startControlledImageProvider() {
         return;
       }
       pendingResponses.add(response);
-    } catch (error) {
+    })().catch((error: unknown) => {
       writeJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
       });
-    }
+    });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -84,7 +84,7 @@ async function startControlledImageProvider() {
   const address = server.address() as AddressInfo;
   const release = () => {
     released = true;
-    for (const response of [...pendingResponses]) {
+    for (const response of pendingResponses) {
       complete(response);
     }
   };
@@ -317,7 +317,9 @@ describe("image generation task lifecycle through QA-channel", () => {
       expect.objectContaining({ id: taskId, status: "completed" }),
     ]);
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 500);
+    });
     const completionOutcomes = state
       .getSnapshot()
       .messages.filter(

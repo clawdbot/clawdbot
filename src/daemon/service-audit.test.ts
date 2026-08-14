@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { VERSION } from "../version.js";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
@@ -791,39 +790,13 @@ describe("checkTokenDrift", () => {
   });
 });
 
-describe("gateway service version mismatch detection", () => {
-  it("flags stale gateway service version metadata", async () => {
-    const audit = await createGatewayAudit({
+describe("legacy gateway service version metadata", () => {
+  it("does not treat install-time version metadata as runtime truth", async () => {
+    const legacyAudit = await createGatewayAudit({
       extraEnvironment: { OPENCLAW_SERVICE_VERSION: "2026.4.15-beta.1" },
     });
+    const canonicalAudit = await createGatewayAudit();
 
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
-    );
-    expect(issue).toBeDefined();
-    expect(issue?.message).toContain("2026.4.15-beta.1");
-    expect(issue?.message).toContain(VERSION);
-    expect(issue?.level).toBe("recommended");
-  });
-
-  it("accepts current gateway service version metadata", async () => {
-    const audit = await createGatewayAudit({
-      extraEnvironment: { OPENCLAW_SERVICE_VERSION: VERSION },
-    });
-
-    expect(
-      audit.issues.some(
-        (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
-      ),
-    ).toBe(false);
-  });
-
-  it("does not flag missing gateway service version metadata", async () => {
-    const audit = await createGatewayAudit();
-    expect(
-      audit.issues.some(
-        (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
-      ),
-    ).toBe(false);
+    expect(legacyAudit).toEqual(canonicalAudit);
   });
 });

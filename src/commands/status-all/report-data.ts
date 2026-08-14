@@ -5,7 +5,7 @@ import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
-import { inspectPortUsage } from "../../infra/ports.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";

@@ -108,7 +108,6 @@ export type GatewaySessionRow = {
   archivedBy?: SessionEntry["archivedBy"];
   pinned?: boolean;
   pinnedAt?: number;
-  icon?: string;
   unread?: boolean;
   lastReadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
@@ -123,6 +122,7 @@ export type GatewaySessionRow = {
   placement?: SessionPlacement;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  restartRecoveryStatus?: "tombstoned";
   thinkingLevel?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];

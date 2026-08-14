@@ -65,6 +65,7 @@ async function maybeSendDiscordWebhookText(params: {
   accountId?: string | null;
   identity?: OutboundIdentity;
   replyToId?: string | null;
+  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<{ messageId: string; channelId: string } | null> {
   if (params.threadId == null) {
     return null;
@@ -96,6 +97,7 @@ async function maybeSendDiscordWebhookText(params: {
     replyTo: params.replyToId ?? undefined,
     username: persona.username,
     avatarUrl: persona.avatarUrl,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
   });
   return result;
 }
@@ -130,6 +132,7 @@ async function resolveDiscordOutboundMessageSend(params: DiscordOutboundMessageC
             await params.onDeliveryResult?.(attachChannelToResult("discord", result));
           }
         : undefined,
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
     },
   };
 }
@@ -173,16 +176,29 @@ export const discordOutbound: ChannelOutboundAdapter = {
     channel: "discord",
     sendText: async (ctx) => {
       if (!ctx.silent) {
-        const webhookResult = await maybeSendDiscordWebhookText({
-          cfg: ctx.cfg,
-          text: ctx.text,
-          threadId: ctx.threadId,
-          accountId: ctx.accountId,
-          identity: ctx.identity,
-          replyToId: ctx.replyToId,
-        }).catch(() => null);
-        if (webhookResult) {
-          return webhookResult;
+        let webhookSelected = false;
+        try {
+          const webhookResult = await maybeSendDiscordWebhookText({
+            cfg: ctx.cfg,
+            text: ctx.text,
+            threadId: ctx.threadId,
+            accountId: ctx.accountId,
+            identity: ctx.identity,
+            replyToId: ctx.replyToId,
+            onPlatformSendDispatch: ctx.onPlatformSendDispatch
+              ? async () => {
+                  webhookSelected = true;
+                  await ctx.onPlatformSendDispatch?.();
+                }
+              : undefined,
+          });
+          if (webhookResult) {
+            return webhookResult;
+          }
+        } catch (error) {
+          if (webhookSelected) {
+            throw error;
+          }
         }
       }
       const { send, target, options } = await resolveDiscordOutboundMessageSend(ctx);
@@ -202,6 +218,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
           mediaAccess: ctx.mediaAccess,
           mediaLocalRoots: ctx.mediaLocalRoots,
           mediaReadFile: ctx.mediaReadFile,
+          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
         });
       }
       const mediaOptions = {
@@ -235,15 +252,20 @@ export const discordOutbound: ChannelOutboundAdapter = {
       }
       return await send(target, ctx.text, mediaOptions);
     },
-    sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
+    sendPoll: async ({ cfg, to, poll, accountId, threadId, silent, onPlatformSendDispatch }) =>
       await (
         await loadDiscordSendRuntime()
       ).sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
         cfg,
+        onPlatformSendDispatch,
       }),
   }),
+  adoptTargetFromDelivery: ({ result }) => {
+    const threadId = normalizeOptionalStringifiedId(result.receipt?.threadId);
+    return threadId ? { threadId } : null;
+  },
   afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,

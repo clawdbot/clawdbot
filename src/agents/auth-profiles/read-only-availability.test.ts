@@ -11,6 +11,20 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 describe("resolveStoredCredentialReadOnlyAvailability", () => {
+  it("keeps an implicit store ref unknown until runtime resolution", () => {
+    expect(
+      resolveStoredCredentialReadOnlyAvailability({
+        credential: {
+          type: "api_key",
+          provider: "test",
+          keyRef: { source: "store", provider: "default", id: "STORED_API_KEY" },
+        },
+        cfg: {},
+        env: {},
+      }),
+    ).toBeUndefined();
+  });
+
   it("prefers explicit secret refs over retained inline values", () => {
     expect(
       resolveStoredCredentialReadOnlyAvailability({

@@ -1,11 +1,11 @@
 // Tool media extraction tests cover structured media payloads, image fallbacks,
 // trust decisions, and filtering of local/remote media URLs.
 import { describe, expect, it } from "vitest";
+import { isToolResultMediaTrusted } from "./embedded-agent-subscribe.tools.test-support.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-} from "./embedded-agent-subscribe.tools.js";
-import { isToolResultMediaTrusted } from "./embedded-agent-subscribe.tools.test-support.js";
+} from "./embedded-agent-tool-media.js";
 
 describe("extractToolResultMediaArtifact", () => {
   it("returns undefined for null/undefined", () => {

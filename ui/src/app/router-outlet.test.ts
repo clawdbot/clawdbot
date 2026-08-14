@@ -1,5 +1,5 @@
-import { createRouter, definePage, type Router } from "@openclaw/uirouter";
-import { html, type LitElement } from "lit";
+import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
+import { html, nothing, type LitElement } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
@@ -8,7 +8,14 @@ import "./router-outlet.ts";
 type RouteId = "page" | "next";
 type TestContext = { label: string };
 type TestData = { label: string };
-type TestModule = { render: (data: TestData | undefined) => unknown };
+type TestOwnerMatch = Pick<RouteMatch<string, unknown, TestData>, "data" | "location">;
+type TestModule = {
+  render: (data: TestData | undefined) => unknown;
+  renderOwnerKey?: (
+    match: TestOwnerMatch,
+    settled: TestOwnerMatch | undefined,
+  ) => string | undefined;
+};
 type TestRouter = Router<RouteId, TestContext, TestModule, TestData>;
 type RouterOutletElement = LitElement & {
   router?: TestRouter;
@@ -53,6 +60,68 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 }
 
 describe("openclaw-router-outlet", () => {
+  it("retains MCP Apps across route IDs that share an explicit owner", async () => {
+    const teardownView = vi.fn(async () => undefined);
+    const nextData = deferred<TestData>();
+    const renderOwnedRoute = vi.fn((data: TestData | undefined) =>
+      data
+        ? html`
+            <mcp-app-view
+              ${ref((element) => {
+                if (element) {
+                  Reflect.set(element, "restartAfterTeardown", vi.fn());
+                  Reflect.set(element, "teardown", teardownView);
+                }
+              })}
+            ></mcp-app-view>
+            <div data-testid="owned-route">${data.label}</div>
+          `
+        : nothing,
+    );
+    const ownedModule: TestModule = {
+      renderOwnerKey: () => "shared-owner",
+      render: renderOwnedRoute,
+    };
+    const context = { label: "page" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ownedModule,
+          loader: () => ({ label: "page" }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ownedModule,
+          loader: () => nextData.promise,
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    await router.navigate("page", context);
+    await settleOutlet(outlet);
+    const appView = outlet.querySelector("mcp-app-view");
+
+    const navigation = router.navigate("next", context);
+    await settleOutlet(outlet);
+    expect(renderOwnedRoute).toHaveBeenCalledWith(undefined);
+    expect(outlet.querySelector("mcp-app-view")).toBe(appView);
+    expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("page");
+    expect(teardownView).not.toHaveBeenCalled();
+
+    nextData.resolve({ label: "next" });
+    await navigation;
+    await settleOutlet(outlet);
+
+    expect(outlet.querySelector("mcp-app-view")).toBe(appView);
+    expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("next");
+    expect(teardownView).not.toHaveBeenCalled();
+    outlet.remove();
+    router.stop();
+  });
+
   it("replaces the centered loading mascot with the resolved route", async () => {
     vi.useFakeTimers();
     const routeModule = deferred<TestModule>();

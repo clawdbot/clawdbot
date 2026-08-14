@@ -4,6 +4,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import {
@@ -16,8 +17,7 @@ import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveUserPath } from "../../utils.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
-import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   generateVideo,
   listRuntimeVideoGenerationProviders,
@@ -41,7 +41,7 @@ import {
 import { getCustomProviderApiKey } from "../model-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -57,6 +57,14 @@ import {
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
+import {
+  completeVideoGenerationTaskRun,
+  createVideoGenerationTaskRun,
+  failVideoGenerationTaskRun,
+  recordVideoGenerationTaskProgress,
+  videoGenerationTaskLifecycle,
+  type VideoGenerationTaskHandle,
+} from "./media-generate-background.js";
 import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
@@ -84,14 +92,6 @@ import {
   type SandboxFsBridge,
   type ToolFsPolicy,
 } from "./tool-runtime.helpers.js";
-import {
-  completeVideoGenerationTaskRun,
-  createVideoGenerationTaskRun,
-  failVideoGenerationTaskRun,
-  recordVideoGenerationTaskProgress,
-  videoGenerationTaskLifecycle,
-  type VideoGenerationTaskHandle,
-} from "./video-generate-background.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,
@@ -894,6 +894,7 @@ export function createVideoGenerateTool(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -959,7 +960,10 @@ export function createVideoGenerateTool(options?: {
       }
 
       if (action === "status") {
-        return createVideoGenerateStatusActionResult(options?.agentSessionKey);
+        return createVideoGenerateStatusActionResult(
+          options?.agentSessionKey,
+          options?.requesterAgentId,
+        );
       }
 
       const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
@@ -975,21 +979,21 @@ export function createVideoGenerateTool(options?: {
       const effectiveCfg =
         applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
-      const prompt = readStringParam(args, "prompt", { required: true });
+      const prompt = readToolStringParam(args, "prompt", { required: true });
 
       const activeDuplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt },
+        { prompt, agentId: options?.requesterAgentId },
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
       }
 
-      const model = readStringParam(args, "model");
-      const filename = readStringParam(args, "filename");
-      const size = readStringParam(args, "size");
-      const aspectRatio = normalizeAspectRatio(readStringParam(args, "aspectRatio"));
-      const resolution = normalizeResolution(readStringParam(args, "resolution"));
+      const model = readToolStringParam(args, "model");
+      const filename = readToolStringParam(args, "filename");
+      const size = readToolStringParam(args, "size");
+      const aspectRatio = normalizeAspectRatio(readToolStringParam(args, "aspectRatio"));
+      const resolution = normalizeResolution(readToolStringParam(args, "resolution"));
       const durationSeconds = readNumberParam(args, "durationSeconds", {
         positiveInteger: true,
         strict: true,
@@ -1089,7 +1093,7 @@ export function createVideoGenerateTool(options?: {
       });
       const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt, requestKey },
+        { prompt, requestKey, agentId: options?.requesterAgentId },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;
@@ -1144,17 +1148,20 @@ export function createVideoGenerateTool(options?: {
       signal?.throwIfAborted();
       const taskHandle = createVideoGenerationTaskRun({
         sessionKey: options?.agentSessionKey,
+        requesterAgentId: options?.requesterAgentId,
         requesterOrigin: options?.requesterOrigin,
         prompt,
         providerId: selectedProvider?.id,
       });
       const shouldDetach = Boolean(
-        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+        taskHandle &&
+        shouldDetachMediaGenerationTask(options?.agentSessionKey, options?.requesterAgentId),
       );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
+          agentId: options?.requesterAgentId,
           taskKind: "video_generation",
           sourcePrefix: "video_generate",
           taskId: taskHandle.taskId,

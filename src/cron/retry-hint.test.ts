@@ -20,6 +20,15 @@ describe("resolveCronExecutionRetryHint", () => {
     ).toEqual({ retryable: true, category: "rate_limit" });
   });
 
+  it("does not let transient error text override a permanent provider classification", () => {
+    expect(
+      resolveCronExecutionRetryHint({
+        error: "HTTP 429: all available credits have been exhausted",
+        classifiedReason: "billing",
+      }),
+    ).toEqual({ retryable: false });
+  });
+
   it("treats common network error codes as network when retryOn only includes network", () => {
     for (const code of [
       "EAI_AGAIN",

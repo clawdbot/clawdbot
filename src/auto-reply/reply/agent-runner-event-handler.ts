@@ -184,19 +184,27 @@ export function createAgentRunEventHandler(params: {
       !suppressItemChannelProgress &&
       (!suppressProgressAfterMessageToolDelivery || completedMessageToolDelivery)
     ) {
+      const itemSummary = readStringValue(evt.data.summary);
+      const itemProgressText = readStringValue(evt.data.progressText);
+      const itemMeta = readStringValue(evt.data.meta);
+      const itemCommandBearing =
+        typeof evt.data.commandBearing === "boolean" ? evt.data.commandBearing : undefined;
+      const itemApprovalId = readStringValue(evt.data.approvalId);
+      const itemApprovalSlug = readStringValue(evt.data.approvalSlug);
       await params.turn.opts?.onItemEvent?.({
         itemId: readStringValue(evt.data.itemId),
-        toolCallId: readStringValue(evt.data.toolCallId),
         kind: readStringValue(evt.data.kind),
         title: readStringValue(evt.data.title),
-        name: itemName,
         phase: itemPhase,
         status: itemStatus,
-        summary: readStringValue(evt.data.summary),
-        progressText: readStringValue(evt.data.progressText),
-        meta: readStringValue(evt.data.meta),
-        approvalId: readStringValue(evt.data.approvalId),
-        approvalSlug: readStringValue(evt.data.approvalSlug),
+        ...(itemToolCallId ? { toolCallId: itemToolCallId } : {}),
+        ...(itemName ? { name: itemName } : {}),
+        ...(itemSummary !== undefined ? { summary: itemSummary } : {}),
+        ...(itemProgressText !== undefined ? { progressText: itemProgressText } : {}),
+        ...(itemMeta !== undefined ? { meta: itemMeta } : {}),
+        ...(itemCommandBearing !== undefined ? { commandBearing: itemCommandBearing } : {}),
+        ...(itemApprovalId !== undefined ? { approvalId: itemApprovalId } : {}),
+        ...(itemApprovalSlug !== undefined ? { approvalSlug: itemApprovalSlug } : {}),
       });
     }
     if (evt.stream === "plan" && !shouldSuppressProgressAfterMessageToolDelivery()) {

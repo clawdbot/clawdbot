@@ -7,6 +7,7 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -14,7 +15,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
-import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
@@ -32,6 +33,7 @@ export type CompactEmbeddedAgentSessionParams = {
   clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
+  conversationToolPolicy?: GroupToolPolicyConfig;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;

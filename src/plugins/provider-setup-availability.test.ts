@@ -3,7 +3,7 @@ import { detectAvailableSetupProviderIds } from "./provider-setup-availability.j
 
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn());
 const enablePluginInConfig = vi.hoisted(() => vi.fn());
-const resolvePluginProviders = vi.hoisted(() => vi.fn());
+const resolvePluginProvidersCore = vi.hoisted(() => vi.fn());
 const debug = vi.hoisted(() => vi.fn());
 
 vi.mock("./provider-auth-choices.js", () => ({
@@ -15,7 +15,7 @@ vi.mock("./enable.js", () => ({
 }));
 
 vi.mock("./providers.runtime.js", () => ({
-  resolvePluginProviders,
+  resolvePluginProvidersCore,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -44,7 +44,7 @@ describe("detectAvailableSetupProviderIds", () => {
 
   it("returns the provider id when its read-only availability probe succeeds", async () => {
     const detectAvailability = vi.fn(async () => true);
-    resolvePluginProviders.mockReturnValue([
+    resolvePluginProvidersCore.mockReturnValue([
       {
         pluginId: "ollama",
         id: "ollama",
@@ -63,7 +63,7 @@ describe("detectAvailableSetupProviderIds", () => {
   });
 
   it("treats failed availability probes as an intentional non-match", async () => {
-    resolvePluginProviders.mockReturnValue([
+    resolvePluginProvidersCore.mockReturnValue([
       {
         pluginId: "ollama",
         id: "ollama",

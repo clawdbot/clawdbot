@@ -1,22 +1,18 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
   noteSessionActivityEvent,
-  readFiniteNumber,
   terminalHealthFor,
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
+import { createSessionObserverCompanionSnapshotReader } from "./session-observer-companion.js";
 import { createSessionObserverCompletion } from "./session-observer-completion.js";
-import type {
-  SessionObserverCompanionSnapshot,
-  SessionObserverEvent,
-  SessionObserverService,
-} from "./session-observer-contract.js";
+import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
 import { createSessionObserverModelSlots } from "./session-observer-model-slots.js";
 import {
   createDormantSessionObserverRun,
@@ -29,7 +25,6 @@ import {
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
   rememberSessionObserverRevisionFloor,
-  sessionObserverScopeKey,
   synthesizeSessionObserverTerminalDigest,
 } from "./session-observer-model.js";
 import type {
@@ -40,7 +35,7 @@ import type {
 } from "./session-observer-model.js";
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
 import { createSessionObserverPreamblePublisher } from "./session-observer-preamble.js";
-import { resolveStoredSessionKeyForAgentStore as resolveStoreKey } from "./session-store-key.js";
+import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
@@ -72,40 +67,24 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const disabledRuns = new Set<string>();
   const visibleConnections = new Set<string>();
   let disposed = false;
-  const getCompanionSnapshot = (sessionKey: string): SessionObserverCompanionSnapshot => {
-    const cfg = deps.getConfig();
-    const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
-    const canonicalSessionKey = resolveStoreKey({ cfg, agentId, sessionKey });
-    const state = states.get(sessionObserverScopeKey(canonicalSessionKey, agentId));
-    if (state) {
-      flushSessionActivityAssistantNote(state);
-      return {
-        agentId: state.agentId,
-        runId: state.runId,
-        ...(state.previousDigest ? { digest: state.previousDigest } : {}),
-        notes: state.notes.map((note) => ({ sequence: note.sequence, text: note.text })),
-      };
-    }
-    const digest = readSession(canonicalSessionKey, agentId)?.observerDigest;
-    return {
-      agentId,
-      ...(digest?.runId ? { runId: digest.runId } : {}),
-      ...(digest ? { digest } : {}),
-      notes: [],
-    };
-  };
+  const getCompanionSnapshot = createSessionObserverCompanionSnapshotReader({
+    getConfig: deps.getConfig,
+    readSession,
+    states,
+  });
   const audience = createSessionObserverAudience({
     subscribers: deps.subscribers,
     sessionEventSubscribers: deps.sessionEventSubscribers,
     isVisible: (connId) => visibleConnections.has(connId),
-    getDefaultAgentId: () => resolveDefaultAgentId(deps.getConfig()),
+    getConfig: deps.getConfig,
   });
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
   const runStillCurrent = (runId: string, sessionKey: string, agentId: string) => () =>
     !disposed &&
     !supersededRuns.has(runId) &&
-    (states.get(sessionObserverScopeKey(sessionKey, agentId))?.runId ?? runId) === runId;
+    (states.get(resolveSessionSubscriptionKey(sessionKey, agentId))?.runId ?? runId) === runId;
+
   const persistAcceptedDigest = createSessionObserverDigestPersister({
     now,
     persistDigest,
@@ -132,7 +111,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         "session.observer",
         digest,
         audience.recipients(state.sessionKey, state.agentId),
-        { dropIfSlow: true },
+        audience.deliveryOptions(state.sessionKey, state.agentId),
       );
       void persistAcceptedDigest(state, digest, false, "preamble");
     },
@@ -174,9 +153,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           "session.observer",
           digest,
           audience.recipients(digest.sessionKey, agentId),
-          {
-            dropIfSlow: true,
-          },
+          audience.deliveryOptions(digest.sessionKey, agentId),
         );
       }
     } catch (error) {
@@ -185,7 +162,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   }
 
   const stateIsTracked = (state: SessionObserverState): boolean =>
-    states.get(sessionObserverScopeKey(state.sessionKey, state.agentId)) === state;
+    states.get(resolveSessionSubscriptionKey(state.sessionKey, state.agentId)) === state;
 
   const dropState = (state: SessionObserverState) => {
     preamblePublisher.clear(state);
@@ -193,9 +170,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       clearTimeoutFn(state.timer);
     }
     modelSlots.invalidateRequest(state);
-    const scopeKey = sessionObserverScopeKey(state.sessionKey, state.agentId);
     if (stateIsTracked(state)) {
-      states.delete(scopeKey);
+      states.delete(resolveSessionSubscriptionKey(state.sessionKey, state.agentId));
     }
   };
 
@@ -417,7 +393,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         const recipients = criticalTransition
           ? audience.criticalRecipients(state.sessionKey, state.agentId)
           : audience.recipients(state.sessionKey, state.agentId);
-        deps.broadcastToConnIds("session.observer", digest, recipients, { dropIfSlow: true });
+        deps.broadcastToConnIds(
+          "session.observer",
+          digest,
+          recipients,
+          audience.deliveryOptions(state.sessionKey, state.agentId),
+        );
         await persistAcceptedDigest(state, digest, final);
         if (final) {
           dormantRuns.delete(state.runId);
@@ -479,7 +460,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (!agentId || !audience.has(sessionKey, agentId)) {
       return undefined;
     }
-    const scopeKey = sessionObserverScopeKey(sessionKey, agentId);
+    const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
     const cfg = deps.getConfig();
     if (cfg.gateway?.controlUi?.sessionObserver === false) {
       return undefined;
@@ -510,7 +491,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     const session = readSession(sessionKey, agentId);
     const startedAt =
-      readFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? now();
+      asFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? now();
     const state: SessionObserverState = {
       ...createSessionActivityNoteState(),
       sessionKey,
@@ -592,7 +573,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
       return;
     }
-    const scopeKey = sessionObserverScopeKey(sessionKey, agentId);
+    const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
     if (terminal && audience.recipients(sessionKey, agentId).size === 0) {
       void synthesizeTerminalDigest({ event, state: states.get(scopeKey) });
       dormantRuns.delete(event.runId);
@@ -621,7 +602,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       const superseded = [...dormantRuns.values()]
         .filter(
           (run) =>
-            sessionObserverScopeKey(run.sessionKey, run.agentId) === scopeKey &&
+            resolveSessionSubscriptionKey(run.sessionKey, run.agentId) === scopeKey &&
             run.runId !== event.runId,
         )
         .toSorted(
@@ -678,7 +659,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.consecutiveFailures = 0;
     }
     state.lastActivityAt = event.ts;
-    const eventStartedAt = readFiniteNumber(event.data.startedAt);
+    const eventStartedAt = asFiniteNumber(event.data.startedAt);
     if (eventStartedAt !== undefined) {
       state.startedAt = Math.min(state.startedAt, eventStartedAt);
     }
@@ -692,7 +673,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       preamblePublisher.clear(state);
       state.terminalHealth = terminalHealthFor(event);
       disabledRuns.delete(event.runId);
-      const endedAt = readFiniteNumber(event.data.endedAt) ?? now();
+      const endedAt = asFiniteNumber(event.data.endedAt) ?? now();
       // previousDigest is set on every ACCEPTED digest of this run; digestCount now
       // counts attempts (budget), so it no longer implies any digest was published.
       const hasRunDigest = state.previousDigest?.runId === state.runId;

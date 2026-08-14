@@ -78,6 +78,8 @@ export type TurnAdoptionLifecycle = {
   /** Stable cancellation owner for collect-mode batches. */
   ownerKey?: string;
   abortSignal?: AbortSignal;
+  /** Ephemeral fact: a direct local operator turn lost fresh cron authority when queued. */
+  cronCreatorAuthorityUnavailable?: "queued-local-operator";
 };
 
 /** Partial assistant payload emitted during streaming or replacement updates. */
@@ -170,6 +172,8 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Suppress standalone tool/progress text even when verbose progress is enabled. */
+  suppressToolProgressMessages?: boolean;
   /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
   allowToolLifecycleWhenProgressHidden?: boolean;
   /**
@@ -226,6 +230,7 @@ export type GetReplyOptions = {
     summary?: string;
     progressText?: string;
     meta?: string;
+    commandBearing?: boolean;
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;

@@ -1,10 +1,11 @@
-/** Builds deterministic plugin load plans for selected native harness and memory owners. */
+/** Builds deterministic plugin load plans for selected harness, memory, and context-engine owners. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
 import {
   isTestDefaultMemorySlotDisabled,
   resolveEffectivePluginActivationState,
+  resolveSelectedContextEnginePluginId,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import {
@@ -173,7 +174,7 @@ export function requiresAgentHarnessPluginSelection(
   );
 }
 
-/** Folds selected harness and memory owners into one deterministic plugin load plan. */
+/** Folds selected harness, memory, and context-engine owners into one deterministic load plan. */
 export function resolveAgentRuntimePluginLoadPlan(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
@@ -185,11 +186,13 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+  const contextEnginePluginId = resolveSelectedContextEnginePluginId(params.config);
+  const contextEnginePluginIds = contextEnginePluginId ? [contextEnginePluginId] : [];
   const basePluginIds = (params.basePluginIds ?? []).filter(
     (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
   );
-  const pluginIds = [...basePluginIds, ...memoryPluginIds];
-  const forceActivatedPluginIds = [...memoryPluginIds];
+  const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
+  const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
   for (const selection of params.selections) {
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     if (!requiresAgentHarnessPluginSelection(selection, config)) {

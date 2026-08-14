@@ -1,0 +1,76 @@
+import { Type } from "typebox";
+import {
+  WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
+  type WorkerSessionsSendParams,
+  type WorkerSessionsSendResponseFrame,
+  type WorkerSessionsSpawnParams,
+  type WorkerSessionsSpawnResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { AgentToolResult } from "../agents/runtime/index.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
+
+type WorkerSessionRpcClient = {
+  requestSessionsSpawn(
+    params: WorkerSessionsSpawnParams,
+  ): Promise<WorkerSessionsSpawnResponseFrame>;
+  requestSessionsSend(params: WorkerSessionsSendParams): Promise<WorkerSessionsSendResponseFrame>;
+};
+
+function parseToolResult(
+  frame: WorkerSessionsSpawnResponseFrame | WorkerSessionsSendResponseFrame,
+) {
+  if (!frame.ok) {
+    throw new Error(frame.error.message);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(frame.payload.resultJson);
+  } catch (error) {
+    throw new Error("Gateway returned an invalid worker session tool result", { cause: error });
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !Array.isArray((parsed as { content?: unknown }).content)
+  ) {
+    throw new Error("Gateway returned an invalid worker session tool result");
+  }
+  return parsed as AgentToolResult<unknown>;
+}
+
+export function createWorkerSessionTools(client: WorkerSessionRpcClient): AnyAgentTool[] {
+  return [
+    {
+      label: "Sessions",
+      name: "sessions_spawn",
+      description:
+        "Spawn a visible cloud child session in a fresh managed worktree. The child inherits the current cloud placement profile and attenuated tool policy.",
+      parameters: Type.Object({
+        task: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
+        label: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+        agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+        model: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+        runTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
+      }),
+      execute: async (toolCallId, raw) => {
+        const params = raw as Omit<WorkerSessionsSpawnParams, "toolCallId">;
+        return parseToolResult(await client.requestSessionsSpawn({ toolCallId, ...params }));
+      },
+    },
+    {
+      label: "Session Send",
+      name: "sessions_send",
+      description:
+        "Send a message to an authorized parent, child, or sibling cloud session. Cross-tree and stale-incarnation targets are denied by the Gateway.",
+      parameters: Type.Object({
+        sessionKey: Type.String({ minLength: 1, maxLength: 1_024 }),
+        message: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
+        timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
+      }),
+      execute: async (toolCallId, raw) => {
+        const params = raw as Omit<WorkerSessionsSendParams, "toolCallId">;
+        return parseToolResult(await client.requestSessionsSend({ toolCallId, ...params }));
+      },
+    },
+  ];
+}

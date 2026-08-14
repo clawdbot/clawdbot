@@ -8,7 +8,6 @@ export {
   registerTestPlugin,
   registerVirtualTestPlugin,
   requireProvider,
-  uniqueSortedStrings,
 } from "./test-helpers/contracts-testkit.js";
 export { runDirectImportSmoke } from "./test-helpers/direct-smoke.js";
 export { describePackageManifestContract } from "./test-helpers/package-manifest-contract.js";
@@ -19,8 +18,4 @@ export {
   BUNDLED_RUNTIME_SIDECAR_BASENAMES,
   getPublicArtifactBasename,
 } from "./test-helpers/public-artifacts.js";
-export {
-  loadBundledPluginPublicSurface,
-  loadBundledPluginPublicSurfaceSync,
-  resolveWorkspacePackagePublicModuleUrl,
-} from "./test-helpers/public-surface-loader.js";
+export { loadBundledPluginPublicSurface } from "./test-helpers/public-surface-loader.js";

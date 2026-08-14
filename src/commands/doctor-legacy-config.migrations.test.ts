@@ -50,7 +50,7 @@ vi.mock("../plugins/manifest-registry.js", () => {
     };
   };
   return {
-    loadPluginManifestRegistry: () => ({
+    loadPluginManifestRegistryCore: () => ({
       diagnostics: [],
       plugins: [
         plugin("brave", "brave"),
@@ -78,7 +78,9 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
   }),
 }));
 
-vi.mock("../secrets/target-registry.js", () => {
+vi.mock("../secrets/target-registry.js", async () => {
+  const { asNullableRecord: readRecord } =
+    await import("@openclaw/normalization-core/record-coerce");
   const entry = {
     id: "channels.discord.token",
     targetType: "channels.discord.token",
@@ -90,11 +92,6 @@ vi.mock("../secrets/target-registry.js", () => {
     includeInConfigure: true,
     includeInAudit: true,
   };
-
-  const readRecord = (value: unknown): Record<string, unknown> | null =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
 
   return {
     discoverConfigSecretTargets: (cfg: OpenClawConfig) => {
@@ -1474,7 +1471,10 @@ describe("normalizeCompatibilityConfigValues", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
           },
           models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "auto", mode: "strict" },
+            },
           },
         },
       },
@@ -1484,7 +1484,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.agents?.defaults?.models).toEqual({
       "anthropic/claude-opus-4-7": {
         alias: "Opus",
-        agentRuntime: { id: "claude-cli" },
+        agentRuntime: { id: "claude-cli", mode: "strict" },
       },
       "anthropic/claude-sonnet-4-6": {
         agentRuntime: { id: "claude-cli" },

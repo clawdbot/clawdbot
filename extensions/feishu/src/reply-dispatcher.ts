@@ -12,6 +12,7 @@ import {
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { toStringifiedError as toFeishuError } from "openclaw/plugin-sdk/error-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -75,10 +76,6 @@ function mergeStreamingFinalText(
     return previousText;
   }
   return `${previousText}\n\n${nextText}`;
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
@@ -905,7 +902,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 if (isChannelPartialDeliveryError(error)) {
                   // The attachment is already visible; text recovery would duplicate delivery.
                   markVisibleReplySent();
-                  throw toError(error);
+                  throw toFeishuError(error);
                 }
                 if (params.abortSignal?.aborted) {
                   return;
@@ -1129,7 +1126,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
           if (closeOutcome.error !== undefined) {
-            throw toError(closeOutcome.error);
+            throw toFeishuError(closeOutcome.error);
           }
         } while (pendingStreamingDeliveries.length > 0);
       } finally {
@@ -1379,7 +1376,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           : undefined;
       if (!shouldDeliverText && !hasMedia) {
         if (priorClosedStreamingSettlement?.error !== undefined) {
-          throw toError(priorClosedStreamingSettlement.error);
+          throw toFeishuError(priorClosedStreamingSettlement.error);
         }
         return priorClosedStreamingSettlement?.result ?? noVisibleFeishuReplyDelivery;
       }

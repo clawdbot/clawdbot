@@ -103,7 +103,12 @@ const OPENAI_COMPLETIONS_APIS = new Set([
 const OPAQUE_REPLAY_TOKEN_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 const GOOGLE_THOUGHT_SIGNATURE_RE =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-f0-9]{16}$/;
+// Transport replay fences use the two-word base-36 output from shortHash.
+const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-z0-9]{2,16}$/;
+
+function isOpenAIReplayContextHash(value: unknown): value is string {
+  return typeof value === "string" && OPENAI_REPLAY_CONTEXT_HASH_RE.test(value);
+}
 
 function isOpenAIResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
   return typeof route?.api === "string" && OPENAI_RESPONSES_APIS.has(route.api);
@@ -268,6 +273,60 @@ const OPENAI_REASONING_REPLAY_METADATA_KEYS = new Set([
   "authProfileHash",
 ]);
 const OPENAI_REASONING_REPLAY_METADATA_KEY = "__openclaw_replay";
+const OPENAI_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
+const OPENAI_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
+const OPENAI_COMPACTION_SUPPRESSION_DATA = "rejected";
+
+function sanitizeOpenAICompactionReplayState(
+  value: unknown,
+  route: TranscriptAssistantRoute | undefined,
+): Record<string, unknown> | undefined {
+  const replayType =
+    value && typeof value === "object" && isPlainTranscriptObject(value) ? value.type : undefined;
+  const isSuppression = replayType === OPENAI_COMPACTION_SUPPRESSION_TYPE;
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !isPlainTranscriptObject(value) ||
+    !isOpenAIResponsesRoute(route) ||
+    value.v !== 1 ||
+    (replayType !== OPENAI_COMPACTION_REPLAY_TYPE && !isSuppression) ||
+    typeof value.data !== "string" ||
+    (isSuppression
+      ? value.data !== OPENAI_COMPACTION_SUPPRESSION_DATA
+      : !isStructurallyValidOpaqueReplayToken(value.data)) ||
+    (value.replayIndex !== undefined &&
+      (isSuppression ||
+        !Number.isSafeInteger(value.replayIndex) ||
+        (value.replayIndex as number) < 0)) ||
+    value.provider !== route?.provider ||
+    typeof value.api !== "string" ||
+    !OPENAI_RESPONSES_APIS.has(value.api) ||
+    value.model !== route?.model ||
+    !isOpenAIReplayContextHash(value.baseUrlHash) ||
+    (value.sessionHash !== undefined && !isOpenAIReplayContextHash(value.sessionHash)) ||
+    (value.authProfileHash !== undefined && !isOpenAIReplayContextHash(value.authProfileHash))
+  ) {
+    return undefined;
+  }
+  const replayId =
+    !isSuppression && typeof value.id === "string" && isOpenAIResponseItemId(value.id, route)
+      ? value.id
+      : undefined;
+  return {
+    v: 1,
+    type: replayType,
+    ...(replayId !== undefined ? { id: replayId } : {}),
+    data: value.data,
+    ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
+    provider: value.provider,
+    api: value.api,
+    model: value.model,
+    baseUrlHash: value.baseUrlHash,
+    ...(value.sessionHash !== undefined ? { sessionHash: value.sessionHash } : {}),
+    ...(value.authProfileHash !== undefined ? { authProfileHash: value.authProfileHash } : {}),
+  };
+}
 
 function sanitizeOpenAIReasoningReplayMetadata(
   value: unknown,
@@ -289,15 +348,9 @@ function sanitizeOpenAIReasoningReplayMetadata(
     value.provider !== route?.provider ||
     value.api !== route.api ||
     value.model !== route.model ||
-    (value.baseUrlHash !== undefined &&
-      (typeof value.baseUrlHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.baseUrlHash))) ||
-    (value.sessionHash !== undefined &&
-      (typeof value.sessionHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.sessionHash))) ||
-    (value.authProfileHash !== undefined &&
-      (typeof value.authProfileHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.authProfileHash)))
+    (value.baseUrlHash !== undefined && !isOpenAIReplayContextHash(value.baseUrlHash)) ||
+    (value.sessionHash !== undefined && !isOpenAIReplayContextHash(value.sessionHash)) ||
+    (value.authProfileHash !== undefined && !isOpenAIReplayContextHash(value.authProfileHash))
   ) {
     return undefined;
   }
@@ -530,6 +583,19 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    if (location === "root" && source.role === "assistant" && key === "providerReplay") {
+      const sanitizedReplay = sanitizeOpenAICompactionReplayState(item, currentAssistantRoute);
+      if (sanitizedReplay !== undefined) {
+        if (sanitizedReplay !== item) {
+          next ??= { ...source };
+          next[key] = sanitizedReplay;
+        }
+        continue;
+      }
+      next ??= { ...source };
+      delete next[key];
+      continue;
+    }
     if (
       location === "assistant-content-block" &&
       (isOpenAIResponsesRoute(currentAssistantRoute) ||

@@ -1,4 +1,5 @@
 import type { SystemAgentChatQuestion } from "@openclaw/gateway-protocol";
+import { normalizeNullableString as nonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 export type CustodianStructuredQuestion = {
   id: string;
@@ -8,10 +9,6 @@ export type CustodianStructuredQuestion = {
   isOther: boolean;
   skipAction?: "exit";
 };
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 /**
  * Sanitize the typed `question` field from `openclaw.chat`. The gateway owns

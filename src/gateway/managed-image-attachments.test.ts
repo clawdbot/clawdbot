@@ -16,6 +16,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -66,7 +67,7 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
-  loadSessionEntryReadOnly: loadSessionEntryMock,
+  loadGatewaySessionEntryReadOnly: loadSessionEntryMock,
   resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
 }));
 
@@ -909,6 +910,61 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
     expect(wrong.result.statusCode).toBe(401);
     expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves a bounded thumbnail through the full-image artifact ticket", async () => {
+    const source = createSolidPngBuffer(640, 320, { r: 24, g: 64, b: 128 });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    const transcriptMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ];
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "sessions.sqlite"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue(transcriptMessages);
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+    const thumbnailUrl = download?.url.replace(/\/full(?=\?)/u, "/thumbnail") ?? "";
+
+    vi.clearAllMocks();
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: thumbnailUrl,
+      denyAuth: true,
+      transcriptMessages,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
+    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
+    expect(readImageProbeFromHeader(result.body)).toMatchObject({ width: 300, height: 150 });
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a managed global artifact owned by another agent", async () => {
+    const { attachmentId } = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "ops",
+    });
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: "global",
+      agentId: "research",
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download).toBeNull();
   });
 
   it("keeps serving and deleting an original after the configured media root changes", async () => {
@@ -2453,6 +2509,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   });
 
   it("retains other selected-agent global records during scoped cleanup", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+      session: { store: path.join(stateDir, "sessions.sqlite") },
+    });
     await replaceTestSessionEntry(
       {
         agentId: "main",
@@ -2491,12 +2551,24 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expectPathMissing(deletedFixture.originalPath);
   });
 
-  it("uses the recorded owner for unscoped session keys", async () => {
-    const fixture = await createFixture(stateDir, {
-      agentId: "work",
+  it.each([
+    {
+      label: "uses the recorded owner for unscoped session keys",
       sessionKey: "legacy-session",
+      recordAgentId: "work",
+    },
+    {
+      label: "uses an agent-scoped session key owner when the record omits agentId",
+      sessionKey: "agent:work:main",
+      recordAgentId: undefined,
+    },
+  ])("$label", async ({ sessionKey, recordAgentId }) => {
+    const fixture = await createFixture(stateDir, {
+      sessionKey,
+      ...(recordAgentId ? { agentId: recordAgentId } : {}),
     });
     getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
       session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
     });
     prepareAgentSessionStore(stateDir, "work");
@@ -2504,7 +2576,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       {
         agentId: "work",
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        sessionKey: "legacy-session",
+        sessionKey,
       },
       { sessionId: "sess-work", updatedAt: Date.now() },
     );
@@ -2587,6 +2659,27 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.retainedCount).toBe(1);
     await expectPathMissing(deletedFixture.originalPath);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+  });
+
+  it("retains ownerless global records when no compatibility owner exists", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+    });
+    const fixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      attachmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      sessionKey: "global",
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   it("does not retain selected-agent global records during full cleanup", async () => {

@@ -10,22 +10,8 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-
-const DEFAULT_AGENT_ID = "main";
-
-function normalizeAgentId(value: string | undefined | null): string {
-  const normalized = (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+/g, "")
-    .replace(/-+$/g, "");
-  return normalized || DEFAULT_AGENT_ID;
-}
-
-function normalizeChannelId(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
@@ -44,7 +30,7 @@ function resolveBindingAccount(params: {
     agentId?: unknown;
     match?: { channel?: unknown; accountId?: unknown };
   };
-  if (normalizeChannelId(binding.match?.channel) !== params.channelId) {
+  if (normalizeLowercaseStringOrEmpty(binding.match?.channel) !== params.channelId) {
     return null;
   }
   const accountId = typeof binding.match?.accountId === "string" ? binding.match.accountId : "";

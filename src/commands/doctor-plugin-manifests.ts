@@ -7,7 +7,7 @@ import { z } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
@@ -128,7 +128,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
     }
   }
 
-  for (const plugin of loadPluginManifestRegistry({
+  for (const plugin of loadPluginManifestRegistryCore({
     ...(params?.config ? { config: params.config } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),

@@ -139,7 +139,7 @@ acquire_pr_gates_lock() {
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   fi
-  node "$scripts_dir/pr-gates-lock.mjs" --status-file "$PR_GATES_LOCK_STATUS_FILE" &
+  node "$scripts_dir/pr-gates-lock.mts" --status-file "$PR_GATES_LOCK_STATUS_FILE" &
   PR_GATES_LOCK_PID=$!
   while [ ! -s "$PR_GATES_LOCK_STATUS_FILE" ]; do
     if ! kill -0 "$PR_GATES_LOCK_PID" 2>/dev/null; then

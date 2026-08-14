@@ -17,8 +17,10 @@ const resolverMocks = vi.hoisted(() => ({
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
-vi.mock("./approval-resolver.js", () => ({
-  resolveWhatsAppApproval: resolverMocks.resolveWhatsAppApproval,
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: resolverMocks.resolveWhatsAppApproval,
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
   isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
 }));
 
@@ -175,6 +177,8 @@ describe("WhatsApp approval reactions", () => {
       approvalId: "plugin:abc",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "whatsapp",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -251,6 +255,8 @@ describe("WhatsApp approval reactions", () => {
       approvalId: "exec-self",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "whatsapp",
+      accountId: "default",
       senderId: "+15551230001",
       gatewayUrl: undefined,
     });
@@ -315,6 +321,8 @@ describe("WhatsApp approval reactions", () => {
       approvalId: "exec-direct",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "whatsapp",
+      accountId: "default",
       senderId: testCase.actorId,
       gatewayUrl: undefined,
     });

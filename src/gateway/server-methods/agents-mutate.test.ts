@@ -13,6 +13,9 @@ import { FsSafeError } from "../../infra/fs-safe.js";
 /* ------------------------------------------------------------------ */
 
 const mocks = vi.hoisted(() => ({
+  sharedAuthStoreOwnership: { location: "legacy-main" } as {
+    location: "legacy-main" | "state-db";
+  },
   loadConfigReturn: {} as Record<string, unknown>,
   listAgentEntries: vi.fn((_cfg?: unknown) => [] as Array<Record<string, unknown>>),
   findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
@@ -58,7 +61,9 @@ const mocks = vi.hoisted(() => ({
   cronRemoveAgentJobsTransactional: vi.fn(
     async (_agentId: string, commit: () => Promise<unknown>) => await commit(),
   ),
-  resolveAgentDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/agents/test-agent"),
+  resolveAgentDir: vi.fn((_cfg?: unknown, agentId?: string) =>
+    agentId === "main" ? "/agents/main/agent" : "/agents/test-agent",
+  ),
   resolveAgentWorkspaceDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/workspace/test-agent"),
   resolveSessionTranscriptsDirForAgent: vi.fn((_agentId?: string) => "/transcripts/test-agent"),
   listAgentsForGateway: vi.fn(() => ({
@@ -172,6 +177,14 @@ vi.mock("../../commands/agents.config.js", () => ({
   pruneAgentConfig: mocks.pruneAgentConfig,
 }));
 
+vi.mock("../../agents/auth-profiles/path-resolve.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/auth-profiles/path-resolve.js")>(
+    "../../agents/auth-profiles/path-resolve.js",
+  )),
+  resolveSharedAuthStoreOwnership: () => mocks.sharedAuthStoreOwnership,
+  resolveSharedAuthStorePath: () => "/resolved/agents/main/agent/openclaw-agent.sqlite",
+}));
+
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
   listAgentEntries: mocks.listAgentEntries,
@@ -181,6 +194,10 @@ vi.mock("../../agents/agent-scope.js", () => ({
       throw new Error("expected exactly one default agent");
     }
     return defaults[0]!.id;
+  },
+  tryResolveSoleAgentId: (cfg: unknown) => {
+    const entries = getAgentList(cfg);
+    return entries.length === 1 ? entries[0]?.id : undefined;
   },
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentConfig: (cfg: unknown, agentId: string) =>
@@ -237,6 +254,8 @@ vi.mock("../../state/agent-deletion-journal.js", () => ({
 }));
 
 vi.mock("../../state/openclaw-agent-db-registry.js", () => ({
+  isSameOpenClawAgentDatabasePath: (left: string, right: string) =>
+    path.resolve(left) === path.resolve(right),
   unregisterOpenClawAgentDatabase: mocks.unregisterOpenClawAgentDatabase,
 }));
 
@@ -344,6 +363,7 @@ const { testing: agentsTesting, agentsHandlers } = await import("./agents.js");
 beforeEach(() => {
   agentsTesting.resetDepsForTests();
   mocks.omitConfigMutationResult = false;
+  mocks.sharedAuthStoreOwnership = { location: "legacy-main" };
   mocks.withAgentExecApprovalsRemoved
     .mockReset()
     .mockImplementation(async (_agentId: string, commit: () => Promise<unknown>) => await commit());
@@ -1261,6 +1281,9 @@ describe("agents.update", () => {
 describe("agents.delete", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveAgentDir.mockImplementation((_cfg?: unknown, agentId?: string) =>
+      agentId === "main" ? "/agents/main/agent" : "/agents/test-agent",
+    );
     mocks.fsLstat.mockResolvedValue({
       isSymbolicLink: () => false,
     } as unknown as import("node:fs").Stats);
@@ -1279,6 +1302,25 @@ describe("agents.delete", () => {
       removedBindings: 2,
     });
     mocks.movePathToTrash.mockReset().mockResolvedValue("/trashed");
+  });
+
+  it("rejects deleting the auth-inheritance owner before starting cleanup", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        defaults: { authInheritance: { agentId: "test-agent" } },
+        list: [
+          { id: "test-agent", workspace: "/workspace/test-agent" },
+          { id: "main", default: true },
+        ],
+      },
+    };
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+
+    expectRespondErrorContaining(respond, "agents.defaults.authInheritance.agentId");
+    expect(mocks.cronRemoveAgentJobsTransactional).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 
   it("removes only the deleted agent's authority before committing its roster removal", async () => {
@@ -2899,8 +2941,26 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, "cannot be deleted");
+    expectRespondErrorContaining(respond, "owns the legacy shared auth store");
+    expectRespondErrorContaining(respond, "openclaw doctor --fix");
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("deletes main through the normal journal path after shared auth relocation", async () => {
+    mocks.sharedAuthStoreOwnership = { location: "state-db" };
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+    };
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "main",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "main" });
+    expect(mocks.beginAgentDeletionCommit).toHaveBeenCalledOnce();
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
   it("returns not found when a concurrent delete wins the delete race", async () => {

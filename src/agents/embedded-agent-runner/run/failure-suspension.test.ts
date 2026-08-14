@@ -17,12 +17,11 @@ describe("buildEmbeddedFailureSuspension", () => {
     const suspension = buildEmbeddedFailureSuspension({
       suspension: { ...baseSuspension, agentDir: "/state/agents/work/agent" },
       runAgentId: "work",
-      laneId: "main",
     });
 
     expect(suspension.agentId).toBe("work");
     expect(suspension.agentDir).toBe("/state/agents/work/agent");
-    expect(suspension.laneId).toBe("main");
+    expect(suspension).not.toHaveProperty("laneId");
   });
 
   it("keeps an explicit caller agent id and tolerates a run without one", () => {
@@ -30,7 +29,6 @@ describe("buildEmbeddedFailureSuspension", () => {
       buildEmbeddedFailureSuspension({
         suspension: { ...baseSuspension, agentId: "explicit" },
         runAgentId: "run-owner",
-        laneId: "main",
       }).agentId,
     ).toBe("explicit");
 
@@ -38,7 +36,6 @@ describe("buildEmbeddedFailureSuspension", () => {
       buildEmbeddedFailureSuspension({
         suspension: baseSuspension,
         runAgentId: undefined,
-        laneId: "main",
       }).agentId,
     ).toBeUndefined();
   });

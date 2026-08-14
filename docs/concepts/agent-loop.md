@@ -2,7 +2,7 @@
 summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
-  - You are changing session queueing, transcript writes, or session write lock behavior
+  - You are changing session queueing, writer claims, or transcript write fencing
 title: "Agent loop"
 ---
 
@@ -27,14 +27,14 @@ execution, streaming, persistence.
 
 Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
 
-Transcript writes are serialized by the per-session lane and the SQLite writer queue. Each append or rewrite validates the current session identity inside its synchronous commit transaction, so a stale run cannot overwrite a newer session generation.
+Before streaming, an admitted run records its durable `activeWriterRunId` claim. Every transcript append or rewrite supplies `expectedWriterRunId`, and the synchronous commit transaction verifies that it still matches the active claim. A superseded run therefore cannot commit stale transcript data. The SQLite writer queue orders per-agent mutations, while the Gateway state-directory lock prevents another Gateway or `openclaw agent --local` process from owning the same state directory concurrently.
 
 ## Session and workspace preparation
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt.
-- A session write lock is acquired and the session transcript target is prepared before streaming starts. Any later transcript rewrite, compaction, or truncation path must take the same lock before mutating the SQLite transcript rows.
+- The session transcript target and writer claim are prepared before streaming starts. Later rewrites, compaction, and truncation use the same in-transaction writer-claim fence.
 
 ## Prompt assembly
 

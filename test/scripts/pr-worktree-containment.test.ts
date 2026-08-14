@@ -25,7 +25,7 @@ function git(root: string, ...args: string[]) {
 }
 
 function createFixture(): Fixture {
-  const root = realpathSync(tempDirs.make("openclaw-pr-worktree-containment-"));
+  const root = tempDirs.make("openclaw-pr-worktree-containment-");
   git(root, "init", "--initial-branch=main");
   git(root, "config", "user.name", "OpenClaw Test");
   git(root, "config", "user.email", "test@openclaw.invalid");

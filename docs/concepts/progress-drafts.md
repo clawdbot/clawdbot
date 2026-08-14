@@ -225,9 +225,9 @@ OpenClaw uses the same formatter for progress drafts and `/verbose`:
 ```
 
 `"explain"` is the default and keeps drafts stable with concise labels.
-`"raw"` appends the underlying command when available, which is useful while
-debugging but noisier in chat. For example, a `node --check /tmp/app.js` call
-renders differently by mode:
+`"raw"` appends underlying tool detail when available. Command text also
+requires the explicit `streaming.progress.commandText: "raw"` opt-in below.
+With that opt-in, a `node --check /tmp/app.js` call renders differently by mode:
 
 | Mode      | Progress line                                                   |
 | --------- | --------------------------------------------------------------- |
@@ -236,10 +236,10 @@ renders differently by mode:
 
 ### Command/exec text
 
-`streaming.progress.commandText` (default `"raw"`) controls how much command
+`streaming.progress.commandText` (default `"status"`) controls how much command
 detail shows next to exec/bash progress lines, independent of the detail mode
-above. Set it to `"status"` to keep a tool-progress line visible while hiding
-the command text entirely:
+above. Set it to `"raw"` to opt into command text; keep `"status"` to show only
+the tool-progress status:
 
 ```json5
 {
@@ -248,7 +248,7 @@ the command text entirely:
       streaming: {
         mode: "progress",
         progress: {
-          commandText: "status",
+          commandText: "raw",
         },
       },
     },
@@ -278,7 +278,7 @@ enabling `streaming.progress.commentary` hands preambles to the interleaved
 commentary lane instead.
 
 On Discord, when a utility model resolves for the agent — an explicit
-[`utilityModel`](/gateway/config-agents#utilitymodel), or the primary
+[`utilityModel`](/gateway/config-agents#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
 Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
 when the model emits no preamble or has been quiet for about 20 seconds
@@ -361,30 +361,6 @@ Tune the per-line budget:
   },
 }
 ```
-
-### Rich rendering (Slack)
-
-Slack can render progress lines as structured Block Kit fields instead of
-plain text:
-
-```json5
-{
-  channels: {
-    slack: {
-      streaming: {
-        mode: "progress",
-        progress: {
-          render: "rich",
-        },
-      },
-    },
-  },
-}
-```
-
-Rich rendering always sends the same plain-text body alongside the Block Kit
-fields, so clients that cannot render the richer shape still show the compact
-progress text.
 
 ### Hide tool/task lines
 

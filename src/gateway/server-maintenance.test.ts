@@ -48,7 +48,7 @@ function createActiveRun(
 function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
-    logHealth: { error: vi.fn() },
+    logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
@@ -240,7 +240,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("delays curator startup, skips overlap, and unregisters on cleanup", async () => {
+  it("delays collection review and does not overlap runs", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     let resolveSweep = () => {};
@@ -250,16 +250,12 @@ describe("startGatewayMaintenanceTimers", () => {
           resolveSweep = resolve;
         }),
     );
-    const unregister = vi.fn();
-    const register = vi.fn(() => unregister);
     const timers = startGatewayMaintenanceTimers({
       ...createMaintenanceTimerDeps(),
       enableSkillCurator: true,
-      runSkillCuratorSweep: sweep,
-      registerSkillUsageTracking: register,
+      runSkillCollectionReconcile: sweep,
     });
 
-    expect(register).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(CURATOR_INITIAL_DELAY_MS - 1);
     expect(sweep).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -275,7 +271,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     await stopMaintenanceTimers(timers);
-    expect(unregister).toHaveBeenCalledTimes(1);
   });
 
   it("passes owner activity to default managed worktree cleanup", async () => {
@@ -332,7 +327,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = {
       ...createMaintenanceTimerDeps(),
-      logHealth: { error: vi.fn() },
+      logHealth: { info: vi.fn(), error: vi.fn() },
     };
 
     const timers = startGatewayMaintenanceTimers({
@@ -895,6 +890,49 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(activeRun.controller.signal.aborted).toBe(true);
     expect(deps.chatAbortControllers.has(runId)).toBe(false);
 
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("recovers a wedged terminal-pending run whose projection clear never ran", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-wedged-terminal-pending";
+    const wedgedRun = createActiveRun("main");
+    wedgedRun.expiresAtMs = Date.now() - 1;
+    wedgedRun.projectSessionActive = false;
+    wedgedRun.projectSessionTerminalPending = true;
+    // Stamped by the synchronous lifecycle listener; the async clear was lost.
+    wedgedRun.projectSessionTerminalObservedAt = Date.now() - 120_000;
+    deps.chatAbortControllers.set(runId, wedgedRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(wedgedRun.controller.signal.aborted).toBe(false);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("keeps a fresh terminal-pending run for its async projection owner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-fresh-terminal-pending";
+    const freshRun = createActiveRun("main");
+    freshRun.expiresAtMs = Date.now() - 1;
+    freshRun.projectSessionTerminalPending = true;
+    // Abort owner reserves terminal ownership without a stamped observation;
+    // the sweeper must never race that owner.
+    freshRun.projectSessionTerminalObservedAt = undefined;
+    deps.chatAbortControllers.set(runId, freshRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.chatAbortControllers.has(runId)).toBe(true);
     await stopMaintenanceTimers(timers);
   });
 

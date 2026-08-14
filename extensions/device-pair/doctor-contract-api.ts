@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   defineLegacyJsonStateMigration,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE,
   DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,

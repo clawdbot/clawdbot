@@ -1,4 +1,3 @@
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 // Stale-while-revalidate cache for models.authStatus provider usage enrichment.
 import {
   ensureAuthProfileStore,
@@ -10,6 +9,10 @@ import {
   fingerprintAuthProfileOwnerShape,
   fingerprintResolvedProviderAuth,
 } from "../../agents/execution-auth-binding.js";
+import {
+  resolveLegacyInheritedAuthAgentId,
+  resolveLegacyInheritedAuthDir,
+} from "../../agents/legacy-inherited-auth-dir.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -302,8 +305,8 @@ export async function loadUsageStatusStaleWhileRevalidate(params: {
   config: OpenClawConfig;
   now?: number;
 }): Promise<UsageSummary> {
-  const agentId = resolveDefaultAgentId(params.config);
-  const agentDir = resolveAgentDir(params.config, agentId);
+  const agentId = resolveLegacyInheritedAuthAgentId(params.config);
+  const agentDir = resolveLegacyInheritedAuthDir(params.config);
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryForConfigStatus({ cfg: params.config }),
   });

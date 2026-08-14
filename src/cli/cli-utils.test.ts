@@ -1,6 +1,7 @@
 // CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import { parseByteSize } from "./parse-bytes.js";
@@ -129,6 +130,7 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
 describe("dns cli", () => {
   it("prints setup info (no apply)", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     try {
       const program = new Command();
       registerDnsCli(program);
@@ -136,7 +138,12 @@ describe("dns cli", () => {
       const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
       expect(output).toContain("DNS setup");
       expect(output).toContain("openclaw.internal");
+      expect(writeJson).toHaveBeenCalledWith({
+        gateway: { bind: "auto" },
+        discovery: { wideArea: { domain: "openclaw.internal." } },
+      });
     } finally {
+      writeJson.mockRestore();
       log.mockRestore();
     }
   });

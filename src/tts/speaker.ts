@@ -1,10 +1,8 @@
 // Speaker-selection compatibility helpers for plugins that renamed voice fields
 // over time but still need one normalized config object.
-type SpeakerSelectionConfig = Record<string, unknown>;
+import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
+type SpeakerSelectionConfig = Record<string, unknown>;
 
 /** Populate canonical and legacy speaker voice fields together. */
 export function withSpeakerSelectionCompat(

@@ -1,6 +1,7 @@
 /** Shared state and owner-notification policy for cron auto-disable transitions. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { cronFailureDetailLines } from "../failure-notification-text.js";
 import type { CronJob, CronJobState } from "../types.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
@@ -24,7 +25,6 @@ export function autoDisableCronJob(params: {
   reason: CronAutoDisableReason;
   atMs: number;
   consecutiveErrors: number;
-  error: unknown;
   deferredNotifications?: DeferredCronNotifications;
 }): boolean {
   const { state, job } = params;
@@ -41,10 +41,11 @@ export function autoDisableCronJob(params: {
   };
 
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
-  const error = truncateUtf16Safe(String(params.error).trim() || "unknown reason", 200);
+  const errorReason =
+    params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;
   const text = [
-    `⚠️ Automation "${name}" (${job.id}) was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
-    `Last error: ${error}`,
+    `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
+    ...cronFailureDetailLines(errorReason),
     `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
   ].join("\n");
   const notify = () => {
@@ -90,7 +91,6 @@ export function maybeAutoDisableCronJobAfterRunFailure(params: {
   state: CronServiceState;
   job: CronJob;
   atMs: number;
-  error: unknown;
   deferredNotifications?: DeferredCronNotifications;
 }): boolean {
   const consecutiveErrors = params.job.state.consecutiveErrors ?? 0;

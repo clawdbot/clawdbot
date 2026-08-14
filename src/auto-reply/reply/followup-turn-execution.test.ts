@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
@@ -302,6 +303,88 @@ describe("executeFollowupTurn", () => {
     expect(onChannelToolResult).toHaveBeenCalledWith({ text: "📄 Web Fetch: working" });
     expect(onDurableToolResult).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      label: "media",
+      payload: { mediaUrl: "https://example.com/tool-result.png" },
+    },
+    {
+      label: "captioned media",
+      payload: {
+        text: "Generated image",
+        mediaUrl: "https://example.com/tool-result.png",
+      },
+    },
+    {
+      label: "exec approvals",
+      payload: {
+        text: "Approval required.",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      },
+    },
+    {
+      label: "unavailable exec approvals",
+      payload: {
+        text: "Exec approval is unavailable.",
+        channelData: {
+          execApprovalUnavailable: { reason: "no-approval-route" },
+        },
+      },
+    },
+    {
+      label: "ask-user prompts",
+      payload: {
+        text: "Question for you: Where should this deploy?",
+        channelData: { askUser: { questionId: "question-owned-by-agent-runtime" } },
+      },
+    },
+  ] satisfies Array<{ label: string; payload: ReplyPayload }>)(
+    "keeps quiet forced $label on the durable path",
+    async ({ payload }) => {
+      const onChannelToolResult = vi.fn(async () => {});
+      const onDurableToolResult = vi.fn(async () => {});
+      const turn = createTurn({
+        session: {
+          kind: "session",
+          key: "main",
+          current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+          publish: () => undefined,
+          adopt: () => undefined,
+        },
+      });
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        await params.opts?.onToolResult?.(payload);
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+
+      const result = await executeFollowupTurn({
+        turn,
+        defaults: {
+          typing: createTypingController(),
+          typingMode: "never",
+          defaultModel: "claude",
+          opts: {
+            forceToolResultProgress: true,
+            onToolResult: onChannelToolResult,
+          },
+        },
+        onToolResult: onDurableToolResult,
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+      await result.progress.drain();
+
+      expect(onChannelToolResult).not.toHaveBeenCalled();
+      expect(onDurableToolResult).toHaveBeenCalledOnce();
+      expect(onDurableToolResult).toHaveBeenCalledWith(payload, { runId: "run-1" });
+    },
+  );
 
   it("keeps verbose tool results durable when channel progress is available", async () => {
     const onChannelToolResult = vi.fn(async () => {});

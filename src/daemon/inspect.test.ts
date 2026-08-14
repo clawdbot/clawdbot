@@ -20,7 +20,7 @@ vi.mock("./schtasks-exec.js", () => ({
 // Real content from the openclaw-gateway.service unit file (the canonical gateway unit).
 const GATEWAY_SERVICE_CONTENTS = `\
 [Unit]
-Description=OpenClaw Gateway (v2026.3.8)
+Description=OpenClaw Gateway
 After=network-online.target
 Wants=network-online.target
 
@@ -29,7 +29,6 @@ ExecStart=/usr/bin/node /home/openclaw/.npm-global/lib/node_modules/openclaw/dis
 Restart=always
 Environment=OPENCLAW_SERVICE_MARKER=openclaw
 Environment=OPENCLAW_SERVICE_KIND=gateway
-Environment=OPENCLAW_SERVICE_VERSION=2026.3.8
 
 [Install]
 WantedBy=default.target

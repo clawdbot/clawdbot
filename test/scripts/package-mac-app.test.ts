@@ -58,6 +58,87 @@ function getSwiftToolchainBlock(): string {
   return script.slice(start, end);
 }
 
+function runSwiftToolchainHarness(options: {
+  swiftVersion: string;
+  selectedDeveloperDir: "command-line-tools" | "custom-xcode" | "invalid" | "xcode";
+  developerDirOverride?: "custom-xcode" | "invalid" | "xcode";
+  xcodebuildFailure?: string;
+}) {
+  const root = tempDirs.make("openclaw-package-swift-root-");
+  const toolsDir = path.join(root, "tools");
+  const commandLineToolsDir = path.join(root, "Library", "Developer", "CommandLineTools");
+  const xcodeDeveloperDir = path.join(root, "Applications", "Xcode.app", "Contents", "Developer");
+  const customXcodeDeveloperDir = path.join(root, "MountedToolchains", "CustomDeveloper");
+  const invalidDeveloperDir = path.join(root, "InvalidDeveloper");
+  const developerDirs = {
+    "command-line-tools": commandLineToolsDir,
+    "custom-xcode": customXcodeDeveloperDir,
+    invalid: invalidDeveloperDir,
+    xcode: xcodeDeveloperDir,
+  } as const;
+  const selectedDeveloperDir = developerDirs[options.selectedDeveloperDir];
+
+  mkdirSync(toolsDir, { recursive: true });
+  mkdirSync(commandLineToolsDir, { recursive: true });
+  for (const developerDir of [xcodeDeveloperDir, customXcodeDeveloperDir]) {
+    const xcodebuild = path.join(developerDir, "usr", "bin", "xcodebuild");
+    mkdirSync(path.dirname(xcodebuild), { recursive: true });
+    writeFileSync(
+      xcodebuild,
+      [
+        "#!/usr/bin/env bash",
+        '[[ "$*" == "-version" ]] || exit 2',
+        ...(options.xcodebuildFailure
+          ? [`printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2`, "exit 1"]
+          : ["echo 'Xcode 26.0'"]),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(xcodebuild, 0o755);
+  }
+  writeFileSync(
+    path.join(toolsDir, "xcrun"),
+    [
+      "#!/usr/bin/env bash",
+      '[[ "${1:-}" == "xcodebuild" && "${2:-}" == "-version" ]] || exit 2',
+      'developer_dir="${DEVELOPER_DIR:-$MOCK_SELECTED_DEVELOPER_DIR}"',
+      'xcodebuild="$developer_dir/usr/bin/xcodebuild"',
+      'if [[ ! -x "$xcodebuild" ]]; then',
+      '  echo "xcrun: error: unable to find utility xcodebuild" >&2',
+      "  exit 1",
+      "fi",
+      'exec "$xcodebuild" "${@:2}"',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(
+    path.join(toolsDir, "swift"),
+    [
+      "#!/usr/bin/env bash",
+      `echo 'swift-driver version: 1.120.0 Apple Swift version ${options.swiftVersion} (swiftlang-${options.swiftVersion} clang-1700.0.13.5)'`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  for (const tool of ["xcrun", "swift"]) {
+    chmodSync(path.join(toolsDir, tool), 0o755);
+  }
+
+  const developerDirOverride = options.developerDirOverride
+    ? `export DEVELOPER_DIR=${JSON.stringify(developerDirs[options.developerDirOverride])}`
+    : "unset DEVELOPER_DIR";
+  return runHelper(`
+    set -euo pipefail
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    export MOCK_SELECTED_DEVELOPER_DIR=${JSON.stringify(selectedDeveloperDir)}
+    ${developerDirOverride}
+    ${getSwiftToolchainBlock()}
+    require_swift_toolchain
+  `);
+}
+
 function getSparkleBuildHelperBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("sparkle_canonical_build_from_version()");
@@ -734,58 +815,89 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it("fails with an actionable error when Swift tools are too old", () => {
-    const helperBlock = getSwiftToolchainBlock();
-    const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
-
-    const swiftPath = path.join(toolsDir, "swift");
-    writeFileSync(
-      swiftPath,
-      [
-        "#!/usr/bin/env bash",
-        "echo 'swift-driver version: 1.115.1 Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)'",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(swiftPath, 0o755);
-
-    const result = runHelper(`
-      set -euo pipefail
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      ${helperBlock}
-      require_swift_toolchain
-    `);
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.0.3",
+      selectedDeveloperDir: "xcode",
+    });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.2+");
     expect(result.stderr).toContain("Current Swift is 6.0");
   });
 
-  it("accepts Swift tools 6.2 or newer", () => {
-    const helperBlock = getSwiftToolchainBlock();
-    const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
+  it("rejects Command Line Tools even when they provide Swift 6.2", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.2.1",
+      selectedDeveloperDir: "command-line-tools",
+    });
 
-    const swiftPath = path.join(toolsDir, "swift");
-    writeFileSync(
-      swiftPath,
-      [
-        "#!/usr/bin/env bash",
-        "echo 'swift-driver version: 1.120.0 Apple Swift version 6.2.1 (swiftlang-6.2.1 clang-1700.0.13.5)'",
-        "",
-      ].join("\n"),
-      "utf8",
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires a full Xcode developer directory");
+    expect(result.stderr).toContain(
+      "Command Line Tools do not include the required SwiftUI macro plugins",
     );
-    chmodSync(swiftPath, 0o755);
+    expect(result.stderr).toContain(
+      "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
+    );
+    expect(result.stderr).toContain("DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer");
+  });
 
-    const result = runHelper(`
-      set -euo pipefail
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      ${helperBlock}
-      require_swift_toolchain
-    `);
+  it("accepts Swift 6.2 from a selected full Xcode developer directory", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.2.1",
+      selectedDeveloperDir: "xcode",
+    });
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  it("honors DEVELOPER_DIR when the global selection is Command Line Tools", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.2.1",
+      selectedDeveloperDir: "command-line-tools",
+      developerDirOverride: "xcode",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("accepts usable full Xcode tooling from a custom developer directory", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.2.1",
+      selectedDeveloperDir: "custom-xcode",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects an unusable selected developer directory", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.2.1",
+      selectedDeveloperDir: "invalid",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires a full Xcode developer directory");
+  });
+
+  it("preserves the native Xcode failure before generic selection guidance", () => {
+    const diagnostic = "xcodebuild: error: SDK metadata is unavailable";
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.2.1",
+      selectedDeveloperDir: "xcode",
+      xcodebuildFailure: diagnostic,
+    });
+
+    expect(result.status).toBe(1);
+    const diagnosticIndex = result.stderr.indexOf(diagnostic);
+    const guidanceIndex = result.stderr.indexOf(
+      "ERROR: OpenClaw macOS app packaging requires a full Xcode developer directory",
+    );
+    expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
+    expect(guidanceIndex).toBeGreaterThan(diagnosticIndex);
   });
 
   it("runs Sparkle build metadata derivation from the repository root", () => {
@@ -876,6 +988,7 @@ describe("package-mac-app plist stamping", () => {
     };
     const macosCi = pkg.scripts?.["test:macos:ci"] ?? "";
 
+    expect(macosCi).toContain("src/gateway/worker-environments/workspace-rsync-path.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
     expect(macosCi).toContain("test/scripts/create-dmg.test.ts");

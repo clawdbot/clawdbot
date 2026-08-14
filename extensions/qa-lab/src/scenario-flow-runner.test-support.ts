@@ -78,6 +78,7 @@ export async function runLoadedScenarioFlow(
         state.resolvePollCursor({
           accountId: "qa-channel",
           cursor: state.getSnapshot().cursor,
+          acknowledgedCursor: state.getSnapshot().cursor,
         });
         return match;
       }

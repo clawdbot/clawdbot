@@ -12,6 +12,7 @@ import type {
 import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
+  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   parseWorkerWorkspaceManifest,
   recoverWorkerWorkspaceReconciliation,
@@ -190,10 +191,16 @@ describe("worker workspace reconciliation recovery", () => {
     await expect(fs.stat(oversizedPath)).resolves.toMatchObject({
       size: MAX_RECONCILIATION_FILE_BYTES + 1,
     });
-    expect(applied.manifest.entries).toEqual([]);
+    expect(applied.manifest.entries).toEqual([
+      expect.objectContaining({
+        path: "result.bin",
+        type: "file",
+        size: MAX_RECONCILIATION_FILE_BYTES + 1,
+      }),
+    ]);
   });
 
-  it("omits an unrelated oversized local file while applying other worker changes", async () => {
+  it("records an unrelated oversized local file while applying other worker changes", async () => {
     const local = await temporaryDirectory("workspace-oversized-local-only");
     const staged = await temporaryDirectory("workspace-oversized-local-only-staged");
     await fs.writeFile(path.join(local, "result.txt"), "base\n");
@@ -215,7 +222,10 @@ describe("worker workspace reconciliation recovery", () => {
     await expect(fs.stat(oversizedPath)).resolves.toMatchObject({
       size: MAX_RECONCILIATION_FILE_BYTES + 1,
     });
-    expect(applied.manifest.entries.map((entry) => entry.path)).toEqual(["result.txt"]);
+    expect(applied.manifest.entries.map((entry) => entry.path)).toEqual([
+      "local-only.bin",
+      "result.txt",
+    ]);
   });
 
   it("allows a remote file to replace a base directory containing only derived entries", async () => {
@@ -753,5 +763,36 @@ describe("worker workspace reconciliation recovery", () => {
         { version: 1, baseCommit: null, entries: [] },
       ),
     ).toThrow("too large");
+  });
+
+  it("counts serialized reconciliation records at the exact transfer boundary", () => {
+    const entries = (count: number, hash: string) =>
+      Array.from({ length: count }, (_, index) => ({
+        path: `entry-${index.toString().padStart(5, "0")}`,
+        type: "file" as const,
+        mode: 0o644,
+        size: 1,
+        sha256: hash.repeat(64),
+      }));
+    const manifest = (values: WorkerWorkspaceManifestEntry[]): WorkerWorkspaceManifest => ({
+      version: 1,
+      baseCommit: null,
+      entries: values,
+    });
+    const modificationBoundary = MAX_RECONCILIATION_ENTRIES / 2;
+    const base = manifest(entries(modificationBoundary, "a"));
+    const current = manifest(entries(modificationBoundary, "b"));
+    expect(workerWorkspaceTransferPaths(current, base)).toHaveLength(modificationBoundary);
+
+    const overBase = manifest(entries(modificationBoundary + 1, "a"));
+    const overCurrent = manifest(entries(modificationBoundary + 1, "b"));
+    expect(() => workerWorkspaceTransferPaths(overCurrent, overBase)).toThrow(
+      `exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
+    );
+
+    const additions = manifest(entries(MAX_RECONCILIATION_ENTRIES, "c"));
+    const empty = manifest([]);
+    expect(workerWorkspaceTransferPaths(additions, empty)).toHaveLength(MAX_RECONCILIATION_ENTRIES);
+    expect(workerWorkspaceTransferPaths(empty, additions)).toEqual([]);
   });
 });

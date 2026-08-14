@@ -78,33 +78,31 @@ afterEach(() => {
 });
 
 describe("device token request lifecycle", () => {
-  it("does not reveal or persist a rotate response from a retired request epoch", async () => {
+  // A retired epoch is a reconnect, not a reason to destroy the credential: the previous
+  // token is already dead on the server, so the caller still needs this one to recover.
+  it("returns a rotate response from a retired request epoch without persisting it", async () => {
     const response = deferred<unknown>();
     const state = createState(() => response.promise);
-    const prompt = vi.spyOn(window, "prompt").mockImplementation(() => null);
 
     const operation = rotateDeviceToken(state, tokenParams);
     state.requestGeneration += 1;
-    response.resolve({ token: "stale-token", ...tokenParams });
-    await operation;
+    response.resolve({ token: "rotated-token", ...tokenParams });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(await operation).toBe("rotated-token");
     expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 
   it("rechecks rotate ownership after loading the local identity", async () => {
     storeIdentity();
     const { digest, digestMock } = deferIdentityFingerprint();
-    const state = createState(async () => ({ token: "stale-token", ...tokenParams }));
-    const prompt = vi.spyOn(window, "prompt").mockImplementation(() => null);
+    const state = createState(async () => ({ token: "rotated-token", ...tokenParams }));
 
     const operation = rotateDeviceToken(state, tokenParams);
     await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
     state.requestGeneration += 1;
     digest.resolve(new Uint8Array([0]).buffer);
-    await operation;
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(await operation).toBe("rotated-token");
     expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 
@@ -113,7 +111,6 @@ describe("device token request lifecycle", () => {
     storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: ["operator.read"] });
     const { digest, digestMock } = deferIdentityFingerprint();
     const state = createState(async () => ({}));
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     const operation = revokeDeviceToken(state, tokenParams);
     await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());

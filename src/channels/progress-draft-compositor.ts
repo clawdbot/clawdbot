@@ -1,4 +1,8 @@
 import {
+  createProgressDraftDiffStatTracker,
+  type ChannelProgressDraftDiffStat,
+} from "./progress-draft-diffstat.js";
+import {
   createChannelProgressDraftEventHandlers,
   type ChannelProgressDraftEventLineBuilder,
 } from "./progress-draft-events.js";
@@ -46,6 +50,7 @@ export type ChannelProgressDraftCompositorSnapshot = Readonly<{
   statusHeadline?: string;
   plan?: readonly AgentPlanStep[];
   planExplanation?: string;
+  diffStat?: ChannelProgressDraftDiffStat;
 }>;
 
 type ChannelProgressDraftUpdateOptions = {
@@ -106,12 +111,14 @@ export function createChannelProgressDraftCompositor(params: {
     params.active &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.entry, {
       draftStreamActive: true,
+      mode: params.mode,
       previewToolProgressEnabled,
     });
   let progressSuppressed = false;
   let lines: ChannelProgressDraftCompositorLine[] = [];
   let lastRenderedText = "";
   let lastRenderedLines = lines;
+  let lastRenderedDiffStatKey = "";
   let reasoningRawText = "";
   let lastReasoningLine: string | undefined;
   // Id-less commentary streams as cumulative snapshots ("Checking" → "Checking
@@ -129,6 +136,14 @@ export function createChannelProgressDraftCompositor(params: {
   let planExplanation = "";
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
+  const diffStatTracker = createProgressDraftDiffStatTracker({
+    canStage: () =>
+      params.active &&
+      params.mode === "progress" &&
+      !progressSuppressed &&
+      !finalReplyStarted &&
+      !finalReplyDelivered,
+  });
   let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
   let lastStartRendered = false;
 
@@ -174,13 +189,17 @@ export function createChannelProgressDraftCompositor(params: {
     });
   };
 
+  const resolveDiffStat = diffStatTracker.resolve;
+
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot => {
     const statusHeadline = resolveStatusText();
+    const diffStat = resolveDiffStat();
     return {
       lines: lines.map((line) => (typeof line === "string" ? line : { ...line })),
       ...(statusHeadline ? { statusHeadline } : {}),
       ...(planSteps ? { plan: planSteps.map((entry) => ({ ...entry })) } : {}),
       ...(planExplanation ? { planExplanation } : {}),
+      ...(diffStat ? { diffStat } : {}),
     };
   };
 
@@ -190,6 +209,7 @@ export function createChannelProgressDraftCompositor(params: {
     lines = [];
     lastRenderedText = "";
     lastRenderedLines = lines;
+    lastRenderedDiffStatKey = "";
     reasoningRawText = "";
     lastReasoningLine = undefined;
     lastIdLessCommentaryId = undefined;
@@ -200,13 +220,17 @@ export function createChannelProgressDraftCompositor(params: {
     narrationText = "";
     planSteps = undefined;
     planExplanation = "";
+    diffStatTracker.reset();
     lastStartRendered = false;
   };
 
   const publish = async (options?: { flush?: boolean }): Promise<boolean> => {
     const text = formatDraftText();
-    const linesChanged = params.updateOnLineChange === true && lines !== lastRenderedLines;
-    if (!text || (text === lastRenderedText && !linesChanged)) {
+    const diffStatKey = JSON.stringify(resolveDiffStat() ?? null);
+    const structuredStateChanged =
+      params.updateOnLineChange === true &&
+      (lines !== lastRenderedLines || diffStatKey !== lastRenderedDiffStatKey);
+    if (!text || (text === lastRenderedText && !structuredStateChanged)) {
       return false;
     }
     const observed = await settleProgressVisibilityCallbackResult(
@@ -218,6 +242,7 @@ export function createChannelProgressDraftCompositor(params: {
     // Only accepted renders become the dedupe baseline; pending sends remain retryable.
     lastRenderedText = text;
     lastRenderedLines = lines;
+    lastRenderedDiffStatKey = diffStatKey;
     return true;
   };
 
@@ -337,7 +362,10 @@ export function createChannelProgressDraftCompositor(params: {
       : lines;
     const lineChanged = nextLines !== lines;
     const hasUnconfirmedRender = formatDraftText(nextLines) !== lastRenderedText;
-    if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender) {
+    const diffStatChanged =
+      params.updateOnLineChange === true &&
+      JSON.stringify(resolveDiffStat() ?? null) !== lastRenderedDiffStatKey;
+    if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender && !diffStatChanged) {
       return false;
     }
     // A work line lands between reasoning bursts: commit the current thinking
@@ -384,6 +412,8 @@ export function createChannelProgressDraftCompositor(params: {
   const progressEventHandlers = createChannelProgressDraftEventHandlers({
     entry: params.entry,
     pushLine: noteProgress,
+    onTool: diffStatTracker.stageToolEvent,
+    onItem: diffStatTracker.commitItemEvent,
     ...(params.buildProgressEventLine ? { buildLine: params.buildProgressEventLine } : {}),
   });
 

@@ -1,8 +1,14 @@
+import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
 } from "../../agents/agent-scope.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+  shouldAdmitFreshChannelOwnerCronAuthority,
+} from "../../agents/cron-creator-authority-context.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
@@ -15,6 +21,7 @@ import {
   resolvePersistedUserTurnText,
 } from "../../sessions/user-turn-transcript.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -22,6 +29,7 @@ import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
 import {
   buildPersistedMediaImageLayout,
   normalizeMessageTimestampMs,
+  suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -29,6 +37,11 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeToolProgressDetail } from "./prompt-session-context.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import {
+  bindSourceReplyDeliveryRuntime,
+  createSourceReplyDeliveryRuntime,
+  type SourceReplyDeliveryRuntimeOptions,
+} from "./source-reply-delivery-runtime.js";
 import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
@@ -76,6 +89,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     useFastReplyRuntime,
     fullAccessState,
     extraSystemPromptParts,
+    sourceConversationContextByMode,
+    sourceConversationContextPromptOffset,
     extraSystemPromptStatic,
     cliSessionBindingFacts,
     baseBodyTrimmedRaw,
@@ -191,7 +206,17 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
-  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
+  const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
+  const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
+    unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
+  );
+  const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
+  const inboundMediaIndexes = buildInboundMediaNoteProjection(ctx).mediaIndexes ?? [];
+  const promptMediaForRun = suppressUnresolvedPromptMedia({
+    promptMedia: promptMedia ?? [],
+    inboundMediaIndexes,
+    unresolvedSourceIndexes,
+  });
   const mediaImageLayout = buildPersistedMediaImageLayout({
     ctx,
     media: userTurnMediaForPersistence,
@@ -317,7 +342,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
-    media: promptMedia,
+    media: promptMediaForRun,
     // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
@@ -342,6 +367,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
+      conversationToolPolicy: sessionCtx.ConversationToolPolicy,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
         normalizeOptionalString(sessionCtx.GroupChannel) ??
@@ -439,51 +465,99 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         : {}),
     },
   };
-
+  const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
+  if (sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin) {
+    const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
+      origin: sourceReplyDeliveryRuntimeOptions.sourceReplyDeliveryModeOrigin,
+      initialMode: sourceReplyDeliveryMode ?? "automatic",
+      projections: [followupRun.run, ...(opts ? [opts] : [])],
+      promptComponentByMode: sourceConversationContextByMode,
+      promptComponentOffset: sourceConversationContextPromptOffset,
+      onModeResolved: sourceReplyDeliveryRuntimeOptions.onSourceReplyDeliveryModeResolved,
+    });
+    bindSourceReplyDeliveryRuntime(followupRun.run, sourceReplyDeliveryRuntime);
+  }
   const replyThreadingOverride =
     isBareSessionReset && sessionCtx.ReplyThreading?.implicitCurrentMessage !== "deny"
       ? { ...sessionCtx.ReplyThreading, implicitCurrentMessage: "deny" as const }
       : undefined;
 
-  return runReplyAgent({
-    commandBody: prefixedCommandBody,
-    transcriptCommandBody,
-    followupRun,
-    queueKey,
-    resolvedQueue,
-    shouldSteer,
-    shouldFollowup,
-    queueAdmissionState,
-    isActive,
-    isRunActive: () => {
-      const latestSessionState = resolvePreparedSessionState();
-      const latestActiveSessionId =
-        resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??
-        latestSessionState.sessionId;
-      return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
-    },
-    opts,
-    typing,
-    sessionEntry: preparedSessionState.sessionEntry,
-    sessionStore,
-    sessionKey,
-    runtimePolicySessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens: agentCfg?.contextTokens,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    toolProgressDetail:
-      normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
-      normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
-    isNewSession: params.isNewSession,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    sessionCtx,
-    shouldInjectGroupIntro,
-    typingMode,
-    resetTriggered: effectiveResetTriggered,
-    replyThreadingOverride,
-    replyOperation: providedReplyOperation,
+  const admitFreshChannelOwnerCronAuthority = shouldAdmitFreshChannelOwnerCronAuthority({
+    senderIsOwner: command.senderIsOwner,
+    messageProvider,
+    senderId: sessionCtx.SenderId,
+    isHeartbeat,
+    isRoomEvent,
+    inputProvenance,
+    spawnedBy: preparedSessionState.sessionEntry?.spawnedBy,
+    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
   });
+  const authorityRunId = admitFreshChannelOwnerCronAuthority
+    ? (opts?.runId ?? crypto.randomUUID())
+    : undefined;
+  const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
+  const createdCronCreatorAuthorityCapability =
+    !inheritedCronCreatorAuthorityCapability && authorityRunId
+      ? createCronCreatorAuthorityCapability(authorityRunId)
+      : undefined;
+  const cronCreatorAuthorityCapability =
+    inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;
+  const execute = () =>
+    runReplyAgent({
+      commandBody: prefixedCommandBody,
+      transcriptCommandBody,
+      followupRun,
+      queueKey,
+      resolvedQueue,
+      shouldSteer,
+      shouldFollowup,
+      queueAdmissionState,
+      isActive,
+      isRunActive: () => {
+        const latestSessionState = resolvePreparedSessionState();
+        const latestActiveSessionId =
+          resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??
+          latestSessionState.sessionId;
+        return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
+      },
+      opts:
+        authorityRunId || cronCreatorAuthorityCapability
+          ? {
+              ...opts,
+              ...(authorityRunId ? { runId: authorityRunId } : {}),
+              ...(cronCreatorAuthorityCapability ? { cronCreatorAuthorityCapability } : {}),
+            }
+          : opts,
+      typing,
+      sessionEntry: preparedSessionState.sessionEntry,
+      sessionStore,
+      sessionKey,
+      runtimePolicySessionKey,
+      storePath,
+      defaultModel,
+      agentCfgContextTokens: agentCfg?.contextTokens,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      toolProgressDetail:
+        normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
+        normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
+      isNewSession: params.isNewSession,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      sessionCtx,
+      shouldInjectGroupIntro,
+      typingMode,
+      resetTriggered: effectiveResetTriggered,
+      replyThreadingOverride,
+      replyOperation: providedReplyOperation,
+    });
+  // The scope surrounds the whole immediate turn, including provider fallbacks.
+  // If runReplyAgent queues this input, the scope settles before later drain/replay.
+  return createdCronCreatorAuthorityCapability
+    ? runWithCronCreatorAuthorityCapability(
+        createdCronCreatorAuthorityCapability,
+        execute,
+        opts?.abortSignal,
+      )
+    : execute();
 }

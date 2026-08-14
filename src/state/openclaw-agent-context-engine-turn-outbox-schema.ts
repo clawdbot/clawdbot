@@ -6,6 +6,7 @@ export const CONTEXT_ENGINE_TURN_OUTBOX_TABLE = "context_engine_turn_outbox";
 
 const OUTBOX_SCHEMA_START = `CREATE TABLE IF NOT EXISTS ${CONTEXT_ENGINE_TURN_OUTBOX_TABLE} (`;
 const OUTBOX_SCHEMA_END = "CREATE TABLE IF NOT EXISTS cache_entries (";
+const ENSURED_DATABASES = new WeakSet<DatabaseSync>();
 
 function contextEngineTurnOutboxSchemaSql(): string {
   const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(OUTBOX_SCHEMA_START);
@@ -18,6 +19,9 @@ function contextEngineTurnOutboxSchemaSql(): string {
 
 /** Lazily installs the additive context-engine turn outbox on first use. */
 export function ensureContextEngineTurnOutboxSchema(db: DatabaseSync): void {
+  if (ENSURED_DATABASES.has(db)) {
+    return;
+  }
   const ensure = () => {
     db.exec(contextEngineTurnOutboxSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
   };
@@ -26,4 +30,5 @@ export function ensureContextEngineTurnOutboxSchema(db: DatabaseSync): void {
     return;
   }
   runSqliteImmediateTransactionSync(db, ensure);
+  ENSURED_DATABASES.add(db);
 }

@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { ModelsConfigSchema } from "../config/zod-schema.core.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { normalizeProviders } from "./models-config.providers.normalize.js";
+import {
+  normalizeProviderCatalogModelsForConfig,
+  normalizeProviders,
+} from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
@@ -381,6 +385,47 @@ describe("normalizeProviders", () => {
     });
     expect((enforced as Record<string, unknown>).openai).toBeNull();
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("publishes schema-complete costs after duplicate model rows merge", () => {
+    type ConfigModel = NonNullable<
+      NonNullable<OpenClawConfig["models"]>["providers"]
+    >[string]["models"][number];
+    const modelWithPartialCost = (id: string, cost: Partial<NonNullable<ConfigModel["cost"]>>) =>
+      ({ ...createModel({ id }), cost }) as ConfigModel;
+    const tieredPricing = [
+      {
+        input: 8,
+        output: 40,
+        cacheRead: 0.1,
+        cacheWrite: 1,
+        range: [0, 1_000_000] as [number, number],
+      },
+    ];
+    const providers = {
+      custom: {
+        baseUrl: "https://models.example/v1",
+        models: [
+          modelWithPartialCost("partial", { input: 10, output: 50, tieredPricing }),
+          createModel({ id: "unknown", cost: undefined }),
+          modelWithPartialCost("duplicate", { input: 3, output: 15 }),
+          modelWithPartialCost("duplicate", { cacheRead: 0.3, cacheWrite: 3.75 }),
+        ],
+      },
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+    expect(ModelsConfigSchema.safeParse({ providers }).success).toBe(true);
+    expect(normalizeProviderCatalogModelsForConfig(providers)?.custom?.models).toEqual([
+      createModel({
+        id: "partial",
+        cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, tieredPricing },
+      }),
+      createModel({ id: "unknown", cost: undefined }),
+      createModel({
+        id: "duplicate",
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      }),
+    ]);
   });
 
   it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {

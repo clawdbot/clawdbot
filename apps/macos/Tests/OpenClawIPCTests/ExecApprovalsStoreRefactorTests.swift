@@ -14,77 +14,20 @@ struct ExecApprovalsStoreRefactorTests {
         return FileManager().temporaryDirectory.resolvingSymlinksInPath()
     }
 
-    private func withLockedEnv(
-        _ values: [String: String?],
-        _ body: () async throws -> Void) async throws
-    {
-        func restoreEnv(_ values: [String: String?]) {
-            for (key, value) in values {
-                if let value {
-                    setenv(key, value, 1)
-                } else {
-                    unsetenv(key)
-                }
-            }
-        }
-
-        await TestIsolationLock.shared.acquire()
-        var previousEnv: [String: String?] = [:]
-        for (key, value) in values {
-            previousEnv[key] = getenv(key).map { String(cString: $0) }
-            if let value {
-                setenv(key, value, 1)
-            } else {
-                unsetenv(key)
-            }
-        }
-
-        do {
-            try await body()
-            restoreEnv(previousEnv)
-            await TestIsolationLock.shared.release()
-        } catch {
-            restoreEnv(previousEnv)
-            await TestIsolationLock.shared.release()
-            throw error
-        }
-    }
-
     private func withTempStateDir(
+        seedCurrentApprovals: Bool = true,
         _ body: @escaping @Sendable (URL) async throws -> Void) async throws
     {
         let root = self.realTemporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        let home = root.appendingPathComponent("home", isDirectory: true)
         let stateDir = root.appendingPathComponent("state", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
-        try Self.seedCurrentApprovalsFile(in: stateDir)
-
-        try await self.withLockedEnv([
-            "OPENCLAW_HOME": home.path,
-            "OPENCLAW_PROFILE": nil,
-            "OPENCLAW_STATE_DIR": stateDir.path,
-        ]) {
-            try await body(stateDir)
+        if seedCurrentApprovals {
+            try Self.seedCurrentApprovalsFile(in: stateDir)
         }
-    }
 
-    private func withTempHomeAndStateDir(
-        profile: String? = nil,
-        _ body: @escaping @Sendable (URL, URL) async throws -> Void) async throws
-    {
-        let root = self.realTemporaryDirectory
-            .appendingPathComponent("openclaw-home-state-\(UUID().uuidString)", isDirectory: true)
-        let home = root.appendingPathComponent("home", isDirectory: true)
-        let stateDir = root.appendingPathComponent("state", isDirectory: true)
-        defer { try? FileManager().removeItem(at: root) }
-
-        try await self.withLockedEnv([
-            "OPENCLAW_HOME": home.path,
-            "OPENCLAW_PROFILE": profile,
-            "OPENCLAW_STATE_DIR": stateDir.path,
-        ]) {
-            try await body(home, stateDir)
+        try await ExecApprovalsStore.withStateDirectory(stateDir) {
+            try await body(stateDir)
         }
     }
 
@@ -108,6 +51,23 @@ struct ExecApprovalsStoreRefactorTests {
             #expect(resolved.agent.ask == .off)
             #expect(resolved.agent.askFallback == .deny)
             #expect(!resolved.agent.autoAllowSkills)
+        }
+    }
+
+    @Test
+    func `task scoped state directory survives detached async reads`() async throws {
+        try await self.withTempStateDir { stateDirectoryURL in
+            _ = try ExecApprovalsStore.updateDefaults { defaults in
+                defaults.security = .allowlist
+                defaults.ask = .onMiss
+            }.get()
+
+            let resolved = try await ExecApprovalsStore.resolveDefaultsAsyncResult().get()
+
+            #expect(resolved.security == .allowlist)
+            #expect(resolved.ask == .onMiss)
+            #expect(ExecApprovalsStore.databaseURL() == ExecApprovalsSQLiteStore.databaseURL(
+                stateDirectoryURL: stateDirectoryURL))
         }
     }
 
@@ -150,7 +110,7 @@ struct ExecApprovalsStoreRefactorTests {
 
     @Test
     func `legacy migration failure is typed and removal recovers without restart`() async throws {
-        try await self.withTempHomeAndStateDir { _, stateDirectoryURL in
+        try await self.withTempStateDir { stateDirectoryURL in
             let legacyFileURL = stateDirectoryURL.appendingPathComponent("exec-approvals.json")
             try FileManager.default.createDirectory(
                 at: stateDirectoryURL,
@@ -184,7 +144,7 @@ struct ExecApprovalsStoreRefactorTests {
         defer { try? FileManager().removeItem(at: root) }
         try Self.seedCurrentApprovalsFile(in: stateDir)
 
-        try await self.withLockedEnv([
+        try await TestIsolation.withEnvValues([
             "OPENCLAW_HOME": home.path,
             "OPENCLAW_STATE_DIR": nil,
         ]) {
@@ -308,7 +268,7 @@ struct ExecApprovalsStoreRefactorTests {
 
     @Test
     func `missing and present empty snapshots have distinct hashes`() async throws {
-        try await self.withTempHomeAndStateDir { _, _ in
+        try await self.withTempStateDir(seedCurrentApprovals: false) { _ in
             let missing = ExecApprovalsStore.readSnapshot()
             #expect(!missing.exists)
             #expect(missing.hash.hasPrefix("missing:"))

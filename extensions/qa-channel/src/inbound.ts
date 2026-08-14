@@ -207,7 +207,7 @@ function createQaReplyPreview(params: {
     currentText = "";
   };
 
-  const sendDurable = async (text: string) => {
+  const sendDurable = async (text: string, isError?: boolean) => {
     if (!text.trim()) {
       return;
     }
@@ -217,6 +217,7 @@ function createQaReplyPreview(params: {
       accountId: params.account.accountId,
       to: params.target,
       text,
+      isError,
       senderId: params.account.botUserId,
       senderName: params.account.botDisplayName,
       threadId: params.inbound.threadId,
@@ -229,8 +230,15 @@ function createQaReplyPreview(params: {
 
   return {
     clear,
-    async deliver(text: string, kind: string) {
+    async deliver(text: string, kind: string, isError?: boolean) {
       await pending;
+      if (isError === true) {
+        // Preview edits cannot add the typed failure marker. Replace any preview
+        // with one durable marked message so QA Lab cannot accept it as success.
+        await clear();
+        await sendDurable(text, true);
+        return;
+      }
       // Core may close a streamed block with an identical final payload.
       // The block is already durable, so posting the final again duplicates the reply.
       if (
@@ -419,7 +427,12 @@ export async function handleQaInbound(params: {
       deliver: async (payload, info) => {
         const reply =
           payload && typeof payload === "object"
-            ? (payload as { text?: string; mediaUrl?: string; mediaUrls?: string[] })
+            ? (payload as {
+                text?: string;
+                mediaUrl?: string;
+                mediaUrls?: string[];
+                isError?: boolean;
+              })
             : undefined;
         const text = reply?.text ?? "";
         const mediaUrls = Array.from(
@@ -444,6 +457,7 @@ export async function handleQaInbound(params: {
             accountId: params.account.accountId,
             to: target,
             text,
+            isError: reply?.isError,
             mediaUrls,
             mediaLocalRoots: getAgentScopedMediaLocalRoots(
               params.config as OpenClawConfig,
@@ -457,7 +471,7 @@ export async function handleQaInbound(params: {
         if (!text.trim()) {
           return;
         }
-        await preview.deliver(text, info?.kind ?? "final");
+        await preview.deliver(text, info?.kind ?? "final", reply?.isError);
       },
       onError: (error) => {
         void preview.clear().catch((clearError: unknown) => {

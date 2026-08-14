@@ -886,7 +886,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
-  it("advances queued entry to unknown_after_send when a later payload fails after an earlier one succeeded", async () => {
+  it("advances queued entry to unknown_after_send before a later payload fails", async () => {
     let sendCount = 0;
     let stateBeforeSecondSend: string | undefined;
     const sendMatrix = vi.fn(async () => {

@@ -14,7 +14,7 @@ import {
   expandPolicyWithPluginGroups,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolName,
+  normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "../../tool-policy.js";
 
@@ -50,7 +50,7 @@ function isPluginGroupAllowlistName(normalized: string): boolean {
 }
 
 function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
-  return toolsAllow.some((entry) => normalizeToolName(entry) === "*");
+  return toolsAllow.some((entry) => normalizeToolPolicyName(entry) === "*");
 }
 
 /**
@@ -104,8 +104,8 @@ export function mergeForcedEmbeddedAttemptToolsAllow(
   if (required.length === 0) {
     return toolsAllow;
   }
-  const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
-  const missing = required.filter((name) => !normalized.has(normalizeToolName(name)));
+  const normalized = new Set(toolsAllow.map((entry) => normalizeToolPolicyName(entry)));
+  const missing = required.filter((name) => !normalized.has(normalizeToolPolicyName(name)));
   if (missing.length === 0) {
     return toolsAllow;
   }
@@ -232,7 +232,7 @@ function shouldCreateBundleRuntimeForAttempt(
   if (hasWildcardToolAllowlist(params.toolsAllow)) {
     return true;
   }
-  return params.toolsAllow.some((toolName) => matchesAllowlist(normalizeToolName(toolName)));
+  return params.toolsAllow.some((toolName) => matchesAllowlist(normalizeToolPolicyName(toolName)));
 }
 
 /**

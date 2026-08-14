@@ -12,7 +12,7 @@ import {
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
   shouldAcquireLocalHeavyCheckLockForTsgo,
-} from "../../scripts/lib/local-heavy-check-runtime.mjs";
+} from "../../scripts/lib/local-heavy-check-runtime.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();

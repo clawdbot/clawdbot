@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw secrets` (reload, audit, configure, apply)"
+summary: "CLI reference for `openclaw secrets` (store, reload, audit, configure, apply)"
 read_when:
   - Re-resolving secret refs at runtime
+  - Managing team-scoped values in the shared secret store
   - Auditing plaintext residues and unresolved refs
   - Configuring SecretRefs and applying one-way scrub changes
 title: "Secrets"
@@ -14,6 +15,7 @@ Manage SecretRefs and keep the active runtime snapshot healthy.
 | Command     | Role                                                                                                                                                                                         |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `reload`    | Gateway RPC (`secrets.reload`): re-resolves refs and atomically publishes the owner-aware runtime snapshot (no config writes); eligible owner failures may publish as cold or stale warnings |
+| `store`     | Manages team-scoped secret and environment values in the local shared state SQLite database                                                                                                  |
 | `audit`     | Read-only scan of config/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs skipped unless `--allow-exec`)                      |
 | `configure` | Interactive planner for provider setup, target mapping, and preflight (requires a TTY)                                                                                                       |
 | `apply`     | Executes a saved plan (`--dry-run` validates only and skips exec checks by default; write mode rejects exec-containing plans unless `--allow-exec`), then scrubs targeted plaintext residues |
@@ -35,8 +37,91 @@ Exit codes for CI/gates:
 
 - `audit --check` returns `1` on findings.
 - Unresolved refs return `2` (regardless of `--check`).
+- Store validation and disclosure-policy failures return `2`; `store get` returns `3` when the name is missing.
 
 Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/onepassword) · [SecretRef Credential Surface](/reference/secretref-credential-surface) · [Security](/gateway/security)
+
+## Shared secret store
+
+`openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped; this release accepts only `--scope team`. `--scope me` is rejected because identity scope is not supported yet.
+
+```bash
+openclaw secrets store list
+openclaw secrets store set <NAME>
+openclaw secrets store get <NAME>
+openclaw secrets store rm <NAME>...
+openclaw secrets store import [--from <file>]
+```
+
+Names must match `^[A-Z][A-Z0-9_]{0,127}$`. Values are limited to 64 KiB (65,536 UTF-8 bytes); an oversized value is rejected with exit code 2 whether it arrives from stdin, `--value`, or `--value-file`. A `secret` entry may not be empty, because an empty credential cannot be diagnosed later (`get` refuses secret kinds and listings mask them); `env` entries may be empty. `--kind secret|env` overrides automatic kind detection; otherwise names ending in common credential suffixes such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
+
+### Set values safely
+
+`--value` is accepted only when the resolved kind is `env`:
+
+```bash
+openclaw secrets store set LOG_LEVEL --kind env --value debug
+```
+
+For `secret` values, `--value` is refused with exit code `2` because command-line arguments can leak through shell history and process listings. Use one of the three safe inputs instead:
+
+- Pipe stdin when stdin is not a TTY.
+- Pass `--value-file <path>`; `--value-file -` means stdin.
+- Run interactively and enter the value in the no-echo prompt.
+
+Examples:
+
+```bash
+op read 'op://Engineering/OpenAI/apiKey' | \
+  openclaw secrets store set OPENAI_API_KEY --kind secret
+
+openclaw secrets store set TLS_PRIVATE_KEY \
+  --kind secret \
+  --value-file ./client-key.pem
+```
+
+`set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. A successful write reminds you to run `openclaw secrets reload` before a config-referenced value can take effect.
+
+### Read values
+
+```bash
+openclaw secrets store list --json
+openclaw secrets store list --plain
+openclaw secrets store get LOG_LEVEL
+```
+
+Secret values never appear in human, `--json`, or `--plain` output. `store get` refuses a `secret` entry as write-only by design and exits `2`; it exits `3` when the name does not exist. Environment-kind values are readable.
+
+Team-scoped `env` entries also reach commands run by OpenClaw's own exec tool, including Code Mode, sandboxed exec, and `node`-hosted exec. Explicit per-call env wins over store values, and host/sandbox security filters can reject protected or credential-shaped names with a warning. `secret` entries are never exposed as subprocess env; use them through `store` SecretRefs instead.
+
+<Warning>
+Store entries do not reach commands run inside an external agent harness. The Codex app-server and its sandbox exec-server, and ACP children such as Claude Code, build their own child environment and never pass through OpenClaw's exec preparation. If an agent run is delegated to one of those harnesses, set the variable in that harness's own configuration instead.
+</Warning>
+
+### Remove values
+
+```bash
+openclaw secrets store rm OLD_TOKEN
+openclaw secrets store rm OLD_TOKEN LEGACY_PASSWORD --yes
+openclaw secrets store rm OLD_TOKEN --dry-run
+```
+
+Removal is idempotent, so a missing name succeeds quietly. Without `--yes`, the CLI asks for confirmation. Removed rows are soft-deleted and purged after 30 days.
+
+### Import dotenv files
+
+Import dotenv-format assignments from a regular file or stdin:
+
+```bash
+openclaw secrets store import --from .env
+openclaw secrets store import --from .env --dry-run
+openclaw secrets store import --from .env --yes
+op read 'op://Engineering/service-account/dotenv' | openclaw secrets store import --yes
+```
+
+The importer supports quoted values and multiline quoted values such as PEM keys. Use `--yes` to skip confirmation and `--dry-run` to inspect the import without writing. Kind detection follows the same name-based rule as `store set`.
+
+The store CLI commands do not accept `--url` or `--token` and do not route through the Gateway. The Control UI uses the admin-scoped `secrets.store.*` RPC methods instead; those methods refresh the runtime automatically when a changed name is referenced by active config.
 
 ## Reload runtime snapshot
 
@@ -57,6 +142,7 @@ Scans OpenClaw state for:
 - plaintext secret storage
 - unresolved refs
 - precedence drift (`auth-profiles.json` credentials shadowing `openclaw.json` refs)
+- store residue (a team store value duplicated by plaintext in `openclaw.json`)
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
 
@@ -75,8 +161,8 @@ Report shape:
 
 - `status`: `clean | findings | unresolved`
 - `resolution`: `refsChecked`, `skippedExecRefs`, `resolvabilityComplete`
-- `summary`: `plaintextCount`, `unresolvedRefCount`, `shadowedRefCount`, `legacyResidueCount`
-- finding codes: `PLAINTEXT_FOUND`, `REF_UNRESOLVED`, `REF_SHADOWED`, `LEGACY_RESIDUE`
+- `summary`: `plaintextCount`, `unresolvedRefCount`, `shadowedRefCount`, `storeResidueCount`, `legacyResidueCount`
+- finding codes: `PLAINTEXT_FOUND`, `REF_UNRESOLVED`, `REF_SHADOWED`, `STORE_PLAINTEXT_RESIDUE`, `LEGACY_RESIDUE`
 
 ## Configure (interactive helper)
 

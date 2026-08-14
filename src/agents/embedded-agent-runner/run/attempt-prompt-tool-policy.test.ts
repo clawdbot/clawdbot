@@ -5,7 +5,7 @@ import type { AnyAgentTool } from "../../tools/common.js";
 import {
   applyPromptBuildToolsAllow,
   applyResolvedToolPromptFinalizer,
-} from "./attempt-prompt-tool-policy.js";
+} from "./attempt-prompt-support.js";
 
 function catalogEntry(name: string, tool: { name: string } = { name }): ToolSearchCatalogEntry {
   return {

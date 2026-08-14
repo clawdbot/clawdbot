@@ -4,9 +4,9 @@ import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-u
 import { fetchCodexUsage } from "./provider-usage.fetch.codex.js";
 
 describe("fetchCodexUsage", () => {
-  it("returns token expired for auth failures", async () => {
+  it.each([401, 403])("returns token expired for a %s auth failure", async (status) => {
     const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(401, { error: "unauthorized" }),
+      makeResponse(status, { error: "unauthorized" }),
     );
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);

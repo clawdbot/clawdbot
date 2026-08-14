@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
-} from "./subagent-spawn.test-helpers.js";
+} from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 type GatewayRequest = { method?: string; params?: Record<string, unknown> };
 type TestBindingRequest = {
@@ -56,8 +56,8 @@ const bindingMocks = vi.hoisted(() => ({
   listBySession: vi.fn(() => []),
 }));
 
-let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let resetSubagentRegistryForTests: typeof import("./subagents/registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
 
 function getGatewayRequests(): GatewayRequest[] {
   // Gateway call list is the observable side effect for spawn orchestration.

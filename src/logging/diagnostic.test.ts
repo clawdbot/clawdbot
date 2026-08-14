@@ -36,7 +36,6 @@ import type { StuckSessionRecoveryOutcome } from "./diagnostic-session-recovery.
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
-  getDiagnosticSessionStateCountForTest,
   peekDiagnosticSessionState,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
@@ -52,11 +51,13 @@ import {
   logMessageQueued,
   logSessionStateChange,
   markDiagnosticSessionProgress,
+  startDiagnosticHeartbeat as startDiagnosticHeartbeatImpl,
+} from "./diagnostic.js";
+import {
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
-  startDiagnosticHeartbeat as startDiagnosticHeartbeatImpl,
-} from "./diagnostic.js";
+} from "./diagnostic.test-support.js";
 
 function startDiagnosticHeartbeat(
   config?: Parameters<typeof startDiagnosticHeartbeatImpl>[0],
@@ -173,12 +174,12 @@ describe("diagnostic session state pruning", () => {
 
   it("evicts stale idle session states", () => {
     getDiagnosticSessionState({ sessionId: "stale-1" });
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
 
     vi.advanceTimersByTime(31 * 60 * 1000);
     getDiagnosticSessionState({ sessionId: "fresh-1" });
 
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
   });
 
   it("caps tracked session states to a bounded max", () => {
@@ -194,7 +195,7 @@ describe("diagnostic session state pruning", () => {
     }
     pruneDiagnosticSessionStates(now + 2002, true);
 
-    expect(getDiagnosticSessionStateCountForTest()).toBe(2000);
+    expect(diagnosticSessionStates.size).toBe(2000);
   });
 
   it("reuses keyed session state when later looked up by sessionId", () => {
@@ -206,7 +207,7 @@ describe("diagnostic session state pruning", () => {
 
     expect(bySessionId).toBe(keyed);
     expect(bySessionId.sessionKey).toBe("agent:main:demo-channel:channel:c1");
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
   });
 
   it("canonicalizes sessionId-only state when the sessionKey becomes known", () => {
@@ -221,7 +222,7 @@ describe("diagnostic session state pruning", () => {
     expect(diagnosticSessionStates.has("s1")).toBe(false);
     expect(diagnosticSessionStates.get(sessionKey)).toBe(keyed);
     expect(getDiagnosticSessionState({ sessionKey })).toBe(keyed);
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
   });
 
   it("merges split sessionId and sessionKey state without leaving stale queued work", () => {
@@ -240,13 +241,13 @@ describe("diagnostic session state pruning", () => {
     expect(merged.queueDepth).toBe(2);
     expect(merged.state).toBe("processing");
     expect(diagnosticSessionStates.has("s1")).toBe(false);
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
 
     logSessionStateChange({ sessionId: "s1", sessionKey, state: "idle", reason: "run_completed" });
     logSessionStateChange({ sessionKey, state: "idle", reason: "message_completed" });
 
     expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(0);
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
   });
 });
 
@@ -2269,7 +2270,7 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events).toStrictEqual([]);
-    expect(getDiagnosticSessionStateCountForTest()).toBe(0);
+    expect(diagnosticSessionStates.size).toBe(0);
   });
 
   it("checks memory pressure every tick without recording idle samples", () => {

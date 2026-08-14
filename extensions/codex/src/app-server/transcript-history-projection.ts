@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
+import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThread, JsonValue } from "./protocol.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -266,4 +267,55 @@ export function projectBoundedCodexThreadHistory(params: {
       .map(({ responseItem }) => responseItem),
     transcriptMessages: selected.map(({ message }) => message),
   };
+}
+
+/** Projects only visible local user/assistant messages through the same bounded history policy. */
+export function projectBoundedCodexVisibleSessionHistory(
+  entries: readonly SessionTranscriptMessageEntry[],
+): JsonValue[] {
+  const projected: ProjectedCodexHistoryMessage[] = [];
+  for (const entry of entries) {
+    if ((entry.role !== "user" && entry.role !== "assistant") || !("content" in entry.message)) {
+      continue;
+    }
+    if (
+      entry.role === "assistant" &&
+      "stopReason" in entry.message &&
+      (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")
+    ) {
+      continue;
+    }
+    const content = entry.message.content;
+    const text = normalizeImportedHistoryText(
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content
+              .flatMap((part) =>
+                part && typeof part === "object" && "text" in part && typeof part.text === "string"
+                  ? [part.text]
+                  : [],
+              )
+              .join("\n")
+          : undefined,
+    );
+    if (!text) {
+      continue;
+    }
+    projected.push({
+      message: entry.message,
+      responseItem: {
+        type: "message",
+        role: entry.role,
+        content: [
+          {
+            type: entry.role === "assistant" ? "output_text" : "input_text",
+            text,
+          },
+        ],
+      },
+      textBytes: Buffer.byteLength(text, "utf8"),
+    });
+  }
+  return selectBoundedCodexHistoryTail(projected).map(({ responseItem }) => responseItem);
 }

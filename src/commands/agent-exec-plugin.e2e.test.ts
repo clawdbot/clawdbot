@@ -1,20 +1,14 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 
 const execFileAsync = promisify(execFile);
-const tempRoots: string[] = [];
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-plugin-e2e-"));
-  tempRoots.push(root);
-  return root;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function writeHarnessPlugin(stateDir: string): Promise<void> {
   const pluginDir = path.join(stateDir, "extensions", "exec-proof");
@@ -159,15 +153,9 @@ function buildCliSource(args: string[]): string {
   `;
 }
 
-afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
-
 describe("agent exec installed plugin isolation", () => {
   it("runs an operator-installed harness without retaining run state", async () => {
-    const stateDir = await makeTempRoot();
+    const stateDir = tempDirs.make("openclaw-agent-exec-plugin-e2e-");
     await writeHarnessPlugin(stateDir);
     await writeConfig(stateDir);
     const source = buildCliSource(["agent", "exec", "prove plugin discovery", "--json"]);

@@ -53,8 +53,6 @@ export async function sanitizeSessionMessagesImages(
     };
   } & ImageSanitizationLimits,
 ): Promise<AgentMessage[]> {
-  const sanitizeMode = options?.sanitizeMode ?? "full";
-  const allowNonImageSanitization = sanitizeMode === "full";
   const imageSanitization = {
     maxDimensionPx: options?.maxDimensionPx,
     maxBytes: options?.maxBytes,
@@ -113,7 +111,7 @@ export async function sanitizeSessionMessagesImages(
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
           const finalContent = dropEmptyTextBlocks(nextContent);
-          if (finalContent.length > 0) {
+          if (finalContent.length > 0 || assistantMsg.providerReplay) {
             out.push({ ...assistantMsg, content: finalContent });
           }
         } else {
@@ -126,28 +124,14 @@ export async function sanitizeSessionMessagesImages(
         const strippedContent = options?.preserveSignatures
           ? content // Keep signatures for Antigravity Claude
           : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
-        if (!allowNonImageSanitization) {
-          const nextContent = (await sanitizeContentBlocksImages(
-            dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
-            label,
-            imageSanitization,
-          )) as unknown as typeof assistantMsg.content;
-          if (nextContent.length > 0) {
-            out.push({ ...assistantMsg, content: nextContent });
-          }
-          continue;
-        }
-
-        const filteredContent = dropEmptyTextBlocks(strippedContent);
         const finalContent = (await sanitizeContentBlocksImages(
-          filteredContent as unknown as ContentBlock[],
+          dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
           label,
           imageSanitization,
         )) as unknown as typeof assistantMsg.content;
-        if (finalContent.length === 0) {
-          continue;
+        if (finalContent.length > 0 || assistantMsg.providerReplay) {
+          out.push({ ...assistantMsg, content: finalContent });
         }
-        out.push({ ...assistantMsg, content: finalContent });
         continue;
       }
     }

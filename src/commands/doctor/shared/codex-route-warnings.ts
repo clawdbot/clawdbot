@@ -33,7 +33,7 @@ import {
   collectDisabledCodexPluginRouteIssues,
   enableCodexPluginForRequiredRoutes,
 } from "./codex-route-config-scan.js";
-import { parseModelRef } from "./codex-route-model-ref.js";
+import { parseCodexRouteModelRef } from "./codex-route-model-ref.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 import type {
   CodexRouteHit,
@@ -152,7 +152,7 @@ function ownValues(record: Record<string, unknown>, keys: readonly string[]): un
 }
 
 function modelUsesCodexForEveryAgent(cfg: OpenClawConfig, modelRef: string): boolean {
-  const parsed = parseModelRef(modelRef);
+  const parsed = parseCodexRouteModelRef(modelRef);
   if (!parsed || parsed.modelId === "*") {
     return false;
   }
@@ -179,7 +179,7 @@ function collectCodexModelParamHits(
     listMutableCodexRouteAgentEntries(cfg).map(({ agentId, path }) => [agentId, path]),
   );
   for (const route of collectCodexRuntimeRouteHits(cfg, env)) {
-    const parsed = parseModelRef(route.canonicalModel);
+    const parsed = parseCodexRouteModelRef(route.canonicalModel);
     if (!parsed || parsed.provider !== "openai") {
       continue;
     }

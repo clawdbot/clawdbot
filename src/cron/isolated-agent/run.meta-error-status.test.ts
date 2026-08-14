@@ -3,9 +3,8 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  cleanupDirectCronSessionMock,
+  callGatewayMock,
   dispatchCronDeliveryMock,
-  isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
@@ -58,6 +57,7 @@ function mockAnnounceOutcome(overrides: Record<string, unknown> = {}) {
     synthesizedText: undefined,
     deliveryPayload: undefined,
     deliveryPayloads: [],
+    deliveryDisposition: { kind: "visible" },
     deliveryPayloadHasStructuredContent: false,
     hasFatalErrorPayload: false,
     hasFatalStructuredErrorPayload: false,
@@ -129,15 +129,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("cron isolated agent run aborted");
-    expect(cleanupDirectCronSessionMock).toHaveBeenCalledWith({
-      job: expect.objectContaining({ deleteAfterRun: true }),
-      agentSessionKey: "agent:default:cron:test",
-      sessionId: "test-session-id",
-      lifecycleRevision: "test-lifecycle-revision",
-      sessionUpdatedAt: expect.any(Number),
-      beforeSessionDelete: expect.any(Function),
-      retireReason: "cron-delete-after-run-aborted",
-    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("marks a completed embedded run with no final payload as a cron error", async () => {
@@ -211,11 +203,10 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   });
 
   it("does not mark empty accepted child-session handoffs as cron errors", async () => {
-    isHeartbeatOnlyResponseMock.mockReturnValue(true);
     mockAgentRun({
       acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
     });
-    mockAnnounceOutcome();
+    mockAnnounceOutcome({ deliveryDisposition: { kind: "empty" } });
 
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
@@ -257,7 +248,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     "waits for the accepted child instead of treating %s as its final reply",
     async (heartbeatReply) => {
       const heartbeatPayload = { text: heartbeatReply };
-      isHeartbeatOnlyResponseMock.mockReturnValue(true);
       mockAgentRun({
         payloads: [heartbeatPayload],
         usage: { input: 10, output: 1 },
@@ -269,6 +259,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
         synthesizedText: heartbeatPayload.text,
         deliveryPayload: heartbeatPayload,
         deliveryPayloads: [heartbeatPayload],
+        deliveryDisposition: { kind: "heartbeat", controlOnly: true },
       });
 
       const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
@@ -301,7 +292,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   ])(
     "preserves $name instead of treating an accepted child as the only completion",
     async ({ parentReply, payloads }) => {
-      isHeartbeatOnlyResponseMock.mockReturnValue(true);
       mockAgentRun({
         payloads,
         usage: { input: 10, output: 1 },
@@ -313,6 +303,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
         synthesizedText: parentReply,
         deliveryPayload: payloads.at(-1),
         deliveryPayloads: payloads,
+        deliveryDisposition: { kind: "heartbeat", controlOnly: false },
       });
 
       const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
@@ -335,7 +326,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
     const heartbeatPayload = { text: "HEARTBEAT_OK" };
     const error = "cron child-session handoff timed out before producing a final assistant payload";
-    isHeartbeatOnlyResponseMock.mockReturnValue(true);
     mockAgentRun({
       payloads: [heartbeatPayload],
       usage: { input: 10, output: 1 },
@@ -347,6 +337,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       synthesizedText: heartbeatPayload.text,
       deliveryPayload: heartbeatPayload,
       deliveryPayloads: [heartbeatPayload],
+      deliveryDisposition: { kind: "heartbeat", controlOnly: true },
     });
     mockDeliveryFailure(error);
 

@@ -1,8 +1,6 @@
 import {
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readStringArrayParam,
-  readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
@@ -12,14 +10,9 @@ import {
 import { PARALLEL_MCP_SEARCH_URL, runParallelMcpSearch } from "./parallel-mcp-search.runtime.js";
 import {
   buildParallelCacheKey,
-  invalidSearchQueriesPayload,
-  mapParallelResults,
-  normalizeParallelClientModel,
-  normalizeParallelObjective,
-  normalizeParallelSearchQueries,
-  normalizeParallelSessionId,
+  buildParallelSearchPayload,
   PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
-  resolveParallelSearchCount,
+  normalizeParallelSearchRequest,
   stripParallelGeneratedSessionId,
 } from "./parallel-search-normalize.js";
 
@@ -34,23 +27,15 @@ export async function executeParallelFreeWebSearchProviderTool(
     resolveProviderWebSearchPluginConfig(ctx.config, "parallel-free"),
   ) as SearchConfigRecord | undefined;
 
-  // Mirror the paid provider's generic `query` fallback (the operator CLI passes
-  // `{ query, count }`); agent callers supply the native objective/search_queries.
-  const objective = normalizeParallelObjective(readStringParam(args, "objective"));
-  const cliQuery = normalizeParallelObjective(readStringParam(args, "query"));
-  let searchQueries = normalizeParallelSearchQueries(readStringArrayParam(args, "search_queries"));
-  if (searchQueries.length === 0 && cliQuery) {
-    searchQueries = normalizeParallelSearchQueries([cliQuery]);
-  }
-  if (searchQueries.length === 0) {
-    return invalidSearchQueriesPayload();
-  }
-  const count = resolveParallelSearchCount(args, searchConfig?.maxResults);
-  const sessionId = normalizeParallelSessionId(
-    readStringParam(args, "session_id"),
+  const request = normalizeParallelSearchRequest(
+    args,
+    searchConfig?.maxResults,
     PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
   );
-  const clientModel = normalizeParallelClientModel(readStringParam(args, "client_model"));
+  if ("error" in request) {
+    return request.error;
+  }
+  const { objective, searchQueries, count, sessionId, clientModel } = request;
   const cacheKey = buildParallelCacheKey({
     endpoint: PARALLEL_MCP_SEARCH_URL,
     objective,
@@ -74,34 +59,13 @@ export async function executeParallelFreeWebSearchProviderTool(
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
     signal,
   });
-  const results = mapParallelResults(response);
-
-  const payload: Record<string, unknown> = {
-    ...(objective ? { objective } : {}),
-    searchQueries,
+  const payload = buildParallelSearchPayload({
     provider: "parallel-free",
-    count: results.length,
-    tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "parallel-free",
-      wrapped: true,
-    },
-    results,
-  };
-  if (typeof response.search_id === "string") {
-    payload.searchId = response.search_id;
-  }
-  if (typeof response.session_id === "string") {
-    payload.sessionId = response.session_id;
-  }
-  if (Array.isArray(response.warnings) && response.warnings.length > 0) {
-    payload.warnings = response.warnings;
-  }
-  if (Array.isArray(response.usage) && response.usage.length > 0) {
-    payload.usage = response.usage;
-  }
+    objective,
+    searchQueries,
+    response,
+    start,
+  });
 
   const cachePayload = sessionId ? payload : stripParallelGeneratedSessionId(payload);
   writeCachedSearchPayload(cacheKey, cachePayload, resolveSearchCacheTtlMs(searchConfig));

@@ -1,5 +1,4 @@
 // Chutes tests cover models plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CHUTES_DEFAULT_MODEL_ID } from "./api.js";
@@ -98,22 +97,6 @@ describe("chutes-models", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("builds static definitions with required fields", () => {
-    const entry = expectDefined(CHUTES_MODEL_CATALOG[0], "first Chutes catalog model");
-    const def = entry;
-    expect(def.id).toBe(entry.id);
-    expect(def.name).toBe(entry.name);
-    expect(def.reasoning).toBe(entry.reasoning);
-    expect(def.input).toEqual(entry.input);
-    expect(def.cost).toEqual(entry.cost);
-    expect(def.contextWindow).toBe(entry.contextWindow);
-    expect(def.maxTokens).toBe(entry.maxTokens);
-    if (!def.compat) {
-      throw new Error("expected Chutes model compat");
-    }
-    expect(def.compat.supportsUsageInStreaming).toBe(false);
-  });
-
   it("keeps image-capable fallback models in the runtime catalog", () => {
     const visionModelIds = ["moonshotai/Kimi-K2.6-TEE", "Qwen/Qwen3.6-27B-TEE"];
     for (const id of visionModelIds) {
@@ -131,6 +114,9 @@ describe("chutes-models", () => {
     const runtimeIds = CHUTES_MODEL_CATALOG.map((model) => model.id);
     expect(manifestIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
     expect(runtimeIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
+    expect(
+      CHUTES_MODEL_CATALOG.every((model) => model.compat?.supportsUsageInStreaming === false),
+    ).toBe(true);
     expect(CHUTES_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.chutes.defaultModel);
     expect(manifest.modelCatalog.providers.chutes.defaultModel).toBe("zai-org/GLM-5.2-TEE");
     expect(

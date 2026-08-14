@@ -16,7 +16,6 @@ import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
-import { shouldMigrateStateFromPath } from "../argv.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -233,7 +232,14 @@ export async function ensureConfigReady(
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
-  const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
+  const shouldConsiderStateMigration =
+    commandName !== "config" &&
+    commandName !== "health" &&
+    commandName !== "logs" &&
+    commandName !== "sessions" &&
+    // Remote RPC clients must not migrate state owned by the running gateway.
+    !(commandName === "gateway" && subcommandName === "call") &&
+    !(commandName === "update" && subcommandName === "status");
   const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
   const runStateMigrationPreflight = async () => {
     didRunDoctorConfigFlow = true;

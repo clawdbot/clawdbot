@@ -5,6 +5,11 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "./delivery-result.js";
+import {
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
+} from "./dispatch-result.js";
 
 describe("createChannelDeliveryResultFromReceipt", () => {
   it("keeps legacy messageIds while attaching the receipt", () => {
@@ -96,5 +101,33 @@ describe("channel partial delivery errors", () => {
         deliveryResult: { visibleReplySent: false },
       }),
     ).toBe(false);
+  });
+});
+
+describe("channel turn dispatch results", () => {
+  it("normalizes visible dispatch checks", () => {
+    expect(hasVisibleChannelTurnDispatch(undefined)).toBe(false);
+    expect(
+      hasVisibleChannelTurnDispatch({
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      }),
+    ).toBe(true);
+    expect(
+      hasVisibleChannelTurnDispatch(undefined, {
+        observedReplyDelivery: true,
+      }),
+    ).toBe(true);
+    expect(
+      hasFinalChannelTurnDispatch({
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      }),
+    ).toBe(false);
+    expect(resolveChannelTurnDispatchCounts(undefined)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
   });
 });

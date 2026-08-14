@@ -112,13 +112,33 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}chat`);
         expect(response?.status()).toBe(200);
+        const identityCard = page.locator(".sidebar-identity-card");
+        await expect
+          .poll(async () => {
+            const subtitle =
+              (await identityCard.locator(".sidebar-identity-card__subtitle").textContent()) ?? "";
+            const [gitIdentity, relativeAge] = subtitle.trim().split(" · ", 2);
+            return { gitIdentity, hasRelativeAge: Boolean(relativeAge?.trim()) };
+          })
+          .toEqual({
+            gitIdentity: `${COMPACT_BRANCH}@0123456*`,
+            hasRelativeAge: true,
+          });
+
+        if (captureUiProofEnabled) {
+          await mkdir(uiProofArtifactDir, { recursive: true });
+          await identityCard.screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "00-footer-custom-build-identity.png"),
+          });
+        }
+
         await openBuildDetails(page);
         await assertFullBranchLabel(page);
         await page.reload();
         await assertFullBranchLabel(page);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-about-build-identity.png"),

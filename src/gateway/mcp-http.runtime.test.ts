@@ -201,6 +201,17 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
+  it("does not share cache rows across different runtime policy agents", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "worker" }));
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts only the revoked grant's cached tool closures", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;

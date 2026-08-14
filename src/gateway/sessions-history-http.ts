@@ -29,6 +29,7 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   buildSessionHistorySnapshot,
+  resolveCursorSeq,
   resolveSessionHistoryTailReadOptions,
   SessionHistorySseState,
 } from "./session-history-state.js";
@@ -178,6 +179,10 @@ export async function handleSessionHistoryHttpRequest(
   }
   const limit = limitResult.value;
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
+  if (cursor !== undefined && resolveCursorSeq(cursor) === undefined) {
+    sendInvalidRequest(res, "cursor must be a positive integer");
+    return true;
+  }
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   let boundedSnapshot:
     | Awaited<ReturnType<typeof readRecentSessionMessagesWithStatsAsync>>

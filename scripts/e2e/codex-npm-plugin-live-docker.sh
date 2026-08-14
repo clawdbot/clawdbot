@@ -43,7 +43,7 @@ AGENT_TURN_TIMEOUT_SECONDS="$(
 )"
 SESSION_STORE_CONTRACT="${OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT:-}"
 if [[ -z "$SESSION_STORE_CONTRACT" ]]; then
-  if [[ -f "$CANDIDATE_ROOT/src/config/sessions/session-accessor.sqlite.ts" ]]; then
+  if [[ -f "$CANDIDATE_ROOT/src/config/sessions/session-accessor.sqlite-contract.ts" ]]; then
     SESSION_STORE_CONTRACT="sqlite"
   else
     # Trusted current harnesses also validate frozen targets from before the SQLite cutover.

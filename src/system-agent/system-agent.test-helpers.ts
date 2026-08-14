@@ -297,7 +297,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
   const agentHarnessId =
     configuredRoute.agentHarnessRuntimeOverride === "auto"
       ? "openclaw"
-      : configuredRoute.agentHarnessRuntimeOverride;
+      : (configuredRoute.agentHarnessRuntimeOverride ?? "codex");
   const authFingerprint =
     profileId && agentHarnessId !== "openclaw"
       ? fingerprintResolvedAuthProfileCredential({ profileId, credential, resolvedAuth })

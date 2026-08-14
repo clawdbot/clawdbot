@@ -13,9 +13,10 @@ import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -260,6 +261,28 @@ export function listPluginOriginsFromMetadataSnapshot(
   return new Map(snapshot.plugins.map((record) => [record.id, record.origin]));
 }
 
+/** Rebuilds every manifest-derived snapshot fact from one authoritative registry. */
+export function rebasePluginMetadataSnapshotManifestRegistry(
+  snapshot: PluginMetadataSnapshot,
+  manifestRegistry: PluginManifestRegistry,
+): PluginMetadataSnapshot {
+  const plugins = manifestRegistry.plugins;
+  return {
+    ...snapshot,
+    manifestRegistry,
+    plugins,
+    diagnostics: manifestRegistry.diagnostics,
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: snapshot.index
+      ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
+      : snapshot.normalizePluginId,
+    owners: buildPluginMetadataOwnerMaps(plugins),
+    ...(snapshot.metrics
+      ? { metrics: { ...snapshot.metrics, manifestPluginCount: plugins.length } }
+      : {}),
+  };
+}
+
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
@@ -425,3 +448,8 @@ function loadPluginMetadataSnapshotImpl(
     discovery: registryResult.discovery,
   };
 }
+
+// Light bridges (plugin-metadata-snapshot.runtime.ts) serve loads through this
+// instance whenever the metadata system is loaded; the require fallback only
+// covers cold processes.
+registerPluginMetadataSnapshotReaders({ resolvePluginMetadataSnapshot });

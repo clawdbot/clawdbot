@@ -1,6 +1,5 @@
 // Tests Canvas A2UI native resource generation.
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -9,15 +8,10 @@ import {
   checkNativeA2uiResources,
   getNativeA2uiResourcePaths,
   syncNativeA2uiResources,
-} from "../../scripts/sync-native-a2ui.mjs";
+} from "../../scripts/sync-native-a2ui.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-async function makeTempDir() {
-  const dir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-a2ui-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function writeA2uiFixture(dir: string, bundle = "console.log('a2ui');\n") {
   await fs.mkdir(dir, { recursive: true });
@@ -25,13 +19,7 @@ async function writeA2uiFixture(dir: string, bundle = "console.log('a2ui');\n") 
   await fs.writeFile(path.join(dir, "a2ui.bundle.js"), bundle, "utf8");
 }
 
-describe("scripts/sync-native-a2ui.mjs", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
+describe("scripts/sync-native-a2ui.mts", () => {
   it("resolves the plugin-owned source and native build owners", () => {
     const paths = getNativeA2uiResourcePaths("/repo");
 
@@ -45,7 +33,7 @@ describe("scripts/sync-native-a2ui.mjs", () => {
   });
 
   it("requires every native build owner to generate isolated resources", async () => {
-    const root = await makeTempDir();
+    const root = tempDirs.make("openclaw-native-a2ui-");
     const paths = {
       linuxBuildFile: path.join(root, "build.rs"),
       androidBuildFile: path.join(root, "build.gradle.kts"),
@@ -54,12 +42,12 @@ describe("scripts/sync-native-a2ui.mjs", () => {
     await Promise.all([
       fs.writeFile(
         paths.linuxBuildFile,
-        '.args(["scripts/sync-native-a2ui.mjs", "--write", "--output"])',
+        '.args(["--import", "tsx", "scripts/sync-native-a2ui.mts", "--write", "--output"])',
       ),
       fs.writeFile(
         paths.androidBuildFile,
         [
-          'commandLine("node", "scripts/sync-native-a2ui.mjs", "--write", "--output")',
+          'commandLine("node", "--import", "tsx", "scripts/sync-native-a2ui.mts", "--write", "--output")',
           "addGeneratedSourceDirectory(stageCanvasA2ui, StageCanvasA2uiTask::outputDirectory)",
         ].join("\n"),
       ),
@@ -67,7 +55,7 @@ describe("scripts/sync-native-a2ui.mjs", () => {
         paths.iosProjectFile,
         [
           "Stage Canvas A2UI resources",
-          "scripts/sync-native-a2ui.mjs --write --output",
+          "node --import tsx scripts/sync-native-a2ui.mts --write --output",
           "pwd -P",
           "$BUILT_PRODUCTS_DIR/OpenClawKit_OpenClawKit.bundle",
           "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH",
@@ -84,7 +72,7 @@ describe("scripts/sync-native-a2ui.mjs", () => {
   });
 
   it("requires Linux Canvas to embed the plugin-owned resources", async () => {
-    const root = await makeTempDir();
+    const root = tempDirs.make("openclaw-native-a2ui-");
     const linuxConsumerFile = path.join(root, "canvas.rs");
     await fs.writeFile(
       linuxConsumerFile,
@@ -102,7 +90,7 @@ describe("scripts/sync-native-a2ui.mjs", () => {
   });
 
   it("replaces stale native resources with the generated source files", async () => {
-    const root = await makeTempDir();
+    const root = tempDirs.make("openclaw-native-a2ui-");
     const sourceDir = path.join(root, "source");
     const nativeDir = path.join(root, "native");
     await writeA2uiFixture(sourceDir);
@@ -122,7 +110,7 @@ describe("scripts/sync-native-a2ui.mjs", () => {
   });
 
   it("fails check mode when native resources contain stale files or stale bytes", async () => {
-    const root = await makeTempDir();
+    const root = tempDirs.make("openclaw-native-a2ui-");
     const sourceDir = path.join(root, "source");
     const nativeDir = path.join(root, "native");
     await writeA2uiFixture(sourceDir);

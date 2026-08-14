@@ -11,7 +11,7 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikte et"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Canlı"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konu"</string>
-    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Yazışmayı aç"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Konuyu aç"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Kaydır →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Basılı tut"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dokun"</string>
@@ -27,9 +27,9 @@
     <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşmayı durdur"</string>
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Son yanıtı seslendir"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşuyor"</string>
-    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dinliyor"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dinleniyor"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlanıyor"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düşünüyor"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düşünme"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yazıyor"</string>
     <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gönderiliyor"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Temsilci çalışıyor"</string>

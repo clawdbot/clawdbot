@@ -176,12 +176,6 @@ public struct SkillStatusConfigCheck: Codable, Identifiable, Sendable {
     public var id: String {
         self.path
     }
-
-    public init(path: String, value: OpenClawProtocol.AnyCodable?, satisfied: Bool) {
-        self.path = path
-        self.value = value
-        self.satisfied = satisfied
-    }
 }
 
 public struct SkillInstallOption: Codable, Identifiable, Sendable {
@@ -226,12 +220,19 @@ public struct ClawHubInstalledSkillLink: Codable, Sendable {
 
 public struct ClawHubSkillSummary: Codable, Identifiable, Hashable, Sendable {
     public let slug: String
+    public let installRef: String?
     public let displayName: String
     public let summary: String?
     public let version: String?
 
+    /// Several publishers can share one slug, so the Gateway-supplied reference is what identifies
+    /// a result, what distinguishes rows, and what detail and install must send back.
+    public var reference: String {
+        self.installRef?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? self.slug
+    }
+
     public var id: String {
-        self.slug
+        self.reference
     }
 }
 

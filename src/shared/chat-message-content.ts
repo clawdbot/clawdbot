@@ -216,7 +216,7 @@ export function extractAssistantTextForPhase(
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
-export function extractAssistantVisibleText(message: unknown): string | undefined {
+export function extractAssistantPhaseText(message: unknown): string | undefined {
   const finalAnswerText = extractAssistantTextForPhase(message, { phase: "final_answer" });
   if (finalAnswerText) {
     return finalAnswerText;

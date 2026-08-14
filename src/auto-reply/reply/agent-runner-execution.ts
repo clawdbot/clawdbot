@@ -6,15 +6,21 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type PreparedAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
-  formatRateLimitOrOverloadedErrorCopy,
+  classifyFailoverReason,
   isContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
@@ -102,6 +108,7 @@ async function executeAgentTurnInternalWithRetryState(
   commitTerminalOutcome: () => void,
   overloadRetryState: OverloadRetryState,
   commitMcpAppModelContext: () => void,
+  preparedRunAdmission: PreparedAgentRunAdmission,
 ): Promise<AgentTurnInternalResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -298,6 +305,7 @@ async function executeAgentTurnInternalWithRetryState(
         heartbeatState,
       });
       const cycle = await executeAgentFallbackCycle({
+        preparedRunAdmission,
         turn: params,
         effectiveRun,
         runtimeConfig,
@@ -421,9 +429,11 @@ async function executeAgentTurnInternalWithRetryState(
           (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
         )?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
-      const formattedErrorCandidate = errorCandidate
-        ? formatRateLimitOrOverloadedErrorCopy(errorCandidate)
-        : undefined;
+      const candidateReason = errorCandidate ? classifyFailoverReason(errorCandidate) : null;
+      const formattedErrorCandidate =
+        candidateReason === "rate_limit" || candidateReason === "overloaded"
+          ? renderRateLimitOrOverloadedCopy({ reason: candidateReason, raw: errorCandidate })
+          : undefined;
       if (formattedErrorCandidate) {
         runResult.payloads = [
           markAgentRunFailureReplyPayload({
@@ -481,14 +491,30 @@ async function executeAgentTurnInternal(
     noticeSent: false,
     completed: false,
   };
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const preparedRunAdmission = prepareAgentRunAdmission({
+    cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      runId,
+      agentId: params.followupRun.run.agentId,
+      ingress: {
+        kind: "channel",
+        boundary: "auto-reply.agent-runner",
+        state: "present",
+      },
+    },
+  });
   try {
     return await executeAgentTurnInternalWithRetryState(
       params,
       commitTerminalOutcome,
       overloadRetryState,
       commitMcpAppModelContext,
+      preparedRunAdmission,
     );
   } finally {
+    preparedRunAdmission.close();
     await cancelOverloadRetryNotice(overloadRetryState);
   }
 }

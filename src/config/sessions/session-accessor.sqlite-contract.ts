@@ -50,6 +50,8 @@ export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "se
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   sessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
 };
 
 export type ExactSessionEntry = {
@@ -197,6 +199,17 @@ type SessionEntryReplacement = {
 
 export type SessionEntryReplacementUpdate<T> = {
   replacements?: Iterable<SessionEntryReplacement>;
+  result: T;
+};
+
+type SessionEntryBatchProjectionMutation = {
+  entry: SessionEntry;
+  previousSessionKeys?: readonly string[];
+  sessionKey: string;
+};
+
+export type SessionEntryBatchProjectionUpdate<T> = {
+  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
   result: T;
 };
 
