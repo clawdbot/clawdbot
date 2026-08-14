@@ -47,6 +47,8 @@ describe("attempt trajectory status", () => {
   });
 
   it("marks length-limited visible text as non-deliverable without terminal output", () => {
+    // No payload was synthesized, so nothing reached the user and the error
+    // classification stands.
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
@@ -60,7 +62,9 @@ describe("attempt trajectory status", () => {
     });
   });
 
-  it("does not treat streamed partial payloads as completed length-limited output", () => {
+  it("records a delivered length-limited partial payload as success", () => {
+    // The terminal owner delivers this turn as a partial reply, so the durable
+    // trajectory record must agree instead of reporting a non-deliverable error.
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
@@ -69,10 +73,7 @@ describe("attempt trajectory status", () => {
           lastAssistantStopReason: "length",
         }),
       ),
-    ).toEqual({
-      status: "error",
-      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-    });
+    ).toEqual({ status: "success" });
   });
 
   it("keeps length-limited turns successful when terminal output was delivered", () => {

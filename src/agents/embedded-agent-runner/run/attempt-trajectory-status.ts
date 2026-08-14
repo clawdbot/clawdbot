@@ -129,10 +129,15 @@ export function resolveAttemptTrajectoryTerminal(
       terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
     };
   }
+  // Same predicate as the terminal delivery owner: a length stop is only
+  // non-deliverable when it produced no payload to deliver. A length stop that
+  // did produce payloads is delivered as a partial reply, so recording it as a
+  // non-deliverable error here would contradict what the user received.
   if (
     params.lastAssistantStopReason === "length" &&
     !params.hasTerminalOutput &&
-    !hasExplicitTerminalDelivery
+    !hasExplicitTerminalDelivery &&
+    params.synthesizedPayloadCount === 0
   ) {
     return {
       status: "error",

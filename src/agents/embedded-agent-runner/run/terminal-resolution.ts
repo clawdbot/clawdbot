@@ -583,13 +583,19 @@ function completeEmbeddedRun(
     : input.attempt.yieldDetected
       ? "end_turn"
       : (input.attemptAssistant?.stopReason as string | undefined);
+  // The truncation notice belongs to exactly the turns this fix newly delivers:
+  // a length stop whose only output is partial assistant text. A length stop that
+  // also produced terminal output (tool media, a committed source reply) was
+  // already complete before this fix and must not gain a misleading extra reply.
+  const isTruncatedPartialReply =
+    stopReason === "length" && !hasAttemptTerminalState(input.attempt);
   // Existing visible payloads already avoid the silent-park symptom. The diagnostic
   // fills only an otherwise empty yielded turn and must not duplicate visible output.
   // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)
   const terminalPayloads = input.emptyAssistantReplyIsSilent
     ? [{ text: SILENT_REPLY_TOKEN }]
     : input.payloadsForTerminalPath?.length
-      ? stopReason === "length"
+      ? isTruncatedPartialReply
         ? [...input.payloadsForTerminalPath, { text: TRUNCATED_REPLY_NOTICE_TEXT }]
         : input.payloadsForTerminalPath
       : input.attempt.yieldDetected && !yieldHasContinuation

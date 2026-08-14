@@ -608,6 +608,35 @@ describe("terminal resolution", () => {
     expect(resolved.result.meta.livenessState).toBe("working");
   });
 
+  it("does not add a truncation notice to a length stop that already has terminal output", async () => {
+    // Terminal tool media was already a complete outcome before this fix, so it
+    // must not gain a notice telling the user to ask for a continuation.
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "length",
+      content: [{ type: "text", text: "Chart attached" }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: ["Chart attached"],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      toolMediaUrls: ["https://example.invalid/chart.png"],
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        payloadsWithToolMedia: [{ text: "Chart attached" }],
+      }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([{ text: "Chart attached" }]);
+  });
+
   it("still reports an incomplete turn when the output budget ends with no text", async () => {
     const assistant = emptyAssistant({ stopReason: "length" });
     const attempt = makeEmbeddedRunnerAttempt({
