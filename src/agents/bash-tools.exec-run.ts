@@ -2,6 +2,7 @@
  * Exec tool policy, host dispatch, and process lifecycle pipeline.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
   type ExecHost,
@@ -350,7 +351,6 @@ export function createExecTool(
       if (!params.command) {
         throw new Error("Provide a command to start.");
       }
-      await rejectUnsafeExecControlShellCommand(params.command);
       let workdir: string | undefined;
       let scriptPreflightCwd: string | null = null;
       let containerWorkdir = sandbox?.containerWorkdir;
@@ -388,6 +388,10 @@ export function createExecTool(
       } else {
         workdir = workdirResolution.remoteCwd;
       }
+      await rejectUnsafeExecControlShellCommand(
+        params.command,
+        host === "gateway" && workdir ? { stateDir: resolveStateDir(), workdir } : undefined,
+      );
       let run: ExecProcessHandle;
       let backgroundTask: BackgroundExecTaskHandle | null = null;
       let settledOutcome: ExecProcessOutcome | null = null;
