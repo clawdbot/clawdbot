@@ -229,6 +229,33 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await captureProof(page, "approved.png");
   });
 
+  it("collapses the limited-access banner into a persistent status chip", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Collapse limited access banner" }).click();
+
+    const statusChip = page.getByRole("button", { name: "Show limited access details" });
+    await statusChip.waitFor();
+    expect(await statusChip.getAttribute("aria-expanded")).toBe("false");
+    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
+      0,
+    );
+
+    await page.reload();
+    await statusChip.waitFor();
+    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
+      0,
+    );
+
+    await statusChip.click();
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Request admin" }).waitFor();
+  });
+
   it.each(SCOPE_UPGRADE_METHODS)(
     "shows manual repair guidance when %s is not advertised",
     async (missingMethod) => {
@@ -266,6 +293,8 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
 
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+      await page.getByRole("button", { name: "Collapse limited access banner" }).click();
+      await page.getByRole("button", { name: "Show limited access details" }).waitFor();
     },
   );
 

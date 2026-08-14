@@ -64,16 +64,6 @@ function renderScopeUpgradeBanner(
   if (state.phase === "hidden") {
     return nothing;
   }
-  if (state.phase === "guidance") {
-    return html`<openclaw-update-banner
-      .props=${{
-        statusBanner: {
-          tone: "warn",
-          text: t("connection.scopeUpgrade.guidance"),
-        },
-      }}
-    ></openclaw-update-banner>`;
-  }
   void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
   if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
     return html`<openclaw-device-scope-upgrade-banner
