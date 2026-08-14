@@ -9,7 +9,9 @@ import {
   bindCodexAppServerRuntimeArtifact,
   captureCodexAppServerRuntimeArtifactBeforeStart,
   finalizeCodexAppServerRuntimeArtifact,
+  isCodexNativeContainmentCapability,
   readCodexAppServerClientRuntimeArtifact,
+  validateAndMintCodexNativeContainmentCapability,
   validateCodexAppServerRuntimeArtifact,
 } from "./runtime-artifact.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -70,6 +72,17 @@ describe("Codex app-server runtime artifact", () => {
 
       expect(readCodexAppServerClientRuntimeArtifact(client)).toEqual(binding);
       await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+      const capability = await validateAndMintCodexNativeContainmentCapability({
+        actual: binding,
+        expected: binding,
+      });
+      expect(isCodexNativeContainmentCapability(capability)).toBe(true);
+      expect(
+        isCodexNativeContainmentCapability({
+          artifactId: binding.id,
+          artifactFingerprint: binding.fingerprint,
+        }),
+      ).toBe(false);
       await fs.writeFile(codeModeHost, "host-v2");
       await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
     });

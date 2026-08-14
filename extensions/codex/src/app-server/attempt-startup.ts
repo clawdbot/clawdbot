@@ -63,6 +63,10 @@ import type {
   JsonObject,
 } from "./protocol.js";
 import {
+  isCodexNativeContainmentCapability,
+  type CodexNativeContainmentCapability,
+} from "./runtime-artifact.js";
+import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
@@ -159,8 +163,8 @@ export async function startCodexAttemptThread(params: {
   /** OpenClaw owns configured MCP dynamically for this scheduled turn. */
   configuredMcpOwnershipVersion?: 1;
   nativeToolSurfaceEnabled: boolean;
-  /** Must be true only after the managed Codex runtime passes containment gates. */
-  nativeContainmentConfirmed?: boolean;
+  /** Must be minted by runtime-artifact validation; never accept a caller boolean. */
+  nativeContainmentCapability?: CodexNativeContainmentCapability;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
@@ -170,11 +174,11 @@ export async function startCodexAttemptThread(params: {
   onStartupTimeout: () => void | Promise<void>;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
-  // Keep native Code Mode disabled until the managed runtime proves finite,
-  // descendant-safe command execution. This is the local fail-closed fence;
-  // the capability is intentionally absent until the upstream patch lands.
+  // Keep native Code Mode disabled unless a non-forgeable runtime-artifact
+  // capability was minted after digest validation. No current caller has one.
   const nativeToolSurfaceEnabled =
-    params.nativeToolSurfaceEnabled && params.nativeContainmentConfirmed === true;
+    params.nativeToolSurfaceEnabled === true &&
+    isCodexNativeContainmentCapability(params.nativeContainmentCapability);
   let pluginAppServer = params.appServer;
   const startupRuntimeAuthProfileId =
     params.startupPreparedAuth?.kind === "profile"

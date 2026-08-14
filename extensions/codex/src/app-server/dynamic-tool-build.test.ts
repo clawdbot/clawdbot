@@ -162,7 +162,6 @@ async function buildDynamicToolsForTest(
     sandboxSessionKey,
     sandbox: { enabled: false, backendId: "docker" } as never,
     nativeToolSurfaceEnabled: true,
-    nativeContainmentConfirmed: true,
     runAbortController: new AbortController(),
     sessionAgentId: "main",
     pluginConfig: {},
@@ -1293,7 +1292,7 @@ describe("Codex app-server dynamic tool build", () => {
     const gatewayTools = await buildDynamicToolsForTest(gatewayParams, workspaceDir, {
       nativeToolSurfaceEnabled: true,
     });
-    expect(gatewayTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(gatewayTools.map((tool) => tool.name)).toEqual(["exec", "process", "message"]);
 
     const allowlistedParams = {
       ...gatewayParams,

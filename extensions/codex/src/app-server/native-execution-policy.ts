@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
 import { getSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  isCodexNativeContainmentCapability,
+  type CodexNativeContainmentCapability,
+} from "./runtime-artifact.js";
 
 type ExecHost = "sandbox" | "gateway" | "node";
 type ExecTarget = "auto" | ExecHost;
@@ -46,8 +50,8 @@ export function resolveCodexNativeExecutionPolicy(params: {
   agentId?: string;
   execOverrides?: ExecHostOverride;
   sandboxAvailable?: boolean;
-  /** Explicit capability from a command-containment-verified Codex runtime. */
-  nativeContainmentConfirmed?: boolean;
+  /** Non-forgeable capability minted by runtime-artifact validation. */
+  nativeContainmentCapability?: CodexNativeContainmentCapability;
   readRuntimeSessionEntry?: boolean;
 }): CodexNativeExecutionPolicy {
   const config = params.config ?? {};
@@ -83,7 +87,10 @@ export function resolveCodexNativeExecutionPolicy(params: {
   });
   const node =
     params.execOverrides?.node ?? sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node;
-  if (effectiveExecHost !== "node" && params.nativeContainmentConfirmed === true) {
+  if (
+    effectiveExecHost !== "node" &&
+    isCodexNativeContainmentCapability(params.nativeContainmentCapability)
+  ) {
     return {
       nativeToolSurfaceAllowed: true,
       requestedExecHost,
@@ -99,22 +106,24 @@ export function resolveCodexNativeExecutionPolicy(params: {
     blockReason:
       effectiveExecHost === "node"
         ? "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node."
-        : "Codex app-server native execution is fail-closed until the runtime proves per-invocation process-group containment, finite deadlines, bounded output, and descendant cleanup.",
+        : "Codex app-server native execution is fail-closed until the runtime artifact proves per-invocation cgroup v2 or transient-unit containment, finite deadlines, bounded output, and descendant cleanup.",
   };
 }
 
-/** Formats the user-facing explanation shown when native tools are blocked by exec host=node. */
-export function formatCodexNativeNodeExecBlock(params: {
+/** Formats a native-execution denial using the policy's actual block reason. */
+export function formatCodexNativeExecutionBlock(params: {
   surface: string;
   reason?: string;
 }): string {
   return [
-    `Codex-native ${params.surface} is unavailable because OpenClaw exec host=node is active for this session.`,
     params.reason ??
-      "Codex app-server native execution cannot route execution through the selected OpenClaw node.",
-    "Use a normal Codex harness turn so OpenClaw exec/process tools run on the node, or switch exec host to gateway for native Codex app-server execution.",
+      "Codex app-server native execution is unavailable because its containment capability is not validated.",
+    `Codex-native ${params.surface} remains disabled; use the configured OpenClaw fallback execution surface.`,
   ].join(" ");
 }
+
+/** Backwards-compatible name for callers that render node-exec denials. */
+export const formatCodexNativeNodeExecBlock = formatCodexNativeExecutionBlock;
 
 function resolvePolicyAgentId(params: {
   config: OpenClawConfig;

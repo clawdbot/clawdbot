@@ -1,7 +1,10 @@
 // Codex tests cover native execution policy plugin behavior.
 import type { getSessionEntry as getSessionEntryType } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
+import {
+  formatCodexNativeExecutionBlock,
+  resolveCodexNativeExecutionPolicy,
+} from "./native-execution-policy.js";
 
 const sessionStoreMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn<typeof getSessionEntryType>(),
@@ -32,45 +35,61 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     });
   });
 
-  it("allows Codex native execution for gateway exec hosts", () => {
+  it("formats the actual block reason instead of assuming node ownership", () => {
+    expect(
+      formatCodexNativeExecutionBlock({
+        surface: "command/exec",
+        reason: "Codex app-server native execution is fail-closed pending cgroup v2 containment.",
+      }),
+    ).toContain("pending cgroup v2 containment");
+    expect(
+      formatCodexNativeExecutionBlock({
+        surface: "command/exec",
+        reason: "OpenClaw exec host=node is active for this session.",
+      }),
+    ).toContain("host=node is active");
+  });
+
+  it("rejects a caller-shaped artifact object for gateway exec hosts", () => {
     expect(
       resolveCodexNativeExecutionPolicy({
         config: { tools: { exec: { host: "gateway" } } },
         sessionKey: "session-1",
-        nativeContainmentConfirmed: true,
+        nativeContainmentCapability: {
+          artifactId: "codex-app-server:v1:caller-input",
+          artifactFingerprint: "0".repeat(64),
+        },
       }),
     ).toMatchObject({
-      nativeToolSurfaceAllowed: true,
+      nativeToolSurfaceAllowed: false,
       requestedExecHost: "gateway",
       effectiveExecHost: "gateway",
     });
   });
 
-  it("resolves auto to gateway when no sandbox is active", () => {
+  it("keeps auto-to-gateway fail closed without a minted capability", () => {
     expect(
       resolveCodexNativeExecutionPolicy({
         config: { tools: { exec: { host: "auto" } } },
         sessionKey: "session-1",
         sandboxAvailable: false,
-        nativeContainmentConfirmed: true,
       }),
     ).toMatchObject({
-      nativeToolSurfaceAllowed: true,
+      nativeToolSurfaceAllowed: false,
       requestedExecHost: "auto",
       effectiveExecHost: "gateway",
     });
   });
 
-  it("resolves auto to sandbox when a sandbox is active", () => {
+  it("keeps auto-to-sandbox fail closed without a minted capability", () => {
     expect(
       resolveCodexNativeExecutionPolicy({
         config: { tools: { exec: { host: "auto" } } },
         sessionKey: "session-1",
         sandboxAvailable: true,
-        nativeContainmentConfirmed: true,
       }),
     ).toMatchObject({
-      nativeToolSurfaceAllowed: true,
+      nativeToolSurfaceAllowed: false,
       requestedExecHost: "auto",
       effectiveExecHost: "sandbox",
     });

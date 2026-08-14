@@ -46,6 +46,23 @@ const SAFE_NODE_OPTIONS_NUMERIC_FLAGS = new Set([
 ]);
 const SAFE_NODE_OPTIONS_DNS_RESULT_ORDERS = new Set(["ipv4first", "ipv6first", "verbatim"]);
 const ARTIFACT_BINDINGS_SYMBOL = Symbol.for("openclaw.codexAppServerRuntimeArtifactBindings");
+const CONTAINMENT_CAPABILITIES_SYMBOL = Symbol.for(
+  "openclaw.codexAppServerNativeContainmentCapabilities",
+);
+
+/** A non-forgeable capability minted only after an expected artifact is revalidated. */
+export type CodexNativeContainmentCapability = Readonly<{
+  artifactId: string;
+  artifactFingerprint: string;
+}>;
+
+function getContainmentCapabilities(): WeakSet<object> {
+  const globalState = globalThis as typeof globalThis & {
+    [CONTAINMENT_CAPABILITIES_SYMBOL]?: WeakSet<object>;
+  };
+  globalState[CONTAINMENT_CAPABILITIES_SYMBOL] ??= new WeakSet();
+  return globalState[CONTAINMENT_CAPABILITIES_SYMBOL];
+}
 
 type CodexRuntimeArtifactSpawnIdentity = Readonly<{
   command: string;
@@ -883,5 +900,39 @@ export async function validateCodexAppServerRuntimeArtifact(
   } catch {
     return false;
   }
+}
+
+/**
+ * Mints the native-execution capability only from a matching expected binding
+ * whose selected files have just been re-hashed. The WeakSet brand prevents a
+ * caller from manufacturing an object with the same two public fields.
+ */
+export async function validateAndMintCodexNativeContainmentCapability(params: {
+  actual: AgentHarnessRuntimeArtifactBinding | undefined;
+  expected: AgentHarnessRuntimeArtifactBinding | undefined;
+  signal?: AbortSignal;
+}): Promise<CodexNativeContainmentCapability | undefined> {
+  if (
+    !params.actual ||
+    !params.expected ||
+    params.actual.id !== params.expected.id ||
+    params.actual.fingerprint !== params.expected.fingerprint ||
+    !(await validateCodexAppServerRuntimeArtifact(params.actual, params.signal))
+  ) {
+    return undefined;
+  }
+  const capability = Object.freeze({
+    artifactId: params.actual.id,
+    artifactFingerprint: params.actual.fingerprint,
+  });
+  getContainmentCapabilities().add(capability);
+  return capability;
+}
+
+/** Returns true only for a capability minted by the artifact validator above. */
+export function isCodexNativeContainmentCapability(
+  capability: CodexNativeContainmentCapability | undefined,
+): boolean {
+  return Boolean(capability && getContainmentCapabilities().has(capability));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
