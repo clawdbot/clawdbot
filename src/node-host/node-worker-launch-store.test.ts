@@ -62,6 +62,16 @@ function insertLaunch(params: {
     );
 }
 
+function hasTerminalExpiryIndex(
+  database: ReturnType<typeof openOpenClawStateDatabase>["db"],
+): boolean {
+  return Boolean(
+    database
+      .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
+      .get("idx_node_worker_launches_terminal_completed"),
+  );
+}
+
 function launchIds(database: ReturnType<typeof openOpenClawStateDatabase>["db"]): string[] {
   return (
     database
@@ -73,6 +83,39 @@ function launchIds(database: ReturnType<typeof openOpenClawStateDatabase>["db"])
 }
 
 describe("node worker launch store pruning", () => {
+  it("lazily ensures the terminal expiry index for existing databases", () => {
+    const { database, env } = fixture();
+    expect(hasTerminalExpiryIndex(database)).toBe(true);
+    database.exec("DROP INDEX idx_node_worker_launches_terminal_completed");
+    expect(hasTerminalExpiryIndex(database)).toBe(false);
+    closeOpenClawStateDatabaseForTest();
+
+    const reopenedStore = new NodeWorkerLaunchStore({ env });
+    reopenedStore.get("schema-probe");
+    const reopened = openOpenClawStateDatabase({ env }).db;
+
+    expect(hasTerminalExpiryIndex(reopened)).toBe(true);
+  });
+
+  it("uses the terminal expiry index for the ordered pruning query", () => {
+    const { database } = fixture();
+    const plan = database
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT launch_id
+         FROM node_worker_launches
+         WHERE state IN ('completed', 'failed', 'interrupted', 'cancelled')
+           AND completed_at_ms <= ?
+         ORDER BY completed_at_ms ASC, launch_id ASC
+         LIMIT ?`,
+      )
+      .all(NOW_MS - DAY_MS, 2) as Array<{ detail: string }>;
+
+    expect(plan.map((row) => row.detail).join("\n")).toContain(
+      "idx_node_worker_launches_terminal_completed",
+    );
+  });
+
   it("prunes only the oldest expired terminal receipts in bounded batches", () => {
     const { database, store } = fixture();
     insertLaunch({ database, launchId: "old-completed", state: "completed", completedAtMs: 1 });

@@ -72,7 +72,7 @@ export type NodeWorkerLaunchClaimResult =
     };
 
 const NODE_WORKER_LAUNCH_SCHEMA_START = "CREATE TABLE IF NOT EXISTS node_worker_launches (";
-const NODE_WORKER_LAUNCH_SCHEMA_END = "\n) STRICT;";
+const NODE_WORKER_LAUNCH_SCHEMA_END = "\n  WHERE completed_at_ms IS NOT NULL;";
 const initializedDatabases = new WeakSet<DatabaseSync>();
 const TERMINAL_STATES: ReadonlySet<string> = new Set([
   "completed",
