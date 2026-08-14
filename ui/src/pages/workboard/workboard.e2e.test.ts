@@ -76,12 +76,12 @@ type UpdatingElement = HTMLElement & {
 };
 
 async function waitForWorkboardRender(page: Page, requestUpdate = false): Promise<void> {
-  await page.locator("openclaw-app").evaluate(async (element, shouldRequestUpdate) => {
-    const app = element as UpdatingElement;
+  await page.locator("openclaw-workboard-page").evaluate(async (element, shouldRequestUpdate) => {
+    const workboardPage = element as UpdatingElement;
     if (shouldRequestUpdate) {
-      app.requestUpdate?.();
+      workboardPage.requestUpdate?.();
     }
-    await app.updateComplete;
+    await workboardPage.updateComplete;
   }, requestUpdate);
 }
 
