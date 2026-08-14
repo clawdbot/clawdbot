@@ -520,19 +520,6 @@ h3.plugins-subheader {
   color: var(--danger);
 }
 
-/* ---------- detail overlay ---------- */
-
-.plugins-detail-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: color-mix(in srgb, var(--bg) 62%, transparent);
-  backdrop-filter: blur(6px);
-}
-
 .plugins-detail {
   position: relative;
   display: flex;
@@ -703,10 +690,6 @@ h3.plugins-subheader {
 }
 
 @media (max-width: 560px) {
-  .plugins-detail-backdrop {
-    padding: 10px;
-  }
-
   .plugins-remove-confirm {
     flex-wrap: wrap;
     white-space: normal;

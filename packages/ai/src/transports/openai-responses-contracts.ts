@@ -106,7 +106,9 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
   }
   const ErrorClass =
     details.code === "previous_response_not_found" ||
-    details.code === "websocket_connection_limit_reached"
+    details.code === "websocket_connection_limit_reached" ||
+    details.code === "invalid_encrypted_content" ||
+    details.code === "thinking_signature_invalid"
       ? OpenAIResponsesWebSocketSafeRetryError
       : OpenAIResponsesWebSocketServerError;
   return new ErrorClass(details.code, details.status, details.param, details.message, cause);

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import {
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_RPC_SET_VERSION,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { createWorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import {
@@ -69,12 +73,40 @@ describe("worker tunnel manager", () => {
     expect(workspace?.argv).toContain("ControlPath=none");
     expect(workspace?.argv.at(-1)).toContain("pwd");
     expect(fake.starts).toHaveLength(1);
-    expect(handle.connectionEndpoint).toMatchObject({
-      kind: "unix",
-      socketPath: expect.stringMatching(/\/gateway\.sock$/u),
+    const plan = parseWorkerLaunchPlan({
+      version: 3,
+      admission: {
+        environmentId: "worker:one",
+        credential: "worker-credential-fixture",
+        sessionId: "session-1",
+        ownerEpoch: 3,
+        rpcSetVersion: WORKER_RPC_SET_VERSION,
+        handshake: {
+          bundleHash: BUNDLE_HASH,
+          openclawVersion: "2026.8.13",
+          protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+        },
+      },
+      assignment: {
+        agentId: "main",
+        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+        agentRuntimeIdentityToken: "runtime-token",
+        runId: "run-1",
+        turnId: "turn-1",
+        prompt: "inspect",
+        suppressPromptTranscript: true,
+        workspaceDir: "/worker/workspace",
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+        inferenceOptions: {},
+        initialMessages: [],
+        transcript: { baseLeafId: null, nextSeq: 1 },
+        liveEvents: { ackedSeq: 0, nextSeq: 1 },
+        toolAuthority: { allowedToolNames: [] },
+      },
     });
-    const descriptor = { version: 3 } as unknown as WorkerLaunchDescriptor;
-    await expect(handle.launchTurn({ descriptor, timeoutMs: 123 })).resolves.toEqual(success());
+    await expect(
+      handle.launchTurn({ plan, placementGeneration: 1, timeoutMs: 123 }),
+    ).resolves.toEqual(success());
     const launch = fake.runs.at(-1);
     const remoteLaunchCommand = launch?.argv.at(-1) ?? "";
     expect(remoteLaunchCommand).toContain("'sh' '-c'");
@@ -82,7 +114,7 @@ describe("worker tunnel manager", () => {
       'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker',
     );
     expect(remoteLaunchCommand).toContain(`'${BUNDLE_HASH}'`);
-    expect(launch?.options.input).toBe(JSON.stringify(descriptor));
+    expect(launch?.options.input).toContain('"connectionEndpoint":{"kind":"unix"');
     expect(launch?.options.timeoutMs).toBe(123);
     await handle.stop();
     expect(tunnel?.process.stopCount).toBe(1);

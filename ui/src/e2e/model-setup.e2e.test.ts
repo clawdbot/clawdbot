@@ -24,7 +24,7 @@ const localPrepareOptions = [
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "llama.cpp",
-    hint: "Run one private GGUF model directly inside this Gateway",
+    hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
     actionLabel: "Set up model",
   },
   {

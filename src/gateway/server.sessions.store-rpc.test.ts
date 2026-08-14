@@ -807,7 +807,7 @@ test("write-scoped operators manage chat organization but not admin session sett
       label: "Trip planning",
       model: "openai/gpt-test-a",
     });
-    expect(renamed.ok).toBe(true);
+    expect(renamed.ok, JSON.stringify(renamed)).toBe(true);
     expect(renamed.payload?.entry).toMatchObject({
       label: "Trip planning",
       modelOverride: "gpt-test-a",

@@ -3618,11 +3618,11 @@ describe("matrix monitor handler draft streaming", () => {
 
   it.each([
     {
-      name: "redacts partial previews before normal final delivery for unchanged Matrix mentions",
+      name: "delivers the normal final before redacting unchanged Matrix mention previews",
       finalText: "hello @alice:example.org",
     },
     {
-      name: "redacts partial previews before normal final delivery for changed Matrix mentions",
+      name: "delivers the normal final before redacting changed Matrix mention previews",
       finalText: "hello @alice:example.org!",
     },
   ])("$name", async ({ finalText }) => {

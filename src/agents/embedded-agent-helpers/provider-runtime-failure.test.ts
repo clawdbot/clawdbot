@@ -17,6 +17,12 @@ function expectNotFailoverSample(sample: string) {
 }
 
 describe("classifyProviderRuntimeFailureKind", () => {
+  it("classifies complete HTML after an HTTP reason phrase as upstream_html", () => {
+    const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
+
+    expect(classifyProviderRuntimeFailureKind(raw)).toBe("upstream_html");
+  });
+
   it("classifies generic resource-exhausted codes as rate_limit", () => {
     expect(
       classifyProviderRuntimeFailureKind({

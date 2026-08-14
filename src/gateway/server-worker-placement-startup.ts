@@ -11,6 +11,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import {
   createWorkerPlacementDispatchService,
   type WorkerPlacementDispatchService,
@@ -243,6 +244,11 @@ export type GatewayWorkerPlacementRuntime = ReturnType<typeof createGatewayWorke
 
 export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlacementRuntimeParams) {
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
+  const diskSpace = createWorkerPlacementDiskSpaceMonitor({
+    placements: params.placements,
+    environments: params.environments,
+    warn: params.warn,
+  });
   const workspaceConflictHandlers = createWorkerWorkspaceConflictTranscriptHandlers(
     loadWorkerPlacementSessionRuntimeModule,
   );
@@ -265,6 +271,32 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       errorMessage: `Session ${sessionKey} dispatch requires a session-owned managed worktree`,
     });
     return worktree.path;
+  };
+  const resolveNodeWorkspaceBinding = async (binding: {
+    environmentId: string;
+    ownerEpoch: number;
+    sessionId: string;
+  }) => {
+    const placement = params.placements.get(binding.sessionId);
+    if (
+      !placement ||
+      (placement.state !== "active" &&
+        placement.state !== "draining" &&
+        placement.state !== "reconciling") ||
+      placement.environmentId !== binding.environmentId ||
+      placement.activeOwnerEpoch !== binding.ownerEpoch
+    ) {
+      return undefined;
+    }
+    return {
+      localPath: await resolveWorkspacePath({
+        sessionId: placement.sessionId,
+        sessionKey: placement.sessionKey,
+        agentId: placement.agentId,
+      }),
+      manifestRef: placement.workspaceBaseManifestRef,
+      remoteWorkspaceDir: placement.remoteWorkspaceDir,
+    };
   };
   const dispatchService = coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
@@ -547,27 +579,52 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
   }): Promise<WorkerPlacementSidecar | null> => {
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
     let placementReconcileInterval: ReturnType<typeof setInterval> | undefined;
-    let placementReconcileInFlight: Promise<void> | undefined;
+    const placementReconcile = { current: undefined as Promise<void> | undefined };
+    const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
     let stopped = false;
+    const trackOperation = (
+      slot: { current: Promise<void> | undefined },
+      current: Promise<void>,
+      failureMessage: string,
+    ): Promise<void> => {
+      slot.current = current;
+      const clearCurrent = () => {
+        if (slot.current === current) {
+          slot.current = undefined;
+        }
+      };
+      void current.then(clearCurrent, (error: unknown) => {
+        params.warn(`${failureMessage}: ${formatErrorMessage(error)}`);
+        clearCurrent();
+      });
+      return current;
+    };
     const reconcileActivePlacements = (): Promise<void> => {
       if (stopped) {
         return Promise.resolve();
       }
-      if (placementReconcileInFlight) {
-        return placementReconcileInFlight;
+      if (placementReconcile.current) {
+        return placementReconcile.current;
       }
-      const current = dispatchService.reconcileActive();
-      placementReconcileInFlight = current;
-      const clearCurrent = () => {
-        if (placementReconcileInFlight === current) {
-          placementReconcileInFlight = undefined;
-        }
-      };
-      void current.then(clearCurrent, (error: unknown) => {
-        params.warn(`Worker placement reconcile sweep failed: ${formatErrorMessage(error)}`);
-        clearCurrent();
-      });
-      return current;
+      return trackOperation(
+        placementReconcile,
+        dispatchService.reconcileActive(),
+        "Worker placement reconcile sweep failed",
+      );
+    };
+    const sweepDiskSpace = (): Promise<void> => {
+      if (stopped) {
+        return Promise.resolve();
+      }
+      if (diskSpaceSweep.current) {
+        return diskSpaceSweep.current;
+      }
+      return trackOperation(diskSpaceSweep, diskSpace.sweep(), "Worker disk-space sweep failed");
+    };
+    const sweepActivePlacements = (): void => {
+      void reconcileActivePlacements();
+      // Session-lifetime sampling covers idle placements independently of provider health.
+      void sweepDiskSpace();
     };
     const sidecar: WorkerPlacementSidecar = {
       stop: async () => {
@@ -580,7 +637,9 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         uninstallPlacementAdmission();
         const environmentStop = params.environments.stop();
         const stopResults = await Promise.allSettled([
-          ...(placementReconcileInFlight ? [placementReconcileInFlight] : []),
+          ...[placementReconcile.current, diskSpaceSweep.current].filter(
+            (operation): operation is Promise<void> => operation !== undefined,
+          ),
           environmentStop,
         ]);
         const environmentStopResult = stopResults.at(-1);
@@ -591,15 +650,15 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     };
     // Close must see the drain handle before reconciliation can yield.
     hooks.registerSidecar(sidecar);
-    // Track startup reconciliation in the shared in-flight slot so a concurrent
+    // Track startup reconciliation in the placement slot so a concurrent
     // close prelude drains it before uninstalling guards and stopping environments.
     const startupRecovery = recoverPendingWorkspaceReconciliations();
-    placementReconcileInFlight = startupRecovery;
+    placementReconcile.current = startupRecovery;
     try {
       await startupRecovery;
     } finally {
-      if (placementReconcileInFlight === startupRecovery) {
-        placementReconcileInFlight = undefined;
+      if (placementReconcile.current === startupRecovery) {
+        placementReconcile.current = undefined;
       }
     }
     if (hooks.isClosePreludeStarted()) {
@@ -607,13 +666,13 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       return null;
     }
     const startupReconcile = dispatchService.reconcile();
-    placementReconcileInFlight = startupReconcile;
+    placementReconcile.current = startupReconcile;
     try {
       try {
         await startupReconcile;
       } finally {
-        if (placementReconcileInFlight === startupReconcile) {
-          placementReconcileInFlight = undefined;
+        if (placementReconcile.current === startupReconcile) {
+          placementReconcile.current = undefined;
         }
       }
       if (hooks.isClosePreludeStarted()) {
@@ -621,8 +680,13 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         return null;
       }
       params.environments.start();
+      if (hooks.isClosePreludeStarted()) {
+        await sidecar.stop();
+        return null;
+      }
+      void sweepDiskSpace();
       placementReconcileInterval = setInterval(
-        () => void reconcileActivePlacements(),
+        sweepActivePlacements,
         WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
       );
       placementReconcileInterval.unref?.();
@@ -632,5 +696,12 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       throw error;
     }
   };
-  return { dispatchService, admissionProvider, placements: params.placements, startRuntime };
+  return {
+    dispatchService,
+    admissionProvider,
+    diskSpace,
+    placements: params.placements,
+    resolveNodeWorkspaceBinding,
+    startRuntime,
+  };
 }

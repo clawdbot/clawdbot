@@ -819,6 +819,18 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
   });
 
+  it("preserves an opted-in bottom workspace dock", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    saveSettings({ ...loadSettings(), chatWorkspaceDock: "bottom" });
+
+    expect(loadSettings().chatWorkspaceDock).toBe("bottom");
+  });
+
   it("persists dashboard tab and dock state per session", () => {
     setTestLocation({
       protocol: "https:",

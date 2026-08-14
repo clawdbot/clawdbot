@@ -5,6 +5,7 @@ import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import { recordPairedNodeDisconnection } from "../../infra/device-pairing-node.js";
 import { touchPresence, upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -493,7 +494,25 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         // terminal.attach until their reaper fires.
         context.terminalSessions?.handleDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
+        let disconnectedNodeHistory:
+          | {
+              nodeId: string;
+              connectedAtMs: number;
+              disconnectedAtMs: number;
+              pairingGeneration: string;
+            }
+          | undefined;
         if (client?.connect?.role === "node") {
+          const nodeId = client.connect.device?.id ?? client.connect.client.id;
+          const nodeSession = context.nodeRegistry.get(nodeId);
+          if (nodeSession?.connId === connId && nodeSession.pairingGeneration) {
+            disconnectedNodeHistory = {
+              nodeId: nodeSession.nodeId,
+              connectedAtMs: nodeSession.connectedAtMs,
+              disconnectedAtMs: Date.now(),
+              pairingGeneration: nodeSession.pairingGeneration,
+            };
+          }
           // Retire I/O immediately, but keep the client revocable until admitted
           // lifecycle work drains; pairing/token removal must still fence it.
           retainClientUntilNodeDrain = true;
@@ -508,6 +527,26 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               }
             }
             currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+            if (
+              disconnectedNodeHistory &&
+              currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
+            ) {
+              try {
+                await recordPairedNodeDisconnection({
+                  nodeId: disconnectedNodeHistory.nodeId,
+                  connectedAtMs: disconnectedNodeHistory.connectedAtMs,
+                  disconnectedAtMs: disconnectedNodeHistory.disconnectedAtMs,
+                  expectedPairingGeneration: {
+                    nodeId: disconnectedNodeHistory.nodeId,
+                    key: disconnectedNodeHistory.pairingGeneration,
+                  },
+                });
+              } catch (error) {
+                logGateway.warn(
+                  `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
+                );
+              }
+            }
           } finally {
             retainClientUntilNodeDrain = false;
           }

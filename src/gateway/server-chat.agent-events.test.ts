@@ -3632,12 +3632,15 @@ describe("agent event handler", () => {
   });
 
   it("keeps selected-agent global chat events scoped to the linked agent", () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+    });
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
-    registerChatRun(chatRunState, "run-global-main", "global", "client-global-main", {
-      agentId: "main",
+    registerChatRun(chatRunState, "run-global-work", "global", "client-global-work", {
+      agentId: "work",
     });
 
-    emitAgentEvent(handler, "run-global-main", "assistant", { text: "main global reply" });
+    emitAgentEvent(handler, "run-global-work", "assistant", { text: "work global reply" });
 
     const chatPayload = chatBroadcastCalls(broadcast)[0]?.[1] as {
       agentId?: string;
@@ -3645,13 +3648,12 @@ describe("agent event handler", () => {
     };
     expect(chatPayload).toEqual(
       expect.objectContaining({
-        agentId: "main",
+        agentId: "work",
         sessionKey: "global",
       }),
     );
     const nodeCalls = sessionChatCalls(nodeSendToSession);
-    expect(nodeCalls[0]?.[0]).toBe("agent:main:global");
-    expect(nodeCalls.map(([sessionKey]) => sessionKey)).toContain("global");
+    expect(nodeCalls.map(([sessionKey]) => sessionKey)).toEqual(["agent:work:global"]);
   });
 
   it("persists selected-agent global lifecycle state with the linked agent", () => {
