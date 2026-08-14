@@ -108,7 +108,7 @@ function mockPendingContextEngineCompaction() {
       ok: true,
       compacted: true,
       reason: undefined,
-      result: { summary: "engine-summary", tokensAfter: 50 },
+      result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
     };
   });
   return pending;
@@ -2534,7 +2534,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ok: true,
       compacted: true,
       reason: undefined,
-      result: { summary: "engine-summary", tokensAfter: 50 },
+      result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
     });
     mockResolvedModel();
     mockQueuedRouteAwareModel();

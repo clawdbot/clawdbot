@@ -2,6 +2,7 @@
  * Test harness mocks for embedded-agent compaction hook coverage.
  */
 import { vi, type Mock } from "vitest";
+import type { CompactResult } from "../../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
@@ -32,13 +33,11 @@ type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
 
-export const contextEngineCompactMock = vi.fn(async () => ({
+export const contextEngineCompactMock: Mock<() => Promise<CompactResult>> = vi.fn(async () => ({
   ok: true as boolean,
   compacted: true as boolean,
   reason: undefined as string | undefined,
-  result: { summary: "engine-summary", tokensAfter: 50 } as
-    | { summary: string; tokensAfter: number }
-    | undefined,
+  result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
 }));
 
 export const hookRunner = {
@@ -583,7 +582,7 @@ export function resetCompactHooksHarnessMocks(): void {
     ok: true,
     compacted: true,
     reason: undefined,
-    result: { summary: "engine-summary", tokensAfter: 50 },
+    result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
   });
   compactWithSafetyTimeoutMock.mockReset();
   compactWithSafetyTimeoutMock.mockImplementation(runCompactWithSafetyTimeoutMock);

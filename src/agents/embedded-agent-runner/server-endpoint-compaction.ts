@@ -15,9 +15,7 @@ type SessionManagerLike = Parameters<
   typeof rewriteTranscriptEntriesInSessionManager
 >[0]["sessionManager"];
 
-export type ServerEndpointCompactionResult = Awaited<
-  ReturnType<typeof requestOpenAIResponsesCompaction>
->;
+type ServerEndpointCompactionResult = Awaited<ReturnType<typeof requestOpenAIResponsesCompaction>>;
 
 /** Try provider-owned compaction and persist its replay checkpoint on the session owner. */
 export async function attemptServerEndpointCompaction(params: {

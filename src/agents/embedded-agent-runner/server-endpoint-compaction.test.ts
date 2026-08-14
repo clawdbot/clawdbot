@@ -1,5 +1,6 @@
-import type { AgentMessage, Model } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { requestCompactionMock } = vi.hoisted(() => ({
@@ -32,6 +33,18 @@ function createSession() {
   sessionManager.appendMessage({
     role: "assistant",
     content: [{ type: "text", text: "remembered" }],
+    api: "openai-responses",
+    provider: "xai",
+    model: "grok-4.5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
     timestamp: 2,
   });
   const messages = sessionManager
@@ -75,10 +88,11 @@ describe("attemptServerEndpointCompaction", () => {
     const owner = session.sessionManager
       .getBranch()
       .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
-    expect(owner?.type === "message" ? owner.message.content : undefined).toEqual([
-      { type: "text", text: "remembered" },
-    ]);
-    expect(owner?.type === "message" ? owner.message.providerReplay : undefined).toMatchObject({
+    if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
+      throw new Error("expected persisted assistant checkpoint owner");
+    }
+    expect(owner.message.content).toEqual([{ type: "text", text: "remembered" }]);
+    expect(owner.message.providerReplay).toMatchObject({
       type: "openai-responses-compaction",
       id: "cmp_test",
       data: "opaque",
@@ -95,7 +109,11 @@ describe("attemptServerEndpointCompaction", () => {
             "abort",
             () => {
               requestAborted = true;
-              reject(options.signal?.reason);
+              reject(
+                options.signal?.reason instanceof Error
+                  ? options.signal.reason
+                  : new Error("request aborted"),
+              );
             },
             { once: true },
           );
