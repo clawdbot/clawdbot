@@ -830,8 +830,7 @@ The closed message enums are:
   `plugin_bound_unavailable`, `plugin_bound_declined`, `plugin_bound_error`,
   `before_dispatch_handled`, `acp_dispatch_completed`, `acp_dispatch_failed`,
   `acp_dispatch_empty`, or `acp_dispatch_aborted`.
-- Outbound `outcome`: `queued`, `platform_started`, `sent`, `suppressed`,
-  `failed`, or `unknown`; optional
+- Outbound `outcome`: `sent`, `suppressed`, `failed`, or `unknown`; optional
   `reasonCode`: `cancelled_by_message_sending_hook`,
   `cancelled_by_reply_payload_sending_hook`,
   `empty_after_message_sending_hook`, `empty_after_reply_payload_sending_hook`,
@@ -842,12 +841,12 @@ The closed message enums are:
 
 Terminal fields are correlated, not independently optional:
 
-| Variant          | Terminal mapping                                                                                                                                                                                                       |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent run        | `started` has no `errorCode`; each non-success finished status requires its matching `run_*` code.                                                                                                                     |
-| Tool action      | `started` and succeeded have no `errorCode`; each other finished status requires its matching `tool_*` code.                                                                                                           |
-| Inbound message  | succeeded = `completed`; blocked = `skipped`; failed = `failed` plus `message_processing_failed`. `reasonCode`, when present, must belong to that terminal family.                                                     |
-| Outbound message | started = action-matched `queued` or `platform_started`; succeeded = `sent`; blocked = `suppressed` plus `reasonCode`; failed = `failed` plus `errorCode` and `failureStage`; unknown = `unknown` plus `failureStage`. |
+| Variant          | Terminal mapping                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent run        | `started` has no `errorCode`; each non-success finished status requires its matching `run_*` code.                                                                 |
+| Tool action      | `started` and succeeded have no `errorCode`; each other finished status requires its matching `tool_*` code.                                                       |
+| Inbound message  | succeeded = `completed`; blocked = `skipped`; failed = `failed` plus `message_processing_failed`. `reasonCode`, when present, must belong to that terminal family. |
+| Outbound message | succeeded = `sent`; blocked = `suppressed` plus `reasonCode`; failed = `failed` plus `errorCode` and `failureStage`; unknown = `unknown` plus `failureStage`.      |
 
 Each activity event includes a stable event id, monotonic ledger sequence,
 source event sequence, timestamp, actor, action, status, integer
@@ -905,6 +904,11 @@ identity collection is separately off by default and requires
 `logging.audit.executionIdentity: true` plus an enabled audit ledger after
 Gateway restart. Missing best-effort evidence never proves that a run did not
 occur.
+
+For a selected run, decision receipts merge terminal outbound activity with
+owner-native `queued` and `platform_started` progress. Progress is
+attribution-only, lives in the lazy companion store, and is not part of the
+`audit.activity.list` result schema.
 
 The shipped `audit.list` request, result, and `AuditEvent` schemas remain
 unchanged and return only agent-run and tool-action records. New operator
