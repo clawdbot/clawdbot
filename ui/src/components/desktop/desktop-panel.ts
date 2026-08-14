@@ -247,7 +247,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       if (operationId === this.operationId) {
         this.errorText = t("desktop.errors.listFailed", { error: formatUiError(error) });
         if (this.documentMode && (this.documentSource !== null || this.documentSession !== null)) {
-          this.environmentId = this.documentSource ?? this.documentSession;
+          // A session key only names a machine once the inventory loads, so it stays out of
+          // `environmentId`; document-mode retry refreshes the inventory rather than reconnecting.
+          this.environmentId = this.documentSource;
           this.state = "inventory-error";
         }
       }
@@ -651,15 +653,15 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       inventoryError: this.state === "inventory-error",
       reason: this.disconnectedReason,
       onRetry: () => {
+        if (this.state === "inventory-error" && this.documentMode) {
+          this.retryDocumentInventory();
+          return;
+        }
         if (!this.environmentId) {
           return;
         }
         if (this.state === "inventory-error") {
-          if (this.documentMode) {
-            this.retryDocumentInventory();
-          } else {
-            void this.connectRequestedEnvironment(this.environmentId);
-          }
+          void this.connectRequestedEnvironment(this.environmentId);
           return;
         }
         void this.connectEnvironment(this.environmentId, this.controlling);

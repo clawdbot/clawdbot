@@ -301,6 +301,45 @@ suite.define(() => {
     });
   });
 
+  it("recovers a session-preselected desktop after an inventory failure", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:mobile-session";
+      const nodeEnvironment = {
+        id: "node:workstation",
+        type: "node",
+        status: "available",
+        desktop: true,
+      };
+      const { gateway, panel } = await startDesktopDocument(
+        page,
+        `?view=desktop&session=${encodeURIComponent(sessionKey)}`,
+        undefined,
+        [{ key: sessionKey, kind: "direct", updatedAt: 1, execNode: "workstation" }],
+      );
+      await gateway.rejectDeferred("environments.list", {
+        code: "UNAVAILABLE",
+        message: "desktop inventory is temporarily unavailable",
+      });
+
+      // A session key only names a machine once the inventory loads, so recovery here has no
+      // preselected environment to reconnect to and must retry the inventory instead.
+      const retry = panel.getByRole("button", { name: "Retry", exact: true });
+      await retry.waitFor();
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+
+      await gateway.setMethodResponse("environments.list", {
+        environments: [gatewayEnvironment, nodeEnvironment],
+      });
+      await retry.click();
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({
+        source: { kind: "node", nodeId: "workstation" },
+        control: false,
+      });
+      await panel.locator("[data-test-remote-desktop='true']").waitFor();
+    });
+  });
+
   it("auto-connects view-only and provides four working touch actions", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { gateway, panel } = await openDesktopDocument(
