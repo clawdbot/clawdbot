@@ -300,6 +300,21 @@ function entryMatches(
   if (sameTranscriptIdentity(left.identity, right.identity)) {
     return true;
   }
+  const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
+  const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
+  if (
+    durableEntry?.live &&
+    provisionalEntry?.live &&
+    durableEntry.identity?.role === "assistant" &&
+    provisionalEntry.identity?.role === "assistant" &&
+    !durableEntry.identity.isImported &&
+    !provisionalEntry.identity.isImported &&
+    !provisionalEntry.identity.id &&
+    durableEntry.identity.runId &&
+    durableEntry.identity.runId === provisionalEntry.identity.runId
+  ) {
+    return true;
+  }
   const persisted = left.identity;
   const observed = right.identity;
   if (

@@ -89,4 +89,44 @@ describe("chat pane read markers", () => {
     expect(state.chatError).toBeNull();
     expect(state.lastError).toBeNull();
   });
+
+  it("does not clear unread from a hidden retained pane", () => {
+    const patch = vi.fn().mockResolvedValue(null);
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+    const sessionsState = (presented: boolean) => {
+      pane.presented = presented;
+      pane.applySessionsState({
+        result: {
+          sessions: [
+            {
+              key: "agent:main:current",
+              kind: "direct",
+              label: "Background activity",
+              updatedAt: 20,
+              unread: true,
+            },
+          ],
+        },
+        agentId: "main",
+        loading: false,
+        error: null,
+        deletedSessions: [],
+      } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+    };
+
+    // Hidden retained panes keep the subscription alive but must not mark
+    // the session read — the user is not looking at it.
+    sessionsState(false);
+    expect(patch).not.toHaveBeenCalled();
+
+    sessionsState(true);
+    expect(patch).toHaveBeenCalledWith(
+      "agent:main:current",
+      { unread: false },
+      { agentId: "main" },
+    );
+  });
 });

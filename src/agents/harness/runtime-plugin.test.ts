@@ -62,6 +62,20 @@ describe("harness runtime plugins", () => {
     expect(pluginRegistry.agentHarnesses).toHaveLength(1);
   });
 
+  it("explains how to recover when the selected harness registration is missing", async () => {
+    await expect(
+      ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        agentHarnessRuntimeOverride: "codex",
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry: createEmptyPluginRegistry(),
+      }),
+    ).rejects.toThrow(
+      'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.',
+    );
+  });
+
   it("force-activates a default-disabled harness owner selected for a run", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
       config: {},

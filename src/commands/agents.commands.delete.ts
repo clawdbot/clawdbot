@@ -1,10 +1,19 @@
 // Implements agent deletion with gateway delegation and local cleanup fallback.
-import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
+import {
+  findOverlappingWorkspaceAgentIds,
+  formatSharedAuthStoreOwnerDeleteError,
+  isSharedAuthStoreOwner,
+} from "../agents/agent-delete-safety.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
+import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import {
   prepareLegacyWorkspaceStateReset,
@@ -26,7 +35,7 @@ import {
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
 } from "../gateway/call.js";
-import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -104,10 +113,16 @@ export async function agentsDeleteCommand(
   if (agentId !== input) {
     runtime.log(`Normalized agent id to "${agentId}".`);
   }
-  // agents/main/agent also owns the shipped shared legacy auth store.
-  // Keep main undeletable until named agents make auth-store ownership explicit.
-  if (agentId === LEGACY_IMPLICIT_AGENT_ID) {
-    runtime.error(`"${LEGACY_IMPLICIT_AGENT_ID}" cannot be deleted.`);
+  const agentDir = resolveAgentDir(cfg, agentId);
+  const sharedAuthOwnership = resolveSharedAuthStoreOwnership();
+  if (
+    isSharedAuthStoreOwner({
+      ownership: sharedAuthOwnership,
+      agentAuthDbPath: resolveAuthProfileDatabasePath(agentDir),
+      sharedAuthDbPath: resolveSharedAuthStorePath(),
+    })
+  ) {
+    runtime.error(formatSharedAuthStoreOwnerDeleteError(agentId));
     runtime.exit(1);
     return;
   }
@@ -123,8 +138,11 @@ export async function agentsDeleteCommand(
     runtime.exit(1);
     return;
   }
-  if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(cfg))) {
-    // H2-2 owns credential relocation; deleting this directory first destroys the shared store.
+  const explicitInheritedAuthAgentId = cfg.agents?.defaults?.authInheritance?.agentId?.trim();
+  const inheritedAuthAgentId =
+    explicitInheritedAuthAgentId ||
+    (sharedAuthOwnership.location === "legacy-main" ? resolveLegacyInheritedAuthAgentId(cfg) : "");
+  if (inheritedAuthAgentId && agentId === normalizeAgentId(inheritedAuthAgentId)) {
     runtime.error(
       `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
     );
@@ -150,7 +168,6 @@ export async function agentsDeleteCommand(
   }
 
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const agentDir = resolveAgentDir(cfg, agentId);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   const result = pruneAgentConfig(cfg, agentId);
 

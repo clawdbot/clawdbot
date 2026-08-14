@@ -222,7 +222,8 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes. Autoreview staged/uncommitted diff: `--mode uncommitted`; there is no `dirty` or `staged` mode.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
-- Landing PR onto red `main` (unrelated breakage blocks the merge gate): fix the breakage in the same landing PR; note it in the PR body; never land onto red or bypass the gate. Prefer the smallest correct fix (e.g. register a missing source file, add a dropped export).
+- Broken CI is always someone's job; default to making it yours. Red `main`, a red merge gate, or a flaky-by-construction assertion gets fixed, not waited out, worked around, or reported back as someone else's problem. Fix it in the landing PR, note it in the PR body, never land onto red or bypass the gate. Prefer the smallest correct fix (register a missing source file, restore a dropped export, give an exact-equality assertion on renderer/timing-dependent values a tolerance).
+- Only two things override that default: an in-flight fix already open for the same breakage (link it, wait, say so), or a fix that needs owner judgment beyond the failing gate (say exactly what and why). Neither excuses leaving CI red and moving on.
 - Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.
 - Prompt snapshots: CI truth is Linux Node 24. If macOS local passes but CI drifts, reproduce/generate in Linux before rerun.
 
@@ -289,6 +290,8 @@ Mechanics only; policy lives above.
 
 - TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
+- Static-analysis fixes must strengthen the owning type/runtime contract or remove an unsafe operation. Never satisfy a checker by rephrasing or moving an assertion, widening a generic, adding a marker type, or replacing typed access with `Reflect`/property probes.
+- New lint rules need a stated semantic invariant, must use type information when available, and start in a clean owner scope with no baseline. If a rule mainly rewards syntax changes or has an easy equivalent-expression bypass, do not add it.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
 - Cross-function state: when valid combos matter, return a closed mode/result shape. Avoid parallel nullable fields or derived booleans that callers must keep in sync; make impossible states unrepresentable.

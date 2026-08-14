@@ -30,6 +30,8 @@ export type NodeListNode = {
   paired?: boolean;
   connected?: boolean;
   connectedAtMs?: number;
+  lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
   lastActiveAtMs?: number;
   presenceUpdatedAtMs?: number;
   active?: boolean;

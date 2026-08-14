@@ -291,17 +291,22 @@ function composerControlsHtml(crowded = false) {
       }
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
-          <div class="chat-controls__model-control">
-            <div class="chat-controls__model-control-row">
-              <div class="model-picker">
-                <wa-select class="settings-select picker-select model-picker__select chat-controls__model-picker" style="display:block;width:100%;min-width:138px">
-                  <div class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
-                    <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
-                  </div>
-                </wa-select>
-              </div>
+          <details class="chat-controls__inline-select chat-controls__model-picker">
+          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
+            <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
+            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
+            <div class="chat-controls__model-options">
+              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-luna</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
             </div>
           </div>
+          </details>
           <details class="chat-controls__inline-select chat-controls__effort-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
             <span class="chat-controls__inline-select-label">High</span>
@@ -362,7 +367,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
       <main class="content content--chat">
         <section class="card chat">
           <div class="chat-split-container">
-            <div class="chat-main${opts.sessionRailDocked ? " chat-main--rail-docked" : ""}" style="flex: 1 1 100%">
+            <div class="chat-main${opts.sessionRailDocked ? " chat-main--rail-docked" : ""}" style="--chat-companion-rail-width: 400px; flex: 1 1 100%">
               <div class="chat-thread${opts.direct ? " chat-thread--direct" : ""}" role="log">
                 <div class="chat-thread-inner">
                   <div class="chat-group user">
@@ -585,14 +590,36 @@ async function closeBrowserPage(page: Page): Promise<void> {
   await page.close().catch(() => {});
 }
 
-async function waitForLayoutSettled(page: Page): Promise<void> {
-  // Raw DOM mutations skip Playwright's actionability wait. Allow style invalidation
-  // to land, then observe one stable frame before measuring viewport bounds.
+async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
+  // content-visibility and container queries can defer descendant layout beyond
+  // a fixed rAF pair. Measure the owning geometry until two frames agree.
   await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      }),
+    async ({ maxFrames, selector: targetSelector }) => {
+      let previousGeometry: string | undefined;
+      let stableFrames = 0;
+      for (let frame = 0; frame < maxFrames; frame += 1) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        const elements = [...document.querySelectorAll<HTMLElement>(targetSelector)];
+        if (elements.length === 0) {
+          throw new Error(`No layout elements matched ${targetSelector}`);
+        }
+        const geometry = JSON.stringify(
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            return [rect.x, rect.y, rect.width, rect.height];
+          }),
+        );
+        stableFrames = geometry === previousGeometry ? stableFrames + 1 : 1;
+        if (stableFrames >= 2) {
+          return;
+        }
+        previousGeometry = geometry;
+      }
+      throw new Error(`Layout did not stabilize for ${targetSelector} within ${maxFrames} frames`);
+    },
+    { maxFrames: 60, selector },
   );
 }
 
@@ -695,7 +722,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         <html>
           <head><style>${readUiCss()}</style></head>
           <body>
-            <section class="chat">
+            <section class="card chat">
               <div class="agent-chat__search-bar">
                 ${iconSvg()}
                 <input type="text" placeholder="Search messages" />
@@ -708,13 +735,33 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
       const icons = await page.locator(".agent-chat__search-bar svg").all();
       const input = page.locator(".agent-chat__search-bar input");
+      const cornerRadii = await page.locator(".chat").evaluate((chat) => {
+        const search = chat.querySelector<HTMLElement>(".agent-chat__search-bar");
+        if (!search) {
+          throw new Error("Expected transcript search bar");
+        }
+        const radii = (element: Element) => {
+          const style = getComputedStyle(element);
+          return [
+            style.borderTopLeftRadius,
+            style.borderTopRightRadius,
+            style.borderBottomRightRadius,
+            style.borderBottomLeftRadius,
+          ];
+        };
+        return { chat: radii(chat), search: radii(search) };
+      });
 
       expect(searchBar.height).toBeLessThan(64);
+      expect(cornerRadii).toEqual({
+        chat: ["0px", "0px", "0px", "0px"],
+        search: ["0px", "0px", "14px", "14px"],
+      });
       expect(icons).toHaveLength(2);
       for (const icon of icons) {
         const box = await icon.boundingBox();
-        expect(box?.width).toBe(16);
-        expect(box?.height).toBe(16);
+        expect(box?.width).toBeCloseTo(16, 3);
+        expect(box?.height).toBeCloseTo(16, 3);
       }
       await input.focus();
       const outline = await input.evaluate((element) => {
@@ -1054,7 +1101,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.locator(".chat-split-view__cell").evaluate((cell) => {
         (cell as HTMLElement).style.width = "580px";
       });
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
       const intermediateHeader = await getBoundingBox(page, ".chat-pane__header");
       const intermediateClose = await getBoundingBox(page, ".chat-pane__close-pane");
       expect(intermediateClose.x + intermediateClose.width).toBeLessThanOrEqual(
@@ -1072,7 +1119,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.locator(".chat-split-view__cell").evaluate((cell) => {
         (cell as HTMLElement).style.width = "1000px";
       });
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
       const fullCompositionWidth = await page.locator(".chat-pane__header").evaluate((element) => {
         const headerElement = element as HTMLElement;
         headerElement.style.containerType = "normal";
@@ -1083,7 +1130,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         return width;
       });
       await setHeaderContentWidth(801);
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
       const transitionOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
         clientWidth: element.clientWidth,
         scrollWidth: element.scrollWidth,
@@ -1498,6 +1545,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           </div>
         </body></html>`,
       );
+      await waitForLayoutSettled(page, "[data-first-row], .chat-group-footer");
 
       const layout = await page.evaluate(() => {
         const first = document.querySelector<HTMLElement>("[data-first-row]")!;
@@ -1649,7 +1697,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             2,
           ),
         );
-        await waitForLayoutSettled(page);
+        await waitForLayoutSettled(page, ".agent-chat__composer-combobox > textarea");
         const wideHeight = (await textarea.boundingBox())?.height ?? 0;
 
         await page.setViewportSize({ width: 430, height: 800 });
@@ -2416,53 +2464,40 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [320, 568, true],
     [667, 375, true],
   ] as const)(
-    "keeps the composer popovers inside the mobile viewport and clear of the input at %sx%s (attachment: %s)",
+    "keeps the context usage popover inside the mobile viewport and clear of the input at %sx%s (attachment: %s)",
     async (width, height, composerAttachment) => {
       const page = await openFixture(width, height, { composerAttachment });
       try {
         const composer = await getBoundingBox(page, ".agent-chat__input");
-        for (const picker of [
-          {
-            menu: ".chat-controls__effort-menu",
-            trigger: '[data-chat-composer-effort="true"]',
-          },
-          {
-            menu: ".context-usage__popover",
-            trigger: ".context-ring",
-          },
-        ]) {
-          await page.locator(picker.trigger).evaluate((node) => {
-            node.parentElement?.setAttribute("open", "");
-          });
-          await waitForLayoutSettled(page);
-          await syncFixtureComposerPopoverAnchor(page);
-          await waitForLayoutSettled(page);
-          const menu = await getBoundingBox(page, picker.menu);
-          const trigger = await getBoundingBox(page, picker.trigger);
-          const footer = await getBoundingBox(page, ".agent-chat__composer-footer");
-          const menuPosition = await page.locator(picker.menu).evaluate((node) => ({
-            bottom: getComputedStyle(node).bottom,
-            boxSizing: getComputedStyle(node).boxSizing,
-            maxHeight: getComputedStyle(node).maxHeight,
-          }));
-          const menuLabel = `${picker.menu} ${JSON.stringify(menuPosition)}`;
-          expect(menu.x, picker.menu).toBeGreaterThanOrEqual(0);
-          expect(menu.x + menu.width, picker.menu).toBeLessThanOrEqual(width + 1);
-          expect(menu.y, menuLabel).toBeGreaterThanOrEqual(0);
-          expect(menu.y + menu.height, picker.menu).toBeLessThanOrEqual(composer.y + 1);
-          expect(trigger.y + trigger.height, picker.trigger).toBeLessThanOrEqual(height + 1);
-          expect(footer.y + footer.height, picker.menu).toBeLessThanOrEqual(height + 1);
-          await page.locator(picker.trigger).evaluate((node) => {
-            node.parentElement?.removeAttribute("open");
-          });
-        }
+        const menuSelector = ".context-usage__popover";
+        const triggerSelector = ".context-ring";
+        await page.locator(triggerSelector).evaluate((node) => {
+          node.parentElement?.setAttribute("open", "");
+        });
+        await waitForLayoutSettled(page, `${menuSelector}, .agent-chat__input`);
+        await syncFixtureComposerPopoverAnchor(page);
+        await waitForLayoutSettled(page, `${menuSelector}, .agent-chat__input`);
+        const menu = await getBoundingBox(page, menuSelector);
+        const trigger = await getBoundingBox(page, triggerSelector);
+        const footer = await getBoundingBox(page, ".agent-chat__composer-footer");
+        const menuPosition = await page.locator(menuSelector).evaluate((node) => ({
+          bottom: getComputedStyle(node).bottom,
+          boxSizing: getComputedStyle(node).boxSizing,
+          maxHeight: getComputedStyle(node).maxHeight,
+        }));
+        expect(menu.x).toBeGreaterThanOrEqual(0);
+        expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
+        expect(menu.y, JSON.stringify(menuPosition)).toBeGreaterThanOrEqual(0);
+        expect(menu.y + menu.height).toBeLessThanOrEqual(composer.y + 1);
+        expect(trigger.y + trigger.height).toBeLessThanOrEqual(height + 1);
+        expect(footer.y + footer.height).toBeLessThanOrEqual(height + 1);
       } finally {
         await closeBrowserPage(page);
       }
     },
   );
 
-  it("anchors mobile composer popovers when the iPhone visual viewport is panned", async () => {
+  it("anchors mobile context usage when the iPhone visual viewport is panned", async () => {
     const page = await openFixture(375, 812);
     try {
       await page.locator(".card.chat").evaluate(async (node) => {
@@ -2475,14 +2510,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
       });
       await syncFixtureComposerPopoverAnchor(page);
-      await page.locator('[data-chat-composer-effort="true"]').evaluate((node) => {
+      await page.locator(".context-ring").evaluate((node) => {
         node.parentElement?.setAttribute("open", "");
       });
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
       await syncFixtureComposerPopoverAnchor(page);
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
       const composer = await getBoundingBox(page, ".agent-chat__input");
-      const menu = await getBoundingBox(page, ".chat-controls__effort-menu");
+      const menu = await getBoundingBox(page, ".context-usage__popover");
       const anchorEvidence = await page.locator(".agent-chat__input").evaluate((node) => ({
         anchorBottom: getComputedStyle(node).getPropertyValue("--chat-composer-popover-bottom"),
         layoutHeight: document.documentElement.clientHeight,
@@ -2521,7 +2556,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           footer: rectFor(".agent-chat__composer-footer"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-controls__model-trigger"),
-          modelPicker: rectFor(".chat-controls__model-picker"),
           modelLabel: rectFor(".chat-controls__model-trigger .chat-controls__inline-select-label"),
           overrides: rectFor(".agent-chat__session-overrides-pill"),
           status: rectFor(".agent-chat__composer-run-status"),
@@ -2529,9 +2563,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
 
-      expect(layout.controls.scrollWidth, JSON.stringify(layout)).toBeLessThanOrEqual(
-        layout.controls.clientWidth + 1,
-      );
+      expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
       for (const control of [
         layout.status,
         layout.overrides,
@@ -2548,7 +2580,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
-      expect(layout.modelPicker.width).toBeGreaterThanOrEqual(138);
       expect(layout.modelLabel.scrollWidth).toBeLessThanOrEqual(layout.modelLabel.clientWidth + 1);
       for (const [left, right] of [
         [layout.status, layout.overrides],

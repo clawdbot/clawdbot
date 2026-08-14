@@ -18,8 +18,9 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
 
-  it("advertises node presence activity updates", () => {
+  it("advertises node topology updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
+    expect(GATEWAY_EVENTS).toContain("node.runnerInventory.changed");
   });
 
   it("advertises skill invalidation updates", () => {
@@ -191,7 +192,7 @@ describe("listGatewayMethods", () => {
 
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
-    expect(methods).not.toContain("node.protocolFeatures.update");
+    expect(methods).not.toContain("node.runnerInventory.update");
     expect(methods).not.toContain("config.openFile");
     expect(methods).not.toContain("chat.inject");
     expect(methods).not.toContain("nativeHook.invoke");
@@ -200,12 +201,12 @@ describe("listGatewayMethods", () => {
 
   it("registers the hidden node protocol feature publication method", () => {
     const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
-      (candidate) => candidate.name === "node.protocolFeatures.update",
+      (candidate) => candidate.name === "node.runnerInventory.update",
     );
 
-    expect(coreGatewayHandlers["node.protocolFeatures.update"]).toBeTypeOf("function");
+    expect(coreGatewayHandlers["node.runnerInventory.update"]).toBeTypeOf("function");
     expect(descriptor).toMatchObject({
-      name: "node.protocolFeatures.update",
+      name: "node.runnerInventory.update",
       scope: "node",
       advertise: false,
     });

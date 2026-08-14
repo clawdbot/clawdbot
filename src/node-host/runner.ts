@@ -12,9 +12,9 @@ import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credential
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
-  NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-} from "../infra/node-worker-supervisor-dialect.js";
+} from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
@@ -128,9 +128,16 @@ function isExactUnknownMethodError(error: unknown, method: string): boolean {
   );
 }
 
-function isExactLegacyNodeAuthorizationError(error: unknown, gatewayProtocol: number): boolean {
+function isExactLegacyNodeAuthorizationError(
+  error: unknown,
+  method: string,
+  gatewayProtocol: number,
+): boolean {
+  const legacyUnknownMethodShape =
+    gatewayProtocol === 3 ||
+    (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD);
   return (
-    gatewayProtocol === 3 &&
+    legacyUnknownMethodShape &&
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
     error.message === "unauthorized role: node"
@@ -144,7 +151,7 @@ function classifyNodeMethodFailure(
 ): "legacy-unsupported" | "rejected" | "transient" {
   if (
     isExactUnknownMethodError(error, method) ||
-    isExactLegacyNodeAuthorizationError(error, gatewayProtocol)
+    isExactLegacyNodeAuthorizationError(error, method, gatewayProtocol)
   ) {
     return "legacy-unsupported";
   }
@@ -155,7 +162,7 @@ function classifyNodeMethodFailure(
 }
 
 type NodeOptionalPublicationMethod =
-  | typeof NODE_PROTOCOL_FEATURES_UPDATE_METHOD
+  | typeof NODE_RUNNER_INVENTORY_UPDATE_METHOD
   | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
   | typeof NODE_SKILLS_UPDATE_METHOD;
 
@@ -451,11 +458,16 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     );
   };
 
-  const publishProtocolFeatures = () => {
+  const publishRunnerInventory = () => {
     queueOptionalPublication(
-      NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
-      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
-      "protocol feature",
+      NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        ...(preparedRuntime.manifest.workerRuns
+          ? { workerRuns: preparedRuntime.manifest.workerRuns }
+          : {}),
+      },
+      "runner inventory",
     );
   };
 
@@ -531,7 +543,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         void finish(0);
         return;
       }
-      publishProtocolFeatures();
+      publishRunnerInventory();
       publishInventory();
     },
     onConnectError: (error) => {

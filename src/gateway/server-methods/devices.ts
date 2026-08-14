@@ -711,14 +711,19 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: entry.role,
       reason: "device-token-rotated",
     });
+    // Record the delivery decision on the wire: an absent token alone cannot tell a
+    // client whether the rotation withheld the secret by policy or the response
+    // predates this field, and the two need different operator-facing outcomes.
+    const deliversTokenInBand = shouldReturnRotatedDeviceToken(authz);
     respond(
       true,
       {
         deviceId,
         role: entry.role,
-        ...(shouldReturnRotatedDeviceToken(authz) ? { token: entry.token } : {}),
+        ...(deliversTokenInBand ? { token: entry.token } : {}),
         scopes: entry.scopes,
         rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
+        tokenDelivery: deliversTokenInBand ? "in-band" : "withheld-cross-device",
       },
       undefined,
     );

@@ -754,7 +754,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       return existing;
     }
     const gatewaySource = this.systemInfoGatewaySource;
-    const promise = loadModels(client)
+    const promise = loadModels(client, { preparedOnly: true })
       .then((models) => {
         if (
           this.isConnected &&

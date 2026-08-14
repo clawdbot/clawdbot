@@ -742,7 +742,9 @@ suite.define(() => {
       await whereSelect.getByRole("button", { name: "Local" }).click();
       await pollLocatorText(whereLabel).toBe("Local");
       await whereTrigger.click();
-      expect(await whereSelect.getByRole("button", { name: "Offline node" }).count()).toBe(0);
+      await expect
+        .poll(() => whereSelect.getByRole("button", { name: "Offline node" }).isDisabled())
+        .toBe(true);
       await whereSelect.getByRole("button", { name: "MacBook" }).click();
       await projectTrigger.click();
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();

@@ -6,7 +6,7 @@ import {
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 
 /** Resolves the configured owner for Talk work that has no agent-scoped session key. */
 export function resolveTalkTargetAgentId(config: OpenClawConfig): string {
@@ -26,8 +26,11 @@ export function resolveTalkSessionAgentId(
   sessionKey?: string | null,
 ): string {
   const normalizedSessionKey = sessionKey ?? undefined;
-  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(config, normalizedSessionKey);
-  return persistedOwner.kind === "none"
-    ? resolveAgentIdFromSessionKey(normalizedSessionKey, resolveTalkTargetAgentId(config))
+  const scopedAgentId = parseAgentSessionKey(normalizedSessionKey)?.agentId;
+  if (scopedAgentId) {
+    return normalizeAgentId(scopedAgentId);
+  }
+  return resolvePersistedSessionStoreOwnerForKey(config, normalizedSessionKey).kind === "none"
+    ? resolveTalkTargetAgentId(config)
     : resolveSessionAgentId({ config, sessionKey: normalizedSessionKey });
 }
