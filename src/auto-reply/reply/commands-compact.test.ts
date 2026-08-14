@@ -1139,3 +1139,5 @@ describe("handleCompactCommand", () => {
     expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(777_777);
   });
 });
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
