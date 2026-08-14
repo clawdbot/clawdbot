@@ -8,6 +8,10 @@ import {
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
+// Synthetic single-text assistant aggregates persisted for CLI backends carry
+// this idempotency key prefix (see cli-run-transcript.ts). They duplicate the
+// per-block native transcript imported from the CLI session.
+const CLI_ASSISTANT_IDEMPOTENCY_PREFIX = "cli-assistant:";
 
 function extractComparableText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
@@ -100,6 +104,49 @@ function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean 
   );
 }
 
+function resolveCliAssistantAggregateText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const record = message as { role?: unknown; idempotencyKey?: unknown };
+  if (readStringValue(record.role) !== "assistant") {
+    return undefined;
+  }
+  const idempotencyKey = normalizeOptionalString(record.idempotencyKey);
+  if (!idempotencyKey?.startsWith(CLI_ASSISTANT_IDEMPOTENCY_PREFIX)) {
+    return undefined;
+  }
+  return extractComparableText(message);
+}
+
+function collectImportedAssistantTexts(messages: unknown[]): string {
+  const parts: string[] = [];
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as { role?: unknown };
+    if (readStringValue(record.role) !== "assistant" || !resolveImportedExternalIdentity(message)) {
+      continue;
+    }
+    const text = extractComparableText(message);
+    if (text) {
+      parts.push(text);
+    }
+  }
+  return parts.join(" ");
+}
+
+function countTextOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    count += 1;
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+  return count;
+}
+
 function isEquivalentImportedMessage(existing: unknown, imported: unknown): boolean {
   // Text is a fallback only when either message lacks authoritative source identity.
   const sameExternalIdentity = hasSameExternalIdentity(existing, imported);
@@ -148,7 +195,24 @@ export function mergeImportedChatHistoryMessages(params: {
   if (params.importedMessages.length === 0) {
     return params.localMessages;
   }
-  const merged = params.localMessages.map((message, index) => ({ message, order: index }));
+  const importedAssistantText = collectImportedAssistantTexts(params.importedMessages);
+  const merged: { message: unknown; order: number }[] = [];
+  const seenAggregateTexts = new Map<string, number>();
+  params.localMessages.forEach((message, index) => {
+    const aggregateText = resolveCliAssistantAggregateText(message);
+    if (aggregateText) {
+      const seen = (seenAggregateTexts.get(aggregateText) ?? 0) + 1;
+      seenAggregateTexts.set(aggregateText, seen);
+      // A cli-assistant aggregate is a synthetic single-text copy of one CLI
+      // assistant turn. Prefer the proven overlapping imported native blocks:
+      // drop the aggregate only when the imported transcript covers this many
+      // copies of its text, and retain it as fallback history otherwise.
+      if (countTextOccurrences(importedAssistantText, aggregateText) >= seen) {
+        return;
+      }
+    }
+    merged.push({ message, order: index });
+  });
   let nextOrder = merged.length;
   for (const imported of params.importedMessages) {
     if (merged.some((existing) => isEquivalentImportedMessage(existing.message, imported))) {

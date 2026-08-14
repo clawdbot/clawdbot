@@ -853,6 +853,128 @@ describe("cli session history", () => {
     });
   });
 
+  it("prefers overlapping imported native blocks over the synthetic cli-assistant aggregate", () => {
+    const localMessages = [
+      {
+        role: "user",
+        content: "hi",
+        timestamp: Date.parse("2026-03-26T16:29:54.900Z"),
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "First block.\n\nSecond block." }],
+        api: "cli",
+        provider: "claude-cli",
+        model: "gpt-5.6-sol",
+        idempotencyKey: "cli-assistant:run-1",
+        timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
+      },
+    ];
+    const importedMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "First block." }],
+        timestamp: Date.parse("2026-03-26T16:29:55.500Z"),
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "assistant-1",
+          cliSessionId: "session-1",
+        },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Second block." }],
+        timestamp: Date.parse("2026-03-26T16:29:55.700Z"),
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "assistant-2",
+          cliSessionId: "session-1",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toHaveLength(3);
+    // The synthetic aggregate is replaced by the proven native blocks.
+    expect(
+      merged.some((message) => readRecord(message).idempotencyKey === "cli-assistant:run-1"),
+    ).toBe(false);
+    expect(merged.filter((message) => readRecord(message).role === "assistant")).toHaveLength(2);
+    expect(
+      merged
+        .filter((message) => readRecord(message).role === "assistant")
+        .every((message) => readRecord(message)["__openclaw"] !== undefined),
+    ).toBe(true);
+  });
+
+  it("retains the synthetic aggregate when imported history does not cover it", () => {
+    const localMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Only available locally." }],
+        idempotencyKey: "cli-assistant:run-1",
+        timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
+      },
+    ];
+    const importedMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Unrelated imported turn." }],
+        timestamp: Date.parse("2026-03-26T16:29:55.500Z"),
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "assistant-1",
+          cliSessionId: "session-1",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toHaveLength(2);
+    // The synthetic aggregate survives as fallback history.
+    expect(
+      merged.filter((message) => readRecord(message).idempotencyKey === "cli-assistant:run-1"),
+    ).toHaveLength(1);
+  });
+
+  it("preserves genuinely repeated assistant turns when imports cover only one copy", () => {
+    const localMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Same answer." }],
+        idempotencyKey: "cli-assistant:run-1",
+        timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Same answer." }],
+        idempotencyKey: "cli-assistant:run-2",
+        // More than the 5-minute dedupe window apart: a genuinely repeated turn.
+        timestamp: Date.parse("2026-03-26T16:36:56.000Z"),
+      },
+    ];
+    const importedMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Same answer." }],
+        timestamp: Date.parse("2026-03-26T16:29:55.500Z"),
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "assistant-1",
+          cliSessionId: "session-1",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toHaveLength(2);
+    // One aggregate is covered by the single imported block; the surplus copy
+    // of the genuinely repeated turn survives as fallback history.
+    expect(
+      merged.filter((message) => readRecord(message).idempotencyKey?.startsWith("cli-assistant:")),
+    ).toHaveLength(1);
+  });
+
   it.each([
     ["deduplicates a local redacted copy against an imported full copy", false],
     ["deduplicates when both local and imported copies are already redacted", true],
