@@ -1,0 +1,240 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createPlanningKnowledgeCaptureTool,
+  createPlanningKnowledgeSearchTool,
+  planningKnowledgeCaptureParameters,
+  planningKnowledgeConfigSchema,
+  resolvePlanningKnowledgeConfig,
+  type PlanningKnowledgeCommandRunner,
+} from "./planning-knowledge-tool.js";
+
+const execFileAsync = promisify(execFile);
+
+const config = {
+  scriptPath: "/opt/OneLibrary/Browser-Tracker/scripts/planning_knowledge_index.py",
+  sourceRoot: "/tmp/goal-agent/notes/knowledge",
+  indexPath: "/tmp/planning-personal.sqlite3",
+  pythonExecutable: "python3",
+  mode: "text" as const,
+  timeoutMs: 5000,
+};
+
+const validHit = {
+  canonical_ref: "note:notes/knowledge/input_output_balance",
+  title: "Input Output Balance",
+  snippet: "Learning should be followed by a concrete output.",
+  score: 1.2,
+  knowledge_type: "principle",
+  status: "active",
+  verification_status: "reviewed",
+  domains: ["lernen"],
+  topics: ["learning"],
+  project_refs: [],
+  goal_refs: [],
+  source_type: "human",
+  created_at: "2026-08-01",
+  updated_at: "2026-08-01",
+};
+
+function runnerReturning(payload: unknown): PlanningKnowledgeCommandRunner {
+  return vi.fn(async () => ({
+    stdout: JSON.stringify(payload),
+    exitCode: 0,
+  }));
+}
+
+describe("planning-knowledge config", () => {
+  it("requires an explicit notes/knowledge root before enabling search", () => {
+    expect(resolvePlanningKnowledgeConfig({}, (value) => value)).toBeNull();
+    expect(() =>
+      resolvePlanningKnowledgeConfig(
+        { ...config, sourceRoot: "/tmp/goal-agent/notes" },
+        (value) => value,
+      ),
+    ).toThrow(/notes\/knowledge/);
+  });
+
+  it("keeps the derived index outside the canonical source", () => {
+    expect(() =>
+      resolvePlanningKnowledgeConfig(
+        { ...config, indexPath: "/tmp/goal-agent/notes/knowledge/index.sqlite3" },
+        (value) => value,
+      ),
+    ).toThrow(/outside/);
+  });
+
+  it("declares a strict configuration schema", () => {
+    expect(planningKnowledgeConfigSchema).toMatchObject({ additionalProperties: false });
+    expect(planningKnowledgeCaptureParameters).toMatchObject({ additionalProperties: false });
+  });
+});
+
+describe("planning-knowledge search", () => {
+  it("delegates to OneLibrary and returns only portable canonical citations", async () => {
+    const runner = runnerReturning({ results: [validHit] });
+    const tool = createPlanningKnowledgeSearchTool(config, runner);
+
+    const result = await tool.execute("call-1", { query: "input output balance" });
+    expect(result.details).toMatchObject({
+      source_system: "planning",
+      record_type: "knowledge",
+      corpus: "planning_personal",
+      security_scope: "personal",
+      results: [{ canonical_ref: validHit.canonical_ref }],
+    });
+    expect(JSON.stringify(result)).not.toMatch(/vector|chunk_id|sqlite|\/tmp\//i);
+    expect(runner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executable: "python3",
+        args: expect.arrayContaining([
+          "search",
+          "--root",
+          config.sourceRoot,
+          "--index",
+          config.indexPath,
+          "--query",
+          "input output balance",
+        ]),
+      }),
+    );
+  });
+
+  it("fails closed for no matches", async () => {
+    const tool = createPlanningKnowledgeSearchTool(config, runnerReturning({ results: [] }));
+    const result = await tool.execute("call-1", { query: "not stored" });
+    expect(result.details).toMatchObject({
+      count: 0,
+      message: "No stored Planning Knowledge Note found for this query.",
+    });
+  });
+
+  it("rejects invalid citations and ineligible results", async () => {
+    const invalidRef = createPlanningKnowledgeSearchTool(
+      config,
+      runnerReturning({ results: [{ ...validHit, canonical_ref: "vector-123" }] }),
+    );
+    await expect(invalidRef.execute("call-1", { query: "x" })).rejects.toThrow(
+      /canonical note ref/,
+    );
+
+    const archived = createPlanningKnowledgeSearchTool(
+      config,
+      runnerReturning({ results: [{ ...validHit, status: "archived" }] }),
+    );
+    await expect(archived.execute("call-1", { query: "x" })).rejects.toThrow(/ineligible/);
+  });
+
+  it("does not use a shell and propagates the caller signal", async () => {
+    const runner = runnerReturning({ results: [] });
+    const tool = createPlanningKnowledgeSearchTool(config, runner);
+    const signal = new AbortController().signal;
+    await tool.execute("call-1", { query: "x" }, signal);
+    expect(runner).toHaveBeenCalledWith(expect.objectContaining({ signal }));
+    expect(vi.mocked(runner).mock.calls[0]?.[0].args).not.toContain("/bin/sh");
+  });
+
+  it.skipIf(!process.env.OPENCLAW_PLANNING_KNOWLEDGE_CLI)(
+    "canary-runs the configured OneLibrary CLI against a synthetic note",
+    async () => {
+      const cliPath = process.env.OPENCLAW_PLANNING_KNOWLEDGE_CLI;
+      if (!cliPath) {
+        throw new Error("OneLibrary CLI canary requires OPENCLAW_PLANNING_KNOWLEDGE_CLI");
+      }
+      const tempRoot = await mkdtemp(join(tmpdir(), "openclaw-planning-knowledge-"));
+      const sourceRoot = join(tempRoot, "notes", "knowledge");
+      const notePath = join(sourceRoot, "input_output_balance.md");
+      const indexPath = join(tempRoot, "planning-personal.sqlite3");
+      try {
+        await mkdir(sourceRoot, { recursive: true });
+        await writeFile(
+          notePath,
+          `---
+schema: planning_knowledge_note
+schema_version: 1
+id: "note:notes/knowledge/input_output_balance"
+title: "Input Output Balance"
+knowledge_type: principle
+status: active
+created_at: "2026-08-01"
+updated_at: "2026-08-01"
+source_type: human
+verification_status: reviewed
+domains: ["lernen"]
+topics: ["learning"]
+goal_refs: []
+project_refs: []
+related_note_refs: []
+source_refs: []
+supersedes: []
+---
+
+## Essence
+
+No major input without a concrete output.
+
+## Knowledge
+
+Output after learning improves retention.
+`,
+          "utf8",
+        );
+        const configured = resolvePlanningKnowledgeConfig(
+          {
+            ...config,
+            scriptPath: cliPath,
+            sourceRoot,
+            indexPath,
+          },
+          (value) => value,
+        );
+        expect(configured).not.toBeNull();
+        await execFileAsync(
+          "python3",
+          [cliPath, "sync", "--root", sourceRoot, "--index", indexPath, "--mode", "text"],
+          { env: process.env },
+        );
+        const tool = createPlanningKnowledgeSearchTool(configured!);
+        const result = await tool.execute("call-1", { query: "input output balance" });
+        expect(result.details).toMatchObject({
+          corpus: "planning_personal",
+          results: [{ canonical_ref: "note:notes/knowledge/input_output_balance" }],
+        });
+      } finally {
+        await rm(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe("planning-knowledge capture in PLN-500A", () => {
+  it("recognizes explicit capture without writing or creating a task", async () => {
+    const result = await createPlanningKnowledgeCaptureTool().execute("call-1", {
+      content: "No major input without an output.",
+    });
+    expect(result.details).toEqual({
+      intent: "knowledge_capture",
+      status: "capture_not_enabled_in_pln_500a",
+      write_performed: false,
+      canonical_owner: "planning",
+      operational_follow_up: "none",
+    });
+  });
+
+  it("keeps a mixed operational follow-up separate", async () => {
+    const result = await createPlanningKnowledgeCaptureTool().execute("call-1", {
+      content: "No major input without an output.",
+      operationalFollowUp: "Remind me tomorrow",
+    });
+    expect(result.details).toMatchObject({
+      intent: "knowledge_capture",
+      status: "capture_not_enabled_in_pln_500a",
+      operational_follow_up: "route_separately",
+      write_performed: false,
+    });
+  });
+});

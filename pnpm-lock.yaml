@@ -1572,6 +1572,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/planning-knowledge:
+    dependencies:
+      typebox:
+        specifier: 1.3.6
+        version: 1.3.6
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/policy:
     dependencies:
       json5:

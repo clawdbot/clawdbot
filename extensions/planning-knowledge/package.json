@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/planning-knowledge",
+  "version": "2026.8.1",
+  "private": true,
+  "description": "Read-only OpenClaw access to the Planning-owned personal Knowledge corpus",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
