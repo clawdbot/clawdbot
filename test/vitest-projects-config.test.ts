@@ -81,11 +81,36 @@ describe("projects vitest config", () => {
     expect(agentConfigs.size).toBe(agentVitestProjectConfigs.length);
   });
 
-  it("covers each normal full-suite test file exactly once", async () => {
-    const { missing, duplicated } = await auditFullSuiteTestFileOwnership();
+  it("covers each normal full-suite test file exactly once after configs cached filtered includes", async () => {
+    const contractTestConfigs = [
+      contractChannelSurfaceConfig,
+      contractChannelConfigConfig,
+      contractChannelRegistryConfig,
+      contractChannelSessionConfig,
+      contractPluginConfig,
+    ].map(requireTestConfig);
+    const previousIncludes = contractTestConfigs.map((config) => config.include);
 
-    expect(missing).toStrictEqual([]);
-    expect(duplicated).toStrictEqual([]);
+    try {
+      // A CLI path outside the contract patterns caches these defaults with empty includes.
+      for (const config of contractTestConfigs) {
+        config.include = [];
+      }
+
+      const { missing, duplicated } = await auditFullSuiteTestFileOwnership();
+
+      expect(missing).toStrictEqual([]);
+      expect(duplicated).toStrictEqual([]);
+    } finally {
+      contractTestConfigs.forEach((config, index) => {
+        const previousInclude = previousIncludes[index];
+        if (previousInclude === undefined) {
+          delete config.include;
+        } else {
+          config.include = previousInclude;
+        }
+      });
+    }
   });
 
   it("keeps all embedded harnesses under their canonical embedded owner", () => {

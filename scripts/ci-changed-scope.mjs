@@ -105,6 +105,8 @@ const NATIVE_COOWNED_GENERATED_I18N_RE =
   /^apps\/android\/app\/src\/main\/res\/values\/(?:assistant|strings)\.xml$/;
 const NATIVE_HARD_GENERATED_I18N_RE =
   /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/i18n\/NativeStringResources\.kt|apps\/android\/app\/src\/main\/res\/values-[^/]+\/(?:assistant|strings)\.xml|apps\/android\/app\/src\/thirdParty\/res\/values-[^/]+\/accessibility_strings\.xml|apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/macos\/Sources\/OpenClaw\/Resources\/Localizable\.xcstrings|apps\/ios\/(?:Sources|WatchApp|ShareExtension|ActivityWidget)\/[^/]+\.lproj\/InfoPlist\.strings)$/;
+const NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE =
+  /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/macos\/Sources\/OpenClaw\/Resources\/Localizable\.xcstrings)$/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
@@ -406,6 +408,9 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
   if (sourcePaths.length === 0) {
     return;
   }
+  if (isNativeCanonicalV2Migration(changedPaths, generatedPaths)) {
+    return;
+  }
   throw new NativeGeneratedArtifactsMixedError(
     [
       "Native generated locale artifacts must be isolated from source changes.",
@@ -414,6 +419,29 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
       ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
+  );
+}
+
+/**
+ * One-time v2 native artifact migration escape; remove after the migration PR lands.
+ * @param {string[]} changedPaths
+ * @param {string[]} generatedPaths
+ * @returns {boolean}
+ */
+function isNativeCanonicalV2Migration(changedPaths, generatedPaths) {
+  const requiredOwners = [
+    ".gitattributes",
+    "scripts/ci-changed-scope.mjs",
+    "scripts/native-app-i18n.ts",
+    "scripts/android-app-i18n.ts",
+    "scripts/apple-app-i18n.ts",
+    "test/scripts/native-app-i18n.test.ts",
+    "test/scripts/apple-app-i18n.test.ts",
+    "src/scripts/ci-changed-scope.native-i18n.test.ts",
+  ];
+  return (
+    requiredOwners.every((owner) => changedPaths.includes(owner)) &&
+    generatedPaths.every((filePath) => NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE.test(filePath))
   );
 }
 

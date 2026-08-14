@@ -248,6 +248,13 @@ api.on(
 );
 ```
 
+When evaluation input includes `correlationId`, OpenClaw forwards it to the
+evaluator event for both manual and apply-triggered evaluations. This value is
+caller-supplied correlation metadata, not authenticated identity or proof of
+authorization. An authorization plugin must mint or replace the value through
+a trusted entry point, bind it to the intended operation, and validate and
+consume it itself.
+
 Stored outcomes identify the evaluator, plugin id, plugin package version,
 status, and returned result. Timeouts and thrown errors are recorded as
 attributed error outcomes; they do not fail the whole evaluation. Applying a

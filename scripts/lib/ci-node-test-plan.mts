@@ -42,6 +42,7 @@ export type NodeTestShard = {
   groups?: NodeTestShardGroup[];
   timeoutMinutes?: number;
   planConcurrency?: number;
+  predictedSeconds?: number;
   saveVitestFsCache?: boolean;
 };
 
@@ -166,13 +167,15 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
 // The group hints below are loaded-fleet CI walls. Three-way striping plus a
 // Blacksmith keeps the proven 200s/276s admission caps and 28-worker ceiling.
-// Standard 4-core GitHub runners use direct hosted wall hints below. Keep their
-// serial group budget near four minutes so setup leaves jobs around five.
+// Standard 4-core GitHub runners use direct hosted wall hints below. The
+// 160-second wall budget is the hosted-hint equivalent of tightening the old
+// 120/166 admission caps to 80/110, leaving setup inside a ~3.5-minute lane.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 240;
-const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 240;
+const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 160;
+const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 160;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
+const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 210;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
@@ -555,7 +558,8 @@ const COMPACT_PUSH_EXCLUDED_SHARDS = new Set([
 // Spawn/signal-timing suites (process-group waits, PTY smoke) flake when a
 // concurrent sibling Vitest run competes for the 4 vCPU runner. Pack them
 // into bins the shard runner executes at concurrency 1.
-const EXCLUSIVE_COMPACT_GROUP_RE = /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$/u;
+const EXCLUSIVE_COMPACT_GROUP_RE =
+  /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$/u;
 // Exclusive bins run serially, so their packed estimate is their wall clock.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 
@@ -568,7 +572,7 @@ function isExclusiveCompactGroup(group: NodeTestShardGroup): boolean {
 // scales with the runner class. infra-process spawns child processes per test
 // and hit worker-startup timeouts under contention before serialization.
 const PINNED_WORKER_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui-(?:\d+|support)$|^agentic-cli$|^agentic-gateway-(?:core-\d+|methods)$/u;
+  /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui-(?:\d+|support)$|^agentic-cli$|^agentic-gateway-(?:core-\d+|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 
 function applyCompactGroupWorkerPins(group: NodeTestShardGroup): NodeTestShardGroup {
@@ -2024,6 +2028,50 @@ export function assignVitestFsCacheWriter<T extends Pick<NodeTestShard, "shardNa
   }));
 }
 
+function listAgentSupportTestFiles(): string[] {
+  const owner = agentVitestProjectOwners.support;
+  return listTestFiles(owner.root).filter(
+    (file) =>
+      owner.include.some((pattern) => matchesGlob(file, pattern)) &&
+      !owner.exclude.some((pattern) => matchesGlob(file, pattern)),
+  );
+}
+
+function splitOversizedGithubCompactGroup(
+  group: NodeTestShardGroup,
+): Array<{ group: NodeTestShardGroup; seconds: number }> {
+  const seconds = estimateCompactGroupSeconds(group, "github");
+  if (seconds <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
+    return [{ group, seconds }];
+  }
+
+  const includePatterns =
+    group.includePatterns ??
+    (group.shard_name === "agentic-agents-support" ? listAgentSupportTestFiles() : undefined);
+  if (!includePatterns || includePatterns.length === 0) {
+    return [{ group, seconds }];
+  }
+
+  // Hosted proof showed the old four-way tooling stripe remained imbalanced
+  // after a two-way split (126s versus 246s). Give that measured outlier a
+  // third stripe; the generic ceiling remains sufficient for other groups.
+  const stripeCount =
+    group.shard_name === "core-tooling-3"
+      ? 3
+      : Math.ceil(seconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS);
+  const splitSeconds = Math.ceil(seconds / stripeCount);
+  return createStripedBatches(includePatterns, stripeCount, stripeFileWeight).map(
+    (patterns, index) => ({
+      group: {
+        ...group,
+        includePatterns: patterns,
+        shard_name: `${group.shard_name}-hosted-${index + 1}`,
+      },
+      seconds: splitSeconds,
+    }),
+  );
+}
+
 function createCompactNodeTestShardBundles(
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
@@ -2032,27 +2080,39 @@ function createCompactNodeTestShardBundles(
     (shard) => compactMode !== "push" || !COMPACT_PUSH_EXCLUDED_SHARDS.has(shard.shardName),
   );
   const groupsByRunner = new Map<string, NodeTestShardGroup[]>();
+  const hostedSplitSeconds = new Map<string, number>();
 
   for (const shard of shards) {
     const runner = resolveCiNodeTestRunner(shard);
     const key = JSON.stringify([runner, shard.requiresDist]);
     const groups = groupsByRunner.get(key) ?? [];
-    const group = {
+    const group = applyCompactGroupWorkerPins({
       configs: shard.configs,
       ...(shard.env ? { env: shard.env } : {}),
       ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
       requiresDist: shard.requiresDist,
       runner,
       shard_name: shard.shardName,
-    };
-    groups.push(applyCompactGroupWorkerPins(group));
+    });
+    const plannedGroups =
+      options.runnerBackend === "github"
+        ? splitOversizedGithubCompactGroup(group)
+        : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
+    for (const planned of plannedGroups) {
+      groups.push(planned.group);
+      if (options.runnerBackend === "github") {
+        hostedSplitSeconds.set(planned.group.shard_name, planned.seconds);
+      }
+    }
     groupsByRunner.set(key, groups);
   }
 
   const compactJobs: CompactNodeTestShard[] = [];
   const estimateGroupSeconds = (group: NodeTestShardGroup) =>
+    hostedSplitSeconds.get(group.shard_name) ??
     estimateCompactGroupSeconds(group, options.runnerBackend);
   const estimateStripeSeconds = (group: NodeTestShardGroup) =>
+    hostedSplitSeconds.get(group.shard_name) ??
     estimateCompactStripeSeconds(group, options.runnerBackend);
   for (const groups of groupsByRunner.values()) {
     // First-fit decreasing sets the existing registration count from the
@@ -2150,6 +2210,7 @@ function createCompactNodeTestShardBundles(
         // lock-timing flakes on 8 vCPU), and the packed weights are
         // contention-inflated so serializing is roughly wall-neutral.
         planConcurrency: 1,
+        predictedSeconds: bin.weight,
       });
     }
   }

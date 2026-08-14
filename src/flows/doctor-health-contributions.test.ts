@@ -110,6 +110,7 @@ const mocks = vi.hoisted(() => ({
     () => "/tmp/openclaw-workspace",
   ),
   tryResolveConfiguredAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  tryResolveSystemAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn<(_cfg: OpenClawConfig) => string>(() => "default"),
   resolveAgentContextLimits: vi.fn(
     (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
@@ -395,6 +396,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   tryResolveSoleAgentId: mocks.tryResolveSoleAgentId,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   tryResolveConfiguredAgentWorkspaceDir: mocks.tryResolveConfiguredAgentWorkspaceDir,
+  tryResolveSystemAgentWorkspaceDir: mocks.tryResolveSystemAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentContextLimits: mocks.resolveAgentContextLimits,
 }));
@@ -709,6 +711,8 @@ describe("doctor health contributions", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.tryResolveConfiguredAgentWorkspaceDir.mockReset();
     mocks.tryResolveConfiguredAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
+    mocks.tryResolveSystemAgentWorkspaceDir.mockReset();
+    mocks.tryResolveSystemAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.listAgentIds.mockReset();
     mocks.listAgentIds.mockReturnValue(["default"]);
     mocks.listAgentEntries.mockReset();

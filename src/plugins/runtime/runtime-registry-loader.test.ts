@@ -29,6 +29,12 @@ const mocks = vi.hoisted(() => ({
   tryResolveConfiguredAgentWorkspaceDir: vi.fn<
     typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
   >(() => "/resolved-workspace"),
+  resolvePluginControlPlaneWorkspace: vi.fn<
+    typeof import("../control-plane-workspace.js").resolvePluginControlPlaneWorkspace
+  >((params) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected",
+  })),
   resolveDefaultAgentId: vi.fn<typeof import("../../agents/agent-scope.js").resolveDefaultAgentId>(
     () => "default",
   ),
@@ -85,6 +91,12 @@ vi.mock("../../agents/agent-scope.js", () => ({
   ) => mocks.tryResolveConfiguredAgentWorkspaceDir(...args),
   resolveDefaultAgentId: (...args: Parameters<typeof mocks.resolveDefaultAgentId>) =>
     mocks.resolveDefaultAgentId(...args),
+}));
+
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: (
+    ...args: Parameters<typeof mocks.resolvePluginControlPlaneWorkspace>
+  ) => mocks.resolvePluginControlPlaneWorkspace(...args),
 }));
 
 import { ensurePluginRegistryLoaded } from "./runtime-registry-loader.js";

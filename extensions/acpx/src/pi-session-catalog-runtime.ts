@@ -12,6 +12,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogHost,
+  SessionCatalogEntrySnapshot,
   SessionCatalogProvider,
   SessionCatalogSession,
   SessionCatalogTerminalPlan,
@@ -147,6 +148,21 @@ function setCatalogCapabilities(
   return page;
 }
 
+function projectPiAdoptedSessions(
+  page: PiSessionPage,
+  adopted: ReadonlyMap<string, string>,
+): PiSessionPage {
+  return {
+    ...page,
+    sessions: page.sessions.map((session) => {
+      const sessionKey = adopted.get(
+        sessionCatalogAdoptedSourceKey(LOCAL_HOST_ID, session.threadId),
+      );
+      return sessionKey ? { ...session, sessionKey } : session;
+    }),
+  };
+}
+
 async function listPiNodeHost(
   runtime: PluginRuntime,
   query: Parameters<SessionCatalogProvider["list"]>[0],
@@ -246,6 +262,9 @@ async function listPiHosts(
 ): Promise<SessionCatalogHost[]> {
   const runtime = api.runtime;
   const canContinue = resolvePiContinuationAvailability(api).available;
+  const adopted = query.sessionEntries
+    ? listAdoptedPiSessions(api, query.sessionEntries)
+    : new Map<string, string>();
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
   const wantsLocal = !requested || requested.has(LOCAL_HOST_ID);
@@ -266,15 +285,18 @@ async function listPiHosts(
           ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         }).then((page) =>
-          setCatalogCapabilities(page, {
-            canContinue,
-            canOpenTerminal:
-              resolveNodeHostExecutable("pi", {
-                env: process.env,
-                pathEnv: process.env.PATH ?? "",
-                strategy: "fallback",
-              }) !== undefined,
-          }),
+          projectPiAdoptedSessions(
+            setCatalogCapabilities(page, {
+              canContinue,
+              canOpenTerminal:
+                resolveNodeHostExecutable("pi", {
+                  env: process.env,
+                  pathEnv: process.env.PATH ?? "",
+                  strategy: "fallback",
+                }) !== undefined,
+            }),
+            adopted,
+          ),
         )),
       });
     } catch {
@@ -338,11 +360,15 @@ function resolvePiContinuationAvailability(
   return executable ? { available: true } : { available: false, message: "Pi CLI is unavailable" };
 }
 
-function listAdoptedPiSessions(api: OpenClawPluginApi): Map<string, string> {
+function listAdoptedPiSessions(
+  api: OpenClawPluginApi,
+  sessionEntries?: SessionCatalogEntrySnapshot,
+): Map<string, string> {
   return listAdoptedSessionCatalogSessions({
     config: currentPiCatalogConfig(api),
     pluginId: api.id,
     runtime: api.runtime,
+    sessionEntries,
     sourceFromEntry: (entry) => {
       const acpx = isRecord(entry.pluginExtensions?.acpx) ? entry.pluginExtensions.acpx : undefined;
       const marker = acpx && isRecord(acpx.piSessionCatalog) ? acpx.piSessionCatalog : undefined;
