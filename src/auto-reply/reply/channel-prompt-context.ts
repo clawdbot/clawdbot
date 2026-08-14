@@ -1,6 +1,6 @@
 /** Appends channel-supplied prompt context to the user-role body under a marked label. */
 import { truncateUtf16Safe } from "../../utils.js";
-import { markInboundContextLabel } from "./inbound-context-marker.js";
+import { INBOUND_CONTEXT_MARKER, markInboundContextLabel } from "./inbound-context-marker.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 /**
@@ -211,19 +211,46 @@ function sanitizeContextJsonValue(
   return Object.fromEntries(result);
 }
 
+const INBOUND_CONTEXT_MARKER_SUFFIX = ` ${INBOUND_CONTEXT_MARKER}`;
+
+/**
+ * Caps the label like any other channel-controlled string. Structured-context
+ * entries carry their own label (`ChannelStructuredContext.label`), normalized
+ * on the way here but not length-bounded, and the block renders it whole: a
+ * label longer than the budget drives `remaining` negative while still being
+ * emitted, so the stated per-block cap would not hold.
+ *
+ * The provenance marker is re-appended after the cut. Strippers key on that
+ * trailing marker rather than on label text (`inbound-context-marker.ts`), so
+ * truncating it away would silently stop detection.
+ */
+function truncateContextJsonLabel(label: string): string {
+  if (label.length <= MAX_CONTEXT_JSON_STRING_CHARS) {
+    return label;
+  }
+  const suffix = label.endsWith(INBOUND_CONTEXT_MARKER_SUFFIX) ? INBOUND_CONTEXT_MARKER_SUFFIX : "";
+  const head = label.slice(0, label.length - suffix.length);
+  const available = Math.max(
+    0,
+    MAX_CONTEXT_JSON_STRING_CHARS - suffix.length - STRING_TRUNCATION_SUFFIX.length,
+  );
+  return `${truncateUtf16Safe(head, available).trimEnd()}${STRING_TRUNCATION_SUFFIX}${suffix}`;
+}
+
 export function formatContextJsonBlock(label: string, payload: unknown): string {
   // Reserve everything the block renders around the budgeted payload (the
   // label line, the fences, the newlines, and the root container's own
   // punctuation) so the rendered block stays at or below the stated cap.
+  const boundedLabel = truncateContextJsonLabel(label);
   const budget: ContextJsonBudget = {
     remaining:
       MAX_CONTEXT_JSON_BLOCK_CHARS -
-      label.length -
+      boundedLabel.length -
       JSON_BLOCK_FENCE_CHARS -
       MAX_ROOT_JSON_PUNCTUATION_CHARS,
   };
   return [
-    label,
+    boundedLabel,
     "```json",
     JSON.stringify(sanitizeContextJsonValue(payload, budget, 0)),
     "```",

@@ -211,6 +211,41 @@ describe("formatContextJsonBlock", () => {
     }
   });
 
+  it("bounds a channel-controlled label and keeps its provenance marker", () => {
+    // `entry.label` on a structured-context entry is channel text. It is
+    // normalized on the way here but never length-bounded, and the block
+    // renders it whole, so the label alone can push the block past the cap the
+    // block advertises.
+    const label = markInboundContextLabel(`Directory ${"L".repeat(60_000)}:`);
+    expect(label.length).toBeGreaterThan(50_000);
+
+    const block = formatContextJsonBlock(label, { a: "b" });
+
+    expect(block.length).toBeLessThanOrEqual(50_000);
+    expect(block).toContain("…[truncated]");
+    // Strippers key on the trailing marker, not on label text
+    // (`inbound-context-marker.ts`), so cutting the label must not cut it off.
+    expect(block.split("\n")[0]).toMatch(/⟦openclaw:ctx⟧$/);
+    expect(() => parseContextJsonBlock(block)).not.toThrow();
+  });
+
+  it("keeps the block within the cap across label sizes", () => {
+    // Sizes around the cap: an unreserved label surfaces as an off-by-N overrun
+    // exactly where the label alone consumes the budget.
+    for (const labelChars of [1_000, 49_900, 50_000, 50_137, 200_000]) {
+      const block = formatContextJsonBlock(markInboundContextLabel("L".repeat(labelChars)), {
+        a: "b",
+      });
+      expect(block.length, `${labelChars}-char label exceeded the block cap`).toBeLessThanOrEqual(
+        50_000,
+      );
+      expect(
+        () => parseContextJsonBlock(block),
+        `${labelChars}-char label emitted invalid JSON`,
+      ).not.toThrow();
+    }
+  });
+
   it("charges a nested value to the budget once, not during recursion and again on retain", () => {
     // Adversarial shape from review: the recursion debited the shared budget
     // while sanitizing the nested array, then the retained property was

@@ -1563,6 +1563,26 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain("…[truncated: inbound context budget exhausted]");
   });
 
+  it("bounds a channel-controlled structured-context label before it reaches the prompt", () => {
+    // `label` is channel/plugin text. It is normalized on the way to the block
+    // formatter but never length-bounded, and the block renders it whole. One
+    // oversized label still fits under the assembly's total budget, so the
+    // assembly accepts a single block larger than the per-block cap.
+    const label = `Directory ${"L".repeat(60_000)}`;
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      ChannelStructuredContext: [
+        { label, source: "whatsapp", type: "directory", payload: { contacts: ["alice"] } },
+      ],
+    } as TemplateContext);
+
+    expect(text.length).toBeLessThanOrEqual(50_000);
+    expect(text).not.toContain("L".repeat(3_000));
+    // The truncated label keeps the provenance marker strippers key on.
+    expect(text).toContain("…[truncated] ⟦openclaw:ctx⟧");
+  });
+
   it("charges the block separators and the exhaustion marker to the total budget", () => {
     // Separator-dominated shape: thousands of tiny blocks make the "\n\n" that
     // `join` renders between them, plus the marker appended on exhaustion, the
