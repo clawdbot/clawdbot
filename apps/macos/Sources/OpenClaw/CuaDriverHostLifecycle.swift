@@ -42,7 +42,10 @@ extension CuaDriverHostCoordinator {
                 !self.processIsAlive(hostPID)
             {
                 logger.error(
-                    "reaping orphaned embedded CUA daemon \(processIdentifier, privacy: .public) whose host \(hostPID, privacy: .public) is gone")
+                    """
+                    reaping orphaned embedded CUA daemon \(processIdentifier, privacy: .public) \
+                    whose host \(hostPID, privacy: .public) is gone
+                    """)
             } else {
                 logger.error(
                     "reaping owned embedded CUA daemon \(processIdentifier, privacy: .public) during lifecycle cleanup")
@@ -273,7 +276,7 @@ extension CuaDriverHostCoordinator {
             guard skipString() else { break }
             let entry = Data(buffer[start..<(offset - 1)])
             if entry.starts(with: prefix) {
-                return String(decoding: entry.dropFirst(prefix.count), as: UTF8.self)
+                return String(bytes: entry.dropFirst(prefix.count), encoding: .utf8)
             }
         }
         return nil

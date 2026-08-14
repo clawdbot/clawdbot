@@ -22,7 +22,10 @@ enum CuaDriverStderrEvent: Equatable, Sendable {
 
 final class CuaDriverStderrRelay: @unchecked Sendable {
     static let managedModeNotice =
-        "CUA embedded driver running in managed unrestricted mode; OpenClaw command arming and pairing are the authorization boundary."
+        """
+        CUA embedded driver running in managed unrestricted mode; \
+        OpenClaw command arming and pairing are the authorization boundary.
+        """
 
     private static let dangerBannerPrefix = "DANGER: Cua Driver is running in unrestricted mode"
     private static let maximumBufferedBytes = 32 * 1024
@@ -103,7 +106,7 @@ final class CuaDriverStderrRelay: @unchecked Sendable {
     }
 
     private func forward(_ data: Data) {
-        let line = String(decoding: data, as: UTF8.self)
+        let line = (String(bytes: data, encoding: .utf8) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty, !line.hasPrefix(Self.dangerBannerPrefix) else { return }
         self.emit(.error(line))

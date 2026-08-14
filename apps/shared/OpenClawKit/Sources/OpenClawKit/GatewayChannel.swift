@@ -490,18 +490,7 @@ public actor GatewayChannelActor {
             "role": ProtoAnyCodable(role),
             "scopes": ProtoAnyCodable(scopes),
         ]
-        if !options.commands.isEmpty {
-            params["commands"] = ProtoAnyCodable(options.commands)
-        }
-        if let computerUse = options.computerUse {
-            params["computerUse"] = computerUse
-        }
-        if let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines), !pathEnv.isEmpty {
-            params["pathEnv"] = ProtoAnyCodable(pathEnv)
-        }
-        if !options.permissions.isEmpty {
-            params["permissions"] = ProtoAnyCodable(options.permissions)
-        }
+        Self.applyOptionalConnectParams(options, to: &params)
         self.applyConnectAuth(
             selectedAuth,
             deviceId: identity?.deviceId,
@@ -604,6 +593,28 @@ extension GatewayChannelActor {
 // MARK: - Authentication
 
 extension GatewayChannelActor {
+    /// Additive connect-frame fields that are only sent when the node actually
+    /// declares them, kept out of `sendConnect` so its body stays reviewable.
+    fileprivate static func applyOptionalConnectParams(
+        _ options: GatewayConnectOptions,
+        to params: inout [String: ProtoAnyCodable])
+    {
+        if !options.commands.isEmpty {
+            params["commands"] = ProtoAnyCodable(options.commands)
+        }
+        if let computerUse = options.computerUse {
+            params["computerUse"] = computerUse
+        }
+        if let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pathEnv.isEmpty
+        {
+            params["pathEnv"] = ProtoAnyCodable(pathEnv)
+        }
+        if !options.permissions.isEmpty {
+            params["permissions"] = ProtoAnyCodable(options.permissions)
+        }
+    }
+
     private func applyConnectAuth(
         _ selectedAuth: SelectedConnectAuth,
         deviceId: String?,
