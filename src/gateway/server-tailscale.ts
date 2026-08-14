@@ -2,8 +2,6 @@
 // Applies Serve/Funnel routes and returns optional shutdown cleanup.
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  disableTailscaleFunnel,
-  disableTailscaleServe,
   enableTailscaleFunnel,
   enableTailscaleServe,
   getTailnetHostname,
@@ -27,6 +25,13 @@ export async function startGatewayTailscaleExposure(params: {
   if (params.tailscaleMode === "off") {
     return null;
   }
+  // Each CLI `off` command reads fresh state before mutating it, so a prior
+  // ownership check cannot stop shutdown from deleting a replacement route.
+  if (params.resetOnExit) {
+    throw new Error(
+      "gateway.tailscale.resetOnExit=true is unsupported because Tailscale's CLI cannot atomically remove only this Gateway's route; run `openclaw doctor --fix` or set gateway.tailscale.resetOnExit=false before enabling Tailscale exposure",
+    );
+  }
   if (!params.backend) {
     throw new Error("Managed Tailscale ingress failed to start");
   }
@@ -47,18 +52,6 @@ export async function startGatewayTailscaleExposure(params: {
     }
     await enableTailscaleFunnel(target);
   };
-  const clearRoute = async () => {
-    if (params.tailscaleMode === "serve") {
-      if (serviceName) {
-        await disableTailscaleServe(undefined, serviceName);
-      } else {
-        await disableTailscaleServe();
-      }
-      return;
-    }
-    await disableTailscaleFunnel();
-  };
-
   if (params.tailscaleMode === "serve" && params.preserveFunnel === true) {
     let preservedFunnel: boolean;
     try {
@@ -114,16 +107,5 @@ export async function startGatewayTailscaleExposure(params: {
 
   return async () => {
     clearPublishedOrigin?.();
-    try {
-      if (params.resetOnExit) {
-        await clearRoute();
-      }
-    } catch (err) {
-      params.logTailscale.warn(
-        `${params.tailscaleMode} cleanup failed: ${formatErrorMessage(err)}`,
-      );
-      // Cleanup is best-effort during shutdown; startup will reclaim the same
-      // owned endpoint without disturbing unrelated Tailscale routes.
-    }
   };
 }

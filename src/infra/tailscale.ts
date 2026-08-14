@@ -406,21 +406,6 @@ function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<strin
   return backends;
 }
 
-export async function disableTailscaleServe(exec: typeof runExec = runExec, serviceName?: string) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(
-    exec,
-    tailscaleBin,
-    serviceName
-      ? ["serve", "clear", serviceName]
-      : ["serve", "--bg", "--yes", "--https=443", "--set-path=/", "off"],
-    {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    },
-  );
-}
-
 export async function enableTailscaleFunnel(
   target: number | string,
   exec: typeof runExec = runExec,
@@ -430,19 +415,6 @@ export async function enableTailscaleFunnel(
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });
-}
-
-export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(
-    exec,
-    tailscaleBin,
-    ["funnel", "--bg", "--yes", "--https=443", "--set-path=/", "off"],
-    {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    },
-  );
 }
 
 function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIdentity | null {

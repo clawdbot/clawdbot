@@ -23,7 +23,7 @@ const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
 const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
-const prepareLegacyTailscaleServeConfigMigrationMock = vi.hoisted(() =>
+const prepareTailscaleConfigMigrationMock = vi.hoisted(() =>
   vi.fn(({ cfg }: { cfg: OpenClawConfig }) => ({
     config: cfg,
     changes: [] as string[],
@@ -273,7 +273,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("./doctor-tailscale.js", () => ({
-  prepareLegacyTailscaleServeConfigMigration: prepareLegacyTailscaleServeConfigMigrationMock,
+  prepareTailscaleConfigMigration: prepareTailscaleConfigMigrationMock,
 }));
 
 vi.mock("./doctor/repair-sequencing.js", async () => {
@@ -1659,8 +1659,8 @@ describe("doctor config flow", () => {
     runDoctorRepairSequenceMock.mockReset();
     createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
-    prepareLegacyTailscaleServeConfigMigrationMock.mockClear();
-    prepareLegacyTailscaleServeConfigMigrationMock.mockImplementation(({ cfg }) => ({
+    prepareTailscaleConfigMigrationMock.mockClear();
+    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
       config: cfg,
       changes: [],
       warnings: [],
@@ -1693,7 +1693,7 @@ describe("doctor config flow", () => {
         tailscale: { mode: "off" },
       },
     };
-    prepareLegacyTailscaleServeConfigMigrationMock.mockImplementation(({ cfg }) => ({
+    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
       config: {
         ...cfg,
         gateway: {
@@ -1721,7 +1721,7 @@ describe("doctor config flow", () => {
     expect(repair.shouldWriteConfig).toBe(true);
     expect(repair.cfg.gateway?.bind).toBe("loopback");
     expect(repair.cfg.gateway?.tailscale?.mode).toBe("serve");
-    expect(prepareLegacyTailscaleServeConfigMigrationMock).toHaveBeenCalledTimes(2);
+    expect(prepareTailscaleConfigMigrationMock).toHaveBeenCalledTimes(2);
   });
 
   it("plans persistence of the injected main roster during doctor repair", async () => {

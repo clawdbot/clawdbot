@@ -9,8 +9,6 @@ const {
   readTailscaleWhoisIdentity,
   enableTailscaleServe,
   enableTailscaleFunnel,
-  disableTailscaleServe,
-  disableTailscaleFunnel,
   hasTailscaleFunnelRouteForPort,
 } = tailscale;
 const tailscaleBin = "tailscale";
@@ -260,56 +258,6 @@ describe("tailscale helpers", () => {
     await enable("http://[::1]:18789" as never, exec as never);
 
     expectExecCall(exec, 1, tailscaleBin, [_mode, "--bg", "--yes", "http://[::1]:18789"], {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    });
-  });
-
-  it("disableTailscaleServe uses targeted root removal with fallback", async () => {
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("permission denied"))
-      .mockResolvedValueOnce({ stdout: "" });
-
-    await disableTailscaleServe(exec as never);
-
-    expect(exec).toHaveBeenCalledTimes(2);
-    expectExecCall(
-      exec,
-      2,
-      "sudo",
-      ["-n", tailscaleBin, "serve", "--bg", "--yes", "--https=443", "--set-path=/", "off"],
-      {
-        maxBuffer: 200_000,
-        timeoutMs: 15_000,
-      },
-    );
-  });
-
-  it("disableTailscaleFunnel removes only the owned root route", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: "" });
-
-    await disableTailscaleFunnel(exec as never);
-
-    expectExecCall(
-      exec,
-      1,
-      tailscaleBin,
-      ["funnel", "--bg", "--yes", "--https=443", "--set-path=/", "off"],
-      {
-        maxBuffer: 200_000,
-        timeoutMs: 15_000,
-      },
-    );
-  });
-
-  it("disableTailscaleServe disables only the configured service name", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: "" });
-
-    await disableTailscaleServe(exec as never, "svc:openclaw");
-
-    expect(exec).toHaveBeenCalledTimes(1);
-    expectExecCall(exec, 1, tailscaleBin, ["serve", "clear", "svc:openclaw"], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });

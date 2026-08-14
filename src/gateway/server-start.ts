@@ -45,8 +45,8 @@ export async function startGatewayServerCore(
   try {
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
-      // Off mode has always been a no-op in the exposure owner; resetOnExit only
-      // controls cleanup for a route this Gateway run actually applied.
+      // Off mode has always been a no-op in the exposure owner. Pass the cleanup
+      // preference through so the owner can reject unsupported publication safely.
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
             prepareManagedTailscaleIngress: async (backend) => {

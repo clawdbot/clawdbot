@@ -1,4 +1,4 @@
-// Doctor migration for shipped external Tailscale Serve routes.
+// Doctor migration for Tailscale config and shipped external Serve routes.
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
@@ -13,11 +13,12 @@ type DoctorTailscaleMigrationResult = {
   warnings: string[];
 };
 
-function unchanged(
+function result(
   config: OpenClawConfig,
+  changes: string[] = [],
   warnings: string[] = [],
 ): DoctorTailscaleMigrationResult {
-  return { config, changes: [], warnings };
+  return { config, changes, warnings };
 }
 
 function isCanonicalServeUrl(raw: string): boolean {
@@ -29,22 +30,38 @@ function isCanonicalServeUrl(raw: string): boolean {
   }
 }
 
-export async function prepareLegacyTailscaleServeConfigMigration(params: {
+export async function prepareTailscaleConfigMigration(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runCommandWithTimeout?: TailscaleStatusCommandRunner;
 }): Promise<DoctorTailscaleMigrationResult> {
-  const gateway = params.cfg.gateway;
+  let config = params.cfg;
+  const changes: string[] = [];
+  const configuredGateway = config.gateway;
+  if (configuredGateway?.tailscale?.resetOnExit === true) {
+    config = {
+      ...config,
+      gateway: {
+        ...configuredGateway,
+        tailscale: { ...configuredGateway.tailscale, resetOnExit: false },
+      },
+    };
+    changes.push(
+      "Disabled gateway.tailscale.resetOnExit because the Tailscale CLI cannot atomically remove only the route owned by the exiting Gateway.",
+    );
+  }
+
+  const gateway = config.gateway;
   if (
     !gateway ||
     gateway.mode === "remote" ||
     gateway.bind !== "lan" ||
     (gateway.tailscale?.mode ?? "off") !== "off"
   ) {
-    return unchanged(params.cfg);
+    return result(config, changes);
   }
 
-  const gatewayPort = resolveGatewayPort(params.cfg, params.env ?? process.env);
+  const gatewayPort = resolveGatewayPort(config, params.env ?? process.env);
   const runCommandWithTimeout: TailscaleStatusCommandRunner =
     params.runCommandWithTimeout ??
     ((argv, options) =>
@@ -57,15 +74,15 @@ export async function prepareLegacyTailscaleServeConfigMigration(params: {
     runCommandWithTimeout,
   );
   if (inspection.status === "unavailable") {
-    return unchanged(params.cfg);
+    return result(config, changes);
   }
   if (inspection.status === "invalid") {
-    return unchanged(params.cfg, [
+    return result(config, changes, [
       "Tailscale Serve status could not be parsed, so legacy Serve configuration was not changed. Review `tailscale serve status --json`, then rerun Doctor.",
     ]);
   }
   if (inspection.urls.length === 0) {
-    return unchanged(params.cfg);
+    return result(config, changes);
   }
 
   // The managed startup command owns the device's default HTTPS root. Custom ports
@@ -76,7 +93,7 @@ export async function prepareLegacyTailscaleServeConfigMigration(params: {
     !gateway.tailscale?.serviceName &&
     gateway.auth?.mode !== "none";
   if (!migrationIsUnambiguous) {
-    return unchanged(params.cfg, [
+    return result(config, changes, [
       `Legacy Tailscale Serve still targets Gateway port ${gatewayPort}, but its custom endpoint, Service, or disabled authentication cannot be migrated safely; configuration was not changed. Remove that route or configure gateway.bind="loopback" and gateway.tailscale.mode="serve" manually.`,
     ]);
   }
@@ -84,7 +101,7 @@ export async function prepareLegacyTailscaleServeConfigMigration(params: {
   const { preserveFunnel: _preserveFunnel, ...tailscale } = gateway.tailscale ?? {};
   return {
     config: {
-      ...params.cfg,
+      ...config,
       gateway: {
         ...gateway,
         bind: "loopback",
@@ -92,6 +109,7 @@ export async function prepareLegacyTailscaleServeConfigMigration(params: {
       },
     },
     changes: [
+      ...changes,
       `Migrated legacy Tailscale Serve on port ${gatewayPort} to managed Tailscale Serve ingress (gateway.bind="loopback", gateway.tailscale.mode="serve"); restart the Gateway to claim the route.`,
     ],
     warnings: [],

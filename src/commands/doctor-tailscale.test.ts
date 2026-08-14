@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TailscaleStatusCommandRunner } from "../shared/tailscale-status.js";
-import { prepareLegacyTailscaleServeConfigMigration } from "./doctor-tailscale.js";
+import { prepareTailscaleConfigMigration } from "./doctor-tailscale.js";
 
 function serveStatus(
   params: {
@@ -35,7 +35,7 @@ function runner(stdout: string): TailscaleStatusCommandRunner {
   return vi.fn().mockResolvedValue({ code: 0, stdout });
 }
 
-describe("prepareLegacyTailscaleServeConfigMigration", () => {
+describe("prepareTailscaleConfigMigration", () => {
   it("moves the shipped LAN Serve shape to managed ingress", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -47,7 +47,7 @@ describe("prepareLegacyTailscaleServeConfigMigration", () => {
       },
     };
 
-    const result = await prepareLegacyTailscaleServeConfigMigration({
+    const result = await prepareTailscaleConfigMigration({
       cfg,
       env: {},
       runCommandWithTimeout: runner(serveStatus()),
@@ -58,10 +58,11 @@ describe("prepareLegacyTailscaleServeConfigMigration", () => {
       bind: "loopback",
       port: 18789,
       auth: { mode: "token", token: "secret", allowTailscale: true },
-      tailscale: { mode: "serve", resetOnExit: true },
+      tailscale: { mode: "serve", resetOnExit: false },
     });
-    expect(result.changes).toHaveLength(1);
-    expect(result.changes[0]).toContain("managed Tailscale Serve ingress");
+    expect(result.changes).toHaveLength(2);
+    expect(result.changes.join("\n")).toContain("managed Tailscale Serve ingress");
+    expect(result.changes.join("\n")).toContain("Disabled gateway.tailscale.resetOnExit");
     expect(result.warnings).toEqual([]);
     expect(cfg.gateway?.bind).toBe("lan");
   });
@@ -87,7 +88,7 @@ describe("prepareLegacyTailscaleServeConfigMigration", () => {
       },
     };
 
-    const result = await prepareLegacyTailscaleServeConfigMigration({
+    const result = await prepareTailscaleConfigMigration({
       cfg,
       env: {},
       runCommandWithTimeout: runner(stdout),
@@ -121,7 +122,7 @@ describe("prepareLegacyTailscaleServeConfigMigration", () => {
       },
     };
 
-    const result = await prepareLegacyTailscaleServeConfigMigration({
+    const result = await prepareTailscaleConfigMigration({
       cfg,
       env: {},
       runCommandWithTimeout: runner(stdout),
@@ -142,12 +143,12 @@ describe("prepareLegacyTailscaleServeConfigMigration", () => {
     };
     const unavailable = vi.fn().mockRejectedValue(new Error("missing"));
 
-    const invalidResult = await prepareLegacyTailscaleServeConfigMigration({
+    const invalidResult = await prepareTailscaleConfigMigration({
       cfg,
       env: {},
       runCommandWithTimeout: runner("not-json"),
     });
-    const unavailableResult = await prepareLegacyTailscaleServeConfigMigration({
+    const unavailableResult = await prepareTailscaleConfigMigration({
       cfg,
       env: {},
       runCommandWithTimeout: unavailable,
@@ -155,5 +156,27 @@ describe("prepareLegacyTailscaleServeConfigMigration", () => {
 
     expect(invalidResult.warnings.join("\n")).toContain("could not be parsed");
     expect(unavailableResult.warnings).toEqual([]);
+  });
+
+  it("disables unsafe managed-route cleanup without inspecting Tailscale state", async () => {
+    const runCommandWithTimeout = vi.fn();
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "loopback",
+        tailscale: { mode: "funnel", resetOnExit: true },
+      },
+    };
+
+    const migration = await prepareTailscaleConfigMigration({ cfg, runCommandWithTimeout });
+
+    expect(migration.config.gateway?.tailscale).toEqual({
+      mode: "funnel",
+      resetOnExit: false,
+    });
+    expect(migration.changes).toEqual([
+      expect.stringContaining("Disabled gateway.tailscale.resetOnExit"),
+    ]);
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(cfg.gateway?.tailscale?.resetOnExit).toBe(true);
   });
 });
