@@ -851,7 +851,7 @@ jobs:
             checks_windows_matrix: createMatrix(
               runWindows
                 ? usesGithubRunnerProfile
-                  ? [1, 2].map((part) => ({
+                  ? [1, 2, 3].map((part) => ({
                       check_name: `checks-windows-node-test-${part}`,
                       runtime: "node",
                       task: `test-${part}`,
@@ -3131,7 +3131,7 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - &platform_checkout_step
@@ -3258,6 +3258,9 @@ jobs:
               ;;
             test-2)
               pnpm test:windows:ci:2
+              ;;
+            test-3)
+              pnpm test:windows:ci:3
               ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2
