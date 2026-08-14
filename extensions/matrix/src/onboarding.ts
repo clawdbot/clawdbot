@@ -56,7 +56,9 @@ function isMatrixInviteAutoJoinPolicy(value: string): value is MatrixInviteAutoJ
 function isMatrixInviteAutoJoinTarget(entry: string): boolean {
   return (
     entry === "*" ||
-    (entry.startsWith("!") && entry.includes(":")) ||
+    // Exact room ID, with or without :server — modern homeservers issue
+    // server-less IDs, which admission matches verbatim.
+    (entry.startsWith("!") && entry.length > 1) ||
     (entry.startsWith("#") && entry.includes(":"))
   );
 }
@@ -241,7 +243,7 @@ async function configureMatrixInviteAutoJoin(params: {
   while (true) {
     const rawAllowlist = await params.prompter.text({
       message: "Matrix invite auto-join allowlist (comma-separated)",
-      placeholder: "!roomId:server, #alias:server, *",
+      placeholder: "!roomId[:server], #alias:server, *",
       initialValue: currentAllowlist[0] ? currentAllowlist.join(", ") : undefined,
       validate: (value) => {
         const entries = splitSetupEntries(value);
@@ -253,7 +255,7 @@ async function configureMatrixInviteAutoJoin(params: {
     if (allowlist.length === 0 || invalidEntries.length > 0) {
       await params.prompter.note(
         [
-          "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+          "Use only stable Matrix invite targets for auto-join: !roomId (server-less or with :server), #alias:server, or *.",
           invalidEntries.length > 0 ? `Invalid: ${invalidEntries.join(", ")}` : undefined,
         ]
           .filter(Boolean)

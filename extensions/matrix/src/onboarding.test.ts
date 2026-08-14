@@ -470,9 +470,44 @@ describe("matrix onboarding", () => {
     expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
     expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual(["#ops:example.org"]);
     expect(notes.join("\n")).toContain(
-      "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+      "Use only stable Matrix invite targets for auto-join: !roomId (server-less or with :server), #alias:server, or *.",
     );
     expect(notes.join("\n")).toContain("Invalid: Project Room");
+  });
+
+  it("accepts server-less !room IDs in Matrix invite auto-join allowlists", async () => {
+    installMatrixTestRuntime();
+    const notes: string[] = [];
+
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
+      notes,
+      inviteAutoJoin: "allowlist",
+      onText: async (message) => {
+        if (message === "Matrix invite auto-join allowlist (comma-separated)") {
+          // Modern homeservers issue server-less room IDs; admission matches
+          // them verbatim, so the wizard must accept them like !room:server.
+          return "!kyPsk-bXS5fEmaIzUxZHgs6QVNyVjlbTSjy_ZkN48Ss";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      },
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: createConfiguredMatrixTopLevelConfig(),
+      prompter,
+      configured: true,
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
+    expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual([
+      "!kyPsk-bXS5fEmaIzUxZHgs6QVNyVjlbTSjy_ZkN48Ss",
+    ]);
+    expect(notes.join("\n")).not.toContain("Invalid:");
   });
 
   it("reports account-scoped DM config keys for named accounts", () => {
