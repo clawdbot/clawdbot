@@ -18,6 +18,7 @@ import {
   getUserProfileDisplay,
   linkEmail,
   listProfiles,
+  readUserProfileDisplayVersion,
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
@@ -492,5 +493,83 @@ describe("user profiles", () => {
     expect(formatUserProfileAvatarEtag(png?.sha256 ?? "", png?.mime ?? "image/png")).not.toBe(
       formatUserProfileAvatarEtag(webp?.sha256 ?? "", webp?.mime ?? "image/png"),
     );
+  });
+
+  it("bumps the sessions.list display fence on setDisplayName writes", () => {
+    const options = stateOptions();
+    const profile = ensureProfileForEmail("ada@example.com", options);
+    const before = readUserProfileDisplayVersion();
+
+    setDisplayName(profile.id, "Ada Lovelace", options);
+
+    expect(readUserProfileDisplayVersion()).toBe(before + 1);
+  });
+
+  it("bumps the sessions.list display fence only when setAvatar actually writes", () => {
+    const options = stateOptions();
+    const profile = ensureProfileForEmail("ada@example.com", options);
+    const before = readUserProfileDisplayVersion();
+
+    expect(setAvatar(profile.id, new Uint8Array(512 * 1024 + 1), "image/png", options).ok).toBe(
+      false,
+    );
+    expect(readUserProfileDisplayVersion()).toBe(before);
+
+    expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options).ok).toBe(true);
+    expect(readUserProfileDisplayVersion()).toBe(before + 1);
+  });
+
+  it("bumps the sessions.list display fence only while Tailscale name adoption fills an empty slot", () => {
+    const options = stateOptions();
+    const profile = ensureProfileForTailscaleIdentity(
+      { login: "ada@github", name: "Ada Provider" },
+      options,
+    );
+    setDisplayName(profile.id, null, options);
+    const before = readUserProfileDisplayVersion();
+
+    ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options);
+    expect(readUserProfileDisplayVersion()).toBe(before + 1);
+
+    ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Provider Changed" }, options);
+    expect(readUserProfileDisplayVersion()).toBe(before + 1);
+  });
+
+  it("bumps the sessions.list display fence only while Tailscale avatar adoption fills an empty slot", async () => {
+    const options = stateOptions();
+    const bytes = fixtureImage("ui/public/favicon-32.png");
+    const identity = {
+      login: "ada@github",
+      name: "Ada Provider",
+      profilePic: "https://avatars.example.test/profile",
+    };
+    const profile = ensureProfileForTailscaleIdentity(identity, options);
+    const before = readUserProfileDisplayVersion();
+
+    await adoptTailscaleProfileAvatar(profile.id, identity.profilePic, options, {
+      fetchImpl: imageFetch(bytes, "image/png"),
+    });
+    expect(readUserProfileDisplayVersion()).toBe(before + 1);
+
+    await adoptTailscaleProfileAvatar(profile.id, identity.profilePic, options, {
+      fetchImpl: imageFetch(bytes, "image/png"),
+    });
+    expect(readUserProfileDisplayVersion()).toBe(before + 1);
+  });
+
+  it("bumps the sessions.list display fence only when linkEmail actually merges two profiles", () => {
+    const options = stateOptions();
+    const source = ensureProfileForEmail("source@example.com", options);
+    const target = ensureProfileForEmail("target@example.com", options);
+    const before = readUserProfileDisplayVersion();
+
+    // A brand-new alias on target does not change what any existing id resolves to.
+    linkEmail("new-alias@example.com", target.id, options);
+    expect(readUserProfileDisplayVersion()).toBe(before);
+
+    // Moving source's only alias merges source into target, so getUserProfileDisplay(source.id)
+    // now resolves through the one-hop merge to target's display name/avatar.
+    linkEmail("source@example.com", target.id, options);
+    expect(readUserProfileDisplayVersion()).toBe(before + 1);
   });
 });

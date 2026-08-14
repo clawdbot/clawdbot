@@ -107,6 +107,20 @@ type UserProfileListRow = Pick<
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
+// sessions.list cache fence input. projectSessionActor re-resolves the
+// actor label/avatar per row via resolveCurrentUserProfileDisplay on every
+// fresh row build, but a cache hit skips that rebuild, so every write that
+// changes what a profile id resolves to (rename, avatar upload, Tailscale-
+// identity adoption of an empty field, or a merge that re-points an id's
+// one-hop resolution target) needs its own fence input the same way the
+// sessions.list writers in this campaign (#123253/#123259/#123290) added
+// theirs.
+let userProfileDisplayVersion = 0;
+
+export function readUserProfileDisplayVersion(): number {
+  return userProfileDisplayVersion;
+}
+
 function profileDb(db: DatabaseSync) {
   return getNodeSqliteKysely<UserProfilesDatabase>(db);
 }
@@ -413,6 +427,7 @@ function adoptDisplayNameIfEmpty(
           .set({ display_name: displayName, updated_at: now })
           .where("id", "=", profile.id),
       );
+      userProfileDisplayVersion += 1;
       return toUserProfile({ ...profile, display_name: displayName, updated_at: now });
     },
     options,
@@ -455,6 +470,7 @@ async function adoptAvatarIfEmpty(params: {
           })
           .where("id", "=", profile.id),
       );
+      userProfileDisplayVersion += 1;
       return toUserProfile({
         ...profile,
         avatar: avatar.bytes,
@@ -589,6 +605,10 @@ export function linkEmail(
             .set({ merged_into: target.id, updated_at: now })
             .where("merged_into", "=", existingAlias.profile_id),
         );
+        // Every merged id's one-hop resolution now points at target, so its
+        // display/avatar changes too even though this write never touched
+        // display_name/avatar directly.
+        userProfileDisplayVersion += 1;
       } else {
         executeSqliteQuerySync(
           db,
@@ -622,6 +642,7 @@ export function setDisplayName(
           .set({ display_name: name, updated_at: now })
           .where("id", "=", profile.id),
       );
+      userProfileDisplayVersion += 1;
       return selectUserProfileListItemById(db, profile.id);
     },
     options,
@@ -655,6 +676,7 @@ export function setAvatar(
           .set({ avatar: bytes, avatar_mime: mime, avatar_sha256: sha256, updated_at: now })
           .where("id", "=", profile.id),
       );
+      userProfileDisplayVersion += 1;
       return selectUserProfileListItemById(db, profile.id);
     },
     options,

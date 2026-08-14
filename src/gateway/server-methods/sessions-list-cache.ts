@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
 import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import { readUserProfileDisplayVersion } from "../../state/user-profiles.js";
 import { readSessionAutomationVersion } from "../session-automation-index.js";
 import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
 import { isGatewayAdmin } from "../session-sharing.js";
@@ -20,6 +21,7 @@ type SessionListFence = {
   sessionsMutationVersion: number;
   sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
+  userProfileDisplayVersion: number;
   workerPlacementDiskSpaceVersion: number;
 };
 type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
@@ -44,6 +46,7 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
     // write without a session mutation must still invalidate reuse.
     sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
+    userProfileDisplayVersion: readUserProfileDisplayVersion(),
     workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
   };
 }
@@ -57,6 +60,7 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
+    value.userProfileDisplayVersion === fence.userProfileDisplayVersion &&
     value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion
   );
 }
