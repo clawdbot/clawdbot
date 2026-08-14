@@ -22,7 +22,10 @@ export function createUiVitestConfig(
     includeOpenClawRuntimeSetup: false,
     isolate: false,
     name: options?.name ?? "ui",
-    setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    setupFiles: [
+      "ui/src/test-helpers/lit-warnings.setup.ts",
+      "ui/src/test-helpers/jsdom-range-rect.setup.ts",
+    ],
     useNonIsolatedRunner: true,
   });
   return { ...config, plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()] };

@@ -163,6 +163,22 @@ export function actionPointerEvents(button: Locator): Promise<string> {
 }
 
 /**
+ * What a pointer would actually land on at the centre of `locator`. Row actions
+ * float over the link, so "is it revealed" and "does the click reach it" are
+ * separate questions and only this one answers the second.
+ */
+export function hitTargetAtCentre(locator: Locator): Promise<"action" | "link" | "other"> {
+  return locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    if (hit?.closest(".session-row-actions")) {
+      return "action";
+    }
+    return hit?.closest(".sidebar-recent-session__link") ? "link" : "other";
+  });
+}
+
+/**
  * Opens a session-menu submenu through the keyboard path. Submenu ARIA is ready
  * before Web Awesome finishes opening the dropdown, so hovering alone races the
  * menu; waiting on its focus contract first keeps navigation keys in order.

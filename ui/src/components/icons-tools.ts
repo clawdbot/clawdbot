@@ -22,6 +22,13 @@ export function strokeIcon(body: SVGTemplateResult): TemplateResult {
   `;
 }
 
+// Shell for glyphs drawn as one solid shape on a 16px grid instead of a 24px
+// outline. Their filled silhouette carries the meaning, so they keep their own
+// fill; pushing them through strokeIcon would hollow them out.
+export function fillIcon(body: SVGTemplateResult): TemplateResult {
+  return html` <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">${body}</svg> `;
+}
+
 export const toolIcons = {
   cpu: strokeIcon(svg` <rect width="16" height="16" x="4" y="4" rx="2" />
     <rect width="6" height="6" x="9" y="9" rx="1" />

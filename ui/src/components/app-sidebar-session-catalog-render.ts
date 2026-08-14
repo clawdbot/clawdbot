@@ -10,6 +10,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { restSessionRow, revealSessionRow } from "../lib/session-row-reveal.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
@@ -447,6 +448,12 @@ function renderCatalogSessionRow(
       role="listitem"
       @contextmenu=${openMenuFromEvent}
       @keydown=${openMenuFromEvent}
+      @mouseenter=${(event: MouseEvent) => revealSessionRow(event.currentTarget as HTMLElement)}
+      @mouseleave=${(event: MouseEvent) =>
+        restSessionRow(event.currentTarget as HTMLElement, event.relatedTarget as Node | null)}
+      @focusin=${(event: FocusEvent) => revealSessionRow(event.currentTarget as HTMLElement)}
+      @focusout=${(event: FocusEvent) =>
+        restSessionRow(event.currentTarget as HTMLElement, event.relatedTarget as Node | null)}
     >
       <a
         href=${href}

@@ -8,8 +8,8 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
+import { restSessionRow, revealSessionRow } from "../lib/session-row-reveal.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -215,9 +215,11 @@ export function renderRecentSession(params: {
     .join(" · ");
   const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
   const menuLabel = `${t("chat.sidebar.openSessionMenu")}: ${label}`;
+  const menuOpen = host.sidebarMenus.sessionMenu?.session.key === session.key;
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
+    menuOpen ? "session-row-host--menu-open" : "",
     session.isChild ? "sidebar-recent-session--child" : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
@@ -247,6 +249,42 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
+  const endcap = renderSessionRowEndcap({
+    state: primaryState,
+    stateId,
+    metadata: renderSessionWorktreePullRequest(pullRequestState),
+    actions: session.isChild
+      ? nothing
+      : html`<span class="session-row-actions">
+          <button
+            class="session-action session-action--pin"
+            data-sidebar-session-pin="true"
+            type="button"
+            title=${pinAccess.allowed ? pinLabel : pinAccess.reason}
+            aria-label=${pinLabel}
+            ?disabled=${!pinAccess.allowed}
+            @click=${() => host.toggleSessionPin(session)}
+          >
+            ${icons.pin}
+          </button>
+          <button
+            class="session-action"
+            data-session-menu="true"
+            type="button"
+            title=${menuLabel}
+            aria-label=${menuLabel}
+            aria-haspopup="menu"
+            aria-expanded=${String(menuOpen)}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              const trigger = event.currentTarget as HTMLElement;
+              host.toggleSessionMenu(session, trigger);
+            }}
+          >
+            ${icons.moreHorizontal}
+          </button>
+        </span>`,
+  });
   const row = html`
     <div
       class=${rowClass}
@@ -271,8 +309,12 @@ export function renderRecentSession(params: {
           }}
       @contextmenu=${openMenuFromEvent ?? nothing}
       @keydown=${openMenuFromEvent ?? nothing}
-      @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
-      @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
+      @mouseenter=${(event: MouseEvent) => revealSessionRow(event.currentTarget as HTMLElement)}
+      @mouseleave=${(event: MouseEvent) =>
+        restSessionRow(event.currentTarget as HTMLElement, event.relatedTarget as Node | null)}
+      @focusin=${(event: FocusEvent) => revealSessionRow(event.currentTarget as HTMLElement)}
+      @focusout=${(event: FocusEvent) =>
+        restSessionRow(event.currentTarget as HTMLElement, event.relatedTarget as Node | null)}
     >
       <a
         href=${session.href}
@@ -328,6 +370,7 @@ export function renderRecentSession(params: {
             sessionHasPendingApproval(host.sessionData.approvalBadgeSnapshot(), session.key),
         })}
       </a>
+      ${endcap}
       ${session.childSessionKeys.length > 0
         ? html`<button
             class="sidebar-child-session-toggle ${session.runningChildCount > 0
@@ -356,42 +399,6 @@ export function renderRecentSession(params: {
                 >`}
           </button>`
         : nothing}
-      ${renderSessionRowEndcap({
-        state: primaryState,
-        stateId,
-        metadata: renderSessionWorktreePullRequest(pullRequestState),
-        actions: session.isChild
-          ? nothing
-          : html`<span class="session-row-actions">
-              <button
-                class="session-action session-action--pin"
-                data-sidebar-session-pin="true"
-                type="button"
-                title=${pinAccess.allowed ? pinLabel : pinAccess.reason}
-                aria-label=${pinLabel}
-                ?disabled=${!pinAccess.allowed}
-                @click=${() => host.toggleSessionPin(session)}
-              >
-                ${icons.pin}
-              </button>
-              <button
-                class="session-action"
-                data-session-menu="true"
-                type="button"
-                title=${menuLabel}
-                aria-label=${menuLabel}
-                aria-haspopup="menu"
-                aria-expanded=${String(host.sidebarMenus.sessionMenu?.session.key === session.key)}
-                @click=${(event: MouseEvent) => {
-                  event.stopPropagation();
-                  const trigger = event.currentTarget as HTMLElement;
-                  host.toggleSessionMenu(session, trigger);
-                }}
-              >
-                ${icons.ellipsis}
-              </button>
-            </span>`,
-      })}
     </div>
   `;
   // Marquee state mutates the row DOM; keying prevents cross-session reuse.

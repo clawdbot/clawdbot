@@ -1,3 +1,4 @@
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
@@ -11,6 +12,34 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+
+/**
+ * How far the revealed actions float over the row's link, as the row itself
+ * publishes it. This replaced a padding swap: an empty value is the row saying
+ * it reserves nothing at rest.
+ */
+function actionCover(row: Locator) {
+  return row.evaluate((element) =>
+    Number.parseFloat(element.style.getPropertyValue("--session-row-action-cover")),
+  );
+}
+
+/**
+ * The reveal's own invariant. The actions float over the link instead of
+ * displacing it, so the check is that the overlap the row published is the
+ * overlap it actually has — that is what puts the fade on the real action edge
+ * instead of a reserved width.
+ */
+async function expectPublishedCoverMatchesOverlap(row: Locator) {
+  const [link, actions] = await Promise.all([
+    row.locator(".sidebar-recent-session__link").boundingBox(),
+    row.locator(".session-row-actions").boundingBox(),
+  ]);
+  if (!link || !actions) {
+    throw new Error("Expected a revealed row to expose both its link and its actions");
+  }
+  expect(await actionCover(row)).toBe(Math.round(link.x + link.width - actions.x));
+}
 
 suite.define(() => {
   it("keeps action-only text widest at rest and swaps active state for actions", async () => {
@@ -43,26 +72,22 @@ suite.define(() => {
       const actionOnlyRow = page.locator('[data-session-key="agent:main:hover-actions"]');
       await actionOnlyRow.waitFor({ state: "visible", timeout: 10_000 });
       const actionOnlyText = actionOnlyRow.locator(".sidebar-recent-session__text");
-      const actionOnlyLink = actionOnlyRow.locator(".sidebar-recent-session__link");
       const actionOnlyPin = actionOnlyRow.getByRole("button", { name: "Pin session" });
-      await expect
-        .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("4px");
+      // Nothing floats over a resting row, so it publishes no overlap at all and
+      // the title keeps the full width rather than a reservation for controls
+      // that are not there.
+      expect(await actionCover(actionOnlyRow)).toBeNaN();
       const restingTextBounds = await actionOnlyText.boundingBox();
 
       await actionOnlyRow.hover();
       await expect.poll(() => actionOpacity(actionOnlyPin)).toBe("1");
-      await expect
-        .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("52px");
+      await expect.poll(() => actionCover(actionOnlyRow)).toBeGreaterThan(0);
       const hoveredTextBounds = await actionOnlyText.boundingBox();
 
       await page.mouse.move(0, 0);
       await actionOnlyPin.focus();
       await expect.poll(() => actionOpacity(actionOnlyPin)).toBe("1");
-      await expect
-        .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("52px");
+      await expect.poll(() => actionCover(actionOnlyRow)).toBeGreaterThan(0);
       const focusedTextBounds = await actionOnlyText.boundingBox();
       if (!restingTextBounds || !hoveredTextBounds || !focusedTextBounds) {
         throw new Error("Expected visible action-only text geometry");
@@ -83,15 +108,11 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
 
-      const [nameBounds, pinBounds, menuBounds] = await Promise.all([
-        row.locator(".sidebar-recent-session__name").boundingBox(),
-        pin.boundingBox(),
-        menu.boundingBox(),
-      ]);
-      if (!nameBounds || !pinBounds || !menuBounds) {
+      const [pinBounds, menuBounds] = await Promise.all([pin.boundingBox(), menu.boundingBox()]);
+      if (!pinBounds || !menuBounds) {
         throw new Error("Expected visible hovered action geometry");
       }
-      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      await expectPublishedCoverMatchesOverlap(row);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
 
       await page.mouse.move(0, 0);
@@ -100,15 +121,14 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
 
-      const [focusedNameBounds, focusedPinBounds, focusedMenuBounds] = await Promise.all([
-        row.locator(".sidebar-recent-session__name").boundingBox(),
+      const [focusedPinBounds, focusedMenuBounds] = await Promise.all([
         pin.boundingBox(),
         menu.boundingBox(),
       ]);
-      if (!focusedNameBounds || !focusedPinBounds || !focusedMenuBounds) {
+      if (!focusedPinBounds || !focusedMenuBounds) {
         throw new Error("Expected visible focused action geometry");
       }
-      expect(focusedNameBounds.x + focusedNameBounds.width).toBeLessThanOrEqual(focusedPinBounds.x);
+      await expectPublishedCoverMatchesOverlap(row);
       expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
       await context.close();
@@ -303,12 +323,11 @@ suite.define(() => {
       // This session is running and unread at once. The live run outranks the
       // unread, so no dot may accompany the spinner.
       expect(await state.locator(".session-state-dot").count()).toBe(0);
-      const link = row.locator(".sidebar-recent-session__link");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
-      await expect
-        .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("68px");
+      // A row carrying state reserves that state and nothing else at rest: the
+      // actions it has not revealed yet cost it no width.
+      expect(await actionCover(row)).toBeNaN();
 
       const [restingTextBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
         await Promise.all([
@@ -331,9 +350,7 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
-      await expect
-        .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("68px");
+      await expect.poll(() => actionCover(row)).toBeGreaterThan(0);
 
       const [textBounds, pinBounds, menuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__text").boundingBox(),
@@ -344,16 +361,14 @@ suite.define(() => {
         throw new Error("Expected visible combined session action geometry");
       }
       expect(restingTextBounds.width).toBeGreaterThanOrEqual(textBounds.width);
-      expect(textBounds.x + textBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      await expectPublishedCoverMatchesOverlap(row);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
       await page.mouse.move(0, 0);
       await pin.focus();
       await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
-      await expect
-        .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("68px");
+      await expect.poll(() => actionCover(row)).toBeGreaterThan(0);
 
       const [focusedTextBounds, focusedPinBounds, focusedMenuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__text").boundingBox(),
@@ -364,7 +379,7 @@ suite.define(() => {
         throw new Error("Expected visible focused session action geometry");
       }
       expect(restingTextBounds.width).toBeGreaterThanOrEqual(focusedTextBounds.width);
-      expect(focusedTextBounds.x + focusedTextBounds.width).toBeLessThanOrEqual(focusedPinBounds.x);
+      await expectPublishedCoverMatchesOverlap(row);
       expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
       await context.close();

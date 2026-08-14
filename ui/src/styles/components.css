@@ -5544,7 +5544,12 @@ td.data-table-key-col {
   background: var(--danger);
 }
 
+/* Stays in flow, so a row reserves exactly the passive state it is showing and
+   nothing more — an empty endcap leaves the title the full resting width. The
+   management actions float inside it rather than claiming a column, which is
+   what holds the row geometry identical between rest and reveal. */
 .session-row-aside {
+  position: relative;
   display: grid;
   align-items: center;
   justify-items: end;
@@ -5641,10 +5646,21 @@ td.data-table-key-col {
   stroke-linejoin: round;
 }
 
+/* Floats from the aside's own trailing edge, so surfacing it costs no layout
+   and the row keeps reserving only its resting state. The 6px gap is the same
+   rhythm the passive trailing metadata keeps. */
 .session-row-actions {
+  position: absolute;
+  top: 50%;
+  right: 0;
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 6px;
+  transform: translateY(-50%);
+  /* The container floats over the link and is wider than the row's own
+     controls; without this it would swallow clicks meant for the link beneath
+     and for its own buttons, which re-enable pointer events when revealed. */
+  pointer-events: none;
 }
 
 .session-action {
@@ -5691,8 +5707,11 @@ td.data-table-key-col {
   cursor: not-allowed;
 }
 
+/* An open session menu holds its own row revealed: the row the menu acts on
+   must stay readable while the pointer is away on the menu itself. */
 .session-row-host:hover .session-action,
-.session-row-host:focus-within .session-action {
+.session-row-host:focus-within .session-action,
+.session-row-host--menu-open .session-action {
   opacity: 1;
   pointer-events: auto;
 }
@@ -5700,17 +5719,25 @@ td.data-table-key-col {
 /* Disabled actions still surface on hover (dimmed) so the tooltip can
    explain why archiving is unavailable instead of the button vanishing. */
 .session-row-host:hover .session-action:disabled,
-.session-row-host:focus-within .session-action:disabled {
+.session-row-host:focus-within .session-action:disabled,
+.session-row-host--menu-open .session-action:disabled {
   opacity: 0.35;
   pointer-events: auto;
 }
 
-.session-row-host:is(:hover, :focus-within) .session-row-state {
+/* Listed one selector per state rather than through :is(): the build wraps any
+   rule mentioning :hover in (hover: hover), which would strand keyboard focus
+   and menu-open reveal on touch. */
+.session-row-host:hover .session-row-state,
+.session-row-host:focus-within .session-row-state,
+.session-row-host--menu-open .session-row-state {
   opacity: 0;
 }
 
 /* Sidebar rows are now the direct management surface after removing the
-   duplicate picker; touch users need pin/menu controls without hover. */
+   duplicate picker; touch users need pin/menu controls without hover. With no
+   hover to reveal them, the actions take real space beside the state instead
+   of floating over the title. */
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session .session-action {
     opacity: 1;
@@ -5721,16 +5748,14 @@ td.data-table-key-col {
     opacity: 0.35;
   }
 
-  .sidebar-recent-session .session-row-aside:has(> .session-row-state) {
-    column-gap: 1px;
-  }
-
-  .sidebar-recent-session .session-row-state {
-    grid-area: 1 / 1;
+  .sidebar-recent-session .session-row-aside {
+    column-gap: 6px;
   }
 
   .sidebar-recent-session .session-row-actions {
+    position: static;
     grid-area: 1 / 2;
+    transform: none;
   }
 }
 
@@ -5775,7 +5800,7 @@ td.data-table-key-col {
    =========================================== */
 
 /* Truncated single-line labels that slide on hover to reveal the clipped
-   tail. lib/hover-marquee.ts measures the overflow and sets the custom
+   tail. lib/session-row-reveal.ts measures the overflow and sets the custom
    properties; without it the label stays a plain ellipsized span. Animates
    text-indent so the resting ellipsis keeps rendering (text-overflow shows
    no "…" for atomic inline children, ruling out a transformed wrapper). */
