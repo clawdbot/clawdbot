@@ -690,7 +690,7 @@ Why this shape is safer:
 - `allowedAgentIds` prevents this hook endpoint from selecting another agent. If the Gateway serves other hook workflows, include only their intended agent ids too.
 - `scope: "session"` gives each Gmail message its own sandbox; `workspaceAccess: "none"` keeps the host agent workspace out of that sandbox.
 - `allow: ["session_status"]` is an absolute per-agent clamp, so global `tools.alsoAllow` additions cannot leak into the reader. The minimal profile and explicit deny list make the intended boundary auditable.
-- `deliver: false` keeps completion inside the hook flow. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Keep agent-to-agent handoff disabled unless you deliberately expose the exact coordination tool and pair it with a narrow [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent) policy.
+- `deliver: false` keeps completion inside the hook flow. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Keep agent-to-agent handoff disabled unless you deliberately expose the exact coordination tool and pair it with a narrow [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent) policy.
 
 Tool policies can only become more restrictive as global, provider, agent, and sandbox rules are combined. The per-agent allowlist cannot restore `session_status` if an earlier policy removed it. Ensure inherited policies retain `session_status`; an empty effective tool set aborts before the model sees the email.
 
@@ -719,7 +719,7 @@ This writes `hooks.gmail` transport settings, enables the Gmail preset, preserve
 <Warning>
 The built-in Gmail preset's per-message session separates conversation context; it does not restrict the target agent's tools or workspace. Without a custom mapping that sets `agentId`, Gmail hooks run as the default agent.
 
-For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent`. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent).
+For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent`. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 </Warning>
 
 ### Verify the reader boundary

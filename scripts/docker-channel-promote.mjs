@@ -19,7 +19,7 @@ const VARIANTS = Object.freeze([
   { aliasKey: "browser", suffix: "-browser" },
 ]);
 
-/** @typedef {{ images: string[]; version: string }} DockerPromotionParams */
+/** @typedef {{ imageTagSuffix?: string; images: string[]; version: string }} DockerPromotionParams */
 /**
  * @typedef {object} DockerExecOptions
  * @property {"utf8"} encoding
@@ -49,9 +49,12 @@ const VARIANTS = Object.freeze([
  *
  * @param {DockerPromotionParams} params
  */
-export function createDockerChannelPromotionPlan({ version, images }) {
+export function createDockerChannelPromotionPlan({ version, imageTagSuffix = "", images }) {
   if (images.length === 0) {
     throw new Error("At least one --image is required.");
+  }
+  if (imageTagSuffix !== "" && !/^-r[0-9]{8}$/u.test(imageTagSuffix)) {
+    throw new Error(`Invalid Docker image tag suffix "${imageTagSuffix}".`);
   }
   const policy = resolveDockerReleasePolicy(version);
   const promotions = [];
@@ -63,7 +66,7 @@ export function createDockerChannelPromotionPlan({ version, images }) {
       }
       promotions.push({
         image,
-        sourceRef: `${image}:${version}${suffix}`,
+        sourceRef: `${image}:${version}${imageTagSuffix}${suffix}`,
         targetRefs: aliases.map((alias) => `${image}:${alias}`),
       });
     }
@@ -218,11 +221,15 @@ function preventChannelRollback(resolved, version, execFileSyncImpl) {
  * @param {DockerPromotionParams} params
  * @param {DockerPromotionOptions} [options]
  */
-export function promoteDockerChannel({ version, images }, options = {}) {
+export function promoteDockerChannel({ version, imageTagSuffix = "", images }, options = {}) {
   const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
   const log = options.log ?? console.log;
   const verifyAttestationsImpl = options.verifyAttestationsImpl ?? verifyDockerAttestations;
-  const plan = createDockerChannelPromotionPlan({ version, images });
+  const plan = createDockerChannelPromotionPlan({
+    version,
+    imageTagSuffix,
+    images,
+  });
 
   // Resolve every version-specific source before the first alias write. A missing
   // release variant must not leave the channel partially promoted.
@@ -276,7 +283,7 @@ export function promoteDockerChannel({ version, images }, options = {}) {
 
 function printHelp() {
   console.log(
-    "Usage: node scripts/docker-channel-promote.mjs --version YYYY.M.P --image REGISTRY/IMAGE [--image REGISTRY/IMAGE] [--allow-rollback]",
+    "Usage: node scripts/docker-channel-promote.mjs --version YYYY.M.P --image REGISTRY/IMAGE [--image REGISTRY/IMAGE] [--image-tag-suffix -rYYYYMMDD] [--allow-rollback]",
   );
 }
 
@@ -287,6 +294,7 @@ function main() {
       "allow-rollback": { type: "boolean" },
       help: { type: "boolean", short: "h" },
       image: { type: "string", multiple: true },
+      "image-tag-suffix": { type: "string", default: "" },
       version: { type: "string" },
     },
     strict: true,
@@ -304,7 +312,7 @@ function main() {
     throw new Error("At least one non-empty --image is required.");
   }
   const plan = promoteDockerChannel(
-    { version, images },
+    { version, imageTagSuffix: values["image-tag-suffix"], images },
     { allowRollback: values["allow-rollback"] },
   );
   console.log(`Promoted Docker ${plan.channel} aliases for ${plan.version}.`);

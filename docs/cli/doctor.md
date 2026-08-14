@@ -14,6 +14,12 @@ When Gateway status reports degraded SecretRef owners, doctor prints a **Secret 
 
 When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
 
+When outbound or session failures are retained, doctor reports queue counts,
+payload-bearing and legacy-unknown rows, owner cleanup still pending in either
+the provider or exact-media phase, and retention-maintenance failures.
+Inspect them with [`openclaw delivery failures list`](/cli/delivery); subagent
+completion recovery remains under `openclaw tasks retry` and `tasks dismiss`.
+
 When the Gateway has exporter health facts, doctor reports the latest trusted
 per-signal state and transport under **Telemetry exporters**. The summary is
 redacted and does not include endpoint values, headers, certificates, payloads,
@@ -211,6 +217,8 @@ the container normally.
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
 
+Doctor also reports when shared auth still uses the legacy `agents/main/agent/openclaw-agent.sqlite` owner. `openclaw doctor --fix` copies its auth profile and runtime-state rows into `state/openclaw.sqlite`, verifies the exact payloads, removes the source rows, and records the new ownership only after the transaction succeeds. Auth resolution has no dual-read fallback: before migration the legacy database is complete; after migration the shared state database is complete. Once relocated, deleting `main` no longer risks fleet credentials.
+
 For the retired QMD memory backend, including config rewrites and derived
 workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
@@ -259,6 +267,10 @@ JSON output reports the database and WAL sizes, freelist pages, page size, and
 `quick_check` and `integrity_check` results. `foreign_key_check` is enforced
 fail-closed and has no separate success field. SQLite reports `auto_vacuum` as
 `0` for none, `1` for full, and `2` for incremental.
+
+Delivery failure cleanup first removes sensitive logical content while keeping
+any required ownership tombstone. This command performs the separate physical
+SQLite reclamation step; it does not resubmit deliveries or break fences.
 
 Compaction fails without mutation when the schema is old, newer than the
 running OpenClaw build, or belongs to an agent database. Run

@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
+import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
@@ -198,6 +199,8 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     resolveFollowupAuthorizationKey(execution),
     run.turnAdoptionLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
+    execution.provider,
+    execution.model,
     execution.messageProvider ?? "",
     JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
     stableStringify(execution.toolBindings ?? null),
@@ -206,6 +209,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.groupId ?? "",
     execution.groupChannel ?? "",
     execution.groupSpace ?? "",
+    JSON.stringify([...new Set(execution.memberRoleIds ?? [])].toSorted()),
     execution.spawnedBy ?? "",
     execution.traceAuthorized === true,
     execution.elevatedLevel ?? "",
@@ -214,6 +218,14 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     provenance?.sourceSessionKey ?? "",
     provenance?.sourceChannel ?? "",
     provenance?.sourceTool ?? "",
+    stableStringify(execution.trustedInternalHandoff ?? null),
+    stableStringify(execution.scheduledToolPolicy ?? null),
+    stableStringify(execution.runtimePluginToolGrant ?? null),
+    stableStringify(run.toolsAllow ?? null),
+    stableStringify(
+      run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
+    ),
+    run.disableTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -318,6 +330,7 @@ type FollowupRuntimeMetadata = Pick<
   | "currentInboundEventKind"
   | "currentInboundAudio"
   | "currentInboundContext"
+  | "explicitSkillSelections"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -554,10 +567,19 @@ function collectRuntimeMetadata(
       item.onReplyAdmissionWaitChange ? [item.onReplyAdmissionWaitChange] : [],
     ),
   );
+  const explicitSkillSelections = [
+    ...new Map(
+      items
+        .flatMap((item) => item.explicitSkillSelections ?? [])
+        .map((selection) => [selection.path, selection] as const),
+    ).values(),
+  ];
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: collectCurrentInboundContext(items),
+    explicitSkillSelections:
+      explicitSkillSelections.length > 0 ? explicitSkillSelections : undefined,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -914,6 +936,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    explicitSkillSelections: source.explicitSkillSelections,
     media: source.media,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
@@ -979,6 +1002,7 @@ async function runSyntheticOverflowSummary(params: {
     errorContext: "followup overflow summary transcript",
   });
   const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
+  const runtimeMetadata = collectRuntimeMetadata(params.sources);
   let admitted = false;
   await params.runFollowup({
     prompt: params.prompt,
@@ -989,7 +1013,8 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
-    onReplyAdmissionWaitChange: collectRuntimeMetadata(params.sources).onReplyAdmissionWaitChange,
+    onReplyAdmissionWaitChange: runtimeMetadata.onReplyAdmissionWaitChange,
+    explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {

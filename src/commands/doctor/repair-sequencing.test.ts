@@ -300,7 +300,7 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       changes: [],
     }));
-    mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
+    mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(null);
     mocks.maybeRepairStaleConfiguredAuthOrders.mockImplementation(
       ({ cfg }: { cfg: OpenClawConfig }) => ({ config: cfg, changes: [] }),
     );
@@ -540,7 +540,7 @@ describe("doctor repair sequencing", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(refreshedSnapshot);
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockImplementation(() => {
       events.push("bundled-shadow-cleanup");
-      return true;
+      return { installRecords: {}, removedPluginIds: ["google-meet"] };
     });
     mocks.maybeRepairPluginOpenClawHostLinks.mockImplementation(async () => {
       events.push("openclaw-peer-links");
@@ -579,6 +579,17 @@ describe("doctor repair sequencing", () => {
     expect(cleanupCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
     expect(cleanupCall?.prompter).toEqual({ shouldRepair: true });
     expect(mocks.maybeRepairPluginOpenClawHostLinks).toHaveBeenCalledOnce();
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
+      cfg: {
+        plugins: {
+          entries: {
+            "google-meet": { enabled: true },
+          },
+        },
+      },
+      env: process.env,
+      baselineRecords: {},
+    });
     const peerLinkCall = mocks.maybeRepairPluginOpenClawHostLinks.mock.calls[0]?.[0];
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);

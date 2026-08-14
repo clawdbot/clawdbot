@@ -371,26 +371,36 @@ function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugi
   );
 }
 
-function registerSyntheticUseEnvSetupPlugin(channelId: ChannelPlugin["id"], envVar: string): void {
-  const plugin = {
-    ...createChannelTestPluginBase({ id: channelId }),
-    setupContract: defineChannelSetupContract({
-      fields: {
-        useEnv: {
-          kind: "boolean",
-          cli: { flags: "--use-env", description: "Use environment credentials" },
-          envVars: [envVar],
-        },
+function registerEnvContractTestPlugin(channelId: string, envVars: readonly string[]): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: channelId,
+        plugin: {
+          ...createChannelTestPluginBase({ id: channelId, label: channelId }),
+          setupContract: defineChannelSetupContract({
+            fields: {
+              useEnv: {
+                kind: "boolean",
+                cli: { flags: "--use-env", description: "Use environment credentials" },
+                envVars,
+              },
+            },
+            adapter: {
+              applyAccountConfig: ({ cfg }) => ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  [channelId]: { enabled: true },
+                },
+              }),
+            },
+          }),
+        } as ChannelPlugin,
+        source: "test",
       },
-      adapter: {
-        applyAccountConfig: ({ cfg }) => ({
-          ...cfg,
-          channels: { ...cfg.channels, [channelId]: { enabled: true } },
-        }),
-      },
-    }),
-  } as ChannelPlugin;
-  setActivePluginRegistry(createTestRegistry([{ pluginId: channelId, plugin, source: "test" }]));
+    ]),
+  );
 }
 
 type SignalAfterAccountConfigWritten = NonNullable<
@@ -532,35 +542,30 @@ describe("channelsAddCommand", () => {
 
   it.each([
     {
-      channel: "telegram",
-      options: {},
-      env: { TELEGRAM_BOT_TOKEN: "" },
-      missing: ["TELEGRAM_BOT_TOKEN"],
+      channel: "single-env-chat",
+      env: { SINGLE_CHAT_TOKEN: "" },
+      missing: ["SINGLE_CHAT_TOKEN"],
     },
     {
-      channel: "slack",
-      options: {},
-      env: { SLACK_BOT_TOKEN: "" },
-      missing: ["SLACK_BOT_TOKEN"],
+      channel: "multi-env-chat",
+      env: { MULTI_CHAT_TOKEN: "token", MULTI_CHAT_SECOND_TOKEN: "" },
+      missing: ["MULTI_CHAT_SECOND_TOKEN"],
     },
     {
-      channel: "buzz",
-      options: {},
-      env: { BUZZ_PRIVATE_KEY: "" },
-      missing: ["BUZZ_PRIVATE_KEY"],
+      channel: "private-key-chat",
+      env: { PRIVATE_CHAT_KEY: "" },
+      missing: ["PRIVATE_CHAT_KEY"],
     },
   ])("rejects $channel --use-env when declared env vars are missing", async (testCase) => {
     for (const [name, value] of Object.entries(testCase.env)) {
       vi.stubEnv(name, value);
     }
-    registerSyntheticUseEnvSetupPlugin(testCase.channel, testCase.missing[0] as string);
+    registerEnvContractTestPlugin(testCase.channel, Object.keys(testCase.env));
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
-    await channelsAddCommand(
-      { channel: testCase.channel, useEnv: true, ...testCase.options },
-      runtime,
-      { hasFlags: true },
-    );
+    await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
+      hasFlags: true,
+    });
 
     for (const missing of testCase.missing) {
       expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(missing));
@@ -571,18 +576,18 @@ describe("channelsAddCommand", () => {
 
   it.each([
     {
-      channel: "telegram",
-      env: { TELEGRAM_BOT_TOKEN: "telegram-token" },
+      channel: "single-env-chat",
+      env: { SINGLE_CHAT_TOKEN: "token" },
     },
     {
-      channel: "slack",
-      env: { SLACK_BOT_TOKEN: "xoxb-token" },
+      channel: "multi-env-chat",
+      env: { MULTI_CHAT_TOKEN: "token", MULTI_CHAT_SECOND_TOKEN: "second-token" },
     },
   ])("commits $channel --use-env config when declared env vars are present", async (testCase) => {
     for (const [name, value] of Object.entries(testCase.env)) {
       vi.stubEnv(name, value);
     }
-    registerSyntheticUseEnvSetupPlugin(testCase.channel, Object.keys(testCase.env)[0] as string);
+    registerEnvContractTestPlugin(testCase.channel, Object.keys(testCase.env));
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
     await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
@@ -590,6 +595,24 @@ describe("channelsAddCommand", () => {
     });
 
     expect(writtenChannel(testCase.channel)).toEqual({ enabled: true });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not demand env vars outside the selected setup contract", async () => {
+    vi.stubEnv("DECLARED_TOKEN", "declared-token");
+    vi.stubEnv("CONDITIONAL_TOKEN", "");
+    registerEnvContractTestPlugin("conditional-chat", ["DECLARED_TOKEN"]);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "conditional-chat", useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel("conditional-chat")).toMatchObject({
+      enabled: true,
+    });
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("CONDITIONAL_TOKEN"));
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });

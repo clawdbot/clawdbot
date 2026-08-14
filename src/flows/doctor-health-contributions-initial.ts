@@ -5,6 +5,7 @@ import {
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   runChannelIngressDeadLettersHealth,
+  runDeliveryFailuresHealth,
   runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
   runConfigAuditScrubHealth,
@@ -59,6 +60,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:write-config-migrations",
       label: "Write config migrations",
+      required: true,
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({
@@ -283,6 +285,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       id: "doctor:channel-ingress-dead-letters",
       label: "Channel ingress dead letters",
       run: runChannelIngressDeadLettersHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:delivery-failures",
+      label: "Delivery failures",
+      run: runDeliveryFailuresHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",

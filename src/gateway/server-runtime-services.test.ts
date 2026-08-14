@@ -22,6 +22,8 @@ type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue.js").recoverPendingDeliveries;
+type ReconcileOutboundFailedDeliveryFinalizations =
+  typeof import("../infra/outbound/delivery-queue.js").reconcileOutboundFailedDeliveryFinalizations;
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -51,6 +53,8 @@ const hoisted = vi.hoisted(() => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     })),
+    reconcileOutboundFailedDeliveryFinalizations:
+      vi.fn<ReconcileOutboundFailedDeliveryFinalizations>(async () => undefined),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
@@ -77,6 +81,8 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
+  reconcileOutboundFailedDeliveryFinalizations:
+    hoisted.reconcileOutboundFailedDeliveryFinalizations,
   drainPendingDeliveriesCore: hoisted.drainPendingDeliveries,
 }));
 
@@ -129,6 +135,8 @@ describe("server-runtime-services", () => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     });
+    hoisted.reconcileOutboundFailedDeliveryFinalizations.mockReset();
+    hoisted.reconcileOutboundFailedDeliveryFinalizations.mockResolvedValue(undefined);
     hoisted.drainPendingDeliveries.mockReset();
     hoisted.drainPendingDeliveries.mockResolvedValue(undefined);
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
@@ -542,6 +550,7 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.reconcileOutboundFailedDeliveryFinalizations).toHaveBeenCalledOnce();
     const [drain] = hoisted.drainPendingDeliveries.mock.calls[0] ?? [];
     expect(drain).toMatchObject({
       drainKey: "gateway:outbound",
@@ -551,6 +560,55 @@ describe("server-runtime-services", () => {
       match: true,
       bypassBackoff: false,
     });
+    services.heartbeatRunner.stop();
+  });
+
+  it("keeps draining deliveries when owner finalization fails transiently", async () => {
+    vi.useFakeTimers();
+    hoisted.reconcileOutboundFailedDeliveryFinalizations.mockRejectedValueOnce(
+      new Error("database busy"),
+    );
+    const log = createLog();
+    const { services } = activateScheduledServicesForTest({ startCron: false, log });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.reconcileOutboundFailedDeliveryFinalizations).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(log.error).toHaveBeenCalledWith(
+      "Delivery failure finalization failed: Error: database busy",
+    );
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.reconcileOutboundFailedDeliveryFinalizations).toHaveBeenCalledTimes(2);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
+    services.heartbeatRunner.stop();
+  });
+
+  it("keeps later delivery ticks running while owner finalization is still pending", async () => {
+    vi.useFakeTimers();
+    let finishFinalization: (() => void) | undefined;
+    hoisted.reconcileOutboundFailedDeliveryFinalizations.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFinalization = resolve;
+        }),
+    );
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.reconcileOutboundFailedDeliveryFinalizations).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(hoisted.reconcileOutboundFailedDeliveryFinalizations).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(3);
+
+    if (!finishFinalization) {
+      throw new Error("Expected owner finalization to be pending");
+    }
+    finishFinalization();
+    await vi.advanceTimersByTimeAsync(0);
+    await services.stopOutboundDeliveryRecovery();
     services.heartbeatRunner.stop();
   });
 
@@ -572,7 +630,7 @@ describe("server-runtime-services", () => {
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledWith(
         expect.objectContaining({ cfg: reloadedConfig }),
       );
-      expect(runtimeConfig).toHaveBeenCalledOnce();
+      expect(runtimeConfig).toHaveBeenCalledTimes(2);
     } finally {
       services.heartbeatRunner.stop();
       runtimeConfig.mockRestore();

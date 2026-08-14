@@ -28,7 +28,7 @@
   border-radius: 50%;
   background: radial-gradient(
     closest-side,
-    color-mix(in srgb, var(--lob-shell, #c44536) 22%, transparent),
+    color-mix(in srgb, var(--lob-shell) 22%, transparent),
     transparent 72%
   );
   pointer-events: none;

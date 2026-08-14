@@ -189,11 +189,20 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return;
     }
     const guardKey = state.sessionKey;
-    void this.context.sessions.patch(row.key, { unread: false }, { agentId }).catch(() => {
-      // Unlatch so later unread snapshots retry; the session capability
-      // publishes the actionable error for the owning page.
-      this.unreadPatchGuard.patchFailed(guardKey);
-    });
+    void this.context.sessions.patch(row.key, { unread: false }, { agentId }).then(
+      (result) => {
+        // A null result means no request was sent (connection scope lost);
+        // unlatch like a failure or the badge stays lit until navigation.
+        if (result === null) {
+          this.unreadPatchGuard.patchFailed(guardKey);
+        }
+      },
+      () => {
+        // Unlatch so later unread snapshots retry; the session capability
+        // publishes the actionable error for the owning page.
+        this.unreadPatchGuard.patchFailed(guardKey);
+      },
+    );
   }
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {

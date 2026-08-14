@@ -52,7 +52,7 @@ describe("OpenClaw shell dock suppression", () => {
         connect: vi.fn(),
       },
       agents: { state: { agentsList: null } },
-      agentSelection: { state: { selectedId: "main" } },
+      agentSelection: { state: { selectedId: "research" } },
       config: {
         current: { terminalEnabled: true, serverVersion: null, devGitBranch: null },
       },
@@ -118,6 +118,13 @@ describe("OpenClaw shell dock suppression", () => {
 
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
+    expect(
+      (
+        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          agentId: string | null;
+        }
+      ).agentId,
+    ).toBe("research");
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {

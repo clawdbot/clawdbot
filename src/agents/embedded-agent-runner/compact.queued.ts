@@ -19,7 +19,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -380,7 +380,7 @@ async function compactEmbeddedAgentSessionImpl(
     }
   };
   try {
-    return await withPluginRuntimeRegistryScope(lease.snapshot.pluginRegistry, run);
+    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
   } finally {
     lease.release();
   }
@@ -570,11 +570,13 @@ async function compactResolvedContextEngine(
         })
       : undefined;
   if (lockedNativeHarness) {
-    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+    return harnessResult
+      ? { ...harnessResult, compactionKind: "native-harness" }
+      : lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
-      return harnessResult;
+      return { ...harnessResult, compactionKind: "native-harness" };
     }
     log.warn(
       `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
@@ -837,6 +839,7 @@ async function compactResolvedContextEngine(
         return {
           ok: result.ok,
           compacted: result.compacted,
+          compactionKind: "context-engine",
           reason: result.reason,
           result: result.result
             ? {

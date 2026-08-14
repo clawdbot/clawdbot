@@ -80,16 +80,6 @@ async function resolveWorkerSessionTarget(params: {
   if (profileId) {
     dispatchTarget = { profileId };
   } else if (deviceId) {
-    const node = (await params.context.nodeRegistry.listCurrentConnected()).find(
-      (candidate) => candidate.nodeId === deviceId && candidate.commands.includes("system.run"),
-    );
-    if (!node) {
-      respondInvalidWorkerSession(
-        params.respond,
-        `device is not a connected session-capable paired node: ${deviceId}`,
-      );
-      return undefined;
-    }
     dispatchTarget = {
       profileId: `device:${deviceId}`,
       deviceId,
@@ -308,7 +298,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    if (existingPlacement?.state !== "active") {
+    if (existingPlacement?.state !== "active" && existingPlacement?.state !== "failed") {
       respondInvalidWorkerSession(
         respond,
         `session cannot stop cloud worker from placement ${existingPlacement?.state ?? "local"}`,

@@ -713,8 +713,21 @@ describe("formatDeliveryQueueHealthLine", () => {
     };
 
     expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
+      "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago). Inspect: openclaw delivery failures list",
     );
+  });
+
+  it("surfaces failed rows still waiting for owner cleanup", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [{ queueName: "outbound", count: 1, ownerCleanupPending: 1 }],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 1)).toContain("owner cleanup pending 1");
   });
 
   it("summarizes dead-lettered ingress entries per channel account", () => {
@@ -732,7 +745,75 @@ describe("formatDeliveryQueueHealthLine", () => {
     };
 
     expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
+      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago). Inspect: openclaw delivery failures list",
+    );
+  });
+
+  it("summarizes ingress pressure per channel account", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [],
+      ingressPressure: [
+        {
+          channelId: "telegram",
+          accountId: "ops",
+          laneCount: 1,
+          pendingCount: 56,
+          claimedCount: 0,
+          blockedCount: 55,
+          oldestReceivedAt: 90_000,
+        },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (ingress pressure — inbound telegram/ops: 1 pressured lane, 56 pending, 0 claimed, 55 blocked; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead letters and ingress pressure together", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
+      ingressPressure: [
+        {
+          channelId: "line",
+          accountId: "default",
+          laneCount: 2,
+          pendingCount: 3,
+          claimedCount: 1,
+          blockedCount: 2,
+          oldestReceivedAt: 3_690_000,
+        },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago; ingress pressure — inbound line/default: 2 pressured lanes, 3 pending, 1 claimed, 2 blocked; oldest 1h ago). Inspect: openclaw delivery failures list",
+    );
+  });
+
+  it("surfaces retention maintenance errors without failed rows", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [],
+      maintenance: { lastRunAt: 1_000, errors: 2 },
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 2_000)).toBe(
+      "Delivery queue: warning (retention maintenance errors 2). Inspect: openclaw delivery failures list",
     );
   });
 

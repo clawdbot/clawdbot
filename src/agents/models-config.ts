@@ -30,6 +30,7 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   MODELS_JSON_STATE,
   type ModelsJsonReadyResult,
@@ -68,7 +69,9 @@ type EnsureOpenClawModelsJsonOptions = {
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 };
 
-type PlanOpenClawModelsJsonSourceOptions = EnsureOpenClawModelsJsonOptions;
+type PlanOpenClawModelsJsonSourceOptions = EnsureOpenClawModelsJsonOptions & {
+  authStore?: AuthProfileStore;
+};
 
 type PlannedOpenClawModelsJsonSource = Readonly<{
   agentDir: string;
@@ -536,6 +539,7 @@ export async function planOpenClawModelsJsonSource(
   const env = createConfigRuntimeEnv(cfg, options.env);
   const plan = await planOpenClawModelsJson({
     cfg,
+    ...(options.authStore ? { authStore: options.authStore } : {}),
     discoveryAuthConfig: resolved.discoveryAuthConfig,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,

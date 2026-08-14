@@ -498,6 +498,7 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   it("converts unavailable skills into repair-capable health findings", async () => {
     const unavailableSkill = createSkill();
+    const detectUnavailableSkills = vi.fn(async () => [unavailableSkill]);
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -507,18 +508,20 @@ describe("CORE_HEALTH_CHECKS", () => {
       },
     };
     const check = getCheck(
-      createCoreHealthChecks(
-        createDeps({
-          async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
-            return [unavailableSkill];
-          },
-        }),
-      ),
+      createCoreHealthChecks(createDeps({ detectUnavailableSkills })),
       "core/doctor/skills-readiness",
     );
 
     expect(check).toMatchObject({ defaultEnabled: false });
     expect(check["repair"]).toBeTypeOf("function");
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: { agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] } },
+      }),
+    ).resolves.toEqual([]);
+    expect(detectUnavailableSkills).not.toHaveBeenCalled();
 
     const findings = await check.detect({
       mode: "lint",
@@ -671,7 +674,9 @@ describe("CORE_HEALTH_CHECKS", () => {
         },
       },
     };
-    expect(hooksModelCatalogCase.calls).toContainEqual([{ config: cfg, readOnly: true }]);
+    expect(hooksModelCatalogCase.calls).toContainEqual([
+      { config: cfg, readOnly: true, providerDiscoveryProviderIds: [] },
+    ]);
   });
 
   it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {
@@ -1043,6 +1048,7 @@ describe("core/doctor/bootstrap-size", () => {
           list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
         },
       },
+      cwd: tmp,
     });
 
     expect(findings).toContainEqual(
@@ -1053,5 +1059,20 @@ describe("core/doctor/bootstrap-size", () => {
         fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
       }),
     );
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: {
+          agents: {
+            defaults: { bootstrapMaxChars: 20_000 },
+            list: [
+              { id: "alpha", default: true, workspace: tmp, bootstrapMaxChars: 10_000 },
+              { id: "beta" },
+            ],
+          },
+        },
+      }),
+    ).resolves.toEqual([]);
   });
 });

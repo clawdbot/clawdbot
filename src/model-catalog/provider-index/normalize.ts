@@ -74,10 +74,6 @@ function normalizePlugin(value: unknown): OpenClawProviderIndexPlugin | undefine
   };
 }
 
-function normalizeCategories(value: unknown): readonly string[] {
-  return normalizeUniqueTrimmedStringList(value);
-}
-
 function normalizePreviewCatalog(params: {
   providerId: string;
   value: unknown;
@@ -192,7 +188,7 @@ function normalizeProvider(
     return undefined;
   }
   const docs = normalizeOptionalString(value.docs) ?? "";
-  const categories = normalizeCategories(value.categories);
+  const categories = normalizeUniqueTrimmedStringList(value.categories);
   const authChoices = normalizeAuthChoices({
     providerId,
     providerName: name,

@@ -15,28 +15,24 @@ import {
 } from "../lib/nodes/index.ts";
 import * as nodes from "../lib/nodes/index.ts";
 import {
+  migrateCloudSessionRecoveryScope,
   readCloudSessionRecovery,
   writeCloudSessionRecovery,
 } from "../lib/sessions/cloud-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
-const recoveryMigrationRuntimeLoad = vi.hoisted(() => {
-  let release = () => {};
-  let markStarted = () => {};
-  const started = new Promise<void>((resolve) => {
-    markStarted = resolve;
-  });
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { markStarted, pending, release, started };
-});
+const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
+  loaded: vi.fn(),
+  migrate: vi.fn(),
+}));
 
-vi.mock("../lib/sessions/cloud-recovery-migration.runtime.ts", async (importOriginal) => {
-  recoveryMigrationRuntimeLoad.markStarted();
-  await recoveryMigrationRuntimeLoad.pending;
-  return await importOriginal();
+vi.mock("../lib/sessions/cloud-recovery-migration.runtime.ts", () => {
+  recoveryMigrationRuntimeMock.loaded();
+  return {
+    default: (gatewayUrl: string, sourceScope: string, destinationScope: string) =>
+      recoveryMigrationRuntimeMock.migrate(gatewayUrl, sourceScope, destinationScope),
+  };
 });
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -412,6 +408,8 @@ describe("GatewayBrowserClient", () => {
     wsInstances.length = 0;
     loadOrCreateDeviceIdentityMock.mockReset();
     signDevicePayloadMock.mockClear();
+    recoveryMigrationRuntimeMock.loaded.mockClear();
+    recoveryMigrationRuntimeMock.migrate.mockImplementation(migrateCloudSessionRecoveryScope);
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "device-1",
       privateKey: "private-key", // pragma: allowlist secret
@@ -1085,6 +1083,13 @@ describe("GatewayBrowserClient", () => {
     useNodeFakeTimers();
     const sessionStorage = createStorageMock();
     vi.stubGlobal("sessionStorage", sessionStorage);
+    const digest = createDeferred<ArrayBuffer>();
+    const digestMock = vi.fn(() => digest.promise);
+    let requestId = 0;
+    vi.stubGlobal("crypto", {
+      randomUUID: () => `req-recovery-${++requestId}`,
+      subtle: { digest: digestMock },
+    });
     const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
     const recovery = {
       sessionKey: "agent:cloud:stale",
@@ -1120,13 +1125,35 @@ describe("GatewayBrowserClient", () => {
         },
       },
     });
-    await recoveryMigrationRuntimeLoad.started;
+    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+    expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
     expect(onRecoveryScopeChange).not.toHaveBeenCalled();
 
     firstWs.emitClose(1006, "socket lost");
     await vi.advanceTimersByTimeAsync(800);
     const secondWs = getLatestWebSocket();
-    const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-current");
+    secondWs.emitOpen();
+
+    digest.resolve(Uint8Array.from(createHash("sha256").update(STORED_CRED).digest()).buffer);
+    await vi.waitFor(() => expect(recoveryMigrationRuntimeMock.loaded).toHaveBeenCalledOnce());
+
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+    expect(recoveryMigrationRuntimeMock.migrate).not.toHaveBeenCalled();
+    expect(client.recoveryScopeReady).toBe(false);
+    expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(
+      recovery,
+    );
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
+
+    secondWs.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-current", ts: 1_800_000_000_000 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const secondConnect = parseLatestConnectFrame(secondWs);
     secondWs.emitMessage({
       type: "res",
       id: secondConnect.id,
@@ -1143,11 +1170,13 @@ describe("GatewayBrowserClient", () => {
         },
       },
     });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
-
-    recoveryMigrationRuntimeLoad.release();
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(recoveryMigrationRuntimeMock.migrate).toHaveBeenCalledExactlyOnceWith(
+      DEFAULT_GATEWAY_URL,
+      legacyScope,
+      "server-current",
+    );
+    expect(client.recoveryScopeReady).toBe(true);
     expect(client.recoveryScope).toBe("server-current");
     expect(
       readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
@@ -1159,6 +1188,7 @@ describe("GatewayBrowserClient", () => {
       readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
     ).toEqual({ ...recovery, recoveryScope: "server-current" });
     client.stop();
+    expect(client.recoveryScopeReady).toBe(false);
   });
 
   it("keeps stale credential recovery isolated across a shared-browser principal switch", async () => {
@@ -1199,8 +1229,6 @@ describe("GatewayBrowserClient", () => {
         },
       },
     });
-    recoveryMigrationRuntimeLoad.release();
-
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScope).toBe(principalScope);
     expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(

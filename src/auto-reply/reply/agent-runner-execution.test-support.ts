@@ -236,13 +236,19 @@ vi.mock("../../utils/message-channel.js", async () => ({
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
 }));
 
-vi.mock("../heartbeat.js", () => ({
-  stripHeartbeatToken: (text: string) => ({
-    text,
-    didStrip: false,
-    shouldSkip: false,
-  }),
-}));
+vi.mock("../heartbeat.js", async () => {
+  const actual = await vi.importActual<typeof import("../heartbeat.js")>("../heartbeat.js");
+  return {
+    DEFAULT_HEARTBEAT_EVERY: actual.DEFAULT_HEARTBEAT_EVERY,
+    HEARTBEAT_CRON_TASK_GUIDANCE: actual.HEARTBEAT_CRON_TASK_GUIDANCE,
+    resolveHeartbeatPromptCore: actual.resolveHeartbeatPromptCore,
+    stripHeartbeatToken: (text: string) => ({
+      text,
+      didStrip: false,
+      shouldSkip: false,
+    }),
+  };
+});
 
 vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
@@ -451,7 +457,7 @@ export function createFollowupRun(): FollowupRun {
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
-      agentId: "agent",
+      agentId: "main",
       agentDir: "/tmp/agent",
       sessionId: "session",
       sessionKey: "main",
@@ -520,6 +526,8 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       markGlobalLaneWaitEnded: vi.fn(),
       updateSessionId: updateSessionIdMock,
       updateSessionKey: vi.fn(),
+      bindToolAuthorityFingerprint: vi.fn(),
+      bindToolAuthorityRoute: vi.fn(),
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       freezeAbort: freezeAbortMock,

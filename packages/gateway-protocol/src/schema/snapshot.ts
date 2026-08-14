@@ -128,7 +128,48 @@ const HealthSnapshotSchema = closedObject({
           queueName: Type.String(),
           count: Type.Integer({ minimum: 0 }),
           oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+          full: Type.Optional(Type.Integer({ minimum: 0 })),
+          compacted: Type.Optional(Type.Integer({ minimum: 0 })),
+          safe: Type.Optional(Type.Integer({ minimum: 0 })),
+          ambiguous: Type.Optional(Type.Integer({ minimum: 0 })),
+          ownerManaged: Type.Optional(Type.Integer({ minimum: 0 })),
+          ownerCleanupPending: Type.Optional(Type.Integer({ minimum: 0 })),
+          fenceNone: Type.Optional(Type.Integer({ minimum: 0 })),
+          fencePermanent: Type.Optional(Type.Integer({ minimum: 0 })),
+          fenceProducerBounded: Type.Optional(Type.Integer({ minimum: 0 })),
+          legacyUnknown: Type.Optional(Type.Integer({ minimum: 0 })),
+          payloadBearing: Type.Optional(Type.Integer({ minimum: 0 })),
+          oldestPayloadFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
         }),
+      ),
+      ingressFailed: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            count: Type.Integer({ minimum: 0 }),
+            oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+          }),
+        ),
+      ),
+      maintenance: Type.Optional(
+        closedObject({
+          lastRunAt: Type.Integer({ minimum: 0 }),
+          errors: Type.Integer({ minimum: 0 }),
+        }),
+      ),
+      ingressPressure: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            laneCount: Type.Integer({ minimum: 0 }),
+            pendingCount: Type.Integer({ minimum: 0 }),
+            claimedCount: Type.Integer({ minimum: 0 }),
+            blockedCount: Type.Integer({ minimum: 0 }),
+            oldestReceivedAt: Type.Integer({ minimum: 0 }),
+          }),
+        ),
       ),
     }),
   ),

@@ -41,6 +41,7 @@ function secretStoreSchemaSql(): string {
 /** Lazily install the additive secret store table and index on first write. */
 export function ensureSecretStoreSchema(database: DatabaseSync): void {
   database.exec(secretStoreSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+  ensureColumn(database, "secret_store_entries", "allowed_hosts TEXT");
 }
 
 /** Lazily install durable MCP OAuth callback correlation on first feature use. */
@@ -424,6 +425,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_install_kind TEXT");
   ensureColumn(
     db,
     "worker_environments",

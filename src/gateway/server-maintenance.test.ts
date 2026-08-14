@@ -50,6 +50,13 @@ function createMaintenanceTimerDeps() {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
+    runDeliveryFailureSweep: vi.fn(async () => ({
+      scanned: 0,
+      compacted: 0,
+      deleted: 0,
+      legacyUnknown: 0,
+      errors: 0,
+    })),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
@@ -226,15 +233,28 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs queue media cleanup at startup and hourly", async () => {
+  it("finishes the delivery failure sweep before queue media cleanup at startup and hourly", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
+    let finishFirstSweep = () => {};
+    deps.runDeliveryFailureSweep.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirstSweep = () =>
+            resolve({ scanned: 400, compacted: 200, deleted: 100, legacyUnknown: 0, errors: 0 });
+        }),
+    );
     const timers = startGatewayMaintenanceTimers(deps);
 
     await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDeliveryFailureSweep).toHaveBeenCalledTimes(1);
+    expect(deps.runDeliveryQueueMediaGc).not.toHaveBeenCalled();
+    finishFirstSweep();
+    await vi.advanceTimersByTimeAsync(0);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(deps.runDeliveryFailureSweep).toHaveBeenCalledTimes(2);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);
@@ -890,6 +910,49 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(activeRun.controller.signal.aborted).toBe(true);
     expect(deps.chatAbortControllers.has(runId)).toBe(false);
 
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("recovers a wedged terminal-pending run whose projection clear never ran", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-wedged-terminal-pending";
+    const wedgedRun = createActiveRun("main");
+    wedgedRun.expiresAtMs = Date.now() - 1;
+    wedgedRun.projectSessionActive = false;
+    wedgedRun.projectSessionTerminalPending = true;
+    // Stamped by the synchronous lifecycle listener; the async clear was lost.
+    wedgedRun.projectSessionTerminalObservedAt = Date.now() - 120_000;
+    deps.chatAbortControllers.set(runId, wedgedRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(wedgedRun.controller.signal.aborted).toBe(false);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("keeps a fresh terminal-pending run for its async projection owner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-fresh-terminal-pending";
+    const freshRun = createActiveRun("main");
+    freshRun.expiresAtMs = Date.now() - 1;
+    freshRun.projectSessionTerminalPending = true;
+    // Abort owner reserves terminal ownership without a stamped observation;
+    // the sweeper must never race that owner.
+    freshRun.projectSessionTerminalObservedAt = undefined;
+    deps.chatAbortControllers.set(runId, freshRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.chatAbortControllers.has(runId)).toBe(true);
     await stopMaintenanceTimers(timers);
   });
 

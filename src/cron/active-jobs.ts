@@ -14,6 +14,9 @@ export type CronActiveJobMarker = {
   jobId: string;
   generation: number;
   token: number;
+  cancellation?:
+    | { kind: "bound"; cancel: (reason: string) => void }
+    | { kind: "requested"; reason: string };
   scheduleMutated?: true;
   triggerMutated?: true;
   jobRemoved?: true;
@@ -50,6 +53,15 @@ function getActiveCronJobCountForGeneration(state: CronActiveJobState) {
 
 function isMarkerActiveInGeneration(marker: CronActiveJobMarker, generation: number) {
   return marker.generation === generation || marker.preserveAcrossGenerationAdvance === true;
+}
+
+function getCurrentCronActiveJobMarker(jobId: string): CronActiveJobMarker | undefined {
+  if (!jobId) {
+    return undefined;
+  }
+  const state = getCronActiveJobState();
+  const marker = state.activeJobs.get(jobId);
+  return marker && isMarkerActiveInGeneration(marker, state.generation) ? marker : undefined;
 }
 
 function notifyActiveCronJobWaitersIfEmpty(state: CronActiveJobState) {
@@ -117,12 +129,8 @@ export function clearCronJobActive(jobId: string, marker?: CronActiveJobMarker) 
 
 /** Records a durable schedule edit against the exact run that was active for it. */
 export function noteActiveCronJobScheduleMutation(jobId: string): void {
-  if (!jobId) {
-    return;
-  }
-  const state = getCronActiveJobState();
-  const marker = state.activeJobs.get(jobId);
-  if (marker && isMarkerActiveInGeneration(marker, state.generation)) {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (marker) {
     // Keep mutation history on the admitted run: A→B→A has the original
     // schedule value but still belongs to the operator's newer edit.
     marker.scheduleMutated = true;
@@ -131,12 +139,8 @@ export function noteActiveCronJobScheduleMutation(jobId: string): void {
 
 /** Records a durable trigger edit against the exact run that evaluated it. */
 export function noteActiveCronJobTriggerMutation(jobId: string): void {
-  if (!jobId) {
-    return;
-  }
-  const state = getCronActiveJobState();
-  const marker = state.activeJobs.get(jobId);
-  if (marker && isMarkerActiveInGeneration(marker, state.generation)) {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (marker) {
     // A→B→A restores the script but cannot return ownership of the new
     // trigger state to an evaluation admitted before either durable edit.
     marker.triggerMutated = true;
@@ -145,19 +149,33 @@ export function noteActiveCronJobTriggerMutation(jobId: string): void {
 
 /** Retires the admitted job identity after its deletion becomes durable. */
 export function noteActiveCronJobRemoval(jobId: string): CronActiveJobMarker | undefined {
-  if (!jobId) {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (!marker) {
     return undefined;
   }
-  const state = getCronActiveJobState();
-  const marker = state.activeJobs.get(jobId);
-  if (marker && isMarkerActiveInGeneration(marker, state.generation)) {
-    // A reused ID names a new job, not a reschedule of the old invocation.
-    // Keep its marker until completion so duplicate-run guards remain intact.
-    marker.scheduleMutated = true;
-    marker.jobRemoved = true;
-    return marker;
+  // A reused ID names a new job, not a reschedule of the old invocation.
+  // Keep its marker until completion so duplicate-run guards remain intact.
+  marker.scheduleMutated = true;
+  marker.jobRemoved = true;
+  requestCronActiveJobMarkerCancellation(marker, "Cron job removed by operator.");
+  return marker;
+}
+
+function requestCronActiveJobMarkerCancellation(marker: CronActiveJobMarker, reason: string): void {
+  const cancellation = marker.cancellation;
+  if (cancellation?.kind === "requested") {
+    return;
   }
-  return undefined;
+  marker.cancellation = { kind: "requested", reason };
+  cancellation?.cancel(reason);
+}
+
+/** Requests cancellation now or when the exact active run binds its controller. */
+export function requestActiveCronJobCancellation(jobId: string, reason: string): void {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (marker) {
+    requestCronActiveJobMarkerCancellation(marker, reason);
+  }
 }
 
 /** Returns whether the given cron job id is currently executing in this process. */

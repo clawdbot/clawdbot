@@ -206,8 +206,20 @@ describe("ModelsListParamsSchema", () => {
         agentId: "research",
         includeProviderCapabilities: true,
       },
+      {
+        preparedOnly: true,
+      },
+      {
+        refresh: true,
+        view: "all",
+      },
     );
-    expectRejected(ModelsListParamsSchema, { view: "provider-route" }, { agentId: "" });
+    expectRejected(
+      ModelsListParamsSchema,
+      { view: "provider-route" },
+      { agentId: "" },
+      { preparedOnly: true, refresh: true },
+    );
   });
 });
 

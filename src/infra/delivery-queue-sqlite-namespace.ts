@@ -1,6 +1,7 @@
 // Owns atomic delivery-queue ownership changes across namespace versions.
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { expireProducerBoundedFailureFenceInDatabase } from "./delivery-queue-failures.js";
 import {
   completeDeliveryQueueEntry,
   deleteDeliveryQueueEntry,
@@ -16,6 +17,20 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 type QueueStatus = "pending" | "failed" | "completed";
+
+function expireExactBoundedFailureFences(params: {
+  database: ReturnType<typeof openStateDatabase>;
+  queueNames: readonly string[];
+  id: string;
+}): void {
+  for (const queueName of params.queueNames) {
+    expireProducerBoundedFailureFenceInDatabase({
+      database: params.database,
+      queueName,
+      id: params.id,
+    });
+  }
+}
 
 function openStateDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
@@ -49,6 +64,11 @@ export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(params: {
       if (!staging) {
         return "missing";
       }
+      expireExactBoundedFailureFences({
+        database,
+        queueNames: [params.queueName, ...params.conflictQueueNames],
+        id: params.entry.id,
+      });
       const owner = executeSqliteQueryTakeFirstSync(
         database.db,
         queueDb
@@ -103,6 +123,11 @@ export function upsertDeliveryQueueEntryOnceAcrossNamespaces(params: {
   return runSqliteImmediateTransactionSync(
     database.db,
     () => {
+      expireExactBoundedFailureFences({
+        database,
+        queueNames: [params.queueName, ...params.conflictQueueNames],
+        id: params.entry.id,
+      });
       const owner = executeSqliteQueryTakeFirstSync(
         database.db,
         queueDb
@@ -249,6 +274,11 @@ export function movePendingDeliveryQueueEntryNamespace(
       ) {
         return "source-changed";
       }
+      expireExactBoundedFailureFences({
+        database,
+        queueNames: [params.destinationQueueName, ...(params.conflictQueueNames ?? [])],
+        id: params.destinationEntry.id,
+      });
       const destination = executeSqliteQueryTakeFirstSync(
         database.db,
         queueDb

@@ -9,9 +9,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
+  getCurrentPluginMetadataSnapshotMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedExtensionFactoriesMock,
@@ -1169,6 +1171,69 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             runtime: "codex",
           }),
         ]),
+      }),
+    );
+  });
+
+  it("plans direct compaction from the requested workspace metadata without ambient discovery", async () => {
+    const baseMetadataSnapshot = expectDefined(
+      getCurrentPluginMetadataSnapshotMock(),
+      "default plugin metadata snapshot",
+    );
+    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+      params?.workspaceDir === TEST_WORKSPACE_DIR
+        ? {
+            ...baseMetadataSnapshot,
+            configFingerprint: "workspace-compaction-normalization",
+            plugins: [
+              {
+                id: "compaction-normalizer",
+                channels: [],
+                providers: ["anthropic"],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                origin: "workspace",
+                rootDir: TEST_WORKSPACE_DIR,
+                source: `${TEST_WORKSPACE_DIR}/index.js`,
+                manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
+                modelIdNormalization: {
+                  providers: {
+                    anthropic: {
+                      aliases: { legacy: "claude-modern" },
+                    },
+                  },
+                },
+              } satisfies PluginManifestRecord,
+            ],
+          }
+        : undefined,
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+      agentHarnessId: "codex",
+      modelFallbacksOverride: ["anthropic/legacy"],
+      config: {} as never,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({
+            provider: "anthropic",
+            modelId: "claude-modern",
+            runtime: "codex",
+          }),
+        ]),
+      }),
+    );
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: TEST_WORKSPACE_DIR,
+        allowWorkspaceScopedSnapshot: true,
       }),
     );
   });
@@ -2513,6 +2578,25 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
   });
 
+  it("reports native harness compaction ownership", async () => {
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "harness", firstKeptEntryId: "entry-1", tokensBefore: 100 },
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({ provider: "openai", model: "gpt-5.5", agentHarnessId: "codex" }),
+    );
+
+    expect(result.compactionKind).toBe("native-harness");
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+  });
+
   it("binds context-engine compaction runtime LLM to the session agent", async () => {
     resolveSessionAgentIdsMock.mockReturnValueOnce({
       defaultAgentId: "main",
@@ -2571,6 +2655,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
+    expect(result.compactionKind).toBe("context-engine");
 
     expect(mockCallArg(hookRunner.runBeforeCompaction)).toEqual({
       messageCount: -1,

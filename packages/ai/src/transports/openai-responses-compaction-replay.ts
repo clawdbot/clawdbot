@@ -13,6 +13,7 @@ import {
   type OpenAIResponsesReplayContext,
   type ReplayableResponseCompactionItem,
 } from "./openai-responses-contracts.js";
+import { log } from "./openai-transport-shared.js";
 
 const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
 const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA = "rejected";
@@ -21,18 +22,6 @@ type OpenAIResponsesCompactionSuppressionState = ProviderReplayState & {
   data: typeof OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA;
   baseUrlHash: string;
 };
-
-/** Removes prefix-bound checkpoint state while preserving route-scoped suppression state. */
-export function stripOpenAIResponsesCompactionReplayCheckpoint(
-  message: AssistantMessage,
-): AssistantMessage {
-  if (message.providerReplay?.type !== OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE) {
-    return message;
-  }
-  const replaySafeMessage = { ...message };
-  delete replaySafeMessage.providerReplay;
-  return replaySafeMessage;
-}
 
 function hashOptionalReplayContextValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -120,7 +109,11 @@ export function captureOpenAIResponsesCompaction(
   captureMetadata?: OpenAIResponsesReasoningReplayMetadata,
 ): void {
   const metadata = captureMetadata ?? buildOpenAIResponsesReasoningReplayMetadata(model);
-  if (!item.encrypted_content || !metadata?.baseUrlHash) {
+  if (!item.encrypted_content) {
+    return;
+  }
+  if (!metadata?.baseUrlHash) {
+    log.debug("[responses] skipping compaction capture: missing base URL hash");
     return;
   }
   if (

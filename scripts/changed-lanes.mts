@@ -44,7 +44,7 @@ const LIVE_DOCKER_TOOLING_PATHS = new Set([
 ]);
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
-  /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mts$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
+  /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/(?:sync-plugin-sdk-exports|plugin-sdk-api-diff)\.mts$)/u;
 const BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE =
   /^(?:src\/config\/(?:bundled-channel-config-metadata\.generated|zod-schema\.[^/]+)\.ts|src\/channels\/plugins\/config-schema\.ts|src\/plugin-sdk\/(?:bundled-channel-config-schema|channel-config-schema)\.ts|src\/plugins\/(?:bundled-dir|public-surface-loader|public-surface-runtime|sdk-alias)\.ts|scripts\/(?:generate-bundled-channel-config-metadata\.ts|load-channel-config-surface\.ts|lib\/(?:bundled-plugin-source-utils|format-generated-module|generated-output-utils)\.mts)|extensions\/[^/]+\/(?:openclaw\.plugin\.json|package\.json|(?:config|security-contract)-api\.[cm]?[jt]sx?|src\/config-(?:schema(?:-[^/]+)?|surface|ui-hints)\.[cm]?[jt]sx?))$/u;
 /**

@@ -17,6 +17,7 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -43,7 +44,10 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt-async-tasks.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt-queue-message.js";
+import {
+  claimEmbeddedPendingUserInputAnswer,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "./attempt-queue-message.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
 import {
   resolveFinalAssistantRawText,
@@ -426,6 +430,13 @@ export function prepareEmbeddedAttemptStream(input: {
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
+    ...(attempt.toolAuthorityFingerprint
+      ? { toolAuthorityFingerprint: attempt.toolAuthorityFingerprint }
+      : {}),
+    claimPendingUserInputAnswer: (text, options) =>
+      claimEmbeddedPendingUserInputAnswer(text, options, attempt.sessionKey),
+    cancelPendingUserInput: (resolvedBy) =>
+      cancelPendingAgentQuestionForSession({ sessionKey: attempt.sessionKey, resolvedBy }),
     queueMessage,
     messageInjection: {
       isAvailable: () =>

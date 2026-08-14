@@ -1,8 +1,13 @@
 import {
+  compactFailedDeliveryQueueEntryInDatabase,
+  loadFailedDeliveryRowInDatabase,
+} from "../../../infra/delivery-queue-failures.js";
+import {
   bindDeliveryQueueEntry,
   loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite-bound.js";
+import { parseDeliveryQueueTerminalPolicy } from "../../../infra/delivery-queue-terminal-policy.js";
 import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
@@ -30,6 +35,63 @@ type AdmissionTestHooks = {
     database: OpenClawStateDatabase,
   ) => unknown;
 };
+
+type RetiredCompletionFailure = {
+  entry: QueuedSessionDelivery;
+  reason: "owner_dismissed" | "owner_expired" | "owner_settled";
+};
+
+type CompletionOwner = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>["owner"];
+
+function sameSubagentCompletionOwner(left: CompletionOwner, right: CompletionOwner): boolean {
+  return (
+    left?.kind === "subagent_completion" &&
+    right?.kind === "subagent_completion" &&
+    left.runId === right.runId &&
+    left.taskId === right.taskId &&
+    left.generation === right.generation &&
+    left.deadlineAt === right.deadlineAt
+  );
+}
+
+function compactRetiredCompletionFailure(
+  database: OpenClawStateDatabase,
+  retired: RetiredCompletionFailure,
+): void {
+  const expectedOwner = retired.entry.kind === "agentTurn" ? retired.entry.owner : undefined;
+  const row = loadFailedDeliveryRowInDatabase(
+    database,
+    SESSION_DELIVERY_QUEUE_NAME,
+    retired.entry.id,
+  );
+  const current = row
+    ? (loadDeliveryQueueEntryInDatabase(
+        database,
+        SESSION_DELIVERY_QUEUE_NAME,
+        retired.entry.id,
+      ) as QueuedSessionDelivery | null)
+    : null;
+  const currentOwner = current?.kind === "agentTurn" ? current.owner : undefined;
+  const policy = parseDeliveryQueueTerminalPolicy(current?.terminalPolicy);
+  if (
+    !row ||
+    !sameSubagentCompletionOwner(currentOwner, expectedOwner) ||
+    policy?.owner !== "subagent_completion"
+  ) {
+    throw new Error(`subagent completion failed-row ownership changed: ${retired.entry.id}`);
+  }
+  if (
+    !compactFailedDeliveryQueueEntryInDatabase({
+      database,
+      queueName: SESSION_DELIVERY_QUEUE_NAME,
+      id: retired.entry.id,
+      expected: row,
+      policy: { ...policy, reason: retired.reason, cleanup: "complete" },
+    })
+  ) {
+    throw new Error(`subagent completion failed row changed: ${retired.entry.id}`);
+  }
+}
 
 function invokeSynchronousHook(hook: (() => unknown) | undefined): void {
   const result = hook?.();
@@ -70,6 +132,7 @@ export function admitSubagentCompletionDelivery(params: {
   databaseOptions?: OpenClawStateDatabaseOptions;
   /** Transaction cut points used by the real-store crash-consistency tests. */
   testHooks?: AdmissionTestHooks;
+  retireFailed?: RetiredCompletionFailure;
 }): { claimed: boolean } {
   assertCorrelatedEntry(params);
   const boundQueue = bindDeliveryQueueEntry({
@@ -94,17 +157,12 @@ export function admitSubagentCompletionDelivery(params: {
         const expectedOwner =
           params.queueEntry.kind === "agentTurn" ? params.queueEntry.owner : undefined;
         const existingOwner = existing?.kind === "agentTurn" ? existing.owner : undefined;
-        if (
-          !existingOwner ||
-          !expectedOwner ||
-          existingOwner.kind !== expectedOwner.kind ||
-          existingOwner.runId !== expectedOwner.runId ||
-          existingOwner.taskId !== expectedOwner.taskId ||
-          existingOwner.generation !== expectedOwner.generation ||
-          existingOwner.deadlineAt !== expectedOwner.deadlineAt
-        ) {
+        if (!sameSubagentCompletionOwner(existingOwner, expectedOwner)) {
           throw new Error(`session delivery queue conflict for ${params.queueEntry.id}`);
         }
+      }
+      if (params.retireFailed) {
+        compactRetiredCompletionFailure(database, params.retireFailed);
       }
       upsertSubagentRunRowInDatabase(database, boundSubagent);
       invokeSynchronousHook(() => params.testHooks?.afterMutation?.("subagent", database));
@@ -123,10 +181,14 @@ export function settleSubagentCompletionDelivery(params: {
   task: TaskRecord;
   databaseOptions?: OpenClawStateDatabaseOptions;
   mutateSubagent?: (entry: SubagentRunRecord) => unknown;
+  retireFailed?: RetiredCompletionFailure;
 }): void {
   const boundTask = bindTaskRecord(params.task);
   runOpenClawStateWriteTransaction(
     (database) => {
+      if (params.retireFailed) {
+        compactRetiredCompletionFailure(database, params.retireFailed);
+      }
       invokeSynchronousHook(() => params.mutateSubagent?.(params.subagent));
       upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(params.subagent));
       upsertTaskRunRowInDatabase(database, boundTask);

@@ -87,14 +87,11 @@ export function resolveSessionSelectedModelRef(params: {
   agentId: string;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> | null {
+}): ReturnType<typeof resolveSessionModelRef> {
   const override = normalizeStoredOverrideModel({
     providerOverride: params.entry?.providerOverride,
     modelOverride: params.entry?.modelOverride,
   });
-  if (!override.modelOverride) {
-    return null;
-  }
   if (!params.rowContext) {
     return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
       allowPluginNormalization: params.allowPluginNormalization,
@@ -103,7 +100,7 @@ export function resolveSessionSelectedModelRef(params: {
   const key = [
     normalizeAgentId(params.agentId),
     override.providerOverride ?? "",
-    override.modelOverride,
+    override.modelOverride ?? "",
   ].join("\0");
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {

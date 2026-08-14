@@ -18,6 +18,8 @@ import {
 } from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
+  testNodeWorkerLaunchIdentity,
+  TEST_WORKER_ENDPOINT,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
@@ -59,7 +61,8 @@ function planHash(input: ReturnType<typeof testWorkerLaunchInput>): string {
   return createHash("sha256")
     .update(
       stableStringify({
-        bundleHash: input.bundleHash,
+        installKind: input.installKind,
+        expectedBundleHash: input.expectedBundleHash,
         descriptor: input.descriptor,
         gatewayNamespace: input.gatewayNamespace,
         placementGeneration: input.placementGeneration,
@@ -153,7 +156,7 @@ function writeSupervisorOwnerScript(root: string): string {
       };
       process.once("SIGTERM", () => void shutdown());
       const input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
-      const receipt = await supervisor.launch(input);
+      const receipt = await supervisor.launch(input, ${JSON.stringify({ kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" })});
       process.stdout.write(JSON.stringify(receipt) + "\\n");
       setInterval(() => {}, 1000);
     `,
@@ -204,7 +207,7 @@ describe("node worker supervisor recovery", () => {
       supervisor: { pid: 2_147_483_647, startTime: 1 },
     });
 
-    const running = await supervisor.launch(input);
+    const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
 
     expect(running).toMatchObject({
       state: "running",
@@ -214,9 +217,12 @@ describe("node worker supervisor recovery", () => {
     await supervisor.close();
   });
 
-  it.runIf(process.platform !== "win32")(
-    "kills the exact stale-owner worker group before marking it interrupted",
-    async () => {
+  it.runIf(process.platform !== "win32").each([
+    { operation: "replay" as const, state: "interrupted" as const },
+    { operation: "cancel" as const, state: "cancelled" as const },
+  ])(
+    "$operation kills the exact stale-owner worker group before terminal persistence",
+    async ({ operation, state }) => {
       const { bundleRoot, env, root, workspaceDir } = fixture("node-worker-stale-running-");
       const marker = path.join(root, "recovery-grandchild.pid");
       const workerSource = `
@@ -246,9 +252,18 @@ describe("node worker supervisor recovery", () => {
         worker,
       });
 
-      const recovered = await supervisor.launch(input);
+      if (operation === "cancel") {
+        await expect(
+          supervisor.cancel({ ...testNodeWorkerLaunchIdentity(input), runId: "run-mismatch" }),
+        ).resolves.toBeUndefined();
+        expect(inspectNodeWorkerProcessIdentity(worker)).toBe("live");
+      }
+      const recovered =
+        operation === "cancel"
+          ? await supervisor.cancel(testNodeWorkerLaunchIdentity(input))
+          : await supervisor.launch(input, TEST_WORKER_ENDPOINT);
 
-      expect(recovered).toMatchObject({ state: "interrupted", worker });
+      expect(recovered).toMatchObject({ state, worker });
       await waitForIdentityDeath(worker);
       await waitForIdentityDeath(grandchild);
       expect((await supervisor.status(input.launchId))?.worker).toEqual(worker);
@@ -266,8 +281,29 @@ describe("node worker supervisor recovery", () => {
     }
     const second = createNodeWorkerSupervisor({ bundleRoot, env });
 
-    const replay = await second.launch(input);
+    const unchanged = await second.cancel(testNodeWorkerLaunchIdentity(input));
+    if (process.platform === "linux") {
+      const originalReadFileSync = fs.readFileSync;
+      const supervisorStatPath = `/proc/${owned.supervisor.pid}/stat`;
+      const readFileSync = vi.spyOn(fs, "readFileSync").mockImplementation(((
+        file: fs.PathOrFileDescriptor,
+        ...args: unknown[]
+      ) => {
+        if (file === supervisorStatPath) {
+          throw new Error("injected unknown process identity");
+        }
+        return Reflect.apply(originalReadFileSync, fs, [file, ...args]);
+      }) as typeof fs.readFileSync);
+      try {
+        await expect(second.cancel(testNodeWorkerLaunchIdentity(input))).resolves.toEqual(owned);
+        expect(inspectNodeWorkerProcessIdentity(owned.worker!)).toBe("live");
+      } finally {
+        readFileSync.mockRestore();
+      }
+    }
+    const replay = await second.launch(input, TEST_WORKER_ENDPOINT);
 
+    expect(unchanged).toEqual(owned);
     expect(replay).toEqual(owned);
     expect(inspectNodeWorkerProcessIdentity(owned.supervisor)).toBe("live");
     expect(inspectNodeWorkerProcessIdentity(owned.worker!)).toBe("live");
@@ -297,7 +333,7 @@ describe("node worker supervisor recovery", () => {
       await waitForIdentityDeath(grandchild);
 
       const restarted = createNodeWorkerSupervisor({ bundleRoot, env });
-      const reconciled = await restarted.launch(input);
+      const reconciled = await restarted.status(input.launchId);
       expect(reconciled).toMatchObject({
         state: "interrupted",
         supervisor: owned.supervisor,
@@ -352,7 +388,7 @@ describe("node worker supervisor recovery", () => {
     const owned = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
     const second = createNodeWorkerSupervisor({ bundleRoot, env });
 
-    const replay = await second.launch(input);
+    const replay = await second.launch(input, TEST_WORKER_ENDPOINT);
 
     expect(replay).toEqual(owned);
     owner.kill("SIGKILL");

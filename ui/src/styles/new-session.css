@@ -78,10 +78,13 @@ openclaw-new-session-page {
   opacity: 1;
 }
 
-/* Active mode stays readable without hover; inactive revealed pills keep the
-   muted resting color until directly hovered. */
-.new-session-page__visibility--active {
-  color: var(--text);
+/* Active mode must read as toggled-on even while hovered: hover on an
+   inactive pill already shows a neutral fill, so active gets an accent
+   tint to stay distinguishable under the cursor. */
+.new-session-page__visibility--active,
+.new-session-page__visibility--active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }
 
 .new-session-page__visibility:disabled {
@@ -334,21 +337,42 @@ wa-popover.new-session-page__select::part(body) {
   color: var(--muted);
 }
 
-/* Place browsing uses the same shell as its root menu, with inset root rows. */
-wa-popover.new-session-page__place-popover {
+.new-session-page__menu-facts {
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: 3px;
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+}
+
+.new-session-page__menu-fact {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-hover) 62%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/* Project browsing uses a wider shell for paths and remote result details. */
+wa-popover.new-session-page__project-popover {
   --max-width: min(420px, calc(100vw - 24px));
 }
 
-wa-popover.new-session-page__place-popover::part(body) {
+wa-popover.new-session-page__project-popover::part(body) {
   width: min(420px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
   overflow: hidden;
 }
 
-/* part(body) hides overflow for the browser view's square corners, so the
-   root menu needs its own scroll region or long place lists become unreachable. */
-.new-session-page__place-root {
+/* Popovers need their own scroll region because project and destination
+   catalogs can grow beyond the available viewport. */
+.new-session-page__picker-root {
   max-height: min(420px, 60vh);
   padding: var(--menu-padding);
   overflow-y: auto;
@@ -728,6 +752,7 @@ wa-dropdown.new-session-page__start-menu {
      Keep those pills intrinsic and let the model picker use the remaining width. */
   .new-session-page__composer .agent-chat__composer-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 2px;
   }
 

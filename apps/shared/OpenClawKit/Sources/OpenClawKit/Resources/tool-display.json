@@ -74,6 +74,17 @@
         "cwd"
       ]
     },
+    "portal": {
+      "emoji": "🌐",
+      "title": "Portal",
+      "detailKeys": [
+        "action",
+        "port",
+        "id",
+        "title",
+        "path"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",

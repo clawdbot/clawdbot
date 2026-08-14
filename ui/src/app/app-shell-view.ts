@@ -59,7 +59,6 @@ const SCOPE_UPGRADE_BANNER_ELEMENT = {
 function renderScopeUpgradeBanner(
   host: ShellViewHost,
   snapshot: ApplicationContext["gateway"]["snapshot"],
-  chromeOffset: boolean,
 ) {
   const state = readScopeUpgradeAvailability(snapshot);
   if (state.phase === "hidden") {
@@ -80,7 +79,6 @@ function renderScopeUpgradeBanner(
     return html`<openclaw-device-scope-upgrade-banner
       .props=${{
         snapshot,
-        chromeOffset,
       }}
     ></openclaw-device-scope-upgrade-banner>`;
   }
@@ -506,7 +504,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
-        ${renderScopeUpgradeBanner(host, gatewaySnapshot, !settingsTakeover && !mobileNavLayout)}
+        ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
         ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
           ? // The migration banner is registered by a rare-flow dynamic import after first render.
             customElements.get("openclaw-device-auth-migration-banner")
@@ -553,11 +551,13 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-terminal-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
+        .agentId=${selectedAgentId}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
       <openclaw-browser-panel
+        data-chat-autotype-exempt
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${browserPanelAvailable}
         .suppressed=${settingsTakeover}
@@ -569,6 +569,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         })}
       ></openclaw-browser-panel>
       <openclaw-desktop-panel
+        data-chat-autotype-exempt
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${desktopPanelAvailable}
         .suppressed=${settingsTakeover}

@@ -141,6 +141,7 @@ export async function executeJobCore(
       effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
     }
   }
+  options?.assertRunCurrent?.();
   if (effectiveJob.payload.kind === "script") {
     const result = await executeScriptCronJob(
       state,
@@ -148,6 +149,7 @@ export async function executeJobCore(
       abortSignal,
       options?.activeJobMarker,
       options?.streamBatch,
+      options?.assertRunCurrent,
     );
     return triggerEval ? { ...result, triggerEval } : result;
   }
@@ -493,6 +495,7 @@ async function executeScriptCronJob(
   abortSignal: AbortSignal | undefined,
   activeJobMarker?: CronActiveJobMarker,
   streamBatch?: string,
+  assertRunCurrent?: () => void,
 ) {
   if (state.deps.cronConfig?.triggers?.enabled !== true) {
     return {
@@ -513,6 +516,7 @@ async function executeScriptCronJob(
   if (abortSignal?.aborted) {
     return { status: "error" as const, error: abortErrorMessage(abortSignal) };
   }
+  assertRunCurrent?.();
   if (result.status !== "ok") {
     return result;
   }

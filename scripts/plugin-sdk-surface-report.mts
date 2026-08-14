@@ -189,7 +189,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: dependency-light channel streaming config readers for doctor closures
       //     (realtime-voice-activation is private-local and not counted here).
       // +1: registry-bound plugin command planning and exact selected execution.
-      144,
+      // +1: canonical Computer Use wire contract and node-host provider seam.
+      145,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -270,7 +271,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: narrow channel agent-run terminal reader and outcome contract.
       // +5: narrow string, record, and error coercion helpers.
       // +1: normalized Gateway public origin resolver for plugin-generated links.
-      4308,
+      // -2: retire the dead progress-draft render reader; it counted twice via
+      // channel-outbound and channel-message's wildcard re-export of it.
+      // +11: Computer Use schemas/types plus parsers, compiler, and provider registration.
+      4317,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -337,7 +341,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: narrow channel agent-run terminal reader.
       // +5: narrow string, record, and error coercion helpers.
       // +1: normalized Gateway public origin resolver for plugin-generated links.
-      2572,
+      // -2: retire the dead progress-draft render reader; it counted twice via
+      // channel-outbound and channel-message's wildcard re-export of it.
+      // +4: Computer Use wire parsers, validator compiler, and provider registration.
+      2574,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

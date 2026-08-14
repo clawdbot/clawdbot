@@ -28,6 +28,7 @@ import {
   inspectSetupMigrationFreshness,
   preserveSetupMigrationSecurityAcknowledgement,
   prepareSetupMigrationAttemptBoundary,
+  SetupMigrationTargetChangedError,
   withSetupMigrationTargetLock,
 } from "./setup.migration-snapshot.js";
 import {
@@ -544,7 +545,9 @@ export async function runSetupMigrationImport(params: {
         buildSetupMigrationPlanSourceSnapshot(plan),
       ]);
       if (currentTargetSnapshotHash !== planningTargetSnapshotHash) {
-        throw new Error("Migration target changed before promotion. Review it and retry.");
+        throw new SetupMigrationTargetChangedError(
+          "Migration target changed before promotion. Review it and retry.",
+        );
       }
       if (currentSourceSnapshotHash !== plannedSourceSnapshotHash) {
         throw new Error("Migration source changed before promotion. Review it and retry.");
