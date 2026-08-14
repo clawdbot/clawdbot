@@ -362,6 +362,12 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   )
     ? undefined
     : rawActiveSessionIdForInterrupt;
+  const visibleTurnPreemptsHeartbeat =
+    !isRoomEvent &&
+    !context.isHeartbeat &&
+    activeSessionIdForInterrupt !== undefined &&
+    // The exact embedded handle rechecks its retained owner kind before aborting.
+    embeddedAgentRuntime?.preemptEmbeddedHeartbeatRun(activeSessionIdForInterrupt) === true;
   if (
     activeRunQueueMode === "interrupt" &&
     !isRoomEvent &&
@@ -522,9 +528,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
     ((isRoomEvent && isActive) ||
       resolvedQueue.mode === "steer" ||
       resolvedQueue.mode === "followup" ||

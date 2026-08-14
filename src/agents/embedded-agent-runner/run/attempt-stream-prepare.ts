@@ -437,6 +437,7 @@ export function prepareEmbeddedAttemptStream(input: {
       claimEmbeddedPendingUserInputAnswer(text, options, attempt.sessionKey),
     cancelPendingUserInput: (resolvedBy) =>
       cancelPendingAgentQuestionForSession({ sessionKey: attempt.sessionKey, resolvedBy }),
+    turnKind: attempt.replyOperation?.turnKind,
     queueMessage,
     messageInjection: {
       isAvailable: () =>

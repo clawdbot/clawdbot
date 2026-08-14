@@ -730,6 +730,23 @@ export function abortEmbeddedAgentRun(
   return false;
 }
 
+/** Targets only the heartbeat handle currently bound to this exact session. */
+export function preemptEmbeddedHeartbeatRun(sessionId: string): boolean {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (handle?.turnKind !== "heartbeat") {
+    return false;
+  }
+  if (!isEmbeddedRunHandleAbortable(sessionId, handle)) {
+    return true;
+  }
+  try {
+    handle.abort();
+  } catch (err) {
+    diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
+  }
+  return true;
+}
+
 export function isEmbeddedAgentRunActive(sessionId: string): boolean {
   const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
   if (active) {

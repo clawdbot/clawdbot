@@ -9,6 +9,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
+  preemptEmbeddedHeartbeatRun,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   setActiveEmbeddedRun,
@@ -22,6 +23,31 @@ describe("embedded-agent active-run steering", () => {
     resetDiagnosticSessionStateForTest();
     setDiagnosticsEnabledForProcess(false);
     vi.restoreAllMocks();
+  });
+
+  it("aborts only the exact active heartbeat handle", () => {
+    const heartbeatAbort = vi.fn();
+    const finalizingHeartbeatAbort = vi.fn();
+    const visibleAbort = vi.fn();
+    setActiveEmbeddedRun("heartbeat-session", {
+      ...createEmbeddedRunHandle({ abort: heartbeatAbort }),
+      turnKind: "heartbeat",
+    });
+    setActiveEmbeddedRun("visible-session", {
+      ...createEmbeddedRunHandle({ abort: visibleAbort }),
+      turnKind: "visible",
+    });
+    setActiveEmbeddedRun("finalizing-heartbeat-session", {
+      ...createEmbeddedRunHandle({ abort: finalizingHeartbeatAbort, isAbortable: false }),
+      turnKind: "heartbeat",
+    });
+
+    expect(preemptEmbeddedHeartbeatRun("heartbeat-session")).toBe(true);
+    expect(preemptEmbeddedHeartbeatRun("finalizing-heartbeat-session")).toBe(true);
+    expect(preemptEmbeddedHeartbeatRun("visible-session")).toBe(false);
+    expect(heartbeatAbort).toHaveBeenCalledOnce();
+    expect(finalizingHeartbeatAbort).not.toHaveBeenCalled();
+    expect(visibleAbort).not.toHaveBeenCalled();
   });
 
   it("passes steering options to active embedded runs", () => {

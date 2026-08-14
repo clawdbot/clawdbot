@@ -45,6 +45,7 @@ vi.mock("../../agents/embedded-agent.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  preemptEmbeddedHeartbeatRun: vi.fn().mockReturnValue(false),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
@@ -2020,6 +2021,58 @@ describe("runPreparedReply media-only handling", () => {
     expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledOnce();
     expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith(
       "session-embedded-only",
+    );
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+  });
+  it("interrupts an embedded-only heartbeat before running a visible Telegram turn", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    let embeddedRunActive = true;
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "steer" });
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockImplementation(() =>
+      embeddedRunActive ? "session-embedded-heartbeat" : undefined,
+    );
+    vi.mocked(embeddedAgentRuntime.preemptEmbeddedHeartbeatRun).mockImplementation(
+      (sessionId) => sessionId === "session-embedded-heartbeat",
+    );
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockImplementation(
+      () => embeddedRunActive,
+    );
+    vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockImplementation(async () => {
+      embeddedRunActive = false;
+      return true;
+    });
+
+    try {
+      await expect(
+        runPrepared({
+          isNewSession: false,
+          sessionId: "session-embedded-heartbeat",
+          ctx: {
+            ...createInboundTurn("answer this now", "telegram", "direct"),
+            OriginatingChannel: "telegram",
+            OriginatingTo: "user:1",
+          },
+          sessionCtx: {
+            ...createSessionTurn("answer this now", "telegram", "direct"),
+            OriginatingChannel: "telegram",
+            OriginatingTo: "user:1",
+          },
+        }),
+      ).resolves.toEqual({ text: "ok" });
+    } finally {
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(false);
+      vi.mocked(embeddedAgentRuntime.preemptEmbeddedHeartbeatRun).mockReturnValue(false);
+      vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockResolvedValue(true);
+    }
+
+    expect(embeddedAgentRuntime.preemptEmbeddedHeartbeatRun).toHaveBeenCalledWith(
+      "session-embedded-heartbeat",
+    );
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith(
+      "session-embedded-heartbeat",
     );
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });

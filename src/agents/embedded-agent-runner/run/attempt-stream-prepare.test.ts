@@ -108,6 +108,28 @@ describe("prepareEmbeddedAttemptStream", () => {
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
 
+  it("retains heartbeat ownership on the embedded queue handle", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-output-schema",
+      turnKind: "heartbeat",
+      resetTriggered: false,
+    });
+    try {
+      const prepared = prepareCatalogExecutor([], { replyOperation: operation });
+
+      expect(prepared.queueHandle.turnKind).toBe("heartbeat");
+      expect(mocks.setActiveRun).toHaveBeenCalledWith(
+        "session-output-schema",
+        expect.objectContaining({ turnKind: "heartbeat" }),
+        "agent:main:main",
+        undefined,
+      );
+    } finally {
+      operation.complete();
+    }
+  });
+
   it("uses the persisted assistant entry id and closes steering during revision settlement", async () => {
     let resolveHook: ((value: { action: "revise"; reason: string }) => void) | undefined;
     mocks.runBeforeFinalizeHook.mockImplementation(
