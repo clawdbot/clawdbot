@@ -1563,50 +1563,30 @@ html.openclaw-native-macos
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  padding: 4px 34px 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--info) 18%, var(--border));
   border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--info-subtle) 48%, var(--bg-elevated));
   color: var(--text);
   text-align: left;
 }
 
 .sidebar-update-card__action {
-  background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
   cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
 }
 
-.sidebar-update-card__availability {
-  gap: 5px;
-  border-color: color-mix(in srgb, var(--info) 18%, var(--border));
-  background: color-mix(in srgb, var(--info) 8%, var(--bg-elevated));
-}
-
-.sidebar-update-card__availability .sidebar-update-card__icon {
-  width: 18px;
-  height: 18px;
-}
-
-.sidebar-update-card__availability .sidebar-update-card__icon svg {
-  width: 13px;
-  height: 13px;
-}
-
-.sidebar-update-card__availability .sidebar-update-card__text {
-  font-size: var(--control-ui-text-xs);
-}
-
 .sidebar-update-card__action:hover:not(:disabled),
 .sidebar-update-card__action:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
-  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--info) 36%, var(--border));
+  background: color-mix(in srgb, var(--info) 10%, var(--bg-elevated));
 }
 
 .sidebar-update-card__action:focus-visible,
 .sidebar-update-card__hold:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--info) 48%, transparent);
   outline-offset: 1px;
 }
 
@@ -1695,8 +1675,8 @@ body.update-dialog-open .sidebar-update-card__status {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+  color: var(--info);
 }
 
 .sidebar-update-card__text {
@@ -1716,7 +1696,7 @@ body.update-dialog-open .sidebar-update-card__status {
   min-height: 24px;
   display: inline-flex;
   align-items: center;
-  padding: 3px 7px;
+  padding: 3px 11px;
   border: 0;
   border-radius: var(--radius-full);
   background: var(--info);
@@ -1770,7 +1750,7 @@ body.update-dialog-open .sidebar-update-card__status {
   height: 16px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 1.7px;
+  stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1779,11 +1759,32 @@ body.update-dialog-open .sidebar-update-card__status {
   margin: 0 0 2px;
 }
 
+.sidebar-shell__footer .sidebar-update-card__action,
 .sidebar-shell__footer .sidebar-update-card__availability {
   min-height: 40px;
   padding: 6px 10px;
   border: 0;
   border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--info) 8%, var(--bg-elevated));
+}
+
+.sidebar-shell__footer .sidebar-update-card__action:hover:not(:disabled),
+.sidebar-shell__footer .sidebar-update-card__action:focus-visible {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--info) 12%, var(--bg-elevated));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 12%, transparent);
+}
+
+.sidebar-shell__footer .sidebar-update-card__icon {
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  color: var(--info);
+}
+
+.sidebar-shell__footer .sidebar-update-card__text {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
 }
 
 .sidebar-nav {

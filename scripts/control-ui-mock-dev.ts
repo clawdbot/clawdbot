@@ -1469,6 +1469,13 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    serverBuildId: "mock",
+    serverVersion: "2026.7.10",
+    updateAvailable: {
+      channel: "stable",
+      currentVersion: "2026.7.10",
+      latestVersion: "2026.8.14",
+    },
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
@@ -1497,6 +1504,7 @@ async function createChatPickerScenario(
       "sessions.create",
       "system.info",
       "terminal.open",
+      "update.run",
     ],
     // Terminal has a second gate beyond the advertised method (see
     // ui/src/lib/terminal-availability.ts).
@@ -1517,6 +1525,11 @@ async function createChatPickerScenario(
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
       ...cronMocks,
+      "update.run": {
+        ok: true,
+        restart: null,
+        result: { after: { version: "2026.8.14" }, status: "ok" },
+      },
       "users.self": { profile: selfProfile },
       // Talk settings page pickers: realtime catalog with the model/voice
       // suggestion lists the gateway emits for provider entries.

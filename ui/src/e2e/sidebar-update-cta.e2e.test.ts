@@ -66,6 +66,29 @@ suite.define(() => {
         expect((await copy.textContent())?.trim()).toBe("New version available");
         expect(await availability.getByRole("button").count()).toBe(1);
         expect(await sidebar.locator(".sidebar-update-card__dismiss").count()).toBe(0);
+        expect(
+          await availability.locator(".sidebar-update-card__icon").evaluate((element) => {
+            const icon = element.getBoundingClientRect();
+            const svg = element.querySelector("svg")?.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const infoProbe = document.createElement("span");
+            infoProbe.style.color = "var(--info)";
+            document.body.append(infoProbe);
+            const infoColor = getComputedStyle(infoProbe).color;
+            infoProbe.remove();
+            return {
+              backgroundColor: style.backgroundColor,
+              usesInfoColor: style.color === infoColor,
+              size: [icon.width, icon.height],
+              svgSize: svg ? [svg.width, svg.height] : null,
+            };
+          }),
+        ).toEqual({
+          backgroundColor: "rgba(0, 0, 0, 0)",
+          usesInfoColor: true,
+          size: [26, 26],
+          svgSize: [16, 16],
+        });
 
         const restSurface = await surfaceStyle(availability);
         const restCta = await surfaceStyle(cta);
