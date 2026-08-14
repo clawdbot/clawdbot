@@ -25,6 +25,17 @@ MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+# OPENCLAW_SKIP_MLX_TTS=1 packages the app without the local MLX voice helper.
+# The helper pulls in the full mlx-swift Metal shader stack, which some beta
+# Xcode toolchains cannot compile (flaky `metal` diagnostics), needlessly
+# blocking unrelated dev/proof builds. Release builds must always ship the
+# helper (notarization verifies it), so refuse the skip there instead of
+# producing a silently incomplete release bundle.
+SKIP_MLX_TTS="${OPENCLAW_SKIP_MLX_TTS:-0}"
+if [[ "$SKIP_MLX_TTS" == "1" && "$BUILD_CONFIG" == "release" ]]; then
+  echo "ERROR: OPENCLAW_SKIP_MLX_TTS is not allowed for release builds; the MLX voice helper must ship in release." >&2
+  exit 1
+fi
 BUILD_TS="$(openclaw_resolve_build_timestamp)"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   OPENCLAW_REQUIRE_BUILD_METADATA=1
@@ -431,8 +442,12 @@ for arch in "${BUILD_ARCHS[@]}"; do
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   restore_swiftpm_resource_sources
-  echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
-  build_mlx_tts_helper "$arch"
+  if [[ "$SKIP_MLX_TTS" == "1" ]]; then
+    echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1) — app will lack the local MLX voice helper [$arch]"
+  else
+    echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
+    build_mlx_tts_helper "$arch"
+  fi
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
@@ -490,17 +505,21 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
-echo "🚚 Copying MLX TTS helper"
-cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-  HELPER_BIN_INPUTS=()
-  for arch in "${BUILD_ARCHS[@]}"; do
-    HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
-  done
-  /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+if [[ "$SKIP_MLX_TTS" == "1" ]]; then
+  echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1) — bundle omits Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+else
+  echo "🚚 Copying MLX TTS helper"
+  cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    HELPER_BIN_INPUTS=()
+    for arch in "${BUILD_ARCHS[@]}"; do
+      HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
+    done
+    /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  fi
+  chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 fi
-chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
