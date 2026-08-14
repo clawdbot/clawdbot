@@ -161,15 +161,14 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const mainRow = host.mainSessionRow(agentId);
   const attention = host.resolveHomeSessionAttention(mainKey, mainRow);
   const attentionLabel = sessionAttentionSubtitle(attention);
-  const outboxCount = host.outboxCountForSessionKey(mainKey);
+  const outboxCount = host.outboxCountForSession(mainKey);
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = !active && host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
-  // Home shares the sidebar's leading-slot contract: run state rings its icon
-  // instead of drifting to the row edge, which stays reserved for counts.
+  // Home rings run state around its leading icon; the trailing slot stays reserved for counts.
   const homeGlyph = renderSessionGlyph({
     content:
       attention.kind === "none"

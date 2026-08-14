@@ -42,6 +42,7 @@ import {
   partitionSidebarVisibleSections,
   promoteSidebarSessionCreatedOrder,
   resolveSidebarAgentChipSubtitle,
+  resolveSidebarHomeAttention,
   resolveSidebarAgentResumeKey,
   resolveSidebarMainSessionKey,
   toggleSidebarSessionSelection,
@@ -50,13 +51,12 @@ import {
 } from "./app-sidebar-session-navigation-logic.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
+import { loadStoredHiddenSessionCatalogIds } from "./app-sidebar-session-types.ts";
 import {
-  loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
   loadStoredSidebarSessionsShowCron,
   loadStoredSidebarSessionsShowSystem,
-  SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -273,10 +273,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     );
   }
 
-  outboxCountForSessionKey(sessionKey: string): number {
-    return this.outboxCountForSession(sessionKey);
-  }
-
   getSessionNavigationState(): SidebarSessionNavigationState {
     const routeSessionKey = this.getRouteSessionKey();
     return buildSidebarSessionNavigationState({
@@ -292,7 +288,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       highlightCurrentSession: isSessionRouteId(this.activeRouteId),
       runtimeSampledAtByRow: this.runtimeSampledAtByRow,
       loadingChildSessionKeys: this.sessionData.loadingChildSessionKeys,
-      outboxCountForSessionKey: (sessionKey) => this.outboxCountForSessionKey(sessionKey),
+      outboxCountForSessionKey: (sessionKey) => this.outboxCountForSession(sessionKey),
       hasSessionDraft: (sessionKey) => this.hasSessionDraft(sessionKey),
       resolveAttention: (row) => this.attention.resolveSessionAttention(row),
       resolveAgentStatusNote: (row) => this.attention.resolveSessionAgentStatus(row)?.note,
@@ -727,13 +723,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   resolveHomeSessionAttention(sessionKey: string, row: GatewaySessionRow | null) {
-    const known = this.attention
-      .knownSessionAttention()
-      .find((entry) => areUiSessionKeysEquivalent(entry.sessionKey, sessionKey));
-    return (
-      known?.attention ??
-      (row ? this.attention.resolveSessionAttention(row) : SIDEBAR_SESSION_NO_ATTENTION)
-    );
+    return resolveSidebarHomeAttention(this.attention, sessionKey, row);
   }
 
   /** Gateway row backing the identity card (unread/running state), if loaded. */
