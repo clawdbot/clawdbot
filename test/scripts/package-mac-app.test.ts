@@ -556,6 +556,9 @@ describe("package-mac-app plist stamping", () => {
     const embeddedRead = script.indexOf(
       'plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit',
     );
+    const bridgeSourceRead = script.indexOf(
+      'plist_print_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit',
+    );
     const signing = script.indexOf('"$ROOT_DIR/scripts/codesign-mac-app.sh"');
     const releaseBranch = script.lastIndexOf(
       'if [[ "$BUILD_CONFIG" == "release" ]]; then',
@@ -570,7 +573,12 @@ describe("package-mac-app plist stamping", () => {
     expect(script).toContain('--expected-commit "$BUILD_GIT_COMMIT"');
     expect(embeddedRead).toBeGreaterThan(sourceCheck);
     expect(embeddedRead).toBeLessThan(signing);
-    expect(script).toContain("Release app embedded Git commit");
+    expect(bridgeSourceRead).toBeGreaterThan(sourceCheck);
+    expect(bridgeSourceRead).toBeLessThan(signing);
+    expect(script).toContain(
+      'plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$BUILD_GIT_COMMIT"',
+    );
+    expect(script).toContain("Release app source mismatch");
   });
 
   it("keeps dependency installation lockfile-safe", () => {

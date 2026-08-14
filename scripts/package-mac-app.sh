@@ -425,10 +425,12 @@ plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionSt
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$BUILD_GIT_COMMIT"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
-  if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
-    echo "ERROR: Release app embedded Git commit '$EMBEDDED_GIT_COMMIT', expected '$BUILD_GIT_COMMIT'." >&2
+  BRIDGE_SOURCE_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit)"
+  if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" || "$BRIDGE_SOURCE_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
+    echo "ERROR: Release app source mismatch: OpenClawGitCommit='$EMBEDDED_GIT_COMMIT', PeekabooSourceCommit='$BRIDGE_SOURCE_COMMIT', expected='$BUILD_GIT_COMMIT'." >&2
     exit 1
   fi
 fi
