@@ -14,6 +14,7 @@ import {
   onCronJobInactive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { isHeartbeatTaskDeclarationKey } from "../heartbeat-task.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
@@ -303,11 +304,14 @@ export async function add(
   let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
-    // Heartbeat monitors are gateway-converged system jobs; without this
-    // boundary any internal caller could upsert the declaration key and
-    // hijack the monitor despite the transport schemas excluding the kind.
+    const declarationKey = normalizeOptionalString(input.declarationKey);
     if (input.payload?.kind === "heartbeat" && opts?.systemOwned !== true) {
       throw new Error("heartbeat payloads are system-owned; jobs cannot be created with them");
+    }
+    if (isHeartbeatTaskDeclarationKey(declarationKey) && opts?.systemOwned !== true) {
+      throw new Error(
+        'cron declarationKey namespace "heartbeat-task:" is system-owned; jobs cannot be created with it',
+      );
     }
     await ensureLoaded(state, { skipRecompute: true });
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
@@ -326,7 +330,6 @@ export async function add(
       }
     }
     const normalizedInput = normalizedId ? { ...input, id: normalizedId } : input;
-    const declarationKey = normalizeOptionalString(input.declarationKey);
     const matches = declarationKey
       ? (state.store?.jobs.filter(
           (job) => job.declarationKey === declarationKey && (opts?.matchesExisting?.(job) ?? true),

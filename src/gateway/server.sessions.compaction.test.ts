@@ -7,6 +7,8 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveManualCompactionCliTarget } from "../agents/session-runtime-compat.js";
 import { enqueueFollowupRun, type FollowupRun } from "../auto-reply/reply/queue.js";
 import {
   clearFollowupQueue,
@@ -24,6 +26,7 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -42,8 +45,10 @@ import {
   rpcReq,
   testState,
 } from "./test-helpers.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   setupGatewaySessionsTestHarness,
+  getGatewayConfigModule,
   getSessionManagerModule,
   sessionStoreEntry,
   createCheckpointFixture,
@@ -132,7 +137,7 @@ function expectMainCompactionResult(
 ) {
   expect(compacted.ok, JSON.stringify(compacted)).toBe(true);
   expect(compacted.payload?.key).toBe("agent:main:main");
-  expect(compacted.payload?.compacted).toBe(expectedCompacted);
+  expect(compacted.payload?.compacted, JSON.stringify(compacted)).toBe(expectedCompacted);
 }
 
 async function seedSessionEntry(params: {
@@ -813,6 +818,7 @@ test("sessions.compact records terminal Codex native compaction", async () => {
   await seedSessionEntry({
     entry: sessionStoreEntry("sess-codex", {
       agentHarnessId: "codex",
+      modelSelectionLocked: true,
       compactionCount: 2,
       totalTokens: 54_321,
       totalTokensFresh: true,
@@ -887,6 +893,84 @@ test("sessions.compact records terminal Codex native compaction", async () => {
   expect(codexEntry?.totalTokensFresh).toBeUndefined();
 
   ws.close();
+});
+
+test("sessions.compact targets the persisted native CLI session", async () => {
+  const pluginRegistry = getTestPluginRegistry();
+  pluginRegistry.cliBackends.push({
+    pluginId: "anthropic",
+    source: "test",
+    backend: {
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      config: { command: "claude" },
+      bundleMcp: false,
+    },
+  });
+  setActivePluginRegistry(pluginRegistry);
+  const { storePath } = await createSessionStoreDir();
+  await seedSessionEntry({
+    entry: sessionStoreEntry("sess-claude", {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "native-claude-session" },
+      },
+    }),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId: "sess-claude",
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 2,
+  });
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+    ok: true,
+    compacted: true,
+  });
+  const storedEntry = loadAccessorSessionEntry({
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  const cfg = (await getGatewayConfigModule()).loadConfig();
+  const selectedModel = resolveSessionModelRef(cfg, storedEntry, "main");
+  expect(selectedModel.provider).toBe("anthropic");
+  expect(storedEntry).toMatchObject({
+    cliSessionBindings: {
+      "claude-cli": { sessionId: "native-claude-session" },
+    },
+  });
+  expect(
+    resolveManualCompactionCliTarget({ provider: selectedModel.provider, entry: storedEntry, cfg }),
+  ).toMatchObject({
+    agentHarnessId: "claude-cli",
+    cliSessionBinding: { sessionId: "native-claude-session" },
+    cliSessionId: "native-claude-session",
+  });
+
+  const { ws } = await openClient();
+  try {
+    await rpcReq(ws, "sessions.subscribe", {});
+    const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+      ws,
+      "sessions.compact",
+      { key: "main" },
+    );
+
+    expectMainCompactionResult(compacted, true);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "claude-cli",
+        cliSessionBinding: expect.objectContaining({ sessionId: "native-claude-session" }),
+        cliSessionId: "native-claude-session",
+        trigger: "manual",
+      }),
+    );
+  } finally {
+    ws.close();
+  }
 });
 
 test("sessions.compact emits a terminal operation event when persistence fails", async () => {
