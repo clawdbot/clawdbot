@@ -31,7 +31,11 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+// Side-effect import: the project header paints the element, so its definition
+// has to be registered even when no other sidebar surface pulled it in.
+import "./workspace-icon.ts";
 import { renderPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
+import { resolveWorkspaceIconSource, type WorkspaceIconSource } from "./workspace-icon.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -119,6 +123,16 @@ function groupWorkSessionsByProject(rows: readonly SidebarRecentSession[]): {
 function renderWorkProjectGroup(host: SidebarSessionListHost, group: WorkProjectGroup) {
   const sectionId = workProjectSectionId(group.key);
   const collapsed = host.collapsedSessionSections.has(sectionId);
+  // Every row in the group shares the checkout, so any of them names the same
+  // workspace; the first is simply the one that is always there.
+  const leadSession = group.rows[0];
+  const iconSource = leadSession
+    ? resolveWorkspaceIconSource({
+        gateway: host.sessionDataContext?.gateway,
+        basePath: host.basePath,
+        sessionKey: leadSession.key,
+      })
+    : null;
   return html`<div
     class="sidebar-session-work-project"
     data-session-work-project=${group.key}
@@ -131,17 +145,36 @@ function renderWorkProjectGroup(host: SidebarSessionListHost, group: WorkProject
       className: "sidebar-session-catalog-project__head",
       labelClassName: "sidebar-session-catalog-project__label",
       title: group.key,
-      lead: html`<span class="sidebar-session-group-toggle__lead" aria-hidden="true"
-        >${icons.folder}</span
-      >`,
+      lead: renderProjectIdentityLead(iconSource),
       onToggle: () => host.toggleSection(sectionId),
     })}
     ${collapsed
       ? nothing
-      : html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${group.label}>
+      : html`<div
+          class="sidebar-session-catalog-project__sessions"
+          role="list"
+          aria-label=${group.label}
+        >
           ${group.rows.map((session) => renderSessionTree({ host, session, project: group.label }))}
         </div>`}
   </div>`;
+}
+
+/**
+ * A project is named by its own mark when the workspace has one; the element
+ * answers a missing icon with the folder glyph, so the fallback lives with the
+ * asset owner instead of being decided again at every header.
+ */
+function renderProjectIdentityLead(source: WorkspaceIconSource | null) {
+  return html`<span class="sidebar-session-group-toggle__lead" aria-hidden="true"
+    >${source
+      ? html`<openclaw-workspace-icon
+          .routeUrl=${source.routeUrl}
+          .authTokens=${source.authTokens}
+          .authReady=${source.authReady}
+        ></openclaw-workspace-icon>`
+      : icons.folder}</span
+  >`;
 }
 
 function renderSessionSection(params: {

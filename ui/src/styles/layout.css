@@ -1901,6 +1901,23 @@ body.update-dialog-open .sidebar-update-card__status {
   border-inline-start: 1px solid color-mix(in srgb, var(--border-strong) 52%, transparent);
 }
 
+/* Sessions inside a project hang off the project's text axis, so the header
+   reads as their parent rather than as one more row in the same column. The
+   step is the header's own lead slot, which is what puts the rows under the
+   project name instead of under its mark. */
+.sidebar-session-catalog-project__sessions {
+  margin-left: var(--sidebar-lead);
+}
+
+/* Project marks are product artwork, not sidebar glyphs, so they fill the lead
+   slot at its own scale instead of inheriting the Lucide stroke treatment. */
+.sidebar-session-group-toggle__lead .workspace-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
 .sidebar-session-tree__loading {
   min-height: 28px;
   padding: 6px var(--sidebar-lead);

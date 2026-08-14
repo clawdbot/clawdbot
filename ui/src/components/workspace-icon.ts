@@ -2,6 +2,7 @@ import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import { html } from "lit";
 import { property, state } from "lit/decorators.js";
 import { CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX } from "../../../src/gateway/control-ui-contract.js";
+import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
@@ -9,6 +10,44 @@ import { icons } from "./icons.ts";
 /** Same-origin Gateway route serving the project icon of a session's workspace. */
 export function workspaceIconRouteUrl(basePath: string, sessionKey: string): string {
   return `${normalizeRouteBasePath(basePath)}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/${encodeURIComponent(sessionKey)}`;
+}
+
+/** Everything `openclaw-workspace-icon` needs to paint one workspace's mark. */
+export type WorkspaceIconSource = {
+  routeUrl: string;
+  authTokens: readonly string[];
+  authReady: boolean;
+};
+
+/**
+ * The icon route is authenticated, so every surface that paints a workspace
+ * mark needs the same credential candidates. Resolving that here keeps the
+ * answer with the route's owner instead of once per calling component.
+ */
+export function resolveWorkspaceIconSource(params: {
+  gateway:
+    | {
+        snapshot: { hello?: { auth?: { deviceToken?: string | null } | null } | null };
+        connection: { token?: string | null; password?: string | null };
+      }
+    | undefined;
+  basePath: string;
+  sessionKey: string;
+}): WorkspaceIconSource | null {
+  const gateway = params.gateway;
+  if (!gateway) {
+    return null;
+  }
+  const authTokens = resolveControlUiAuthCandidates({
+    hello: gateway.snapshot.hello,
+    settings: { token: gateway.connection.token },
+    password: gateway.connection.password,
+  });
+  return {
+    routeUrl: workspaceIconRouteUrl(params.basePath, params.sessionKey),
+    authTokens,
+    authReady: Boolean(gateway.snapshot.hello || authTokens.length),
+  };
 }
 
 /**
