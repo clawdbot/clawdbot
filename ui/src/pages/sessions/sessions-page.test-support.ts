@@ -25,6 +25,7 @@ export type TestSessionsPage = HTMLElement & {
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
   checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
+  checkpointErrorByKey: Record<string, string>;
   checkpointLoadingKey: string | null;
   checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
