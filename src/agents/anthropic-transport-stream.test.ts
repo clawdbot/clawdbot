@@ -285,7 +285,8 @@ describe("anthropic transport stream", () => {
             { path: "/workspace/MEMORY.md", content: memoryContent },
           ],
         },
-        onPromptComposition: (request) => telemetry.push(request),
+        onPromptComposition: (request: { blocks: Array<Record<string, unknown>> }) =>
+          telemetry.push(request),
       } as unknown as AnthropicStreamOptions,
     );
 

@@ -34,6 +34,36 @@ export interface AssistantMessageDiagnostic {
   details?: Record<string, unknown>;
 }
 
+/**
+ * Content-free prompt-shape record for one provider request. Mirrors the
+ * identically-named type in `src/llm/types.ts`; the two option surfaces are
+ * deliberately independent in this repo, so both must carry the field for a
+ * stream wrapper to pass it through to a transport.
+ */
+export type PromptCompositionBlock = {
+  name: string;
+  byteSize: number;
+  tokenEstimate: number;
+  contentHash: string;
+};
+
+export type PromptCompositionRequest = {
+  blocks: PromptCompositionBlock[];
+};
+
+export type PromptCompositionTelemetry = {
+  version: 1;
+  requests: PromptCompositionRequest[];
+};
+
+/**
+ * Ephemeral source hints used only to partition rendered system prompt blocks
+ * before hashing. Providers must never send or log this metadata.
+ */
+export type PromptCompositionSource = {
+  injectedFiles?: Array<{ path: string; content: string }>;
+};
+
 export interface SimpleStreamOptions {
   temperature?: number;
   maxTokens?: number;
@@ -44,6 +74,16 @@ export interface SimpleStreamOptions {
   sessionId?: string;
   onPayload?: (payload: unknown, model: Model) => MaybePromise<unknown>;
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
+  /**
+   * Ephemeral source hints used to derive content-free prompt-shape telemetry.
+   * This data is not part of the provider payload.
+   */
+  promptComposition?: PromptCompositionSource;
+  /**
+   * Receives only byte counts, token estimates, and hashes for a final provider
+   * request. Prompt content is deliberately not exposed by this callback.
+   */
+  onPromptComposition?: (request: PromptCompositionRequest, model: Model) => MaybePromise<void>;
   headers?: Record<string, string>;
   timeoutMs?: number;
   maxRetries?: number;

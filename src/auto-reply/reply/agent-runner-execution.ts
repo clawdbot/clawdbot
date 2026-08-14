@@ -1217,7 +1217,15 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
   );
 }
 
-function buildProviderUsageForTerminal(agentMeta: unknown): Record<string, unknown> | undefined {
+/**
+ * Exported for test: the cache-write TTL split below prices the configured
+ * one-hour prompt cache. An aggregate cache-write figure misprices it, and that
+ * defect is invisible at the gateway boundary because the terminal handler only
+ * forwards whatever this function already built.
+ */
+export function buildProviderUsageForTerminal(
+  agentMeta: unknown,
+): Record<string, unknown> | undefined {
   if (!agentMeta || typeof agentMeta !== "object" || Array.isArray(agentMeta)) {
     return undefined;
   }
@@ -1302,6 +1310,7 @@ function buildPromptCompositionForTerminal(
           typeof tokenEstimate !== "number" ||
           !Number.isSafeInteger(tokenEstimate) ||
           tokenEstimate < 0 ||
+          contentHash === undefined ||
           !/^[a-f0-9]{64}$/u.test(contentHash)
         ) {
           return [];
@@ -1310,7 +1319,7 @@ function buildPromptCompositionForTerminal(
       });
       return sanitizedBlocks.length > 0 ? { blocks: sanitizedBlocks } : undefined;
     })
-    .filter((request): request is { blocks: Record<string, unknown>[] } => Boolean(request));
+    .filter((request): request is NonNullable<typeof request> => Boolean(request));
 
   return requests.length > 0 ? { version: 1, requests } : undefined;
 }

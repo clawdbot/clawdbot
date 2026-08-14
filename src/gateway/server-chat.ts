@@ -176,7 +176,7 @@ function sanitizePromptCompositionTelemetry(value: unknown): Record<string, unkn
       });
       return sanitizedBlocks.length > 0 ? { blocks: sanitizedBlocks } : undefined;
     })
-    .filter((request): request is { blocks: Record<string, unknown>[] } => Boolean(request));
+    .filter((request): request is NonNullable<typeof request> => Boolean(request));
   return requests.length > 0 ? { version: 1, requests } : undefined;
 }
 
