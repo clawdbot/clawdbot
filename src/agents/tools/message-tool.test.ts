@@ -2773,6 +2773,56 @@ describe("message tool explicit target guard", () => {
       await withGatewayToolCallerIdentity(identity, () =>
         actionTool.execute("portable-action", { action: "react", emoji: "ok" }),
       );
+
+      const sourceReplyTool = createMessageTool({
+        runMessageAction: mocks.runMessageAction as never,
+        sourceReplyOnly: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "qa-channel",
+        currentChannelId: "source-conversation",
+        agentAccountId: "default",
+      });
+      await expect(
+        withGatewayToolCallerIdentity(identity, () =>
+          sourceReplyTool.execute("source-policy", {
+            action: "send",
+            channel: "telegram",
+            message: "hi",
+          }),
+        ),
+      ).rejects.toThrow("cannot target another channel");
+
+      const accountPlugin = createChannelPlugin({
+        id: "slack",
+        label: "Slack",
+        docsPath: "/channels/slack",
+        blurb: "test",
+        actions: ["send"],
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true }),
+        },
+      });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "slack", source: "test", plugin: accountPlugin }]),
+      );
+      const accountTool = createMessageTool({
+        config: { channels: { slack: { accounts: { default: {} } } } } as never,
+        currentChannelProvider: "slack",
+        currentChannelId: "source-conversation",
+        agentAccountId: "default",
+        runMessageAction: mocks.runMessageAction as never,
+      });
+      await expect(
+        withGatewayToolCallerIdentity(identity, () =>
+          accountTool.execute("account-policy", {
+            action: "send",
+            target: "source-conversation",
+            accountId: "missing-account",
+            message: "hi",
+          }),
+        ),
+      ).rejects.toThrow("Unknown account");
     } finally {
       clearSink();
     }
@@ -2797,9 +2847,24 @@ describe("message tool explicit target guard", () => {
         decision: { outcome: "allowed", reasonCode: "message_action_completed" },
         enforcement: expect.objectContaining({ coverageState: "attribution-only" }),
       }),
+      expect.objectContaining({
+        decision: { outcome: "denied", reasonCode: "message_source_reply_policy_denied" },
+        enforcement: expect.objectContaining({
+          coverageState: "enforced",
+          policyRefs: ["message-source-reply:current-conversation"],
+        }),
+      }),
+      expect.objectContaining({
+        decision: { outcome: "denied", reasonCode: "message_account_unknown" },
+        enforcement: expect.objectContaining({
+          coverageState: "enforced",
+          policyRefs: ["message-account:known"],
+        }),
+      }),
     ]);
     expect(JSON.stringify(receipts)).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
     expect(JSON.stringify(receipts)).not.toContain("/tmp/x");
+    expect(JSON.stringify(receipts)).not.toContain("missing-account");
   });
 
   it("requires an explicit target for upload-file when configured", async () => {
