@@ -361,6 +361,59 @@ function configuredLlamaCppMemoryConfig() {
 }
 
 describe("gateway preflight CLI process", () => {
+  it.each([
+    {
+      name: "missing config",
+      config: {},
+      removeConfig: true,
+      message: "Missing config.",
+    },
+    {
+      name: "missing gateway mode",
+      config: { memory: { search: { provider: "none" } } },
+      removeConfig: false,
+      message: "existing config is missing gateway.mode",
+    },
+    {
+      name: "non-local gateway mode",
+      config: {
+        gateway: { mode: "remote" },
+        memory: { search: { provider: "none" } },
+      },
+      removeConfig: false,
+      message: "set gateway.mode=local",
+    },
+  ])("blocks $name in agreement with direct Gateway startup", async (testCase) => {
+    const fixture = await createFixture({
+      config: testCase.config,
+      includeFixturePlugin: false,
+      includeSharedStateDatabase: false,
+    });
+    if (testCase.removeConfig) {
+      await fs.rm(fixture.configPath);
+    }
+    const before = await snapshotTree(fixture.root);
+
+    const preflight = await runPreflight(fixture);
+
+    expect(preflight.code).toBe(1);
+    expect(JSON.parse(preflight.stdout)).toMatchObject({
+      status: "blocked",
+      blockers: [
+        expect.objectContaining({
+          code: "gateway-start-config-blocked",
+          message: expect.stringContaining(testCase.message),
+        }),
+      ],
+      errors: [],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+
+    const startup = await runGateway(fixture);
+    expect(startup.code).toBe(78);
+    expect(startup.stderr).toContain(testCase.message);
+  });
+
   it("blocks the same missing password prerequisite as direct Gateway startup", async () => {
     const fixture = await createFixture({
       config: {

@@ -66,9 +66,13 @@ describe("gateway startup preflight command", () => {
   });
 
   it("uses an unobserved config read without activating plugin runtime", async () => {
-    const config = { memory: { search: { provider: "local", fallback: "none" } } };
+    const config = {
+      gateway: { mode: "local" as const },
+      memory: { search: { provider: "local", fallback: "none" as const } },
+    };
     const sourceConfig = structuredClone(config);
     mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
       valid: true,
       config,
       sourceConfig,
@@ -111,9 +115,10 @@ describe("gateway startup preflight command", () => {
     mocks.readConfigFileSnapshot.mockImplementation(async () => {
       expect(process.env.JITI_FS_CACHE).toBe("false");
       return {
+        exists: true,
         valid: true,
-        config: {},
-        sourceConfig: {},
+        config: { gateway: { mode: "local" } },
+        sourceConfig: { gateway: { mode: "local" } },
       };
     });
     mocks.collectGatewayStartupPreflight.mockResolvedValue({
@@ -133,9 +138,10 @@ describe("gateway startup preflight command", () => {
   it("returns indeterminate instead of writing when path case cannot be inspected", async () => {
     mocks.unresolvedDirectories = ["/protected/state"];
     mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
       valid: true,
-      config: {},
-      sourceConfig: {},
+      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
     });
     mocks.collectGatewayStartupPreflight.mockResolvedValue({
       checksRun: 1,
@@ -180,6 +186,37 @@ describe("gateway startup preflight command", () => {
     expect(mocks.collectGatewayStartupPreflight).not.toHaveBeenCalled();
   });
 
+  it("blocks a missing target config before running startup inspections", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      sourceConfig: {},
+    });
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      checksRun: 1,
+      blockers: [
+        {
+          id: "core/gateway-config/start-guard",
+          pluginId: "core",
+          migrationId: "gateway-config",
+          code: "gateway-start-config-blocked",
+          message: expect.stringContaining("Missing config"),
+          configPath: "gateway.mode",
+        },
+      ],
+      errors: [],
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+    expect(mocks.collectGatewayStartupPreflight).not.toHaveBeenCalled();
+    expect(mocks.inspectStartupSessionMigrationPrerequisites).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       status: "blocked" as const,
@@ -201,9 +238,10 @@ describe("gateway startup preflight command", () => {
     },
   ])("writes one JSON result and exits for $status", async ({ evaluation, exitCode }) => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
       valid: true,
-      config: {},
-      sourceConfig: {},
+      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
     });
     mocks.collectGatewayStartupPreflight.mockResolvedValue(evaluation);
     const runtime = {
@@ -232,9 +270,10 @@ describe("gateway startup preflight command", () => {
 
   it("reports core session SQLite startup blockers", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
       valid: true,
-      config: {},
-      sourceConfig: {},
+      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
     });
     mocks.collectGatewayStartupPreflight.mockResolvedValue({
       checksRun: 0,
@@ -278,6 +317,7 @@ describe("gateway startup preflight command", () => {
 
   it("reports a core Gateway auth blocker when password mode has no password", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
       valid: true,
       config: { gateway: { mode: "local", auth: { mode: "password" } } },
       sourceConfig: { gateway: { mode: "local", auth: { mode: "password" } } },
@@ -319,6 +359,7 @@ describe("gateway startup preflight command", () => {
       },
     };
     mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
       valid: true,
       config,
       sourceConfig: config,

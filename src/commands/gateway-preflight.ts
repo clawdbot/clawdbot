@@ -1,4 +1,6 @@
+import { getGatewayStartGuardErrors } from "../cli/gateway-cli/start-guard.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { CONFIG_AUDIT_STORE_LABEL } from "../config/io.audit.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { defaultGatewayBindMode } from "../gateway/net.js";
 import {
@@ -46,6 +48,7 @@ type GatewayStartupPreflightResult = {
 const CORE_PREFLIGHT_PLUGIN_ID = "core";
 const CORE_SESSION_PREFLIGHT_MIGRATION_ID = "session-sqlite";
 const CORE_AUTH_PREFLIGHT_MIGRATION_ID = "gateway-auth";
+const CORE_CONFIG_PREFLIGHT_MIGRATION_ID = "gateway-config";
 
 function createResult(params: {
   checksRun?: number;
@@ -231,6 +234,29 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
           id: "config/validation",
           code: "invalid-config",
           message,
+        },
+      ],
+    });
+  }
+
+  const startGuardErrors = getGatewayStartGuardErrors({
+    configExists: snapshot.exists,
+    configAuditLocation: CONFIG_AUDIT_STORE_LABEL,
+    mode: snapshot.config.gateway?.mode,
+  });
+  if (startGuardErrors.length > 0) {
+    const [message, ...remediation] = startGuardErrors;
+    return createResult({
+      checksRun: 1,
+      blockers: [
+        {
+          id: `${CORE_PREFLIGHT_PLUGIN_ID}/${CORE_CONFIG_PREFLIGHT_MIGRATION_ID}/start-guard`,
+          pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+          migrationId: CORE_CONFIG_PREFLIGHT_MIGRATION_ID,
+          code: "gateway-start-config-blocked",
+          message: message ?? "Gateway startup configuration is blocked.",
+          ...(remediation.length > 0 ? { remediation } : {}),
+          configPath: "gateway.mode",
         },
       ],
     });
