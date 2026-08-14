@@ -71,6 +71,7 @@ type WorkerTurnLauncherOptions = {
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
   resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
+  recoverPendingWorkspaceResult?: (environmentId: string) => Promise<void>;
   workspaceOperations?: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
@@ -624,6 +625,7 @@ export function createWorkerSessionTurnPlacementProvider(
           // A recovery sweep owns the still-live worker claim. Teardown here
           // could discard the terminal event's durably fenced file results.
           options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          await options.recoverPendingWorkspaceResult?.(placement.environmentId);
           throw error;
         }
         if (error instanceof WorkerRunnerUnavailableError && !handedOff) {

@@ -412,6 +412,8 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     placements: params.placements,
     admitNewPlacements: params.admitNewPlacements,
     resolveWorkspacePath,
+    recoverPendingWorkspaceResult: async (environmentId) =>
+      await dispatchService.reconcileActive(environmentId),
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
       dispatch: dispatchService.dispatch,

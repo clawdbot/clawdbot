@@ -402,6 +402,7 @@ describe("gateway/node-registry", () => {
         pairingIdentity: "identity-a",
         pairingGeneration: "generation-a",
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerBuild: WORKER_RUNS,
         workerRuns: WORKER_RUNS,
         commands: ["system.run"],
       }),

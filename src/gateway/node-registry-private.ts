@@ -71,6 +71,9 @@ export type NodeWorkerSupervisorNodeProof = {
   clientId: typeof GATEWAY_CLIENT_IDS.NODE_HOST;
   clientMode: "node";
   protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
+  /** Immutable build ceiling from the authenticated connection handshake. */
+  workerBuild?: WorkerAdmissionHandshake;
+  /** Transient new-launch eligibility; omitted while the node is at capacity. */
   workerRuns?: WorkerAdmissionHandshake;
   commands: readonly string[];
 };
@@ -91,7 +94,7 @@ export type NodeWorkerSupervisorTransport = {
 
 type NodeRunnerInventoryRecord = Omit<
   NodeWorkerSupervisorNodeProof,
-  "commands" | "pairingGeneration" | "workerRuns"
+  "commands" | "pairingGeneration" | "workerBuild" | "workerRuns"
 > & {
   protocolFeatures: readonly string[];
   workerRuns?: WorkerAdmissionHandshake;
@@ -225,6 +228,7 @@ function resolveWorkerSupervisorProof(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    ...(node.workerRuns ? { workerBuild: structuredClone(node.workerRuns) } : {}),
     ...(declaration.workerRuns ? { workerRuns: structuredClone(declaration.workerRuns) } : {}),
     commands: [...node.commands],
   };
@@ -245,6 +249,7 @@ function isWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
+    sameOptionalWorkerBuild(current.workerBuild, proof.workerBuild) &&
     sameOptionalWorkerBuild(current.workerRuns, proof.workerRuns)
   );
 }
