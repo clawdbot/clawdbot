@@ -74,10 +74,7 @@ import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import {
-  readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
-} from "./notification-correlation.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
@@ -1219,7 +1216,7 @@ class CodexSideQuestionCollector {
       this.pendingNotifications.push(notification);
       return;
     }
-    if (!isNotificationForTurn(params, this.threadId, this.turnId)) {
+    if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     if (notification.method === "item/agentMessage/delta") {
@@ -1345,16 +1342,6 @@ function collectAssistantText(turn: CodexTurn): string {
     .map((item) => item.text.trim())
     .filter(Boolean);
   return messages.at(-1) ?? "";
-}
-
-function isNotificationForTurn(params: JsonObject, threadId: string, turnId: string): boolean {
-  return (
-    readCodexNotificationThreadId(params) === threadId && readNotificationTurnId(params) === turnId
-  );
-}
-
-function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readCodexNotificationTurnId(record);
 }
 
 function formatCodexErrorMessage(params: JsonObject, rateLimits: JsonValue | undefined): Error {

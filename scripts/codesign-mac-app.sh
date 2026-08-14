@@ -361,6 +361,11 @@ if [ -f "$MLX_TTS_HELPER" ]; then
   echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"
 fi
 
+CUA_DRIVER="$APP_BUNDLE/Contents/Resources/cua-driver"
+if [ -f "$CUA_DRIVER" ]; then
+  echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"
+fi
+
 # Sign main binary
 if [ -f "$APP_BUNDLE/Contents/MacOS/OpenClaw" ]; then
   echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/OpenClaw" "$APP_ENTITLEMENTS"

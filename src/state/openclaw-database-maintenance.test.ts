@@ -7,8 +7,14 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
-import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.js";
+import {
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
+import {
+  ensureAdditiveStateColumns,
+  ensureDevicePairSetupBootstrapSchema,
+} from "./openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -171,6 +177,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
       "worktrees.run_end_cleanup_json TEXT",
+      "device_bootstrap_tokens.setup_id TEXT",
       "installed_plugin_index.workspace_dir TEXT",
       "secret_store_entries.allowed_hosts TEXT",
     ]);
@@ -203,7 +210,7 @@ describe("OpenClaw database maintenance schema validation", () => {
         columnName,
         dataType,
         tableName,
-      } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+      } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
         expect(readColumnContract(database, tableName, columnName)).toEqual({
           dflt_value: null,
           hidden: 0,
@@ -213,6 +220,17 @@ describe("OpenClaw database maintenance schema validation", () => {
           type: dataType,
         });
       }
+      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toBeUndefined();
+
+      ensureDevicePairSetupBootstrapSchema(database);
+      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toEqual({
+        dflt_value: null,
+        hidden: 0,
+        name: "setup_id",
+        notnull: 0,
+        pk: 0,
+        type: "TEXT",
+      });
     } finally {
       database.close();
     }

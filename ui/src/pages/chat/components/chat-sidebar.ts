@@ -21,8 +21,9 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { openInlineChatImage } from "./chat-image-lightbox.ts";
+import { openResolvedImage } from "./chat-message-image-open.ts";
 import "./session-diff-panel.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
@@ -499,18 +500,6 @@ function resolveSidebarCanvasSandbox(
     : "allow-scripts";
 }
 
-function openSidebarImage(
-  onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
-  src: string,
-  title: string,
-) {
-  if (onOpenImage) {
-    onOpenImage({ src, title });
-  } else {
-    openExternalUrlSafe(src, { allowDataImage: true });
-  }
-}
-
 type MarkdownSidebarProps = {
   content: ChatDetailContent | null;
   error: string | null;
@@ -643,7 +632,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                               class="chat-tool-card__preview-image-button"
                               aria-label=${t("chat.imageLightbox.open", { title })}
                               @click=${() =>
-                                openSidebarImage(props.onOpenImage, content.src, title)}
+                                openResolvedImage(props.onOpenImage, content.src, title)}
                             >
                               <img
                                 class="chat-tool-card__preview-image"
@@ -1308,21 +1297,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private readonly handlePanelClick = (event: Event) => {
-    const imageButton = event
-      .composedPath()
-      .find(
-        (target): target is HTMLElement =>
-          target instanceof HTMLElement &&
-          target.classList.contains("markdown-inline-image-button"),
-      );
-    const image = imageButton?.querySelector<HTMLImageElement>(".markdown-inline-image");
-    if (image) {
-      event.preventDefault();
-      openSidebarImage(
-        this.onOpenImage ?? undefined,
-        image.currentSrc || image.src,
-        image.alt.trim() || t("chat.imageLightbox.untitled"),
-      );
+    if (openInlineChatImage(event, this.onOpenImage ?? undefined)) {
       return;
     }
     handleMarkdownCodeBlockCopy(event);

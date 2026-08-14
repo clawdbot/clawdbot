@@ -956,6 +956,7 @@ describe("parseSystemAgentOperation", () => {
     const installCall = requireFirstMockCall(runPluginInstall, "runPluginInstall");
     expect(installCall[0]).toBe("clawhub:openclaw-demo");
     expectRuntimeArg(installCall[1]);
+    expect(installCall[2]).toEqual({ allowInstallPolicyWarningPrompt: false });
     expect(lines.join("\n")).toContain("[openclaw] done: plugin.install");
     const audit = readLastAuditEntry();
     expectAuditRecord(

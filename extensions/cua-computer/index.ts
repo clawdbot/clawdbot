@@ -14,7 +14,7 @@ const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema);
 export default definePluginEntry({
   id: "cua-computer",
   name: "CUA Computer",
-  description: "Experimental CUA Driver SDK computer control for Windows and Linux node hosts.",
+  description: "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.",
   configSchema,
   register(api) {
     const parsed = CuaComputerConfigSchema.safeParse(api.pluginConfig ?? {});

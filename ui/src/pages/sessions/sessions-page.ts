@@ -1144,7 +1144,10 @@ class SessionsPage extends OpenClawLightDomElement {
     expectedSessionId?: string,
   ): Promise<SessionsPageMutationResult> {
     if (!scope) {
-      return "stale";
+      // Nothing was attempted (e.g. rename dialog submitted after the gateway
+      // dropped); say so instead of silently swallowing the edit.
+      this.error = t("sessionsView.actionRequiresConnection");
+      return "failed";
     }
     if (typeof patch.archived === "boolean" && !expectedSessionId?.trim()) {
       this.error = "Session lifecycle action requires a durable session identity.";
@@ -1193,21 +1196,20 @@ class SessionsPage extends OpenClawLightDomElement {
     if (result !== "completed" || !this.isRequestScopeCurrent(scope)) {
       return;
     }
+    // Undo is captured before showing the toast: the toast host outlives this
+    // page, so the action must run against the shared mutations store (which
+    // fails closed on connection replacement) rather than page scope — a
+    // page-scope check would silently no-op after navigating away.
+    const agentId = this.sessionAgentId(row.key, scope.context);
     showToast({
       message: t("sessionsView.sessionArchived"),
       actionLabel: t("common.undo"),
       onAction: () => {
-        void (async () => {
-          if (!this.isRequestScopeCurrent(scope)) {
-            return;
-          }
-          await this.patchSession(
-            row.key,
-            { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
-            scope,
-            row.sessionId,
-          );
-        })();
+        void scope.sessions.patch(
+          row.key,
+          { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
+          { agentId, expectedSessionId: row.sessionId },
+        );
       },
     });
   }
@@ -1281,6 +1283,12 @@ class SessionsPage extends OpenClawLightDomElement {
   private async loadCheckpoint(sessionKey: string) {
     const scope = this.captureRequestScope();
     if (!scope) {
+      // Rows stay expandable while disconnected; without an error the drawer
+      // would claim "No checkpoints" beside a nonzero checkpoint badge.
+      this.checkpointErrorByKey = {
+        ...this.checkpointErrorByKey,
+        [sessionKey]: t("sessionsView.actionRequiresConnection"),
+      };
       return;
     }
     this.checkpointTaskKey = sessionKey;
