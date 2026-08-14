@@ -723,17 +723,22 @@ describe("exec tool backgrounding", () => {
   it(
     "backgrounds after yield and can be polled",
     async () => {
-      const result = await executeExecCommand(execTool, shellEcho(OUTPUT_DONE), { yieldMs: 0 });
+      const chunk1 = "chunk1";
+      const chunk2 = "chunk2";
+      const command = joinCommands([shellEcho(chunk1), shortDelayCmd, shellEcho(chunk2)]);
+      const result = await executeExecCommand(execTool, command, { yieldMs: 0 });
 
       // Timing can race here: command may already be complete before the first response.
       if (result.details.status === PROCESS_STATUS_COMPLETED) {
-        expect(readTextContent(result.content) ?? "").toContain(OUTPUT_DONE);
+        const content = readTextContent(result.content) ?? "";
+        expect(content).toContain(chunk1);
+        expect(content).toContain(chunk2);
         return;
       }
 
       const sessionId = requireRunningSessionId(result);
 
-      let output = "";
+      let output = readTextContent(result.content) ?? "";
       await expect
         .poll(async () => {
           const pollResult = await pollProcessSession({ tool: processTool, sessionId });
@@ -742,7 +747,8 @@ describe("exec tool backgrounding", () => {
         }, BACKGROUND_POLL_OPTIONS)
         .toBe(PROCESS_STATUS_COMPLETED);
 
-      expect(output).toContain(OUTPUT_DONE);
+      expect(output).toContain(chunk1);
+      expect(output).toContain(chunk2);
     },
     isWin ? 15_000 : 5_000,
   );
