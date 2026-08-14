@@ -291,7 +291,13 @@ export function resolvePublishedOwner(
       owner.input.readOnly === input.readOnly &&
       owner.input.loadRuntimePlugins === input.loadRuntimePlugins &&
       owner.input.skipCredentials === input.skipCredentials &&
-      owner.input.allowGatewaySubagentBinding === input.allowGatewaySubagentBinding &&
+      // Binding is a publication-time build capability readers cannot know;
+      // absent (= undefined after normalization) is a wildcard like the
+      // clauses below. Requiring equality made every flagless gateway reader
+      // (models.list, catalog loads) miss the configured owner and silently
+      // rebuild a live ephemeral catalog per request.
+      (input.allowGatewaySubagentBinding === undefined ||
+        owner.input.allowGatewaySubagentBinding === input.allowGatewaySubagentBinding) &&
       (input.runtimePluginSelections === undefined ||
         JSON.stringify(owner.input.runtimePluginSelections) ===
           JSON.stringify(input.runtimePluginSelections)) &&
