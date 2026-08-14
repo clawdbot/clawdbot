@@ -131,6 +131,40 @@ describe("sessions page lifecycle", () => {
     );
   });
 
+  it("keeps the archive Undo working after navigating off the Sessions page", async () => {
+    const key = "agent:main:navigated";
+    const patch = vi.fn(async () => ({
+      ok: true as const,
+      path: "",
+      key,
+      entry: { sessionId: key },
+    }));
+    const sessions = createSessions({ patch });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({ sessionKey: key });
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
+
+    await page.archiveSessionWithUndo({
+      key,
+      sessionId: "session-nav",
+      pinned: false,
+    } as GatewaySessionRow);
+    await toast.updateComplete;
+    // The toast host outlives the page; navigation unmounts the page element.
+    page.remove();
+    toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    expect(patch).toHaveBeenNthCalledWith(
+      2,
+      key,
+      { archived: false },
+      { agentId: undefined, expectedSessionId: "session-nav" },
+    );
+  });
+
   it("submits one trimmed bounded transcript search and adopts its status", async () => {
     const response = deferred<SessionsSearchResult>();
     const request = vi.fn(() => response.promise);

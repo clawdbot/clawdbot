@@ -64,6 +64,7 @@ describe("plugin install mutation-free preflight", () => {
     await expect(
       resolvePluginInstallPreflight({
         raw: "superpowers@claude-plugins-official",
+        allowInstallPolicyWarningPrompt: false,
         opts: { force: true },
       }),
     ).resolves.toMatchObject({

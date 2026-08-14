@@ -104,7 +104,6 @@ describe("Telegram QA API boundary", () => {
         sut: {
           botToken: "placeholder",
           dmPolicy: "disabled",
-          replyToMode: "first",
           groups: {
             "-100123": {
               groupPolicy: "allowlist",
@@ -115,6 +114,7 @@ describe("Telegram QA API boundary", () => {
         },
       },
     });
+    expect(config.channels?.telegram?.accounts?.sut?.replyToMode).toBeUndefined();
   });
 
   it("disables mention gating only inside the exact leased QA group", () => {

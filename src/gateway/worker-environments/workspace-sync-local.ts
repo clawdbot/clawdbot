@@ -84,7 +84,7 @@ export async function filterExistingGitTransferList(params: {
         throw error;
       });
       if (stats?.isFile() || stats?.isSymbolicLink()) {
-        await output.write(`${file}\0`);
+        await output.writeFile(`${file}\0`);
       }
     }
   } finally {

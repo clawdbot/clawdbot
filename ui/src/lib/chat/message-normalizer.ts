@@ -5,7 +5,10 @@
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { asRecord as asMessageRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
+import {
+  extractCanvasShortcodes,
+  isCanvasBoardWidgetName,
+} from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -111,6 +114,9 @@ function coerceCanvasPreview(
     return null;
   }
   const mcpApp = isRecord(preview.mcpApp) ? preview.mcpApp : undefined;
+  const boardWidgetName = isCanvasBoardWidgetName(preview.boardWidgetName)
+    ? preview.boardWidgetName
+    : undefined;
   return {
     kind: "canvas",
     surface: "assistant_message",
@@ -126,6 +132,7 @@ function coerceCanvasPreview(
     ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
       ? { sandbox: preview.sandbox }
       : {}),
+    ...(boardWidgetName ? { boardWidgetName } : {}),
     ...(typeof mcpApp?.viewId === "string" && mcpApp.viewId.trim()
       ? {
           mcpApp: {

@@ -667,7 +667,8 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Device pairing and device tokens">
     - `device.pair.list` returns pending and approved paired devices.
-    - `device.pair.setupCode` creates a mobile setup code and, by default, a PNG QR data URL. It requires `operator.admin` and is intentionally omitted from advertised discovery. The result includes `setupCode`, optional `qrDataUrl`, `gatewayUrl`, the non-secret `auth` label, and `urlSource`.
+    - `device.pair.setupCode` creates a mobile setup code and, by default, a PNG QR data URL. It requires `operator.admin` and is intentionally omitted from advertised discovery. Current gateways include an opaque non-secret `setupId`, authoritative `expiresAtMs`, `setupCode`, optional `qrDataUrl`, `gatewayUrl`, the non-secret `auth` label, `urlSource`, and the issued `access` level (`full`, `limited`, or `node`). Older protocol-v4 gateways omit `setupId` and `expiresAtMs`, so separately shipped clients must treat those lifecycle fields as optional. The `setupId` is independent from the bootstrap credential and is not embedded in the setup code.
+    - `device.pair.setupStatus` reconciles one setup credential the caller already issued (`{ setupId }`). It requires `operator.admin`, is omitted from advertised discovery, and returns either `{ completion }` after the credential-bearing response finishes or `{ deliveryUncertain }` when the bearer was retired but response delivery could not be confirmed. Both use the same non-secret payload as their corresponding events. When both fields are absent, the gateway holds no retained outcome for that `setupId`.
     - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
     - `device.pair.rename` assigns an operator label (`{ deviceId, label }`) that is preferred over the client-reported display name and survives device repair or re-approval.
     - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
@@ -675,6 +676,23 @@ methods. Treat this as feature discovery, not a full enumeration of
 
     The setup code embeds a short-lived bootstrap credential. Clients must not
     log or persist it beyond the pairing flow.
+
+    Pairing-scoped clients receive `device.pair.setup.completed` only after the
+    exact setup handoff has delivered its credentials. Its payload is
+    `{ setupId, deviceId, deviceName?, access, ts }`; it never includes the
+    bootstrap credential or token-derived identifiers.
+
+    If the response closes before delivery can be confirmed, the gateway keeps
+    the bearer retired and emits `device.pair.setup.deliveryUncertain` instead
+    of success. The presenting client should offer the operator a path to inspect
+    or remove the paired device and generate a new setup code.
+
+    The gateway records an uncertain outcome when it consumes the bearer, then
+    promotes it to completion only after response delivery finishes. Operator
+    event frames are best effort and drop for slow subscribers rather than
+    closing their socket. A client that displayed a setup code must therefore
+    call `device.pair.setupStatus` before presenting the code as expired.
+    Outcomes are retained past the credential's own expiry.
 
   </Accordion>
 
@@ -742,7 +760,11 @@ methods. Treat this as feature discovery, not a full enumeration of
 - `shutdown`: gateway shutdown notification.
 - `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
 - `node.invoke.request`: node invoke request broadcast.
-- `device.pair.requested` / `device.pair.resolved`: paired-device lifecycle.
+- `device.pair.requested` / `device.pair.resolved`: paired-device approval lifecycle.
+- `device.pair.setup.completed`: exact setup-code handoff completion, scoped to
+  `operator.pairing`.
+- `device.pair.setup.deliveryUncertain`: replay-safe setup-code retirement whose
+  credential response delivery could not be confirmed, scoped to `operator.pairing`.
 - `voicewake.changed`: wake-word trigger config changed.
 - `config.changed`: a config write persisted (payload carries the config path,
   the new snapshot hash, and a timestamp — never config content). Operator-read

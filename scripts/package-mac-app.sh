@@ -350,7 +350,7 @@ merge_framework_machos() {
 
   while IFS= read -r -d '' file; do
     if /usr/bin/file "$file" | /usr/bin/grep -q "Mach-O"; then
-      local rel="${file#$primary/}"
+      local rel="${file#"$primary"/}"
       local primary_archs
       primary_archs=$(archs_for "$file")
       IFS=' ' read -r -a primary_arch_array <<< "$primary_archs"
@@ -371,7 +371,7 @@ merge_framework_machos() {
           IFS=' ' read -r -a other_arch_array <<< "$other_archs"
           for arch in "${other_arch_array[@]}"; do
             if ! arch_in_list "$arch" "${primary_arch_array[@]}"; then
-              local thin_file="$tmp_dir/$(echo "$rel" | tr '/' '_')-$arch"
+              local thin_file="$tmp_dir/${rel//\//_}-$arch"
               /usr/bin/lipo -thin "$arch" "$other_file" -output "$thin_file"
               missing_files+=("$thin_file")
               primary_arch_array+=("$arch")
@@ -565,6 +565,9 @@ if [ ! -d "$PROVIDER_ICONS_SRC" ]; then
 fi
 rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
 cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
+
+echo "🖥  Staging embedded CUA driver"
+"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
 
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"

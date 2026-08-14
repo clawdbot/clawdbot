@@ -1,10 +1,11 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { loadSettings } from "../../app/settings.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
@@ -17,6 +18,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
+import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import type { SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
@@ -25,6 +27,7 @@ import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
+import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -57,6 +60,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private connectMachineError: string | null = null;
   private connectMachineSetup: DevicePairSetup | null = null;
   private connectMachineRequestId = 0;
+  @state() private imageLightbox: ImageLightboxItem | null = null;
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
@@ -215,6 +219,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     document.removeEventListener("keydown", this, true);
     document.removeEventListener("pointerdown", this, true);
+    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
     this.subscriptions.clear();
     this.gateway.invalidateDiscovery(
       true,
@@ -256,9 +261,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.openedAgentId = resolvedAgentId;
       this.place.setAgentsHydrated(agentsReady);
       this.resetDraft();
-      if (ownedMessage) {
-        this.setMessage(ownedMessage, openKey);
-      }
+      this.messageOwnerKey = restoreDraft(this.context, this.submission, openKey, ownedMessage);
       return;
     }
     if (this.openedAgentId !== resolvedAgentId) {
@@ -596,6 +599,9 @@ class NewSessionPage extends OpenClawLightDomElement {
               this.setMessageFromUser(message);
             }
           },
+          onOpenImage: (item) => {
+            this.imageLightbox = item;
+          },
           onVisibilityChange: (visibility) => {
             if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
               this.submission.setVisibility(visibility);
@@ -682,6 +688,9 @@ class NewSessionPage extends OpenClawLightDomElement {
             this.closeConnectMachine();
             this.context?.navigate("devices");
           },
+        })}
+        ${renderChatImageLightbox(this.imageLightbox, () => {
+          this.imageLightbox = null;
         })}
       </div>
     `;

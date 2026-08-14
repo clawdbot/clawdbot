@@ -70,6 +70,7 @@ function createMaintenanceTimerDeps() {
     logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
+    runDevicePairSetupCompletionGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
 }
@@ -273,6 +274,20 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(2);
     expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(2);
+
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("prunes retained setup outcomes at startup and every maintenance minute", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDevicePairSetupCompletionGc).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(deps.runDevicePairSetupCompletionGc).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);
   });

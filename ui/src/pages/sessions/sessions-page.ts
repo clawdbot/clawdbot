@@ -1193,21 +1193,20 @@ class SessionsPage extends OpenClawLightDomElement {
     if (result !== "completed" || !this.isRequestScopeCurrent(scope)) {
       return;
     }
+    // Undo is captured before showing the toast: the toast host outlives this
+    // page, so the action must run against the shared mutations store (which
+    // fails closed on connection replacement) rather than page scope — a
+    // page-scope check would silently no-op after navigating away.
+    const agentId = this.sessionAgentId(row.key, scope.context);
     showToast({
       message: t("sessionsView.sessionArchived"),
       actionLabel: t("common.undo"),
       onAction: () => {
-        void (async () => {
-          if (!this.isRequestScopeCurrent(scope)) {
-            return;
-          }
-          await this.patchSession(
-            row.key,
-            { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
-            scope,
-            row.sessionId,
-          );
-        })();
+        void scope.sessions.patch(
+          row.key,
+          { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
+          { agentId, expectedSessionId: row.sessionId },
+        );
       },
     });
   }

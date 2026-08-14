@@ -27,7 +27,6 @@ import type {
 } from "./operations-parse.js";
 import { formatSystemAgentPersistentPlan } from "./operations-parse.js";
 import type { SystemAgentOverview } from "./overview.js";
-import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 type ConfigModule = typeof import("../config/config.js");
@@ -749,40 +748,4 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
       (owner) => owner.trim().toLowerCase() === normalizedPluginId,
     ),
   );
-}
-
-export async function executePluginInstall(
-  operation: Extract<SystemAgentOperation, { kind: "plugin-install" }>,
-  runtime: RuntimeEnv,
-  opts: ExecuteOptions,
-): Promise<SystemAgentOperationResult> {
-  // Reject an untrusted plugin source before proposing or installing it, not
-  // only on the approved apply — a formatted "plan" must never surface an
-  // arbitrary npm/url/file spec that bypassed the ClawHub trust boundary.
-  const validationError = validateSystemAgentPluginInstallSpec(operation.spec);
-  if (validationError) {
-    throw new Error(validationError);
-  }
-  const result = await applyPersistentOperation({
-    auditOperation: "plugin.install",
-    operation,
-    runtime,
-    opts,
-    run: async (ctx) => {
-      const runPluginInstall =
-        ctx.deps?.runPluginInstall ??
-        (async (spec: string, pluginRuntime: RuntimeEnv) => {
-          const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-          await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
-        });
-      await ctx.commit(async () => {
-        await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
-      });
-      return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
-    },
-  });
-  if (result.applied) {
-    runtime.log("Restart the Gateway to apply installed plugin changes.");
-  }
-  return result;
 }
