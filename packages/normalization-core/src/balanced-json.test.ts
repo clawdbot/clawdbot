@@ -56,6 +56,17 @@ describe("extractBalancedJsonPrefix", () => {
 
     expect(fragment).toBeNull();
   });
+
+  it("does not resurrect a delimiter from an earlier, already-closed quoted span", () => {
+    // The unterminated-quote fallback must only rescan from its own unclosed
+    // span onward; rescanning from index 0 would pick `{not}` back up out of
+    // the first, already-completed quoted span instead of the real object.
+    const raw = '"first {not}" then "unterminated {"ok":true}';
+
+    const fragment = extractBalancedJsonPrefix(raw);
+
+    expect(fragment?.json).toBe('{"ok":true}');
+  });
 });
 
 describe("extractBalancedJsonFragments", () => {

@@ -15,9 +15,10 @@ function isJsonOpeningDelimiter(
 
 function findLiteralOpeningDelimiter(
   raw: string,
+  fromIndex: number,
   openers: readonly JsonOpeningDelimiter[],
 ): number {
-  let index = 0;
+  let index = fromIndex;
   while (index < raw.length && !isJsonOpeningDelimiter(raw[index], openers)) {
     index += 1;
   }
@@ -25,13 +26,17 @@ function findLiteralOpeningDelimiter(
 }
 
 // Quoted prose before the JSON value is not itself JSON, so a delimiter
-// inside a complete quoted span must not be mistaken for the real start.
-// An unterminated quote can't reliably be told apart from real prose, so it
-// falls back to a literal scan instead of swallowing the rest of the text
-// (which would hide a later, real JSON value from ever being found).
+// inside a complete quoted span must not be mistaken for the real start. An
+// unterminated quote can't reliably be told apart from real prose, so when
+// one is still open at end-of-input, this retries a literal (quote-blind)
+// scan from each quote-opening checkpoint, most recent first, stopping at
+// the first one that recovers a delimiter. This falls back only as far as
+// necessary instead of resurrecting a delimiter from an earlier span that
+// was already validly paired and skipped.
 function findStart(raw: string, openers: readonly JsonOpeningDelimiter[]): number {
   let inString = false;
   let escaped = false;
+  const openQuoteCheckpoints: number[] = [];
   for (let index = 0; index < raw.length; index += 1) {
     const char = raw[index];
     if (inString) {
@@ -46,13 +51,27 @@ function findStart(raw: string, openers: readonly JsonOpeningDelimiter[]): numbe
     }
     if (char === '"') {
       inString = true;
+      openQuoteCheckpoints.push(index);
       continue;
     }
     if (isJsonOpeningDelimiter(char, openers)) {
       return index;
     }
   }
-  return inString ? findLiteralOpeningDelimiter(raw, openers) : raw.length;
+  if (!inString) {
+    return raw.length;
+  }
+  for (let i = openQuoteCheckpoints.length - 1; i >= 0; i -= 1) {
+    const checkpoint = openQuoteCheckpoints[i];
+    if (checkpoint === undefined) {
+      continue;
+    }
+    const candidate = findLiteralOpeningDelimiter(raw, checkpoint, openers);
+    if (candidate < raw.length) {
+      return candidate;
+    }
+  }
+  return raw.length;
 }
 
 /** Extracts the first balanced JSON object/array from text. */
