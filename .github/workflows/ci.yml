@@ -2604,18 +2604,39 @@ jobs:
               fi
               ;;
             test-types)
-              pnpm check:test-types
+              # The github/hybrid planner profile moves the 14 serial core-test
+              # graphs (~70% of this lane) into the dedicated hosted stripes
+              # job; this row keeps the extensions/root/scripts tail. Targets
+              # without stripe support run the whole lane here.
+              root_covered=false
+              if [ "$RUNNER_BACKEND" = "github" ] &&
+                grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
+                pnpm tsgo:extensions:test
+              else
+                pnpm check:test-types
+                # check:test-types (pnpm tsgo:test) already runs tsgo:test:root
+                # on current targets; rerunning it below would double ~25s of
+                # wall on this slowest static lane.
+                if node -e '
+                  const scripts = require("./package.json").scripts ?? {};
+                  process.exit(/tsgo:test:root/.test(scripts["tsgo:test"] ?? "") ? 0 : 1);
+                '; then
+                  root_covered=true
+                fi
+              fi
               if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:scripts$'; then
                 pnpm tsgo:scripts
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                 echo "Current CI targets must provide the tsgo:scripts package script." >&2
                 exit 1
               fi
-              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then
-                pnpm tsgo:test:root
-              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
-                echo "Current CI targets must provide the tsgo:test:root package script." >&2
-                exit 1
+              if [ "$root_covered" != "true" ]; then
+                if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then
+                  pnpm tsgo:test:root
+                elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                  echo "Current CI targets must provide the tsgo:test:root package script." >&2
+                  exit 1
+                fi
               fi
               ;;
             *)
@@ -2655,6 +2676,44 @@ jobs:
         run: >-
           node --import tsx scripts/run-oxlint-shards.mts
           --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
+
+  # The github/hybrid planner profile stripes the 14 serial core test-type
+  # graphs (~256-500s on one 4-core runner, load-dependent) across three
+  # hosted jobs; the check-test-types row keeps the extensions/root/scripts
+  # tail. All-Blacksmith mode keeps the single 16-vCPU test-types job.
+  check-test-types-hosted-core-shard:
+    permissions:
+      contents: read
+    name: check-test-types-core-${{ matrix.stripe }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.run_check == 'true' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        stripe: [1, 2, 3]
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Run hosted core test-types stripe
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Frozen/historical targets predate stripe support; their whole
+          # test-types lane already runs inside the check-test-types row.
+          if ! grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
+            echo "[skip] target does not support core test-type stripes"
+            exit 0
+          fi
+          node scripts/run-tsgo-core-test-shards.mjs --stripe "${{ matrix.stripe }}/3"
 
   check-additional-shard:
     permissions:
@@ -3954,6 +4013,7 @@ jobs:
       - checks-node-core-test-nondist-shard
       - check-shard
       - check-lint-hosted-core-shard
+      - check-test-types-hosted-core-shard
       - check-additional-shard
       - check-docs
       - skills-python
@@ -3989,6 +4049,7 @@ jobs:
             checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
             check-shard=${{ needs.check-shard.result }}
             check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}
+            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}
             check-additional-shard=${{ needs.check-additional-shard.result }}
             check-docs=${{ needs.check-docs.result }}
             skills-python=${{ needs.skills-python.result }}
