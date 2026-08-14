@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OpenClawIPC
 import Testing
@@ -11,9 +12,10 @@ struct CuaDriverHostCoordinatorTests {
         launcher: CuaProcessLauncherProbe,
         coordinator: CuaDriverHostCoordinator) async -> Bool
     {
-        for _ in 0..<1000 {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
             if launcher.launches.count >= expected, coordinator.workerEndpoint != nil { return true }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         return launcher.launches.count >= expected && coordinator.workerEndpoint != nil
     }
@@ -74,6 +76,86 @@ struct CuaDriverHostCoordinatorTests {
         #expect(!FileManager.default.fileExists(atPath: first.url.path))
         #expect(FileManager.default.fileExists(atPath: second.url.path))
         CuaDriverHostCoordinator.cleanupSocketDirectory(second)
+    }
+
+    @Test func `liveness write end is close on exec and absent from a subsequently spawned child`() throws {
+        let livenessPipe = try CuaDriverHostCoordinator.makeLivenessPipe()
+        let descriptor = livenessPipe.fileHandleForWriting.fileDescriptor
+        #expect(fcntl(descriptor, F_GETFD) & FD_CLOEXEC == FD_CLOEXEC)
+
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["1"]
+        try child.run()
+        defer {
+            if child.isRunning { child.terminate() }
+            child.waitUntilExit()
+        }
+        #expect(!Self.process(child.processIdentifier, hasDescriptor: descriptor))
+    }
+
+    @Test func `liveness read end remains daemon standard input and observes writer EOF`() throws {
+        let livenessPipe = try CuaDriverHostCoordinator.makeLivenessPipe()
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/cat")
+        child.standardInput = livenessPipe.fileHandleForReading
+        child.standardOutput = FileHandle.nullDevice
+        child.standardError = FileHandle.nullDevice
+        try child.run()
+        try livenessPipe.fileHandleForWriting.close()
+        for _ in 0..<1000 where child.isRunning {
+            usleep(1000)
+        }
+        if child.isRunning { child.terminate() }
+        child.waitUntilExit()
+
+        #expect(child.terminationStatus == 0)
+    }
+
+    @Test func `unexpected exit closes liveness and removes its socket directory`() async throws {
+        let root = self.shortTemporaryDirectory("exit-cleanup")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launcher = CuaProcessLauncherProbe()
+        let coordinator = CuaDriverHostCoordinator(
+            artifactURL: { root.appendingPathComponent("cua-driver") },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true })
+
+        await coordinator.setEnabled(true)
+        let endpoint = try #require(coordinator.workerEndpoint)
+        let process = try #require(launcher.processes.first)
+        process.crash(status: 7)
+        for _ in 0..<1000 where coordinator.workerEndpoint != nil {
+            await Task.yield()
+        }
+
+        #expect(process.closeLivenessCount == 1)
+        #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: endpoint.socketPath)
+                .deletingLastPathComponent().path))
+        await coordinator.setEnabled(false)
+    }
+
+    @Test func `startup removes a preexisting owned directory without a live daemon`() async throws {
+        let root = self.shortTemporaryDirectory("startup-reap")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
+        let launcher = CuaProcessLauncherProbe()
+        let coordinator = CuaDriverHostCoordinator(
+            artifactURL: { root.appendingPathComponent("cua-driver") },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true })
+
+        await coordinator.setEnabled(true)
+        #expect(!FileManager.default.fileExists(atPath: stale.url.path))
+        await coordinator.setEnabled(false)
     }
 
     @Test func `socket directory rejects a symlinked CUA root`() throws {
@@ -228,6 +310,23 @@ struct CuaDriverHostCoordinatorTests {
     private func shortTemporaryDirectory(_ label: String) -> URL {
         URL(fileURLWithPath: "/tmp/oc-cua-\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
     }
+
+    private static func process(_ processIdentifier: pid_t, hasDescriptor descriptor: Int32) -> Bool {
+        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: 64)
+        let populatedBytes = descriptors.withUnsafeMutableBytes { buffer in
+            proc_pidinfo(
+                processIdentifier,
+                PROC_PIDLISTFDS,
+                0,
+                buffer.baseAddress,
+                Int32(buffer.count))
+        }
+        guard populatedBytes > 0 else { return false }
+        let count = min(
+            descriptors.count,
+            Int(populatedBytes) / MemoryLayout<proc_fdinfo>.stride)
+        return descriptors.prefix(count).contains { $0.proc_fd == descriptor }
+    }
 }
 
 private final class CuaDriverStderrProbe: @unchecked Sendable {
@@ -270,6 +369,7 @@ private final class CuaProcessLauncherProbe {
 @MainActor
 private final class CuaProcessProbe: CuaDriverProcessControlling {
     private(set) var isRunning = true
+    private(set) var closeLivenessCount = 0
     private let onTermination: @Sendable (Int32) -> Void
 
     init(onTermination: @escaping @Sendable (Int32) -> Void) {
@@ -277,6 +377,7 @@ private final class CuaProcessProbe: CuaDriverProcessControlling {
     }
 
     func closeLiveness() {
+        self.closeLivenessCount += 1
         guard self.isRunning else { return }
         self.isRunning = false
         self.onTermination(0)

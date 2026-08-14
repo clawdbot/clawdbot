@@ -131,6 +131,7 @@ private final class FoundationCuaDriverProcess: CuaDriverProcessControlling {
     }
 
     deinit {
+        try? self.livenessPipe.fileHandleForWriting.close()
         self.stderrRelay.stop()
     }
 
@@ -318,6 +319,10 @@ final class CuaDriverHostCoordinator {
 
     private func ensureStarted() async {
         guard self.runningChild == nil else { return }
+        let applicationSupportURL = self.applicationSupportURL()
+        await Self.reapStaleSocketDirectories(
+            in: applicationSupportURL,
+            hostBundleID: self.bundleIdentifier())
         guard let executableURL = self.artifactURL() else {
             self.logger.info("embedded CUA remains unavailable because the driver is not bundled")
             return
@@ -331,7 +336,7 @@ final class CuaDriverHostCoordinator {
 
         let socketDirectory: CuaDriverSocketDirectory
         do {
-            socketDirectory = try Self.createSocketDirectory(in: self.applicationSupportURL())
+            socketDirectory = try Self.createSocketDirectory(in: applicationSupportURL)
         } catch {
             self.logger.error("\(error.localizedDescription, privacy: .public)")
             self.scheduleRestartIfNeeded()
@@ -389,7 +394,14 @@ final class CuaDriverHostCoordinator {
 
     private func ensureStopped() async {
         self.setReadyEndpoint(nil)
-        guard let child = self.runningChild else { return }
+        let applicationSupportURL = self.applicationSupportURL()
+        let hostBundleID = self.bundleIdentifier()
+        guard let child = self.runningChild else {
+            await Self.reapStaleSocketDirectories(
+                in: applicationSupportURL,
+                hostBundleID: hostBundleID)
+            return
+        }
         // The worker owns the MCP proxy. Drain it before the app closes the
         // privileged daemon so an execution can never cross generations.
         await self.beforeDaemonStop()
@@ -409,12 +421,16 @@ final class CuaDriverHostCoordinator {
         }
         self.stoppingGenerations.remove(child.generation)
         Self.cleanupSocketDirectory(child.socketDirectory)
+        await Self.reapStaleSocketDirectories(
+            in: applicationSupportURL,
+            hostBundleID: hostBundleID)
     }
 
     private func processExited(generation: UInt64, status: Int32) {
         guard let child = self.runningChild, child.generation == generation else { return }
         let expected = self.stoppingGenerations.contains(generation) || !self.desiredEnabled
         self.setReadyEndpoint(nil)
+        child.process.closeLiveness()
         self.runningChild = nil
         Self.cleanupSocketDirectory(child.socketDirectory)
         if expected {
@@ -510,7 +526,7 @@ final class CuaDriverHostCoordinator {
         onTermination: @escaping @Sendable (Int32) -> Void) throws -> any CuaDriverProcessControlling
     {
         let process = Process()
-        let livenessPipe = Pipe()
+        let livenessPipe = try Self.makeLivenessPipe()
         let logger = Logger(subsystem: "ai.openclaw", category: "cua-driver-host")
         let stderrRelay = CuaDriverStderrRelay { event in
             switch event {
@@ -630,25 +646,8 @@ final class CuaDriverHostCoordinator {
     }
 
     nonisolated static func socketAcceptsConnections(_ socketPath: String) -> Bool {
-        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { return false }
+        guard let descriptor = self.connectUnixSocket(socketPath) else { return false }
         defer { close(descriptor) }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let maximumLength = MemoryLayout.size(ofValue: address.sun_path)
-        guard socketPath.utf8.count < maximumLength else { return false }
-        socketPath.withCString { source in
-            withUnsafeMutablePointer(to: &address.sun_path) { pointer in
-                let bytes = UnsafeMutableRawPointer(pointer).assumingMemoryBound(to: Int8.self)
-                memset(bytes, 0, maximumLength)
-                strncpy(bytes, source, maximumLength - 1)
-            }
-        }
-        let size = socklen_t(MemoryLayout.size(ofValue: address))
-        return withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
-                connect(descriptor, rebound, size) == 0
-            }
-        }
+        return true
     }
 }
