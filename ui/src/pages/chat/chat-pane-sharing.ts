@@ -36,14 +36,14 @@ import {
 } from "./components/chat-session-sharing.ts";
 
 export abstract class ChatPaneSharing extends ChatPaneBase {
-  protected readonly clearSessionCompanion = () => {
+  protected readonly clearSessionCompanion = async () => {
     const scope = this.captureConnectionScope();
     const key = scope?.state.sessionKey;
     if (!scope || !key) {
       return;
     }
     const agentId = resolveChatAgentId(scope.state);
-    void this.sessionCompanionThreads
+    await this.sessionCompanionThreads
       .reset(key, (sessionKey) => resetSessionCompanion(scope.client, sessionKey, agentId), agentId)
       .catch((error: unknown) => {
         if (
