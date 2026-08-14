@@ -110,6 +110,8 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private static let maxQueuedRequests = 64
     private static let maxStdoutDrainBytes = 256 * 1024
+    private static let gracefulShutdownTimeout: Duration = .seconds(
+        AppTerminationTiming.cleanupDeadlineSeconds * 0.75)
 
     private let queue = DispatchQueue(label: "ai.openclaw.codex-thread-catalog")
     private let idleTimeoutSeconds: Double
@@ -281,14 +283,14 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             arguments: Arguments(request.invocation.arguments),
             environment: ManagedProcess.environment(from: environment),
             workingDirectory: request.invocation.cwd.map { .init($0.path) })
-        // Codex stdio exits on EOF; its upstream harness allows 200 ms before forced termination.
+        // Leave enough of the app's cleanup budget for group termination and joined reaping.
         let process = ManagedProcess.launch(
             configuration: configuration,
             stdin: connection.stdinPipe.fileHandleForReading,
             stdout: connection.stdoutPipe.fileHandleForWriting,
             stderr: connection.stderrPipe.fileHandleForWriting,
             closeStdinForGracefulShutdown: connection.stdinPipe.fileHandleForWriting,
-            gracefulShutdownTimeout: .milliseconds(200))
+            gracefulShutdownTimeout: Self.gracefulShutdownTimeout)
         connection.process = process
         Task { [weak self] in
             let started = await (try? process.waitUntilStarted()) != nil

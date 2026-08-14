@@ -18,6 +18,7 @@ final class ManagedProcess: @unchecked Sendable {
     private final class State: @unchecked Sendable {
         private let lock = NSLock()
         private var childHandles: [FileHandle]
+        private var abortiveTerminationRequested = false
         private var finished = false
         private var status: TerminationStatus?
 
@@ -31,6 +32,14 @@ final class ManagedProcess: @unchecked Sendable {
 
         var terminationStatus: TerminationStatus? {
             self.lock.withLock { self.status }
+        }
+
+        var shouldAbortGracefulTermination: Bool {
+            self.lock.withLock { self.abortiveTerminationRequested }
+        }
+
+        func requestAbortiveTermination() {
+            self.lock.withLock { self.abortiveTerminationRequested = true }
         }
 
         func closeChildHandles() {
@@ -133,7 +142,11 @@ final class ManagedProcess: @unchecked Sendable {
                     }
                     if graceful, let stdinHandle {
                         try? stdinHandle.close()
-                        if await self.waitForExit(pid, timeout: gracefulShutdownTimeout) {
+                        if await self.waitForExit(
+                            pid,
+                            timeout: gracefulShutdownTimeout,
+                            interruptWhenAbortive: state)
+                        {
                             await killGroup()
                             return
                         }
@@ -190,6 +203,9 @@ final class ManagedProcess: @unchecked Sendable {
     }
 
     func requestTermination(gracefully: Bool = true) {
+        if !gracefully {
+            self.state.requestAbortiveTermination()
+        }
         self.wakeContinuation.yield(.terminate(gracefully: gracefully))
     }
 
@@ -206,11 +222,20 @@ final class ManagedProcess: @unchecked Sendable {
         self.requestTermination()
     }
 
-    private static func waitForExit(_ processIdentifier: pid_t, timeout: Duration) async -> Bool {
+    private static func waitForExit(
+        _ processIdentifier: pid_t,
+        timeout: Duration,
+        interruptWhenAbortive state: State? = nil) async -> Bool
+    {
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
             if State.hasExited(processIdentifier) { return true }
-            try? await Task.sleep(for: .milliseconds(10))
+            if state?.shouldAbortGracefulTermination == true { return false }
+            do {
+                try await Task.sleep(for: .milliseconds(10))
+            } catch {
+                return false
+            }
         }
         return State.hasExited(processIdentifier)
     }

@@ -1056,8 +1056,8 @@ extension MacNodeCodexThreadCatalogTests {
               printf '{"id":%s,"result":{"data":[]}}\n' "$id"
             done
             touch "${0}.eof"
-            trap '' TERM
-            /bin/sleep 0.2
+            trap 'touch "${0}.term"' TERM
+            /bin/sleep 0.35
             touch "${0}.graceful-exit"
             """#)
         let leaderPIDFile = URL(fileURLWithPath: fake.executable.path + ".leader.pid")
