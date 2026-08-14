@@ -6,7 +6,7 @@ inputs:
   node-version:
     description: Node.js version to install.
     required: false
-    default: "24.x"
+    default: "26.x"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false

@@ -64,7 +64,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "26.x"
 
 jobs:
   # Preflight: establish routing truth and job matrices once, then let real
@@ -1125,7 +1125,7 @@ jobs:
 
       - name: Setup Node.js
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "26.x"
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -1579,7 +1579,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.x"
+          node-version: "26.x"
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
@@ -1645,7 +1645,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.x"
+          node-version: "26.x"
           install-bun: "false"
           # Hosted paths use the pnpm store cache; first-attempt same-repo
           # Blacksmith runs restore the preflight-published dependency tree.
@@ -1686,7 +1686,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.x"
+          node-version: "26.x"
           install-bun: "false"
           # Hosted paths use the pnpm store cache; first-attempt same-repo
           # Blacksmith runs restore the preflight-published dependency tree.
@@ -1724,7 +1724,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.x"
+          node-version: "26.x"
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
