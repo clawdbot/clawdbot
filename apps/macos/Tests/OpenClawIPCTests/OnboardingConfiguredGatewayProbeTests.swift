@@ -771,7 +771,7 @@ struct OnboardingConfiguredGatewayProbeTests {
         #expect(await result.value == .superseded)
     }
 
-    @Test func `snapshot during active probe is delivered after probe completion`() async throws {
+    @Test func `snapshot owned by active probe is not reported as reconnect`() async throws {
         let gate = OnboardingProbeGate()
         let url = try #require(URL(string: "ws://example.invalid"))
         let fixture = onboardingProbeFixture(url: url, beforeReply: { await gate.wait() })
@@ -791,14 +791,9 @@ struct OnboardingConfiguredGatewayProbeTests {
         #expect(reconnectCount == 0)
         await gate.release()
         #expect(await configuredModel(result.value) == "openai/gpt-5.5")
-        for _ in 0..<100 {
-            if reconnectCount > 0 {
-                break
-            }
-            await Task.yield()
-        }
+        for _ in 0..<100 { await Task.yield() }
 
-        #expect(reconnectCount == 1)
+        #expect(reconnectCount == 0)
     }
 
     @Test func `invalidated onboarding probe cannot complete the replacement selection`() async throws {

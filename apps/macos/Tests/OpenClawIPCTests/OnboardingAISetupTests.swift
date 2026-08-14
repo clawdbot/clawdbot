@@ -812,6 +812,11 @@ private func setupAdmissionBusyResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingAISetupTests {
+    @Test func `nix first run presenter hands off to dashboard`() {
+        #expect(OnboardingController.firstRunDestination(isNixMode: true) == .dashboard)
+        #expect(OnboardingController.firstRunDestination(isNixMode: false) == .onboarding)
+    }
+
     @Test func `first run verifies configured gateway before opening dashboard`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingFirstRunVerifyTests"))
         let url = try #require(URL(string: "ws://localhost:18789"))
@@ -860,6 +865,83 @@ struct OnboardingAISetupTests {
         ])
         #expect(presenter.view?.aiSetup.configuredGatewayVerificationFailure?.status == "auth")
         presenter.view?.onboardingDidDisappear()
+    }
+
+    @Test func `cold hello does not repeat verification and real reconnect does`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingColdHelloSingleFlight"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let initialVerificationGate = AISetupRequestGate()
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list":
+                    return configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify":
+                    await initialVerificationGate.wait()
+                    return rejectedSetupVerificationResponse(id: request.id)
+                case "openclaw.setup.detect":
+                    return reauthenticationDetectedSetupResponse(id: request.id)
+                default:
+                    return nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.verify"]))
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(
+            state: state,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+        let reconnectConsumer = Task {
+            await view.configuredGatewayProbe.consumeReconnects {
+                view.probeConfiguredGatewayForDashboard(knownVisible: true)
+            }
+        }
+        defer {
+            reconnectConsumer.cancel()
+            view.onboardingDidDisappear()
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        let initialProbe = try #require(view.onboardingDidAppear())
+        await initialVerificationGate.waitUntilStarted()
+        await initialVerificationGate.release()
+        await initialProbe.value
+        _ = await waitForAISetupRequests(harness.recorder, count: 3)
+        await settleQueuedAISetupTasks()
+        var requests = await harness.recorder.snapshot()
+
+        #expect(requests.methods.filter { $0 == "agents.list" }.count == 1)
+        #expect(requests.methods.filter { $0 == "openclaw.setup.verify" }.count == 1)
+
+        let firstSocket = try #require(harness.session.latestTask())
+        for _ in 0..<200 where !firstSocket.hasPendingReceiveHandler() {
+            await Task.yield()
+        }
+        firstSocket.emitReceiveFailure()
+        for _ in 0..<400 {
+            requests = await harness.recorder.snapshot()
+            if requests.methods.filter({ $0 == "openclaw.setup.verify" }).count == 2 {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await settleQueuedAISetupTasks()
+        requests = await harness.recorder.snapshot()
+
+        #expect(harness.session.snapshotMakeCount() == 2)
+        #expect(requests.methods.filter { $0 == "agents.list" }.count == 2)
+        #expect(requests.methods.filter { $0 == "openclaw.setup.verify" }.count == 2)
     }
 
     @Test func `failed configured route verification exposes provider reauthentication`() async throws {

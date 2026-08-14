@@ -532,6 +532,11 @@ protocol FirstRunOnboardingPresenting: AnyObject {
     func show()
 }
 
+enum FirstRunOnboardingDestination: Equatable {
+    case onboarding
+    case dashboard
+}
+
 @MainActor
 final class OnboardingController: NSObject, NSWindowDelegate, FirstRunOnboardingPresenting {
     static let shared = OnboardingController()
@@ -553,10 +558,15 @@ final class OnboardingController: NSObject, NSWindowDelegate, FirstRunOnboarding
         Self.markComplete()
     }
 
+    static func firstRunDestination(isNixMode: Bool) -> FirstRunOnboardingDestination {
+        isNixMode ? .dashboard : .onboarding
+    }
+
     func show() {
-        if ProcessInfo.processInfo.isNixMode {
+        if Self.firstRunDestination(isNixMode: ProcessInfo.processInfo.isNixMode) == .dashboard {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
             Self.markComplete()
+            AppNavigationActions.openDashboard()
             return
         }
         if let window {

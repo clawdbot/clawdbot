@@ -47,8 +47,10 @@ final class OnboardingConfiguredGatewayProbe {
     private let timeoutMs: Double
     private let verificationTimeoutMs: Double
     private var generation: UInt64 = 0
-    private var activeProbeCount = 0
+    private var scheduledProbeGenerations = Set<UInt64>()
+    private var activeProbeGenerations = Set<UInt64>()
     private var reconnectPending = false
+    private var snapshotAwaitingProbeLease: GatewayConnection.ServerLease?
     private var reconnectHandler: (@MainActor () -> Void)?
     private var pendingActivationDeadlineTask: Task<Void, Never>?
     private var temporaryConnectionCheckDepth = 0
@@ -67,7 +69,11 @@ final class OnboardingConfiguredGatewayProbe {
     /// order, decides which selected Gateway owns the result.
     func beginProbe() -> Attempt {
         self.generation &+= 1
-        return Attempt(generation: self.generation)
+        let attempt = Attempt(generation: self.generation)
+        // Only the newest queued attempt can still start; active superseded
+        // attempts remain tracked until their route-bound work unwinds.
+        self.scheduledProbeGenerations = [attempt.generation]
+        return attempt
     }
 
     func isCurrent(_ attempt: Attempt) -> Bool {
@@ -91,6 +97,7 @@ final class OnboardingConfiguredGatewayProbe {
 
     func invalidate() {
         self.generation &+= 1
+        self.scheduledProbeGenerations.removeAll()
         self.pendingActivationDeadlineTask?.cancel()
         self.pendingActivationDeadlineTask = nil
     }
@@ -125,9 +132,10 @@ final class OnboardingConfiguredGatewayProbe {
         routeIdentity: String? = nil,
         verifyConfiguredInference: Bool = true) async -> Outcome
     {
+        self.scheduledProbeGenerations.remove(attempt.generation)
         guard self.isCurrent(attempt) else { return .superseded }
-        self.activeProbeCount += 1
-        defer { self.finishProbe() }
+        self.activeProbeGenerations.insert(attempt.generation)
+        defer { self.finishProbe(attempt) }
         guard connectionMode != .unconfigured else { return .unavailable }
         let lease: GatewayConnection.ServerLease
         do {
@@ -142,6 +150,7 @@ final class OnboardingConfiguredGatewayProbe {
             return .unavailable
         }
         guard self.isCurrent(attempt) else { return .superseded }
+        await self.registerProbeLease(lease)
         let route = lease.route
         do {
             let agentsData = try await gateway.request(
@@ -234,15 +243,27 @@ final class OnboardingConfiguredGatewayProbe {
         defer {
             self.reconnectHandler = nil
             self.reconnectPending = false
+            self.snapshotAwaitingProbeLease = nil
         }
-        let stream = await gateway.subscribe(bufferingNewest: 1)
+        // onboardingDidAppear owns the current cached snapshot. This stream
+        // observes only physical connections established after it subscribes.
+        let stream = await gateway.subscribe(
+            bufferingNewest: 1,
+            replayLatestSnapshot: false)
         for await push in stream {
             guard !Task.isCancelled else { return }
             guard case .snapshot = push else { continue }
-            // captureRoute can create the socket whose hello produced this
-            // snapshot. Coalesce it until that route-bound check finishes so a
-            // real reconnect is never lost behind the in-flight request.
-            guard self.activeProbeCount == 0 else {
+            // ServerLease validation includes the physical socket generation.
+            // Ignore the hello owned by this probe, but retain a newer socket
+            // until all work for the replaced lease has unwound.
+            if let lease = self.snapshotAwaitingProbeLease,
+               await self.gateway.isCurrentServerLease(lease)
+            {
+                self.snapshotAwaitingProbeLease = nil
+                self.reconnectPending = false
+                continue
+            }
+            guard !self.hasProbeWork else {
                 self.reconnectPending = true
                 continue
             }
@@ -250,9 +271,27 @@ final class OnboardingConfiguredGatewayProbe {
         }
     }
 
-    private func finishProbe() {
-        self.activeProbeCount -= 1
-        guard self.activeProbeCount == 0, self.reconnectPending else { return }
+    private var hasProbeWork: Bool {
+        !self.scheduledProbeGenerations.isEmpty || !self.activeProbeGenerations.isEmpty
+    }
+
+    private func registerProbeLease(_ lease: GatewayConnection.ServerLease) async {
+        guard await self.gateway.isCurrentServerLease(lease) else { return }
+        if self.reconnectPending {
+            // A snapshot received before lease acquisition belongs to the same
+            // physical socket now covered by this probe.
+            self.reconnectPending = false
+            self.snapshotAwaitingProbeLease = nil
+        } else {
+            // Push delivery is intentionally asynchronous to connect. Remember
+            // the lease until its hello arrives after a fast probe completes.
+            self.snapshotAwaitingProbeLease = lease
+        }
+    }
+
+    private func finishProbe(_ attempt: Attempt) {
+        self.activeProbeGenerations.remove(attempt.generation)
+        guard !self.hasProbeWork, self.reconnectPending else { return }
         self.reconnectPending = false
         self.reconnectHandler?()
     }

@@ -1188,12 +1188,15 @@ extension GatewayConnection {
             stateDir?.isEmpty == false ? stateDir : nil)
     }
 
-    func subscribe(bufferingNewest: Int = 100) -> AsyncStream<GatewayPush> {
+    func subscribe(
+        bufferingNewest: Int = 100,
+        replayLatestSnapshot: Bool = true) -> AsyncStream<GatewayPush>
+    {
         let id = UUID()
         let snapshot = self.lastSnapshot
         let connection = self
         return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
-            if let snapshot {
+            if replayLatestSnapshot, let snapshot {
                 continuation.yield(.snapshot(snapshot))
             }
             self.subscribers[id] = continuation
