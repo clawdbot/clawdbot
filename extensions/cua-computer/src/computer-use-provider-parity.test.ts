@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  COMPUTER_USE_V2_ACTION_NAMES,
   COMPUTER_USE_V2_PROVIDER_ACTION_SUPPORT,
-  CUA_MCP_TOOL_NAMES,
-  CUA_MCP_TOOL_PARITY,
-  CUA_PROVIDER_PARITY_SOURCE,
+  type DeliveryModeSupport,
   PEEKABOO_MCP_TOOL_NAMES,
   PEEKABOO_MCP_TOOL_PARITY,
   PEEKABOO_PROVIDER_PARITY_SOURCE,
+} from "./computer-use-peekaboo-parity.test-fixtures.js";
+import {
+  COMPUTER_USE_V2_ACTION_NAMES,
+  CUA_MCP_TOOL_NAMES,
+  CUA_MCP_TOOL_PARITY,
+  CUA_PROVIDER_PARITY_SOURCE,
 } from "./computer-use-provider-parity.test-fixtures.js";
 
 describe("computer-use provider parity fixtures", () => {
@@ -77,7 +80,9 @@ describe("computer-use provider parity fixtures", () => {
             : "peekaboo",
       );
 
-      for (const [provider, delivery] of Object.entries(entry.deliveryModes ?? {})) {
+      for (const [provider, delivery] of Object.entries<DeliveryModeSupport>(
+        entry.deliveryModes ?? {},
+      )) {
         expect(delivery.modes.length).toBeGreaterThan(0);
         expect(new Set(delivery.modes).size).toBe(delivery.modes.length);
         expect(delivery.modes.every((mode) => mode === "background" || mode === "foreground")).toBe(
