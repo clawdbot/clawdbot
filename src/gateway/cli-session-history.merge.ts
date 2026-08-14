@@ -119,32 +119,91 @@ function resolveCliAssistantAggregateText(message: unknown): string | undefined 
   return extractComparableText(message);
 }
 
-function collectImportedAssistantTexts(messages: unknown[]): string {
-  const parts: string[] = [];
+type ImportedAssistantTurn = {
+  text: string;
+  firstTimestamp?: number;
+  lastTimestamp?: number;
+  consumed: boolean;
+};
+
+// Groups imported native assistant blocks into turns (contiguous assistant
+// runs between user messages) so an aggregate can be matched only against the
+// exact native block sequence of its own CLI turn.
+function buildImportedAssistantTurns(messages: unknown[]): ImportedAssistantTurn[] {
+  const turns: ImportedAssistantTurn[] = [];
+  let current: { parts: string[]; firstTimestamp?: number; lastTimestamp?: number } | undefined;
+  const flush = () => {
+    if (current && current.parts.length > 0) {
+      turns.push({
+        text: current.parts.join(" "),
+        firstTimestamp: current.firstTimestamp,
+        lastTimestamp: current.lastTimestamp,
+        consumed: false,
+      });
+    }
+    current = undefined;
+  };
   for (const message of messages) {
     if (!message || typeof message !== "object") {
       continue;
     }
-    const record = message as { role?: unknown };
-    if (readStringValue(record.role) !== "assistant" || !resolveImportedExternalIdentity(message)) {
+    const role = readStringValue((message as { role?: unknown }).role);
+    if (role === "user") {
+      flush();
+      continue;
+    }
+    if (role !== "assistant" || !resolveImportedExternalIdentity(message)) {
       continue;
     }
     const text = extractComparableText(message);
-    if (text) {
-      parts.push(text);
+    if (!text) {
+      continue;
+    }
+    const timestamp = resolveComparableTimestamp(message);
+    if (!current) {
+      current = { parts: [], firstTimestamp: timestamp, lastTimestamp: timestamp };
+    }
+    current.parts.push(text);
+    if (timestamp !== undefined) {
+      current.firstTimestamp =
+        current.firstTimestamp === undefined
+          ? timestamp
+          : Math.min(current.firstTimestamp, timestamp);
+      current.lastTimestamp =
+        current.lastTimestamp === undefined
+          ? timestamp
+          : Math.max(current.lastTimestamp, timestamp);
     }
   }
-  return parts.join(" ");
+  flush();
+  return turns;
 }
 
-function countTextOccurrences(haystack: string, needle: string): number {
-  let count = 0;
-  let index = haystack.indexOf(needle);
-  while (index !== -1) {
-    count += 1;
-    index = haystack.indexOf(needle, index + needle.length);
+// A synthetic aggregate covers one CLI turn: its normalized text must equal
+// the concatenation of that turn's native blocks, and its write time must sit
+// near the turn's block timestamps. Exact turn-local matching keeps unrelated
+// imported turns (e.g. a later "not OK" reply) from consuming an "OK" fallback.
+function findMatchingImportedTurn(
+  turns: ImportedAssistantTurn[],
+  aggregateText: string,
+  aggregateTimestamp: number | undefined,
+): ImportedAssistantTurn | undefined {
+  for (const turn of turns) {
+    if (turn.consumed || turn.text !== aggregateText) {
+      continue;
+    }
+    if (
+      aggregateTimestamp !== undefined &&
+      turn.firstTimestamp !== undefined &&
+      turn.lastTimestamp !== undefined &&
+      (aggregateTimestamp < turn.firstTimestamp - DEDUPE_TIMESTAMP_WINDOW_MS ||
+        aggregateTimestamp > turn.lastTimestamp + DEDUPE_TIMESTAMP_WINDOW_MS)
+    ) {
+      continue;
+    }
+    return turn;
   }
-  return count;
+  return undefined;
 }
 
 function isEquivalentImportedMessage(existing: unknown, imported: unknown): boolean {
@@ -195,19 +254,22 @@ export function mergeImportedChatHistoryMessages(params: {
   if (params.importedMessages.length === 0) {
     return params.localMessages;
   }
-  const importedAssistantText = collectImportedAssistantTexts(params.importedMessages);
+  const importedAssistantTurns = buildImportedAssistantTurns(params.importedMessages);
   const merged: { message: unknown; order: number }[] = [];
-  const seenAggregateTexts = new Map<string, number>();
   params.localMessages.forEach((message, index) => {
     const aggregateText = resolveCliAssistantAggregateText(message);
     if (aggregateText) {
-      const seen = (seenAggregateTexts.get(aggregateText) ?? 0) + 1;
-      seenAggregateTexts.set(aggregateText, seen);
       // A cli-assistant aggregate is a synthetic single-text copy of one CLI
       // assistant turn. Prefer the proven overlapping imported native blocks:
-      // drop the aggregate only when the imported transcript covers this many
-      // copies of its text, and retain it as fallback history otherwise.
-      if (countTextOccurrences(importedAssistantText, aggregateText) >= seen) {
+      // drop the aggregate only when its own imported turn covers it exactly,
+      // and retain it as fallback history otherwise.
+      const match = findMatchingImportedTurn(
+        importedAssistantTurns,
+        aggregateText,
+        resolveComparableTimestamp(message),
+      );
+      if (match) {
+        match.consumed = true;
         return;
       }
     }

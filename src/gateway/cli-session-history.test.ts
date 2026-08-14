@@ -975,6 +975,115 @@ describe("cli session history", () => {
     ).toHaveLength(1);
   });
 
+  it("keeps a fallback aggregate when only an unrelated imported turn contains its text", () => {
+    const localMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "OK" }],
+        idempotencyKey: "cli-assistant:run-1",
+        timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
+      },
+    ];
+    const importedMessages = [
+      {
+        role: "user",
+        content: "say not OK",
+        timestamp: Date.parse("2026-03-26T16:31:00.000Z"),
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "user-2",
+          cliSessionId: "session-1",
+        },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "not OK" }],
+        timestamp: Date.parse("2026-03-26T16:31:01.000Z"),
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "assistant-2",
+          cliSessionId: "session-1",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    // The unrelated later turn ("not OK") must not consume the "OK" fallback.
+    expect(
+      merged.filter((message) => readRecord(message).idempotencyKey === "cli-assistant:run-1"),
+    ).toHaveLength(1);
+    expect(merged.filter((message) => readRecord(message).role === "assistant")).toHaveLength(2);
+  });
+
+  it("replaces a cli-assistant aggregate with its own imported turn through the real file-backed import", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+      const filePath = path.join(
+        homeDir,
+        ".claude",
+        "projects",
+        "demo-workspace",
+        `${sessionId}.jsonl`,
+      );
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          { role: "user", uuid: "user-1", content: "hi" },
+          { role: "assistant", uuid: "assistant-1", content: "First block." },
+          { role: "assistant", uuid: "assistant-2", content: "Second block." },
+        ]),
+        "utf-8",
+      );
+      const localMessages = [
+        {
+          role: "user",
+          content: "hi",
+          timestamp: Date.parse("2026-03-26T16:29:54.900Z"),
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "First block.\n\nSecond block." }],
+          api: "cli",
+          provider: "claude-cli",
+          model: "gpt-5.6-sol",
+          idempotencyKey: "cli-assistant:run-1",
+          timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
+        },
+      ];
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages,
+      });
+
+      expect(messages).toHaveLength(3);
+      expect(
+        messages.some((message) =>
+          readRecord(message).idempotencyKey?.startsWith("cli-assistant:"),
+        ),
+      ).toBe(false);
+      const importedAssistantBlocks = messages.filter((message) => {
+        const record = readRecord(message);
+        return (
+          record.role === "assistant" &&
+          (record["__openclaw"] as { importedFrom?: string } | undefined)?.importedFrom ===
+            "claude-cli"
+        );
+      });
+      expect(importedAssistantBlocks).toHaveLength(2);
+      expectFields(readRecord(importedAssistantBlocks[0]), {
+        role: "assistant",
+      });
+      expect(readRecord(importedAssistantBlocks[0])["__openclaw"]).toMatchObject({
+        externalId: "assistant-1",
+      });
+      expect(readRecord(importedAssistantBlocks[1])["__openclaw"]).toMatchObject({
+        externalId: "assistant-2",
+      });
+    });
+  });
+
   it.each([
     ["deduplicates a local redacted copy against an imported full copy", false],
     ["deduplicates when both local and imported copies are already redacted", true],
