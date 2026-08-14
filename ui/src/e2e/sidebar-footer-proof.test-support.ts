@@ -19,7 +19,7 @@ export function createSidebarFooterProofSuite(name: string, buildInfo?: ControlU
   return createControlUiE2eSuite({
     name,
     browserLaunchOptions: { headless: process.env.OPENCLAW_UI_E2E_HEADED !== "1" },
-    startServer: buildInfo ? () => startControlUiE2eServer(buildInfo, { source: true }) : undefined,
+    startServer: () => startControlUiE2eServer(buildInfo, { source: true }),
     startServerBeforeBrowser: true,
     trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>
@@ -30,6 +30,7 @@ export function createSidebarFooterProofSuite(name: string, buildInfo?: ControlU
 export async function openSidebarFooterProofPage(
   suite: ReturnType<typeof createSidebarFooterProofSuite>,
   options: NonNullable<Parameters<typeof installMockGateway>[1]> = {},
+  beforeNavigation?: (page: Page) => Promise<void>,
 ) {
   const context = await suite.newBrowserContext({
     locale: "en-US",
@@ -37,6 +38,7 @@ export async function openSidebarFooterProofPage(
     viewport: { height: 900, width: 1440 },
   });
   const page = await context.newPage();
+  await beforeNavigation?.(page);
   const gateway = await installMockGateway(page, {
     ...options,
     presenceUsers: [SIDEBAR_PROOF_USER],

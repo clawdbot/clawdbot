@@ -1,4 +1,4 @@
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   captureUnionProof,
@@ -28,6 +28,26 @@ async function surfaceStyle(locator: Locator) {
       cursor: style.cursor,
       transform: style.transform,
     };
+  });
+}
+
+async function installLongPortugueseUpdateCopy(page: Page) {
+  const translations = JSON.stringify({
+    updates: {
+      sidebar: {
+        available: "Uma nova versão do OpenClaw está disponível",
+        action: "Atualizar",
+      },
+    },
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem("openclaw.i18n.locale", "pt-BR");
+  });
+  await page.route("**/src/i18n/locales/pt-BR.ts*", (route) => {
+    return route.fulfill({
+      contentType: "application/javascript",
+      body: `export const pt_BR = ${translations};`,
+    });
   });
 }
 
@@ -139,4 +159,57 @@ suite.define(() => {
       }
     },
   );
+
+  it("keeps long Portuguese update copy inside the supported sidebar width", async () => {
+    const opened = await openSidebarFooterProofPage(
+      suite,
+      {
+        methodResponses: { "update.run": UPDATE_RUN_RESPONSE },
+        updateAvailable: UPDATE_AVAILABLE,
+      },
+      installLongPortugueseUpdateCopy,
+    );
+    try {
+      const { page, sidebar } = opened;
+      await setSidebarProofTheme(page, "light");
+
+      const availability = sidebar.locator(".sidebar-update-card__availability");
+      const copy = availability.locator(".sidebar-update-card__text");
+      const cta = availability.getByRole("button", { name: "Atualizar", exact: true });
+      await expect
+        .poll(() => copy.textContent())
+        .toBe("Uma nova versão do OpenClaw está disponível");
+      expect(await page.locator("html").getAttribute("lang")).toBe("pt-BR");
+      expect(
+        await availability.evaluate((element) => {
+          const container = element.getBoundingClientRect();
+          const text = element.querySelector(".sidebar-update-card__text");
+          const action = element.querySelector(".sidebar-update-card__cta");
+          if (!(text instanceof HTMLElement) || !(action instanceof HTMLElement)) {
+            return null;
+          }
+          const textBox = text.getBoundingClientRect();
+          const actionBox = action.getBoundingClientRect();
+          return {
+            containerFits: element.scrollWidth <= element.clientWidth,
+            textTruncates: text.scrollWidth > text.clientWidth,
+            textInside: textBox.left >= container.left && textBox.right <= container.right,
+            actionInside: actionBox.left >= container.left && actionBox.right <= container.right,
+          };
+        }),
+      ).toEqual({
+        containerFits: true,
+        textTruncates: true,
+        textInside: true,
+        actionInside: true,
+      });
+      await captureUnionProof(page, "sidebar-update-cta", "light-update-pt-BR.png", [
+        availability,
+        sidebar.locator(".sidebar-footer-bar"),
+        cta,
+      ]);
+    } finally {
+      await suite.closeBrowserContext(opened.context);
+    }
+  });
 });
