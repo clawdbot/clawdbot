@@ -29,13 +29,16 @@ import type { GatewayRequestContext } from "./types.js";
 /** Captures the prepared request data used by both pre-ACK and detached injection attempts. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
-  request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
+  request: Pick<
+    NormalizedChatSendRequest,
+    "p" | "rawMessage" | "supportsTaskSuggestions" | "toolBindings"
+  >;
   session: Pick<PreparedChatSendSession, "cfg" | "entry">;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
   userTurnTranscriptRecorder: ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"];
 }) {
-  const { p, rawMessage, supportsTaskSuggestions } = params.request;
+  const { p, rawMessage, supportsTaskSuggestions, toolBindings } = params.request;
   const { cfg, entry } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
   return (): ReplyMessageInjectionAttempt | undefined => {
@@ -57,6 +60,11 @@ export function createChatSendMessageInjectionStarter(params: {
       {
         steeringMode: "all",
         isInboundUserMessage: true,
+        // chat.send cannot alter per-turn tool policy. Preserve the captured
+        // active authority only when no request-scoped tool bindings are present.
+        ...(toolBindings === undefined && params.target.toolAuthorityFingerprint
+          ? { toolAuthorityFingerprint: params.target.toolAuthorityFingerprint }
+          : {}),
         ...(replyOptionImages?.length ? { images: replyOptionImages } : {}),
         ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),

@@ -116,6 +116,7 @@ function createReplyOperation(): ReplyOperation {
     lastActivityAtMs: Date.now(),
     recordActivity: vi.fn(),
     setPhase: vi.fn(),
+    bindToolAuthorityFingerprint: vi.fn(),
     freezeAbort: vi.fn(),
     fail: vi.fn(),
     complete: vi.fn(),

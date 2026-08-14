@@ -51,6 +51,11 @@ const resolveOutboundAttachmentFromUrlMock = vi.fn();
 const createReplyMediaContextRuntimeMock = vi.fn();
 const EXPECTED_STEER_QUEUE_IDENTITY =
   "channel-user:v1:6f3f31084a7a2a6ff17176c0c16682e64d9f21301f64ff7e5bf1173b54fadc33";
+const TEST_TOOL_AUTHORITY_FINGERPRINT = "test-tool-authority";
+
+vi.mock("./reply-tool-authority.js", () => ({
+  resolveFollowupRunToolAuthorityFingerprint: () => "test-tool-authority",
+}));
 
 vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: {
@@ -292,10 +297,14 @@ const { runReplyAgent } = await import("./agent-runner.js");
 function createReplyOperation(): ReplyOperation {
   return {
     result: undefined,
+    toolAuthorityFingerprint: TEST_TOOL_AUTHORITY_FINGERPRINT,
+    abortSignal: new AbortController().signal,
     startedAtMs: Date.now(),
     lastActivityAtMs: Date.now(),
     recordActivity: vi.fn(),
     setPhase: vi.fn(),
+    bindToolAuthorityFingerprint: vi.fn(),
+    bindToolAuthorityRoute: vi.fn(),
     freezeAbort: vi.fn(),
     fail: vi.fn(),
     complete: vi.fn(),
@@ -486,6 +495,7 @@ describe("runReplyAgent media path normalization", () => {
         queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
         onQueueAccepted: parkedSteerAcceptedMock,
         taskSuggestionDeliveryMode: "gateway",
+        toolAuthorityFingerprint: TEST_TOOL_AUTHORITY_FINGERPRINT,
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
@@ -534,6 +544,7 @@ describe("runReplyAgent media path normalization", () => {
         images,
         media: followupRun.media,
         taskSuggestionDeliveryMode: undefined,
+        toolAuthorityFingerprint: TEST_TOOL_AUTHORITY_FINGERPRINT,
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
@@ -580,6 +591,7 @@ describe("runReplyAgent media path normalization", () => {
       resetTriggered: false,
     });
     operation.setPhase("running");
+    operation.bindToolAuthorityFingerprint(TEST_TOOL_AUTHORITY_FINGERPRINT);
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
@@ -615,6 +627,7 @@ describe("runReplyAgent media path normalization", () => {
         queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
         onQueueAccepted: parkedSteerAcceptedMock,
         taskSuggestionDeliveryMode: undefined,
+        toolAuthorityFingerprint: TEST_TOOL_AUTHORITY_FINGERPRINT,
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();

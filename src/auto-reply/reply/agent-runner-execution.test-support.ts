@@ -237,6 +237,7 @@ vi.mock("../../utils/message-channel.js", async () => ({
 }));
 
 vi.mock("../heartbeat.js", () => ({
+  DEFAULT_HEARTBEAT_EVERY: "30m",
   stripHeartbeatToken: (text: string) => ({
     text,
     didStrip: false,
@@ -451,7 +452,7 @@ export function createFollowupRun(): FollowupRun {
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
-      agentId: "agent",
+      agentId: "main",
       agentDir: "/tmp/agent",
       sessionId: "session",
       sessionKey: "main",
