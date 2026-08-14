@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -99,7 +108,20 @@ export function syncClawHubPins(rootDir: string, write: boolean): boolean {
   const changed = rendered !== source;
 
   if (write && changed) {
-    writeFileSync(materializerPath, rendered);
+    const temporaryPath = `${materializerPath}.${process.pid}.tmp`;
+    rmSync(temporaryPath, { force: true });
+    try {
+      const descriptor = openSync(temporaryPath, "w", statSync(materializerPath).mode);
+      try {
+        writeFileSync(descriptor, rendered);
+        fsyncSync(descriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+      renameSync(temporaryPath, materializerPath);
+    } finally {
+      rmSync(temporaryPath, { force: true });
+    }
   }
   return changed;
 }
