@@ -105,7 +105,7 @@ export const handlePluginCommand: CommandHandler = async (
       ? {
           runtimeContext: {
             compactCurrent: async () =>
-              (await import("./commands-compact.runtime.js")).readSessionEntry(sessionTarget)
+              (await import("./commands-compact.runtime.js")).readCurrentSession(sessionTarget)
                 ?.sessionId === sessionTarget.sessionId
                 ? (await handleCompactCommand(
                     {
