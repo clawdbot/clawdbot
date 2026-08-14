@@ -1,7 +1,9 @@
 // Memory Core tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
+import { LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES } from "openclaw/plugin-sdk/memory-authorization";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { MemoryPluginCapability } from "openclaw/plugin-sdk/memory-host-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
@@ -45,16 +47,24 @@ const hostRuntime = {
   },
 } as unknown as OpenClawPluginApi["runtime"];
 
-function registerMemoryCoreRuntime(): MemoryPluginRuntime {
-  let runtime: MemoryPluginRuntime | undefined;
+function registerMemoryCoreCapability(): MemoryPluginCapability {
+  let registered: MemoryPluginCapability | undefined;
   plugin.register(
     createTestPluginApi({
       runtime: hostRuntime,
       registerMemoryCapability(capability) {
-        runtime = capability.runtime;
+        registered = capability;
       },
     }),
   );
+  if (!registered) {
+    throw new Error("expected memory-core to register a memory capability");
+  }
+  return registered;
+}
+
+function registerMemoryCoreRuntime(): MemoryPluginRuntime {
+  const runtime = registerMemoryCoreCapability().runtime;
   if (!runtime) {
     throw new Error("expected memory-core to register a memory runtime");
   }
@@ -212,6 +222,13 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
 
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
+  it("declares the selected lazy capability as legacy-only without synthesizing runtime authority", () => {
+    const capability = registerMemoryCoreCapability();
+
+    expect(capability.authorization).toEqual(LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES);
+    expect("authorization" in (capability.runtime ?? {})).toBe(false);
   });
 
   it("binds the host local-service hook to the registered memory runtime", async () => {

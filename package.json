@@ -1209,6 +1209,14 @@
     "./plugin-sdk/qa-runner-runtime": {
       "default": "./dist/plugin-sdk/qa-runner-runtime.js"
     },
+    "./plugin-sdk/memory-authorization": {
+      "types": "./dist/plugin-sdk/memory-authorization.d.ts",
+      "default": "./dist/plugin-sdk/memory-authorization.js"
+    },
+    "./plugin-sdk/memory-authorization-conformance": {
+      "types": "./dist/plugin-sdk/memory-authorization-conformance.d.ts",
+      "default": "./dist/plugin-sdk/memory-authorization-conformance.js"
+    },
     "./plugin-sdk/memory-core-host-embedding-registry": {
       "default": "./dist/plugin-sdk/memory-core-host-embedding-registry.js"
     },

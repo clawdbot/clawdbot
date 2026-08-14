@@ -37,6 +37,7 @@ import memoryPlugin, {
   testing,
 } from "./index.js";
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.test-support.js";
+import { LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES } from "./src/authorization.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 // Provenance marker OpenClaw appends to every injected inbound-context header.
@@ -443,6 +444,8 @@ describe("memory plugin e2e", () => {
       registerMemoryCapabilityLocal as unknown as MockCallSource,
       "memory capability",
     );
+    expect(capability.authorization).toBe(LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES);
+    expect(capability.runtime).toBeUndefined();
     const publicArtifacts = capability.publicArtifacts as
       | { listArtifacts?: (params: { cfg: unknown }) => Promise<unknown> }
       | undefined;

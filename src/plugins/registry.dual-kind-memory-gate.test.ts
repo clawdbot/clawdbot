@@ -5,7 +5,11 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
+import { LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES } from "../plugin-sdk/memory-authorization.js";
+import {
+  resolveMemoryCapabilityRegistration,
+  resolveSelectedMemoryCapabilityRegistration,
+} from "./memory-state.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 function createStubMemoryRuntime() {
@@ -201,18 +205,63 @@ describe("dual-kind memory registration gate", () => {
       config,
       record,
       register(api) {
-        api.registerMemoryCapability({ runtime, flushPlanResolver });
+        api.registerMemoryCapability({
+          authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+          runtime,
+          flushPlanResolver,
+        });
         api.registerMemoryCapability({ publicArtifacts: { listArtifacts: async () => [] } });
       },
     });
 
-    expect(resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities)).toEqual({
+    expect(
+      resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities, "memory-core"),
+    ).toEqual({
       pluginId: "memory-core",
       capability: {
+        authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
         runtime,
         flushPlanResolver,
         publicArtifacts: expect.any(Object),
       },
     });
+  });
+
+  it("does not borrow sidecar authorization when the selected backend omits it", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const runtime = createStubMemoryRuntime();
+    const publicArtifacts = { listArtifacts: async () => [] };
+
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "memory-core", name: "Memory Core", kind: "memory" }),
+      register(api) {
+        api.registerMemoryCapability({
+          authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+          runtime,
+        });
+      },
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "memory-lancedb",
+        name: "Memory LanceDB",
+        kind: "memory",
+        memorySlotSelected: true,
+      }),
+      register(api) {
+        api.registerMemoryCapability({ publicArtifacts });
+      },
+    });
+
+    const resolved = resolveSelectedMemoryCapabilityRegistration(registry.registry);
+    expect(resolved).toEqual({
+      pluginId: "memory-lancedb",
+      capability: { runtime, publicArtifacts },
+    });
+    expect(resolved?.capability).not.toHaveProperty("authorization");
   });
 });

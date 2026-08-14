@@ -78,6 +78,16 @@ describe("type suppression inventory", () => {
       "src/infra/kysely-sync.types.test.ts:61:@ts-expect-error Kysely checks order references and selected aliases.",
       "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:8:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
       "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:10:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:271:@ts-expect-error retrieve only permits broker-internal candidate selection.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:278:@ts-expect-error retrieve only permits broker-internal candidate selection.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:280:@ts-expect-error the context and plan must name the same content operation.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:290:@ts-expect-error retrieve only permits broker-internal candidate selection.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:347:@ts-expect-error retrieve may select candidates only inside the broker.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:353:@ts-expect-error the mutation kind must match the context and plan operation.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:359:@ts-expect-error retrieve may not invoke an import action.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:365:@ts-expect-error retrieve may not invoke a sync action.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:367:@ts-expect-error retrieve may not produce a content-bearing export payload.",
+      "src/plugins/contracts/memory-authorization.contract.test.ts:373:@ts-expect-error retrieve may not invoke a status action.",
     ]);
   });
 });
