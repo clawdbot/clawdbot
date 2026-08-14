@@ -22,6 +22,7 @@ import {
 import { DesktopClient, type DesktopConnectionHandle } from "./desktop-client.ts";
 import { desktopDocumentStyles } from "./desktop-document-styles.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
+import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import type {
   DesktopAppId,
   DesktopCredentials,
@@ -51,7 +52,6 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 560,
 });
-const MOBILE_KEYBOARD_SENTINEL = "________________";
 /** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
 class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
@@ -88,7 +88,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private launchOperationId = 0;
   private controlTakeoverRecoveryUsed = false;
   private documentSourceResolved = false;
-  private keyboardInputValue = MOBILE_KEYBOARD_SENTINEL;
+  private readonly mobileKeyboard = new DesktopMobileKeyboard({
+    connection: () => this.connection,
+    controlling: () => this.controlling,
+    input: () => this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input"),
+  });
   private readonly dockLayout = new DockLayoutController(this, {
     layout: panelLayout,
     reservationPrefix: "desktop",
@@ -215,7 +219,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     const connection = this.connection;
     this.connection = null;
     connection?.disconnect();
-    this.resetDocumentKeyboardInput();
+    this.mobileKeyboard.reset();
   }
 
   private clearLaunchState(): void {
@@ -577,57 +581,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
   }
 
-  private handleDocumentKeyboardEvent(event: KeyboardEvent): void {
-    if (!this.controlling || !this.connection?.sendKeyboardEvent) {
-      return;
-    }
-    this.connection.sendKeyboardEvent(event);
-    event.preventDefault();
-  }
-
-  private handleDocumentKeyboardInput(event: InputEvent): void {
-    const input = event.currentTarget as HTMLTextAreaElement;
-    if (!this.controlling) {
-      this.resetDocumentKeyboardInput(input);
-      return;
-    }
-    const previousValue = this.keyboardInputValue;
-    const nextValue = input.value;
-    let prefixLength = 0;
-    const comparableLength = Math.min(previousValue.length, nextValue.length);
-    while (
-      prefixLength < comparableLength &&
-      previousValue.charAt(prefixLength) === nextValue.charAt(prefixLength)
-    ) {
-      prefixLength += 1;
-    }
-    const removedCount = previousValue.length - prefixLength;
-    for (let index = 0; index < removedCount; index += 1) {
-      this.connection?.sendBackspace?.();
-    }
-    this.connection?.sendText?.(nextValue.slice(prefixLength));
-    if (nextValue.length < 1 || nextValue.length > MOBILE_KEYBOARD_SENTINEL.length * 2) {
-      this.resetDocumentKeyboardInput(input);
-      return;
-    }
-    this.keyboardInputValue = nextValue;
-  }
-
-  private resetDocumentKeyboardInput(input?: HTMLTextAreaElement): void {
-    this.keyboardInputValue = MOBILE_KEYBOARD_SENTINEL;
-    const target =
-      input ?? this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
-    if (target) {
-      target.value = MOBILE_KEYBOARD_SENTINEL;
-    }
-  }
-
-  private focusDocumentKeyboard(): void {
-    const input = this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
-    input?.focus({ preventScroll: true });
-    input?.setSelectionRange(input.value.length, input.value.length);
-  }
-
   private toggleDocumentScale(): void {
     this.scaleViewport = !this.scaleViewport;
     this.connection?.setScaleViewport?.(this.scaleViewport);
@@ -690,7 +643,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         state: this.state,
         controlling: this.controlling,
         scaleViewport: this.scaleViewport,
-        keyboardInputValue: this.keyboardInputValue,
+        keyboardInputValue: this.mobileKeyboard.value,
         notice,
         picker,
         credentials,
@@ -700,9 +653,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
             void this.connectEnvironment(this.environmentId, !this.controlling);
           }
         },
-        onKeyboardFocus: () => this.focusDocumentKeyboard(),
-        onKeyboardEvent: (event) => this.handleDocumentKeyboardEvent(event),
-        onKeyboardInput: (event) => this.handleDocumentKeyboardInput(event),
+        onKeyboardFocus: () => this.mobileKeyboard.focus(),
+        onKeyboardEvent: (event) => this.mobileKeyboard.handleKeyboardEvent(event),
+        onKeyboardInput: (event) => this.mobileKeyboard.handleInput(event),
         onScaleToggle: () => this.toggleDocumentScale(),
         onClose: () => this.onDocumentClose?.(),
       });
