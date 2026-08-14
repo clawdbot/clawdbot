@@ -5732,6 +5732,8 @@ export const en: TranslationMap = {
       refresh: "Refresh",
       refreshing: "Refreshing...",
       paused: "Paused",
+      autoDisabledRunFailures: "Auto-disabled · {count} run failures",
+      autoDisabledScheduleErrors: "Auto-disabled · {count} schedule errors",
       tasksTab: "Automations",
       activityTab: "Run history",
     },
