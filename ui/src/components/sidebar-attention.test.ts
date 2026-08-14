@@ -176,7 +176,7 @@ describe("sidebar attention refresh ownership", () => {
     const secondCron = deferred<unknown>();
     const secondAuth = deferred<unknown>();
     const responses = {
-      "cron.list": [firstCron, secondCron],
+      "cron.list": [firstCron, secondCron, deferred<unknown>()],
       "models.authStatus": [firstAuth, secondAuth],
     };
     const request = vi.fn((method: keyof typeof responses, _params?: unknown) => {
@@ -211,6 +211,15 @@ describe("sidebar attention refresh ownership", () => {
       snapshot: { approvalQueue: [] },
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["overlays"];
+    const selectionState = { selectedId: "main" as string | null };
+    const selectionListeners = new Set<() => void>();
+    const agentSelection = {
+      state: selectionState,
+      subscribe: (listener: () => void) => {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
+    } as unknown as ApplicationContext["agentSelection"];
     const storage = createTestStorageMock();
     vi.stubGlobal("localStorage", storage);
     localStorage.setItem(
@@ -221,7 +230,11 @@ describe("sidebar attention refresh ownership", () => {
     let now = 120_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
 
-    const provider = createApplicationContextProvider({ gateway, overlays } as ApplicationContext);
+    const provider = createApplicationContextProvider({
+      gateway,
+      overlays,
+      agentSelection,
+    } as ApplicationContext);
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
     document.body.append(provider);
@@ -230,8 +243,14 @@ describe("sidebar attention refresh ownership", () => {
       agentId: "main",
     });
 
-    document.dispatchEvent(new Event("visibilitychange"));
+    selectionState.selectedId = "writer";
+    for (const listener of selectionListeners) {
+      listener();
+    }
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")[1]?.[1]).toEqual(
+      { agentId: "writer" },
+    );
 
     const currentAuth = { ts: 2, providers: [] } as ModelAuthStatusResult;
     now = 200_000;
@@ -255,6 +274,14 @@ describe("sidebar attention refresh ownership", () => {
     expect(element.modelAuthStatus).toBe(currentAuth);
     expect(element.loadedAtMs).toBe(200_000);
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
+
+    selectionState.selectedId = null;
+    for (const listener of selectionListeners) {
+      listener();
+    }
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(5));
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
+    expect(element.modelAuthStatus).toBeNull();
   });
 
   it("clears a stale failure alert when the gateway reports an automation change", async () => {
@@ -298,9 +325,17 @@ describe("sidebar attention refresh ownership", () => {
       snapshot: { approvalQueue: [] },
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["overlays"];
+    const agentSelection = {
+      state: { selectedId: "main" },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["agentSelection"];
     vi.stubGlobal("localStorage", createTestStorageMock());
 
-    const provider = createApplicationContextProvider({ gateway, overlays } as ApplicationContext);
+    const provider = createApplicationContextProvider({
+      gateway,
+      overlays,
+      agentSelection,
+    } as ApplicationContext);
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
     document.body.append(provider);

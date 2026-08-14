@@ -44,9 +44,13 @@ class DebugPage extends OpenClawLightDomElement {
   private diagnosticsTaskActiveClient: GatewayBrowserClient | null = null;
   private readonly diagnosticsTask = new Task(this, {
     autoRun: false,
-    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
-    task: ([client], { signal }) =>
-      client ? loadGatewayDiagnostics(client, signal) : initialState,
+    args: () =>
+      [
+        this.gateway.connected ? this.gateway.client : null,
+        this.context?.agentSelection.state.selectedId ?? null,
+      ] as const,
+    task: ([client, agentId], { signal }) =>
+      client ? loadGatewayDiagnostics(client, agentId, signal) : initialState,
     onComplete: (result) => {
       this.diagnosticsTaskActiveClient = null;
       this.debugDiagnosticsError = null;
@@ -72,7 +76,7 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugDiagnosticsError = null;
     },
     invalidateRequests: () => {
-      void this.diagnosticsTask.run([null]);
+      void this.diagnosticsTask.run([null, null]);
       this.diagnosticsTaskActiveClient = null;
       this.callEpoch += 1;
     },
@@ -81,17 +85,28 @@ class DebugPage extends OpenClawLightDomElement {
       this.ensureInitialDebug();
     },
   });
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribeEventLog(notify),
-    (gateway) => {
-      this.eventLog = gateway.eventLog;
-    },
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribeEventLog(notify),
+      (gateway) => {
+        this.eventLog = gateway.eventLog;
+      },
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => {
+        this.debugModels = [];
+        void this.diagnosticsTask.run([null, null]);
+        this.diagnosticsTaskActiveClient = null;
+        void this.loadDiagnostics();
+      },
+    );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    void this.diagnosticsTask.run([null]);
+    void this.diagnosticsTask.run([null, null]);
     this.diagnosticsTaskActiveClient = null;
     this.callEpoch += 1;
     super.disconnectedCallback();
@@ -123,7 +138,7 @@ class DebugPage extends OpenClawLightDomElement {
       return Promise.resolve();
     }
     this.diagnosticsTaskActiveClient = client;
-    return this.diagnosticsTask.run([client]);
+    return this.diagnosticsTask.run([client, this.context.agentSelection.state.selectedId]);
   }
 
   private async callDebugMethod() {

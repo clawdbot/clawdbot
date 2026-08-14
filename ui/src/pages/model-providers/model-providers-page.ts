@@ -52,7 +52,7 @@ export type ModelProvidersRouteData = {
   /** Client the loader fetched from; null when it ran disconnected. */
   client: GatewayBrowserClient | null;
   /** Concrete agent whose credential store populated the auth snapshot. */
-  agentId: string;
+  agentId: string | null;
 };
 
 function isMissingMethodError(error: unknown): boolean {
@@ -112,7 +112,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private addProviderId = "";
   @state() private addProviderKey = "";
   @state() private defaultsDraft: DefaultModelSelection | null = null;
-  @state() private selectedAgentId = "main";
+  @state() private selectedAgentId = "";
 
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
@@ -132,7 +132,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         false as boolean,
       ] as const,
     task: ([client, agentId, force], { signal }) =>
-      client
+      client && agentId
         ? loadModelProvidersData(client, {
             agentId,
             ...(force ? { refresh: true } : {}),
@@ -173,7 +173,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
-    void this.refreshTask.run([null, this.selectedAgentId, false]);
+    void this.refreshTask.run([null, "", false]);
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -182,7 +182,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (changed.has("routeData") && this.routeData) {
       const selectedAgentId = this.resolveSelectedAgentId();
       this.setSelectedAgent(selectedAgentId);
-      if (this.routeData.agentId === selectedAgentId) {
+      if ((this.routeData.agentId ?? "") === selectedAgentId) {
         this.data = this.routeData.data;
         this.dataClient = this.routeData.client;
       } else {
@@ -243,14 +243,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private resolveSelectedAgentId(): string {
-    const agentsList = this.context.agents.state.agentsList;
-    const requested = this.context.agentSelection.state.scopeId;
-    const normalizedRequested = requested ? normalizeAgentId(requested) : null;
-    const rosterIds = new Set(agentsList?.agents.map((agent) => normalizeAgentId(agent.id)) ?? []);
-    if (normalizedRequested && rosterIds.has(normalizedRequested)) {
-      return normalizedRequested;
-    }
-    return normalizeAgentId(agentsList?.defaultId ?? agentsList?.agents[0]?.id ?? "main");
+    const selected = this.context.agentSelection.state.selectedId;
+    return selected ? normalizeAgentId(selected) : "";
   }
 
   private setSelectedAgent(agentId: string): boolean {
@@ -281,7 +275,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   private refresh(opts: { force: boolean }): Promise<void> {
     const client = this.context.gateway.snapshot.client;
-    if (!client) {
+    if (!client || !this.selectedAgentId) {
       return Promise.resolve();
     }
     return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
@@ -295,7 +289,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!hasOperatorAdminAccess(snapshot.hello?.auth ?? null)) {
       return t("modelProviders.readOnly.adminRequired");
     }
-    if (!snapshot.client || !this.data?.config) {
+    if (!snapshot.client || !this.selectedAgentId || !this.data?.config) {
       return t("modelProviders.configUnavailable");
     }
     return null;

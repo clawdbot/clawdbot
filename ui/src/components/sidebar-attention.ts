@@ -50,6 +50,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
+  private loadedAgentId: string | null = null;
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
@@ -61,9 +62,10 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       [
         null as ApplicationContext["gateway"] | null,
         null as GatewayBrowserClient | null,
+        null as string | null,
         true as boolean,
       ] as const,
-    task: async ([gateway, client, refreshModelAuth], { signal }) => {
+    task: async ([gateway, client, agentId, refreshModelAuth], { signal }) => {
       if (!gateway || !client) {
         return initialState;
       }
@@ -75,13 +77,11 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
           }
         }),
       ];
-      if (refreshModelAuth) {
+      if (refreshModelAuth && agentId) {
         loads.push(
           loadModelAuthStatus(client, {
+            agentId,
             signal,
-            ...(gateway.snapshot.assistantAgentId
-              ? { agentId: gateway.snapshot.assistantAgentId }
-              : {}),
           })
             .catch(() => null)
             .then((modelAuthStatus) => {
@@ -90,6 +90,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
               }
             }),
         );
+      } else if (!agentId) {
+        this.modelAuthStatus = null;
       }
       await Promise.allSettled(loads);
       return true;
@@ -106,6 +108,16 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       (gateway) => {
         this.synchronize(gateway);
         return gateway.subscribe(() => this.synchronize(gateway));
+      },
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => {
+        const gateway = this.context?.gateway;
+        if (gateway) {
+          this.synchronize(gateway);
+        }
       },
     )
     .effect(
@@ -163,9 +175,10 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.idleRefreshTimer = null;
     }
     this.subscriptions.clear();
-    void this.loadTask.run([null, null, false]);
+    void this.loadTask.run([null, null, null, false]);
     this.loadedClient = null;
     this.loadedGateway = null;
+    this.loadedAgentId = null;
     super.disconnectedCallback();
   }
 
@@ -180,19 +193,26 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.dismissed = loadDismissals(gatewayUrl);
     }
     if (snapshot.phase !== "connected" || !snapshot.client) {
-      void this.loadTask.run([null, null, false]);
+      void this.loadTask.run([null, null, null, false]);
       this.loadedClient = null;
       this.loadedGateway = null;
+      this.loadedAgentId = null;
       this.cronJobs = [];
       this.modelAuthStatus = null;
       return;
     }
-    if (gateway === this.loadedGateway && snapshot.client === this.loadedClient) {
+    const agentId = this.context?.agentSelection.state.selectedId ?? null;
+    if (
+      gateway === this.loadedGateway &&
+      snapshot.client === this.loadedClient &&
+      agentId === this.loadedAgentId
+    ) {
       return;
     }
     this.loadedGateway = gateway;
     this.loadedClient = snapshot.client;
-    void this.loadTask.run([gateway, snapshot.client, options.refreshModelAuth !== false]);
+    this.loadedAgentId = agentId;
+    void this.loadTask.run([gateway, snapshot.client, agentId, options.refreshModelAuth !== false]);
   }
 
   // Re-arm stale snoozes only right after this tab's own data refresh: fresh
