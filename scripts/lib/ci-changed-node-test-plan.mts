@@ -15,8 +15,10 @@ import {
   resolvePolicyTestTargets,
 } from "./ci-node-test-plan.mts";
 import {
-  createExtensionTestProcessTargetChunks,
+  listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
+  shouldSplitExtensionTestProcesses,
+  splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 
@@ -329,7 +331,10 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
   const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
     ...rootsByConfig,
   ].flatMap(([config, roots]) => {
-    const chunks = createExtensionTestProcessTargetChunks(config, roots);
+    const testFiles = shouldSplitExtensionTestProcesses(config)
+      ? listExtensionTestFilesForRoots(roots)
+      : [];
+    const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
     return chunks.length > 1
       ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
       : [{ config, roots }];
