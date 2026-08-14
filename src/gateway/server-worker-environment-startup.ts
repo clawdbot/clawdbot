@@ -181,6 +181,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const nodeWorkspaceTransfer = createNodeWorkspaceTransferService({
     getOwner: (environmentId) => params.startup.store.getTransferOwner(environmentId),
   });
+  await nodeWorkspaceTransfer.initialize();
   const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
     gatewayDeviceId: loadOrCreateProcessDeviceIdentity().deviceId,
     getEnvironment: (environmentId) => params.startup.store.get(environmentId),

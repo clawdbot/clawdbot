@@ -713,6 +713,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         pending.cancelled = true;
       }
       await Promise.all([...entries.values()].map(stopEntry));
+      await options.workspaceTransfer.closeAll();
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);
