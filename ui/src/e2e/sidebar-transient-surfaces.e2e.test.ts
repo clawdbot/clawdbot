@@ -16,11 +16,18 @@ const suite = createSidebarCustomizationSuite(
   "Control UI sidebar transient surfaces mocked Gateway E2E",
 );
 
-const visualVariants = [{ colorScheme: "light" as const }, { colorScheme: "dark" as const }];
+const visualVariants = [
+  { colorScheme: "light", resolvedTheme: "light", theme: "claw" },
+  { colorScheme: "dark", resolvedTheme: "dark", theme: "claw" },
+  { colorScheme: "light", resolvedTheme: "openknot-light", theme: "knot" },
+  { colorScheme: "dark", resolvedTheme: "openknot", theme: "knot" },
+  { colorScheme: "light", resolvedTheme: "dash-light", theme: "dash" },
+  { colorScheme: "dark", resolvedTheme: "dash", theme: "dash" },
+] as const;
 
-function configResponse(colorScheme: "light" | "dark") {
-  const config = { ui: { prefs: { locale: "en", themeMode: colorScheme } } };
-  const hash = `transient-surfaces-${colorScheme}`;
+function configResponse(theme: "claw" | "knot" | "dash", colorScheme: "light" | "dark") {
+  const config = { ui: { prefs: { locale: "en", theme, themeMode: colorScheme } } };
+  const hash = `transient-surfaces-${theme}-${colorScheme}`;
   return {
     appliedConfigHash: hash,
     config,
@@ -53,10 +60,21 @@ async function waitForAnimations(surface: Locator) {
   });
 }
 
+async function computedShadowFromToken(root: Locator, token: "--overlay-shadow" | "--shadow-md") {
+  return root.evaluate((_, tokenName) => {
+    const probe = document.createElement("div");
+    probe.style.boxShadow = `var(${tokenName})`;
+    document.body.append(probe);
+    const shadow = getComputedStyle(probe).boxShadow;
+    probe.remove();
+    return shadow;
+  }, token);
+}
+
 suite.define(() => {
   it.each(visualVariants)(
-    "keeps sidebar transient surfaces on one contract in $colorScheme",
-    async ({ colorScheme }) => {
+    "keeps sidebar transient surfaces on one contract in $theme $colorScheme",
+    async ({ colorScheme, resolvedTheme, theme }) => {
       const context = await suite.newBrowserContext({
         colorScheme,
         locale: "en-US",
@@ -73,7 +91,7 @@ suite.define(() => {
           "sessions.patch",
         ],
         methodResponses: {
-          "config.get": configResponse(colorScheme),
+          "config.get": configResponse(theme, colorScheme),
           "sessions.list": sessionsListResponse([
             sessionRow("agent:main:main", "Main", Date.parse("2026-08-14T16:00:00.000Z")),
             {
@@ -97,6 +115,8 @@ suite.define(() => {
         await expect
           .poll(() => page.locator("html").getAttribute("data-theme-mode"))
           .toBe(colorScheme);
+        const root = page.locator("html");
+        await expect.poll(() => root.getAttribute("data-theme")).toBe(resolvedTheme);
 
         const newSessionButton = sidebar.locator(".sidebar-brand__new-thread");
         await newSessionButton.hover();
@@ -105,7 +125,13 @@ suite.define(() => {
         await tooltipSurface.waitFor({ state: "visible" });
         await waitForAnimations(tooltipSurface);
         const tooltipContract = await surfaceMetrics(tooltipSurface);
-        expect(tooltipContract.boxShadow).not.toBe("none");
+        const overlayShadow = await computedShadowFromToken(root, "--overlay-shadow");
+        const expectedShadow = await computedShadowFromToken(
+          root,
+          theme === "claw" ? "--overlay-shadow" : "--shadow-md",
+        );
+        expect(overlayShadow).toBe(expectedShadow);
+        expect(tooltipContract.boxShadow).toBe(overlayShadow);
         expect(
           await tooltip
             .locator("wa-tooltip")
@@ -116,7 +142,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface, tooltipSurface],
-          `transient-${colorScheme}-tooltip.png`,
+          `transient-${theme}-${colorScheme}-tooltip.png`,
           { animations: "allow" },
         );
 
@@ -203,7 +229,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface, sessionMenuSurface],
-          `transient-${colorScheme}-session-default-disabled.png`,
+          `transient-${theme}-${colorScheme}-session-default-disabled.png`,
           { animations: "allow" },
         );
 
@@ -215,7 +241,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface, sessionMenuSurface],
-          `transient-${colorScheme}-session-hover.png`,
+          `transient-${theme}-${colorScheme}-session-hover.png`,
           { animations: "allow" },
         );
         await deleteItem.hover();
@@ -226,7 +252,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface, sessionMenuSurface],
-          `transient-${colorScheme}-session-delete-hover.png`,
+          `transient-${theme}-${colorScheme}-session-delete-hover.png`,
           { animations: "allow" },
         );
         await page.mouse.move(700, 700);
@@ -239,7 +265,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface, sessionMenuSurface],
-          `transient-${colorScheme}-session-focus.png`,
+          `transient-${theme}-${colorScheme}-session-focus.png`,
           { animations: "allow" },
         );
         await page.keyboard.press("Escape");
@@ -259,7 +285,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface, moreMenuSurface],
-          `transient-${colorScheme}-navigation-menu.png`,
+          `transient-${theme}-${colorScheme}-navigation-menu.png`,
           { animations: "allow" },
         );
         await page.keyboard.press("Escape");
@@ -272,7 +298,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface, identitySurface],
-          `transient-${colorScheme}-identity-menu.png`,
+          `transient-${theme}-${colorScheme}-identity-menu.png`,
           { animations: "allow" },
         );
         const buildChip = identityMenu.locator(".sidebar-footer-build");
@@ -289,7 +315,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface, identitySurface, richTooltip],
-          `transient-${colorScheme}-rich-popover.png`,
+          `transient-${theme}-${colorScheme}-rich-popover.png`,
           { animations: "allow" },
         );
 
@@ -308,7 +334,7 @@ suite.define(() => {
         await captureSidebarUiUnionProof(
           page,
           [languageRow, listbox],
-          `transient-${colorScheme}-select-listbox.png`,
+          `transient-${theme}-${colorScheme}-select-listbox.png`,
           { animations: "allow" },
         );
       } finally {
