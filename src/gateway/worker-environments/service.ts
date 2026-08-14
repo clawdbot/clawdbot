@@ -336,6 +336,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         }),
     );
     await runTasksWithConcurrency({ tasks, limit: 8 });
+    store.pruneTerminalEnvironments();
   };
 
   const reconcileOnce = () => {

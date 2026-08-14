@@ -185,8 +185,11 @@ stated honestly (revision 1 undersold this):
   driven to `orphaned` by the reconcile sweep), _gone_ (unpaired or ceiling
   elapsed → normal orphan/reap path). A device-environment reaper keyed on
   unpair/dormancy — not on provider teardown proof — cleans rows,
-  credentials, and staged refs. Device-side GC of per-session workspace dirs
-  and superseded bundles is a milestone exit gate, not an open question:
+  credentials, and staged refs. Unreferenced terminal environment rows retain
+  seven days of operator diagnostics, then prune in bounded post-reconcile
+  batches; any surviving placement keeps its environment provenance.
+  Device-side GC of per-session workspace dirs and superseded bundles is a
+  milestone exit gate, not an open question:
   persistent machines otherwise leak the user's own disk.
 - **Placement `runner-offline`.** Pre-dispatch device loss waits up to 10
   seconds, then returns an operator-visible coordination error without failing
