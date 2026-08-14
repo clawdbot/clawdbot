@@ -9,6 +9,7 @@ import { html, svg, type SVGTemplateResult, type TemplateResult } from "lit";
 export function strokeIcon(body: SVGTemplateResult): TemplateResult {
   return html`
     <svg
+      data-lucide-icon=""
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -241,6 +242,9 @@ export const toolIcons = {
   moreHorizontal: strokeIcon(svg` <circle cx="12" cy="12" r="1.5" />
     <circle cx="6" cy="12" r="1.5" />
     <circle cx="18" cy="12" r="1.5" />`),
+  ellipsis: strokeIcon(svg` <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="5" cy="12" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.25" fill="currentColor" stroke="none" />`),
   arrowUpDown: strokeIcon(svg` <path d="m21 16-4 4-4-4" />
     <path d="M17 20V4" />
     <path d="m3 8 4-4 4 4" />

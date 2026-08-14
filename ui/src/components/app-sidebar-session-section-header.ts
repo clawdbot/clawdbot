@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
+import { icons } from "./icons.ts";
 
 export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
@@ -51,7 +52,9 @@ export function renderSidebarSessionSectionHeader(params: {
       }}
       @contextmenu=${params.onContextMenu ?? nothing}
     >
-      <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>
+      <span class="sidebar-session-group-drag-handle" aria-hidden="true"
+        >${icons.gripVertical}</span
+      >
       ${params.content}
     </div>
   `;

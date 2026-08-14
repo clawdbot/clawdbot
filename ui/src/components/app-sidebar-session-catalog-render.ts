@@ -508,7 +508,7 @@ function renderCatalogSessionRow(
               openMenu(rect.right, rect.bottom + 4, trigger);
             }}
           >
-            ${icons.moreHorizontal}
+            ${icons.ellipsis}
           </button>
         </span>
       </span>

@@ -54,6 +54,8 @@ describe("session row placement badges", () => {
     const badge = container.querySelector(".session-row-badge--incognito");
     expect(badge?.getAttribute("aria-label")).toBe("Incognito session");
     expectTooltipText(badge, "Incognito session");
+    expect(badge?.querySelectorAll("circle")).toHaveLength(2);
+    expect(badge?.querySelector("rect")).toBeNull();
   });
 
   it("renders the durable outbox count and stays quiet when empty", () => {

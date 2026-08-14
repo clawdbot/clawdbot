@@ -13,6 +13,8 @@ const sidebarProofArtifactDir = path.join(
 
 export function createSidebarCustomizationSuite(name: string) {
   return createControlUiE2eSuite({
+    browserLaunchOptions:
+      process.env.OPENCLAW_UI_E2E_HEADED === "1" ? { headless: false } : undefined,
     name,
     trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>
@@ -42,6 +44,43 @@ export async function captureSettingsSidebarUiProof(
   await mkdir(sidebarProofArtifactDir, { recursive: true });
   await sidebar.screenshot({
     animations: "disabled",
+    path: path.join(sidebarProofArtifactDir, fileName),
+  });
+}
+
+export async function captureSidebarUiUnionProof(
+  page: Page,
+  locators: Locator[],
+  fileName: string,
+): Promise<void> {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  const boxes = (await Promise.all(locators.map((locator) => locator.boundingBox()))).filter(
+    (box): box is NonNullable<typeof box> => box !== null,
+  );
+  if (boxes.length === 0) {
+    throw new Error("Cannot capture sidebar proof without a visible surface");
+  }
+  const viewport = page.viewportSize();
+  if (!viewport) {
+    throw new Error("Cannot capture sidebar proof without a fixed viewport");
+  }
+  const padding = 16;
+  const left = Math.max(0, Math.min(...boxes.map((box) => box.x)) - padding);
+  const top = Math.max(0, Math.min(...boxes.map((box) => box.y)) - padding);
+  const right = Math.min(
+    viewport.width,
+    Math.max(...boxes.map((box) => box.x + box.width)) + padding,
+  );
+  const bottom = Math.min(
+    viewport.height,
+    Math.max(...boxes.map((box) => box.y + box.height)) + padding,
+  );
+  await mkdir(sidebarProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    clip: { x: left, y: top, width: right - left, height: bottom - top },
     path: path.join(sidebarProofArtifactDir, fileName),
   });
 }

@@ -203,6 +203,13 @@ export const icons = {
     <path d="M5 4c5-4 9 4 14 0v11c-5 4-9-4-14 0" />`),
   lock: strokeIcon(svg` <rect width="18" height="11" x="3" y="11" rx="2" />
     <path d="M7 11V7a5 5 0 0 1 10 0v4" />`),
+  hatGlasses: strokeIcon(svg` <path d="M14 18a2 2 0 0 0-4 0" />
+    <path
+      d="m19 11-2.11-6.657a2 2 0 0 0-2.752-1.148l-1.276.61A2 2 0 0 1 12 4H8.5a2 2 0 0 0-1.925 1.456L5 11"
+    />
+    <path d="M2 11h20" />
+    <circle cx="17" cy="18" r="3" />
+    <circle cx="7" cy="18" r="3" />`),
   pencil: strokeIcon(svg` <path
       d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"
     />

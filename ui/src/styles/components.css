@@ -5664,8 +5664,8 @@ td.data-table-key-col {
 }
 
 .session-row-badge svg {
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.6px;
@@ -5699,8 +5699,8 @@ td.data-table-key-col {
 }
 
 .session-action svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.6px;

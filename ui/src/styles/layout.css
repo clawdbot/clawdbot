@@ -932,6 +932,8 @@ openclaw-settings-save-indicator {
 
 .sidebar-shell {
   --sidebar-pad-x: 10px;
+  --sidebar-lucide-icon-size: 16px;
+  --sidebar-lucide-stroke-width: 1.5px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -944,6 +946,25 @@ openclaw-settings-save-indicator {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+}
+
+/* Top-layer menus do not inherit sidebar ancestry, so every sidebar-owned
+   surface participates explicitly in the same Lucide optical contract. */
+:is(
+    .sidebar-shell,
+    .settings-sidebar,
+    .sidebar-customize-menu,
+    .session-menu,
+    .sidebar-session-sort-menu,
+    .sidebar-hover-card,
+    .shell-chrome-controls__nav-toggle,
+    .topbar-nav-toggle,
+    .chat-pane__nav-toggle
+  )
+  svg[data-lucide-icon] {
+  max-width: var(--sidebar-lucide-icon-size, 16px);
+  max-height: var(--sidebar-lucide-icon-size, 16px);
+  stroke-width: var(--sidebar-lucide-stroke-width, 1.5px);
 }
 
 .sidebar-brand {
@@ -1642,19 +1663,23 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-group-drag-handle {
   position: absolute;
   top: 50%;
-  left: 1px;
+  left: 0;
   z-index: 1;
-  width: 4px;
-  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
   transform: translateY(-50%);
-  border-radius: 3px;
-  background-image: radial-gradient(circle, currentColor 1px, transparent 1.2px);
-  background-position: 0 0;
-  background-size: 4px 4px;
   color: var(--muted);
   opacity: 0;
   cursor: grab;
   transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-session-group-drag-handle svg {
+  width: 16px;
+  height: 16px;
 }
 
 .sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
@@ -1671,8 +1696,8 @@ body.update-dialog-open .sidebar-update-card__status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-md);
@@ -1703,8 +1728,8 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-session-sort svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.7px;
@@ -1755,6 +1780,16 @@ body.update-dialog-open .sidebar-update-card__status {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.sidebar-session-group-actions.sidebar-session-sort {
+  width: 28px;
+  height: 28px;
+}
+
+.sidebar-session-group-actions.sidebar-session-sort svg {
+  width: 13px;
+  height: 13px;
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -2760,8 +2795,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
 }
 
@@ -2775,8 +2810,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .session-menu__icon svg,
 .session-menu__check svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.7px;
@@ -3988,6 +4023,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
+}
+
+.sidebar-recent-session__link:has(> .session-row-badges) > .sidebar-recent-session__text {
+  flex-grow: 0;
 }
 
 .sidebar-recent-session__subtitle {
