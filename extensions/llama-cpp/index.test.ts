@@ -47,6 +47,7 @@ import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+  DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
   LLAMA_CPP_PROVIDER_ID,
   resolveLegacyLlamaCppModelCacheDir,
 } from "./src/defaults.js";
@@ -103,8 +104,10 @@ function registerTextProvider(): ProviderPlugin {
 }
 
 function configuredOptions(
-  params: { embeddingModelPath?: string } = {},
+  params: { embeddingModelPath?: string; chatModelPath?: string | null } = {},
 ): EmbeddingProviderCreateOptions {
+  const chatModelPath =
+    params.chatModelPath === undefined ? "/models/chat.gguf" : params.chatModelPath;
   return {
     config: {
       models: {
@@ -127,7 +130,7 @@ function configuredOptions(
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 8192,
                 maxTokens: 2048,
-                params: { modelPath: "/models/chat.gguf" },
+                ...(chatModelPath ? { params: { modelPath: chatModelPath } } : {}),
               },
             ],
           },
@@ -231,6 +234,34 @@ describe("llama.cpp provider plugin", () => {
         {
           code: "chat-model-cache-missing",
           message: "Managed llama.cpp chat model is not cached at /models/chat.gguf.",
+          remediation: [
+            "Run `openclaw configure` and choose llama.cpp once.",
+            "Retry `openclaw memory status --deep` after setup completes.",
+          ],
+        },
+      ],
+    });
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+    expect(mocks.genericCreate).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing default chat cache because ordinary startup does not download it", async () => {
+    mocks.inspectModelFile.mockResolvedValueOnce({ status: "missing" });
+
+    expect(
+      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(
+        configuredOptions({
+          chatModelPath: null,
+          embeddingModelPath: "/models/embedding.gguf",
+        }),
+      ),
+    ).toEqual({
+      status: "blocked",
+      issues: [
+        {
+          code: "chat-model-cache-missing",
+          message: expect.stringContaining(DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE),
           remediation: [
             "Run `openclaw configure` and choose llama.cpp once.",
             "Retry `openclaw memory status --deep` after setup completes.",

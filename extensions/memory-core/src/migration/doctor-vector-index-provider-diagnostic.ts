@@ -68,6 +68,12 @@ async function inspectExistingVectorModel(
   let db: ReturnType<typeof openNodeSqliteDatabase> | undefined;
   try {
     db = openNodeSqliteDatabase(resolveSqliteReadOnlyLocation(databasePath), { readOnly: true });
+    const metadataTable = db
+      .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get("memory_index_meta");
+    if (!metadataTable) {
+      return null;
+    }
     const row = db
       .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
       .get(MEMORY_INDEX_META_KEY) as { value?: unknown } | undefined;

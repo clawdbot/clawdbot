@@ -177,7 +177,35 @@ describe("memory vector index provider doctor diagnostic", () => {
     expect(calls).toBe(1);
   });
 
-  it.each(["missing", "fts-only"] as const)(
+  it("inspects the canonical state database when agentDir is customized", async () => {
+    let inspectedDatabasePath: string | undefined;
+    const diagnostic = createPreflightDiagnostic(async ({ agentDatabasePath }) => {
+      inspectedDatabasePath = agentDatabasePath;
+      return { status: "ready" };
+    });
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-agentdir-"));
+    roots.add(stateDir);
+    const agentPath = await createSemanticIndex(stateDir);
+    const customAgentDir = path.join(stateDir, "custom-agent");
+
+    await expect(
+      diagnostic.preflightStartup?.({
+        config: {
+          agents: { list: [{ id: "main", agentDir: customAgentDir }] },
+          memory: { search: { provider: "local", fallback: "none" } },
+        },
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+        resolveSqliteReadOnlyLocation: (pathname) => pathname,
+        resolveEmbeddingProviderStartupInspector: () => undefined,
+      }),
+    ).resolves.toEqual({ status: "ready" });
+    expect(inspectedDatabasePath).toBe(agentPath);
+    expect(inspectedDatabasePath).not.toContain(customAgentDir);
+  });
+
+  it.each(["missing", "fts-only", "database-without-memory-metadata"] as const)(
     "does not inspect a provider for a %s semantic index",
     async (indexMode) => {
       let calls = 0;
@@ -189,6 +217,12 @@ describe("memory vector index provider doctor diagnostic", () => {
       roots.add(stateDir);
       if (indexMode === "fts-only") {
         await createSemanticIndex(stateDir, "fts-only");
+      } else if (indexMode === "database-without-memory-metadata") {
+        const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(agentPath), { recursive: true });
+        const db = new DatabaseSync(agentPath);
+        db.exec("CREATE TABLE unrelated_state (id INTEGER PRIMARY KEY) STRICT");
+        db.close();
       }
 
       await expect(

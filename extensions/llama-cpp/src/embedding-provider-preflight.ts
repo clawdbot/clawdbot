@@ -112,6 +112,7 @@ export async function inspectLlamaCppEmbeddingStartupPrerequisites(
       ...(target.expectedSha256 ? { expectedSha256: target.expectedSha256 } : {}),
     });
     if (inspection.status === "missing") {
+      // Ordinary chat startup never downloads this artifact; only explicit setup does.
       throw new LlamaCppStartupPrerequisiteError(
         "chat-model-cache-missing",
         `Managed llama.cpp chat model is not cached at ${target.filePath}.`,
