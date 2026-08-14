@@ -593,12 +593,16 @@ function estimateDefaultCompactGroupSeconds(group: NodeTestShardGroup): number {
   return DEFAULT_WHOLE_GROUP_SECONDS;
 }
 
+function usesGithubRunnerProfile(runnerBackend: string | undefined): boolean {
+  return runnerBackend === "github" || runnerBackend === "hybrid";
+}
+
 function estimateCompactGroupSeconds(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
 ): number {
   const defaultSeconds = estimateDefaultCompactGroupSeconds(group);
-  if (runnerBackend !== "github") {
+  if (!usesGithubRunnerProfile(runnerBackend)) {
     return defaultSeconds;
   }
   return (
@@ -611,7 +615,7 @@ function estimateCompactStripeSeconds(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
 ): number {
-  if (runnerBackend === "github") {
+  if (usesGithubRunnerProfile(runnerBackend)) {
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
   return (
@@ -2094,13 +2098,12 @@ function createCompactNodeTestShardBundles(
       runner,
       shard_name: shard.shardName,
     });
-    const plannedGroups =
-      options.runnerBackend === "github"
-        ? splitOversizedGithubCompactGroup(group)
-        : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
+    const plannedGroups = usesGithubRunnerProfile(options.runnerBackend)
+      ? splitOversizedGithubCompactGroup(group)
+      : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       groups.push(planned.group);
-      if (options.runnerBackend === "github") {
+      if (usesGithubRunnerProfile(options.runnerBackend)) {
         hostedSplitSeconds.set(planned.group.shard_name, planned.seconds);
       }
     }
@@ -2128,7 +2131,7 @@ function createCompactNodeTestShardBundles(
       const exclusive = isExclusiveCompactGroup(group);
       const secondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
-        : options.runnerBackend === "github"
+        : usesGithubRunnerProfile(options.runnerBackend)
           ? group.runner.includes("-8vcpu-")
             ? COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS
             : COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS
