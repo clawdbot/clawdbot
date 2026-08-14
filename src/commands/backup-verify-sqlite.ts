@@ -50,7 +50,7 @@ export type BackupManifest = {
   }>;
 };
 
-export type NormalizedArchiveEntry = {
+type NormalizedArchiveEntry = {
   raw: string;
   normalized: string;
   size?: number;

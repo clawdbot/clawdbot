@@ -16,7 +16,6 @@ import {
   assertSqliteExtractionBudget,
   type BackupManifest,
   type BackupManifestAsset,
-  type NormalizedArchiveEntry,
   resolvePortableArchivePathKey,
   verifySqliteSnapshots,
 } from "./backup-verify-sqlite.js";
