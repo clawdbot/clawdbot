@@ -131,9 +131,15 @@ describe("Slack presence monitor", () => {
         },
       }),
     );
-    expect(enqueue.mock.calls[0]?.[0]).toContain("retrieve relevant memory and wiki context");
-    expect(enqueue.mock.calls[0]?.[0]).toContain("not exact time away");
-    expect(enqueue.mock.calls[0]?.[0]).toContain("unobserved presence changes");
+    expect(enqueue.mock.calls[0]?.[0]).toBe(
+      [
+        "Slack presence event:",
+        'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
+        "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
+        "Before greeting, retrieve relevant memory and wiki context for this immutable user_id, including a known timezone when available. Use their local time; if their timezone is unknown, do not guess.",
+        "Send at most one short, natural greeting in this Slack conversation. Do not reveal private memory. If no greeting is appropriate, stay silent.",
+      ].join("\n"),
+    );
     expect(wake).toHaveBeenCalledOnce();
 
     now = 8_000;
