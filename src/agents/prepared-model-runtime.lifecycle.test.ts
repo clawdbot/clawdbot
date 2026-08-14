@@ -244,20 +244,18 @@ describe("prepared model runtime snapshots", () => {
     const workspacePluginRoot = path.join(workspaceDir, ".openclaw", "extensions");
     const statSpy = vi.spyOn(fsp, "stat");
 
-    const firstLease = await acquireAgentRunPreparedModelRuntime({
-      agentId: "default",
-      config,
-      agentDir: "/tmp/unused-agent",
-      inheritedAuthDir: "/tmp/unused-agent",
-      workspaceDir,
-    });
-    const secondLease = await acquireAgentRunPreparedModelRuntime({
-      agentId: "default",
-      config,
-      agentDir: "/tmp/unused-agent",
-      inheritedAuthDir: "/tmp/unused-agent",
-      workspaceDir,
-    });
+    const acquireDynamicLease = () =>
+      acquireAgentRunPreparedModelRuntime({
+        agentId: "default",
+        config,
+        agentDir: "/tmp/unused-agent",
+        inheritedAuthDir: "/tmp/unused-agent",
+        workspaceDir,
+      });
+    const [firstLease, secondLease] = await Promise.all([
+      acquireDynamicLease(),
+      acquireDynamicLease(),
+    ]);
 
     expect(firstLease.snapshot.workspaceDir).toBe(workspaceDir);
     expect(secondLease.snapshot).toBe(firstLease.snapshot);

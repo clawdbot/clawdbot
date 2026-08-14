@@ -23,6 +23,7 @@ import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.t
 type PreparedModelRuntimeLeaseContext = {
   owners: Map<string, PreparedModelRuntimeOwner>;
   agentBuildCompletions: Map<string, Promise<void>>;
+  workspacePluginRootPresenceResolutions: Map<string, Promise<boolean | undefined>>;
   retainedDirectRunOwners: PreparedModelRuntimeOwnerRetention;
   retainedGatewayRunOwners: PreparedModelRuntimeOwnerRetention;
   getBuildTimeoutMs(): number;
@@ -34,6 +35,26 @@ type PreparedModelRuntimeLeaseContext = {
     options: PreparedModelRuntimePublicationOptions,
   ): Promise<PreparedModelRuntimeSnapshot>;
 };
+
+async function resolveCoalescedWorkspacePluginRootPresence(
+  input: PreparedModelRuntimeInput,
+  context: PreparedModelRuntimeLeaseContext,
+): Promise<boolean | undefined> {
+  const key = ownerKey(input);
+  const existing = context.workspacePluginRootPresenceResolutions.get(key);
+  if (existing) {
+    return await existing;
+  }
+  const pending = resolveWorkspacePluginRootPresence(input);
+  context.workspacePluginRootPresenceResolutions.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    if (context.workspacePluginRootPresenceResolutions.get(key) === pending) {
+      context.workspacePluginRootPresenceResolutions.delete(key);
+    }
+  }
+}
 
 export async function resolveWorkspacePluginRootPresence(
   input: PreparedModelRuntimeInput,
@@ -85,7 +106,9 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   const workspacePluginRootPresent =
     rawInput.workspacePluginRootPresent ??
     retainedWorkspacePluginRootPresent ??
-    (provenance === "run" ? await resolveWorkspacePluginRootPresence(normalizedInput) : undefined);
+    (provenance === "run"
+      ? await resolveCoalescedWorkspacePluginRootPresence(normalizedInput, context)
+      : undefined);
   let input = normalizePreparedModelRuntimeInput({
     ...normalizedInput,
     ...(workspacePluginRootPresent === undefined ? {} : { workspacePluginRootPresent }),

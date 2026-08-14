@@ -64,6 +64,7 @@ let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 
 const owners = new Map<string, PreparedModelRuntimeOwner>();
 const agentBuildCompletions = new Map<string, Promise<void>>();
+const workspacePluginRootPresenceResolutions = new Map<string, Promise<boolean | undefined>>();
 const standaloneActivationTails = new Map<string, Promise<void>>();
 const retainedDirectRunOwners = new PreparedModelRuntimeOwnerRetention(1);
 const retainedGatewayRunOwners = new PreparedModelRuntimeOwnerRetention(8);
@@ -274,6 +275,7 @@ async function activateStandalonePreparedModelRuntimeNow(
 const preparedModelRuntimeLeaseContext = {
   owners,
   agentBuildCompletions,
+  workspacePluginRootPresenceResolutions,
   retainedDirectRunOwners,
   retainedGatewayRunOwners,
   getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
@@ -650,6 +652,7 @@ function resetPreparedModelRuntimeSnapshotsForTest(): void {
   pendingModelRuntimeReplacement = undefined;
   owners.clear();
   agentBuildCompletions.clear();
+  workspacePluginRootPresenceResolutions.clear();
   standaloneActivationTails.clear();
   retainedGatewayRunOwners.clear(owners);
   gatewayLifecycleActive = false;
