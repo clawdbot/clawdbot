@@ -186,6 +186,16 @@ describe("cron view list pane", () => {
     expect(onSelectJob).toHaveBeenCalledWith(paused);
   });
 
+  it("shows Running instead of a past-due next-run time while a run executes", () => {
+    const running = createJob("job-running", {
+      state: { nextRunAtMs: Date.now() - 600_000, runningAtMs: Date.now() - 60_000 },
+    });
+    const container = renderView({ jobs: [running] });
+    const row = container.querySelector(".cron-table__row");
+    expect(row?.querySelector(".cron-table__running")?.textContent).toBe("Running");
+    expect(row?.textContent).not.toContain("ago");
+  });
+
   it("keeps inline row actions from selecting the row", () => {
     const onSelectJob = vi.fn();
     const onRun = vi.fn();
