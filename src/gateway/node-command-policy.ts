@@ -13,7 +13,7 @@ import {
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
-  NODE_WORKER_SUPERVISOR_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
   isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
@@ -446,7 +446,7 @@ function resolveNodeCommandAllowlistInternal(
       allow.delete(trimmed);
     }
   }
-  for (const privateCommand of NODE_WORKER_SUPERVISOR_COMMANDS) {
+  for (const privateCommand of NODE_WORKER_PRIVATE_COMMANDS) {
     allow.delete(privateCommand);
   }
   return allow;

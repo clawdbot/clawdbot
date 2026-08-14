@@ -373,7 +373,6 @@ src/agents/embedded-agent-runner/transcript-file-state.test.ts
 src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts
-src/agents/failover-error.test.ts
 src/agents/failover-error.ts
 src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
@@ -523,7 +522,6 @@ src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/auth-choice.test.ts
 src/commands/backup-verify.test.ts
-src/commands/backup-verify.ts
 src/commands/channels.add.test.ts
 src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts
@@ -641,7 +639,6 @@ src/gateway/server-close.test.ts
 src/gateway/server-close.ts
 src/gateway/server-cron.test.ts
 src/gateway/server-cron.ts
-src/gateway/server-http.ts
 src/gateway/server-methods/agent.abort-integration.test-utils.ts
 src/gateway/server-methods/agent.base.test-utils.ts
 src/gateway/server-methods/agent.events-and-subagents.test-utils.ts
@@ -706,7 +703,6 @@ src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
 src/gateway/worker-environments/inference-runtime.ts
 src/gateway/worker-environments/store.ts
-src/gateway/worker-environments/worker-turn-launcher.test.ts
 src/hooks/install.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts

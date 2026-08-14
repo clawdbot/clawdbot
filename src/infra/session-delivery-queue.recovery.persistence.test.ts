@@ -4,10 +4,12 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   drainPendingSessionDeliveries,
+  recoverPendingSessionDeliveries,
+} from "./session-delivery-queue-recovery.js";
+import {
   enqueueSessionDelivery,
   loadPendingSessionDeliveries,
-  recoverPendingSessionDeliveries,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-storage.js";
 
 describe("session-delivery recovery persistence", () => {
   it.each(["startup", "targeted drain"] as const)(

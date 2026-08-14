@@ -7,11 +7,17 @@ import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 const QA_SMOKE_PROFILE = "smoke-ci";
 // Four parts keep each smoke job near the fixed setup cost (~1min) instead of
-// serializing ~4min of scenarios into one job that owns the PR wall clock.
-const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2", "profile-3", "profile-4"] as const;
+// serializing ~4min of scenarios into one job that owns the PR wall clock. The
+// hosted fallback may use six parts because its 4-core runners execute the
+// scenario phase more slowly.
+const QA_SMOKE_CI_DEFAULT_PART_COUNT = 4;
+const QA_SMOKE_CI_PART_COUNTS = new Set([QA_SMOKE_CI_DEFAULT_PART_COUNT, 6]);
 const QA_SMOKE_CI_CHANNELS = ["telegram", "matrix"] as const;
+// Hosted timings show the separate Matrix run adds about two minutes, so
+// reserve three flow-cost points for its fixed part during primary packing.
+const QA_SMOKE_CI_MATRIX_RUN_COST = 3;
 
-type QaSmokeCiPartId = (typeof QA_SMOKE_CI_PARTS)[number];
+type QaSmokeCiPartId = `profile-${number}`;
 type QaSmokeCiScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
 
 // CI consumes only the run slug and ids. `qa run` resolves the taxonomy-owned
@@ -26,8 +32,16 @@ type QaSmokeCiPart = {
   runs: QaSmokeCiRun[];
 };
 
-function isQaSmokeCiPartId(value: string): value is QaSmokeCiPartId {
-  return QA_SMOKE_CI_PARTS.includes(value as QaSmokeCiPartId);
+function resolveQaSmokeCiPartIndex(partId: string, partCount: number): number {
+  if (!QA_SMOKE_CI_PART_COUNTS.has(partCount)) {
+    throw new Error(`unsupported QA smoke CI profile part count: ${partCount}`);
+  }
+  const match = /^profile-([1-9][0-9]*)$/u.exec(partId);
+  const partIndex = Number(match?.[1]) - 1;
+  if (!Number.isInteger(partIndex) || partIndex < 0 || partIndex >= partCount) {
+    throw new Error(`unknown QA smoke CI profile part: ${partId}`);
+  }
+  return partIndex;
 }
 
 function estimateScenarioCost(scenario: QaSmokeCiScenario) {
@@ -52,10 +66,11 @@ export function selectQaSmokeCiEligibilityChannel(scenario: QaSmokeCiScenario): 
   return QA_SMOKE_CI_CHANNELS.find((channel) => declaredChannels.includes(channel));
 }
 
-export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
-  if (!isQaSmokeCiPartId(partId)) {
-    throw new Error(`unknown QA smoke CI profile part: ${partId}`);
-  }
+export function createQaSmokeCiPart(
+  partId: string,
+  partCount = QA_SMOKE_CI_DEFAULT_PART_COUNT,
+): QaSmokeCiPart {
+  const partIndex = resolveQaSmokeCiPartIndex(partId, partCount);
 
   const scenarioPack = readQaScenarioPack();
   const scorecardReport = readQaScorecardTaxonomyReport(scenarioPack.scenarios);
@@ -155,8 +170,9 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
       (left, right) =>
         estimateScenarioCost(right) - estimateScenarioCost(left) || left.id.localeCompare(right.id),
     );
-  const partitions = QA_SMOKE_CI_PARTS.map(() => ({
-    cost: 0,
+  const matrixPartIndex = partCount - 1;
+  const partitions = Array.from({ length: partCount }, (_, index) => ({
+    cost: index === matrixPartIndex ? QA_SMOKE_CI_MATRIX_RUN_COST : 0,
     scenarios: [] as typeof scenarios,
   }));
   const firstPartition = partitions[0];
@@ -172,10 +188,8 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
     partition.cost += estimateScenarioCost(scenario);
   }
 
-  // The Matrix run rides on the last part so the greedy cost balance above
-  // stays undisturbed for scenarios that use the run-level channel driver.
-  const matrixPartIndex = QA_SMOKE_CI_PARTS.length - 1;
-  const partIndex = QA_SMOKE_CI_PARTS.indexOf(partId);
+  // The Matrix run stays on the last part, whose reserved cost above reduces
+  // its primary share without mixing run-level channel drivers.
   const selectedPartition = partitions[partIndex];
   if (!selectedPartition) {
     throw new Error(`unknown QA smoke CI profile part: ${partId}`);
@@ -196,5 +210,7 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
     throw new Error(`${QA_SMOKE_PROFILE} CI profile part ${partId} did not resolve any scenarios.`);
   }
 
-  return { id: partId, runs };
+  // Reconstruct from the validated index so the id carries the template type
+  // without asserting on the caller-supplied string.
+  return { id: `profile-${partIndex + 1}`, runs };
 }

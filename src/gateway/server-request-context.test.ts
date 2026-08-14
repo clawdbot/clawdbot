@@ -50,6 +50,7 @@ function makeContextParams(
     loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
       agentId: "main",
       agentDir: "/tmp/model-catalog-agent",
+      catalogComplete: false,
       workspaceDir: "/tmp/model-catalog-workspace",
       config,
       entries: [],
@@ -195,6 +196,15 @@ describe("createGatewayRequestContext", () => {
 
     status = "disabled";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
+  });
+
+  it("publishes the worker disk-space reader through the kernel bridge", () => {
+    const workerPlacementDiskSpaceReader = { read: vi.fn(), version: vi.fn(() => 1) };
+    const context = createGatewayRequestContext(
+      makeContextParams({ workerPlacementDiskSpaceReader }),
+    );
+
+    expect(context.workerPlacementDiskSpaceReader).toBe(workerPlacementDiskSpaceReader);
   });
 
   it("routes plugin metadata changes through the kernel bridge", () => {

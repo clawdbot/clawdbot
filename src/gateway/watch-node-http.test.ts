@@ -13,13 +13,18 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import {
+  issueDeviceBootstrapToken,
+  issueDevicePairSetupBootstrapToken,
+  verifyDeviceBootstrapToken,
+} from "../infra/device-bootstrap.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
+import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
 import {
   approveDevicePairing,
   getPairedDevice,
@@ -114,6 +119,7 @@ async function startRuntime(
     abortConnectResponse?: boolean;
     config?: OpenClawConfig;
     now?: () => number;
+    onConnectResponseStart?: () => void;
     onPollReady?: (response: ServerResponse) => void;
   },
 ) {
@@ -147,6 +153,13 @@ async function startRuntime(
   });
   const server = createServer((req, res) => {
     const isConnect = req.url === "/api/nodes/watch/connect";
+    if (isConnect && options?.onConnectResponseStart) {
+      const end = res.end.bind(res);
+      res.end = ((...args: Parameters<typeof res.end>) => {
+        options.onConnectResponseStart?.();
+        return end(...args);
+      }) as typeof res.end;
+    }
     if (isConnect && options?.abortConnectResponse) {
       res.end = (() => {
         res.destroy();
@@ -197,7 +210,7 @@ async function createWatchNodeFixture(
   const identity = loadOrCreateDeviceIdentity({
     path: path.join(baseDir, "watch-identity.sqlite"),
   });
-  const issued = await issueDeviceBootstrapToken({
+  const issued = await issueDevicePairSetupBootstrapToken({
     baseDir,
     profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   });
@@ -393,8 +406,16 @@ describe("watch node HTTP transport", () => {
   });
 
   it("requires an authenticated disconnect and emits one lifecycle teardown", async () => {
-    const { identity, issued, nodeRegistry, connectedNodes, disconnectedNodes, runtime, baseUrl } =
-      await createWatchNodeFixture("openclaw-watch-node-disconnect-");
+    const {
+      baseDir,
+      identity,
+      issued,
+      nodeRegistry,
+      connectedNodes,
+      disconnectedNodes,
+      runtime,
+      baseUrl,
+    } = await createWatchNodeFixture("openclaw-watch-node-disconnect-");
 
     const connectResponse = await connectWatchNode({
       baseUrl,
@@ -424,9 +445,17 @@ describe("watch node HTTP transport", () => {
     expect(disconnectResponse.status).toBe(200);
     await expect(readJson(disconnectResponse)).resolves.toEqual({ ok: true });
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-    expect(disconnectedNodes).toEqual([
-      { nodeId: identity.deviceId, reason: "watch disconnected" },
-    ]);
+    await vi.waitFor(() =>
+      expect(disconnectedNodes).toEqual([
+        { nodeId: identity.deviceId, reason: "watch disconnected" },
+      ]),
+    );
+    await vi.waitFor(async () => {
+      const paired = (await listNodePairing(baseDir)).paired.find(
+        (entry) => entry.nodeId === identity.deviceId,
+      );
+      expect(paired?.lastDisconnectedAtMs).toEqual(expect.any(Number));
+    });
 
     const repeatedDisconnect = await fetch(`${baseUrl}/disconnect`, {
       method: "POST",
@@ -499,9 +528,11 @@ describe("watch node HTTP transport", () => {
             : nodeRegistry.sendEvent(identity.deviceId, "node.invoke.request", payload);
         expect(delivered).toBe(false);
         expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-        expect(disconnectedNodes).toEqual([
-          { nodeId: identity.deviceId, reason: "event delivery failed" },
-        ]);
+        await vi.waitFor(() =>
+          expect(disconnectedNodes).toEqual([
+            { nodeId: identity.deviceId, reason: "event delivery failed" },
+          ]),
+        );
         await expect(pollFailure).resolves.toBe("ECONNRESET");
         expect(nodeRegistry.sendEvent(identity.deviceId, "node.invoke.request", payload)).toBe(
           false,
@@ -657,7 +688,7 @@ describe("watch node HTTP transport", () => {
     const abortedIdentity = loadOrCreateDeviceIdentity({
       path: path.join(abortedBaseDir, "watch-identity.sqlite"),
     });
-    const abortedBootstrap = await issueDeviceBootstrapToken({
+    const abortedBootstrap = await issueDevicePairSetupBootstrapToken({
       baseDir: abortedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
@@ -682,6 +713,32 @@ describe("watch node HTTP transport", () => {
         }),
       ).rejects.toThrow();
       await abortedRuntime.connectHandled;
+      expect(
+        abortedRuntime.broadcasts.find((entry) => entry.event === "device.pair.setup.completed"),
+      ).toBeUndefined();
+      expect(
+        abortedRuntime.broadcasts.find(
+          (entry) => entry.event === "device.pair.setup.deliveryUncertain",
+        )?.payload,
+      ).toMatchObject({ setupId: abortedBootstrap.setupId });
+      expect(
+        loadDevicePairSetupCompletionRecord(abortedBootstrap.setupId, Date.now(), abortedBaseDir),
+      ).toMatchObject({
+        setupId: abortedBootstrap.setupId,
+        deviceId: abortedIdentity.deviceId,
+        access: "node",
+        deliveryState: "uncertain",
+      });
+      await expect(
+        verifyDeviceBootstrapToken({
+          token: abortedBootstrap.token,
+          deviceId: abortedIdentity.deviceId,
+          publicKey: publicKeyRawBase64UrlFromPem(abortedIdentity.publicKeyPem),
+          role: "node",
+          scopes: [],
+          baseDir: abortedBaseDir,
+        }),
+      ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
       const stillLimited = await fetch(`${abortedRuntime.baseUrl}/challenge`);
       expect(stillLimited.status).toBe(429);
       abortedRuntime.runtime.close();
@@ -693,7 +750,7 @@ describe("watch node HTTP transport", () => {
     const completedIdentity = loadOrCreateDeviceIdentity({
       path: path.join(completedBaseDir, "watch-identity.sqlite"),
     });
-    const completedBootstrap = await issueDeviceBootstrapToken({
+    const completedBootstrap = await issueDevicePairSetupBootstrapToken({
       baseDir: completedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
@@ -710,6 +767,23 @@ describe("watch node HTTP transport", () => {
       expect(connectResponse.status).toBe(200);
       await readJson(connectResponse);
       await completedRuntime.connectHandled;
+      expect(
+        completedRuntime.broadcasts.find((entry) => entry.event === "device.pair.setup.completed")
+          ?.payload,
+      ).toEqual({
+        setupId: completedBootstrap.setupId,
+        deviceId: completedIdentity.deviceId,
+        deviceName: "Test Watch",
+        access: "node",
+        ts: expect.any(Number),
+      });
+      expect(
+        loadDevicePairSetupCompletionRecord(
+          completedBootstrap.setupId,
+          Date.now(),
+          completedBaseDir,
+        ),
+      ).toMatchObject({ deliveryState: "confirmed" });
       await waitForLastConnectedMetadata(completedBaseDir, completedIdentity.deviceId);
       const resetAfterCompletion = await fetch(`${completedRuntime.baseUrl}/challenge`);
       expect(resetAfterCompletion.status).toBe(200);
@@ -717,6 +791,77 @@ describe("watch node HTTP transport", () => {
     } finally {
       completedLimiter.dispose();
     }
+  });
+
+  it("restores an uncorrelated bootstrap token when the connect response aborts", async () => {
+    const baseDir = await tempDirs.make("openclaw-watch-node-generic-abort-");
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const runtime = await startRuntime(baseDir, { abortConnectResponse: true });
+
+    await expect(
+      connectWatchNode({
+        baseUrl: runtime.baseUrl,
+        identity,
+        bootstrapToken: issued.token,
+      }),
+    ).rejects.toThrow();
+    await runtime.connectHandled;
+
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(
+      runtime.broadcasts.find((entry) => entry.event.startsWith("device.pair.setup.")),
+    ).toBeUndefined();
+    runtime.runtime.close();
+  });
+
+  it("persists setup status before handing off the successful connect response", async () => {
+    let fixtureBaseDir = "";
+    let setupId = "";
+    let completionAtHandoff: ReturnType<typeof loadDevicePairSetupCompletionRecord> = null;
+    const fixture = await createWatchNodeFixture("openclaw-watch-node-setup-order-", {
+      onConnectResponseStart: () => {
+        completionAtHandoff = loadDevicePairSetupCompletionRecord(
+          setupId,
+          Date.now(),
+          fixtureBaseDir,
+        );
+      },
+    });
+    fixtureBaseDir = fixture.baseDir;
+    setupId = fixture.issued.setupId;
+
+    const response = await connectWatchNode({
+      baseUrl: fixture.baseUrl,
+      identity: fixture.identity,
+      bootstrapToken: fixture.issued.token,
+    });
+    expect(response.status).toBe(200);
+    await readJson(response);
+    await fixture.connectHandled;
+
+    expect(completionAtHandoff).toMatchObject({
+      setupId: fixture.issued.setupId,
+      deviceId: fixture.identity.deviceId,
+      deviceName: "Test Watch",
+      access: "node",
+      deliveryState: "uncertain",
+    });
+    fixture.runtime.close();
   });
 
   it("bootstraps, registers, polls an invoke, and accepts its result", async () => {
@@ -729,6 +874,7 @@ describe("watch node HTTP transport", () => {
       connectedNodes,
       disconnectedNodes,
       runtime,
+      connectHandled,
       baseUrl,
     } = await createWatchNodeFixture("openclaw-watch-node-http-");
 
@@ -739,6 +885,7 @@ describe("watch node HTTP transport", () => {
     });
     expect(connectResponse.status).toBe(200);
     const connected = await readJson(connectResponse);
+    await connectHandled;
     expect(connected.sessionToken).toEqual(expect.any(String));
     expect(connected.deviceToken).toEqual(expect.any(String));
     expect(nodeRegistry.get(identity.deviceId)?.commands).toEqual([
@@ -748,6 +895,15 @@ describe("watch node HTTP transport", () => {
     ]);
     expect(broadcasts.map((entry) => entry.event)).toContain("device.pair.resolved");
     expect(broadcasts.map((entry) => entry.event)).toContain("node.pair.resolved");
+    expect(
+      broadcasts.find((entry) => entry.event === "device.pair.setup.completed")?.payload,
+    ).toEqual({
+      setupId: issued.setupId,
+      deviceId: identity.deviceId,
+      deviceName: "Test Watch",
+      access: "node",
+      ts: expect.any(Number),
+    });
     expect(connectedNodes).toEqual([identity.deviceId]);
 
     const reconnectResponse = await connectWatchNode({
@@ -816,10 +972,12 @@ describe("watch node HTTP transport", () => {
     });
     runtime.disconnectSessionsForDevice(identity.deviceId, { role: "node" });
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-    expect(disconnectedNodes).toContainEqual({
-      nodeId: identity.deviceId,
-      reason: "device-token-revoked",
-    });
+    await vi.waitFor(() =>
+      expect(disconnectedNodes).toContainEqual({
+        nodeId: identity.deviceId,
+        reason: "device-token-revoked",
+      }),
+    );
     const invalidatedPollResponse = await fetch(`${baseUrl}/poll`, {
       method: "POST",
       headers: { authorization: `Bearer ${String(reconnected.sessionToken)}` },
@@ -875,10 +1033,12 @@ describe("watch node HTTP transport", () => {
       nodeRegistry.sendEventRaw(identity.deviceId, "node.invoke.request", oversizedPayload),
     ).toBe(false);
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-    expect(disconnectedNodes).toContainEqual({
-      nodeId: identity.deviceId,
-      reason: "event payload too large",
-    });
+    await vi.waitFor(() =>
+      expect(disconnectedNodes).toContainEqual({
+        nodeId: identity.deviceId,
+        reason: "event payload too large",
+      }),
+    );
 
     runtime.close();
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();

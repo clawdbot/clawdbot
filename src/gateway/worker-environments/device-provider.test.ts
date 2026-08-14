@@ -7,16 +7,24 @@ import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
-import { createDeviceWorkerRuntime } from "./device-provider.js";
+import {
+  bindDeviceWorkerReconciliation,
+  createDeviceWorkerRuntime,
+  reconcileDeviceWorker,
+} from "./device-provider.js";
 
 const DEVICE_ID = "device-session-host";
+const DAY_MS = 24 * 60 * 60 * 1_000;
 const WORKER_BUILD = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.8.12",
   protocolFeatures: ["worker-heartbeat-v1"],
 };
 
-function pairedDevice(deviceId = DEVICE_ID): PairedDevice {
+function pairedDevice(
+  deviceId = DEVICE_ID,
+  nodeSurface?: PairedDevice["nodeSurface"],
+): PairedDevice {
   return {
     deviceId,
     publicKey: `public-key-${deviceId}`,
@@ -30,6 +38,7 @@ function pairedDevice(deviceId = DEVICE_ID): PairedDevice {
         createdAtMs: 1,
       },
     },
+    ...(nodeSurface ? { nodeSurface } : {}),
     createdAtMs: 1,
     approvedAtMs: 1,
   };
@@ -55,8 +64,12 @@ function connectedNode(
 function deviceRuntime(params: {
   getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
   listCurrentNodes?: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+  now?: () => number;
 }) {
-  const runtime = createDeviceWorkerRuntime({ getPairedDevice: params.getPairedDevice });
+  const runtime = createDeviceWorkerRuntime({
+    getPairedDevice: params.getPairedDevice,
+    ...(params.now ? { now: params.now } : {}),
+  });
   if (params.listCurrentNodes) {
     runtime.bindNodeTransport({
       listCurrentNodes: params.listCurrentNodes,
@@ -67,6 +80,17 @@ function deviceRuntime(params: {
 }
 
 describe("device worker provider", () => {
+  it("binds targeted device reconciliation to the active worker service", async () => {
+    const service = {};
+    const reconcile = async (deviceId: string) => [`environment:${deviceId}`];
+
+    await expect(reconcileDeviceWorker(service, DEVICE_ID)).resolves.toEqual([]);
+    bindDeviceWorkerReconciliation(service, reconcile);
+    await expect(reconcileDeviceWorker(service, DEVICE_ID)).resolves.toEqual([
+      `environment:${DEVICE_ID}`,
+    ]);
+  });
+
   it("provisions deterministic node leases only for connected paired session hosts", async () => {
     const provider = deviceRuntime({
       getPairedDevice: async (deviceId) => pairedDevice(deviceId),
@@ -110,16 +134,62 @@ describe("device worker provider", () => {
     );
   });
 
+  it.each([
+    {
+      name: "inside the dormancy ceiling",
+      disconnectedAtMs: 6 * DAY_MS + 1,
+      expected: { status: "dormant" },
+    },
+    {
+      name: "at the dormancy ceiling",
+      disconnectedAtMs: 6 * DAY_MS,
+      expected: { status: "unknown" },
+    },
+    {
+      name: "past the dormancy ceiling",
+      disconnectedAtMs: DAY_MS,
+      expected: { status: "unknown" },
+    },
+    {
+      name: "without exact legacy disconnect history",
+      disconnectedAtMs: undefined,
+      expected: { status: "dormant" },
+    },
+  ])("reports an offline paired node as $name", async ({ disconnectedAtMs, expected }) => {
+    const nowMs = 20 * DAY_MS;
+    const device = pairedDevice(DEVICE_ID, {
+      createdAtMs: 1,
+      approvedAtMs: 1,
+      lastConnectedAtMs: DAY_MS,
+      ...(disconnectedAtMs === undefined ? {} : { lastDisconnectedAtMs: disconnectedAtMs }),
+    });
+    // General device activity must not extend node-worker dormancy.
+    device.lastSeenAtMs = nowMs;
+    const provider = deviceRuntime({
+      getPairedDevice: async () => device,
+      listCurrentNodes: async () => [],
+      now: () => nowMs,
+    }).provider;
+
+    await expect(
+      provider.inspect({ leaseId: "device-lease", profile: { device: DEVICE_ID } }),
+    ).resolves.toEqual(expected);
+  });
+
   it("reports active, dormant, and unknown from pairing plus live presence", async () => {
     let paired: PairedDevice | null = pairedDevice();
     let connected = true;
+    let available = true;
     const runtime = deviceRuntime({
       getPairedDevice: async () => paired,
-      listCurrentNodes: async () => (connected ? [connectedNode()] : []),
+      listCurrentNodes: async () =>
+        connected ? [connectedNode(DEVICE_ID, available ? WORKER_BUILD : null)] : [],
     });
     const provider = runtime.provider;
     const lease = { leaseId: "device-lease", profile: { device: DEVICE_ID } };
 
+    await expect(provider.inspect(lease)).resolves.toEqual({ status: "active", sharedHost: true });
+    available = false;
     await expect(provider.inspect(lease)).resolves.toEqual({ status: "active", sharedHost: true });
     connected = false;
     await expect(provider.inspect(lease)).resolves.toEqual({ status: "dormant" });

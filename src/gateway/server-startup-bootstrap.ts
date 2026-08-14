@@ -15,7 +15,7 @@ import {
 } from "../config/io.js";
 import { normalizeStateDirEnv } from "../config/paths.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -30,9 +30,11 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -201,10 +203,16 @@ export async function prepareGatewayServerBootstrap(input: {
     message: string,
     cfg: OpenClawConfig,
   ) => {
-    enqueueSystemEvent(`[${code}] ${message}`, {
-      sessionKey: resolveMainSessionKey(cfg),
-      contextKey: code,
-    });
+    const text = `[${code}] ${message}`;
+    try {
+      const target = resolveSystemMainSessionTarget(cfg);
+      enqueueSystemEvent(
+        text,
+        withSystemEventOwner({ sessionKey: target.sessionKey, contextKey: code }, target.agentId),
+      );
+    } catch (error) {
+      logSecrets.warn(`${text} not delivered: ${formatErrorMessage(error)}`);
+    }
   };
   const { createRuntimeSecretsActivator } = await startupConfigModulePromise;
   const activateRuntimeSecrets = createRuntimeSecretsActivator({

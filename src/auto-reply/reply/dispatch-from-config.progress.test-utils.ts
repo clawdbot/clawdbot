@@ -6,6 +6,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createDispatcher,
   emptyConfig,
+  hookMocks,
   replyMediaPathMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -14,7 +15,6 @@ import {
   automaticGroupReplyConfig,
   messageToolGroupReplyConfig,
   dispatchReplyFromConfig,
-  dispatchFromConfigTesting,
   setNoAbort,
   firstMockArg,
   firstToolResultPayload,
@@ -46,12 +46,17 @@ describe("dispatchReplyFromConfig", () => {
 
     let isActive: (() => boolean) | undefined;
     let activeDuringRun: boolean | undefined;
+    let activeAfterLevelChange: boolean | undefined;
     const replyResolver = async (
       _ctx: MsgContext,
       _opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
       activeDuringRun = isActive?.();
+      sessionStoreMocks.currentEntry = {
+        verboseLevel: "off",
+      };
+      activeAfterLevelChange = isActive?.();
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -68,6 +73,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(activeDuringRun).toBe(true);
+    expect(activeAfterLevelChange).toBe(false);
 
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -92,60 +98,88 @@ describe("dispatchReplyFromConfig", () => {
     expect(activeDuringOffRun).toBe(false);
   });
 
-  it("keeps block-owned commentary out of the standalone durable progress lane", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "on",
-    };
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      ChatType: "direct",
-    });
-    const onItemEvent = vi.fn();
+  it.each([
+    { surface: "slack", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
+    { surface: "slack", verboseLevel: "off", nextVerboseLevel: "on", durableCommentary: false },
+    { surface: "discord", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
+    { surface: "discord", verboseLevel: "off", nextVerboseLevel: "on", durableCommentary: false },
+  ] as const)(
+    "routes $surface commentary through one owner with verbose $verboseLevel",
+    async ({ surface, verboseLevel, nextVerboseLevel, durableCommentary }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        verboseLevel,
+      };
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: surface,
+        Surface: surface,
+        ChatType: "group",
+        From: `${surface}:channel:C123`,
+        SessionKey: `agent:main:${surface}:channel:C123`,
+      });
+      const onItemEvent = vi.fn();
+      let isVerboseProgressActive = () => false;
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onItemEvent?.({
+      const replyResolver = async (
+        _ctx: MsgContext,
+        opts?: GetReplyOptions,
+        _cfg?: OpenClawConfig,
+      ) => {
+        sessionStoreMocks.currentEntry = {
+          verboseLevel: nextVerboseLevel,
+        };
+        expect(isVerboseProgressActive()).toBe(durableCommentary);
+        expect(opts?.commentaryPayloadsEnabled).toBe(durableCommentary);
+        await opts?.onItemEvent?.({
+          itemId: "commentary-1",
+          kind: "preamble",
+          progressText: "Inspecting the dispatch path.",
+          ...(durableCommentary ? { suppressDurableProgress: true } : {}),
+        });
+        await opts?.onBlockReply?.({
+          text: "Inspecting the dispatch path.",
+          isCommentary: true,
+        });
+        return { text: "Done." } satisfies ReplyPayload;
+      };
+
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg: automaticGroupReplyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          suppressDefaultToolProgressMessages: true,
+          commentaryProgressEnabled: true,
+          progressPreambleEnabled: true,
+          commentaryPayloadsEnabled: true,
+          shouldDeliverCommentaryPayloads: () => isVerboseProgressActive(),
+          onVerboseProgressVisibility: (getter) => {
+            isVerboseProgressActive = getter;
+          },
+          onItemEvent,
+        },
+      });
+
+      expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
         itemId: "commentary-1",
         kind: "preamble",
         progressText: "Inspecting the dispatch path.",
-        suppressDurableProgress: true,
+        ...(durableCommentary ? { suppressDurableProgress: true } : {}),
       });
-      await opts?.onBlockReply?.({ text: "Inspecting the dispatch path." });
-      return { text: "Done." } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        suppressDefaultToolProgressMessages: true,
-        commentaryProgressEnabled: true,
-        progressPreambleEnabled: true,
-        commentaryPayloadsEnabled: true,
-        onItemEvent,
-      },
-    });
-
-    expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
-      itemId: "commentary-1",
-      kind: "preamble",
-      progressText: "Inspecting the dispatch path.",
-      suppressDurableProgress: true,
-    });
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledExactlyOnceWith({
-      text: "Inspecting the dispatch path.",
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "Done." });
-  });
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      if (durableCommentary) {
+        expect(dispatcher.sendBlockReply).toHaveBeenCalledExactlyOnceWith({
+          text: "Inspecting the dispatch path.",
+          isCommentary: true,
+        });
+      } else {
+        expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      }
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "Done." });
+    },
+  );
 
   it("forwards channel-owned group progress callbacks while source delivery is suppressed", async () => {
     setNoAbort();
@@ -354,15 +388,42 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("exposes live tool-summary state to reply_dispatch hooks", () => {
-    let shouldSendToolSummaries = false;
-    const event = dispatchFromConfigTesting.createReplyDispatchEvent({
-      shouldSendToolSummaries: () => shouldSendToolSummaries,
-    } as never) as { shouldSendToolSummaries: boolean };
+  it("exposes live group tool-summary state to reply_dispatch hooks", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "matrix",
+      Surface: "matrix",
+      ChatType: "group",
+      From: "matrix:!room:test",
+      SessionKey: "agent:main:matrix:group:!room:test",
+    });
+    let initialHookState: boolean | undefined;
+    let updatedHookState: boolean | undefined;
+    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event: unknown) => {
+      const replyDispatchEvent = event as { shouldSendToolSummaries: boolean };
+      initialHookState = replyDispatchEvent.shouldSendToolSummaries;
+      sessionStoreMocks.currentEntry = {
+        verboseLevel: "on",
+      };
+      updatedHookState = replyDispatchEvent.shouldSendToolSummaries;
+      return undefined;
+    });
 
-    expect(event.shouldSendToolSummaries).toBe(false);
-    shouldSendToolSummaries = true;
-    expect(event.shouldSendToolSummaries).toBe(true);
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(initialHookState).toBe(false);
+    expect(updatedHookState).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
   it("forwards direct native progress callbacks while verbose is off", async () => {

@@ -1211,10 +1211,6 @@ export function sweepExpiredPluginStateEntries(): number {
   }
 }
 
-export function isPluginStateDatabaseOpen(): boolean {
-  return cachedDatabase?.db.isOpen === true;
-}
-
 export function clearPluginStateDatabaseForTests(): void {
   const store = openPluginStateDatabase("clear");
   executeSqliteQuerySync(

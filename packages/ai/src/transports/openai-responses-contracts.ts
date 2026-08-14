@@ -28,6 +28,14 @@ export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
+export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-chatgpt-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
 
 export class OpenAIResponsesWebSocketResponseFailedError extends Error {
   readonly code: string;
@@ -106,7 +114,9 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
   }
   const ErrorClass =
     details.code === "previous_response_not_found" ||
-    details.code === "websocket_connection_limit_reached"
+    details.code === "websocket_connection_limit_reached" ||
+    details.code === "invalid_encrypted_content" ||
+    details.code === "thinking_signature_invalid"
       ? OpenAIResponsesWebSocketSafeRetryError
       : OpenAIResponsesWebSocketServerError;
   return new ErrorClass(details.code, details.status, details.param, details.message, cause);

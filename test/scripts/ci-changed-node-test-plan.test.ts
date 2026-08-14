@@ -94,12 +94,16 @@ describe("CI changed Node test plan", () => {
     expect(hasBuildArtifactAffectingChange(["qa/scenarios/index.yaml"])).toBe(false);
     expect(hasBuildArtifactAffectingChange(["ui/src/app.ts"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["extensions/qa-lab/src/ci-smoke-plan.ts"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(true);
-    // Inside the packaged CLI's import graph -> the smoke scenarios can see it.
-    expect(hasQaSmokeAffectingChange(["src/infra/retry.ts"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["qa/scenarios/index.yaml"])).toBe(true);
     // Smoke drives matrix + telegram; other channel plugins are invisible to it.
     expect(hasQaSmokeAffectingChange(["extensions/telegram/src/index.ts"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
+    // Broad runtime changes ride the main-push smoke run instead of taxing
+    // every PR with the six-part matrix; only QA-owned surfaces select it.
+    expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(false);
+    expect(hasQaSmokeAffectingChange(["src/infra/retry.ts"])).toBe(false);
+    expect(hasQaSmokeAffectingChange(["packages/llm-core/src/index.ts"])).toBe(false);
+    expect(hasQaSmokeAffectingChange(["pnpm-lock.yaml"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["test/scripts/ci-node-test-plan.test.ts"])).toBe(false);
     // The QA lane's own orchestration must not be able to skip the lane.
@@ -107,8 +111,6 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
-    // Deleted source files cannot be graphed; fail safe to running QA smoke.
-    expect(hasQaSmokeAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
   });
 
   it("classifies prompt-snapshot impact by surface and generator import graph", () => {
@@ -283,6 +285,40 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it.each([
+    {
+      changedPath: "extensions/browser/src/browser/cdp.helpers.test.ts",
+      config: "test/vitest/vitest.extension-browser.config.ts",
+    },
+    {
+      changedPath: "extensions/codex/src/session-upstream-marker.ts",
+      config: "test/vitest/vitest.extension-codex.config.ts",
+    },
+  ])("runs the whole owning extension config for $changedPath", ({ changedPath, config }) => {
+    const shards = createChangedNodeTestShards([changedPath]);
+
+    expect(shards).not.toBeNull();
+    expect(shards?.flatMap((shard) => shard.configs)).toContain(config);
+  });
+
+  it("packs Telegram process lifetimes into bounded changed-extension jobs", () => {
+    const shards = createChangedExtensionFallbackShards(["extensions/telegram/src/channel.ts"]);
+    const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+
+    expect(shards.length).toBeGreaterThan(1);
+    expect(
+      shards.every(
+        (shard) =>
+          shard.configs[0] === "test/vitest/vitest.extension-telegram.config.ts" &&
+          (shard.includePatterns?.length ?? 0) > 0 &&
+          (shard.includePatterns?.length ?? 0) <= 10,
+      ),
+    ).toBe(true);
+    expect(targets.length).toBeGreaterThan(10);
+    expect(new Set(targets).size).toBe(targets.length);
+    expect(shards).toHaveLength(Math.ceil(targets.length / 10));
+  });
+
   it("preserves Matrix process bounds in mixed package fallbacks", () => {
     const shards = createChangedExtensionFallbackShards([
       "packages/gateway-protocol/src/frame-guards.ts",
@@ -406,20 +442,19 @@ describe("CI changed Node test plan", () => {
     expect(new Set(targets).size).toBe(targets.length);
   });
 
-  it("serializes changed-test chunks that contain Memory Core integration tests", () => {
+  it("serializes the owning Memory Core extension config for direct changes", () => {
     const shards = createChangedNodeTestShards([
       "extensions/memory-core/src/memory/mmr.ts",
       "extensions/memory-core/src/memory/mmr.test.ts",
     ]);
     expect(shards).not.toBeNull();
-    const targetShards = shards?.filter((shard) => shard.targets) ?? [];
-    expect(targetShards.length).toBeGreaterThan(0);
-    expect(
-      targetShards
-        .filter((shard) =>
-          shard.targets?.some((target) => target.startsWith("extensions/memory-core/")),
-        )
-        .every((shard) => shard.planConcurrency === 1),
-    ).toBe(true);
+    expect(shards).toContainEqual({
+      checkName: "checks-node-changed-extensions-config",
+      configs: ["test/vitest/vitest.extension-memory.config.ts"],
+      planConcurrency: 1,
+      requiresDist: false,
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      shardName: "changed-extensions-config",
+    });
   });
 });

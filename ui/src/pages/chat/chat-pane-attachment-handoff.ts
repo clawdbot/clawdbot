@@ -97,10 +97,21 @@ export function replacePaneStagedAttachmentGatewayOwner(
   if (!nextOwner || previousOwner === nextOwner) {
     return previousOwner;
   }
-  discardStateStagedAttachments(state);
-  state?.requestUpdate?.();
+  // Rotating the client invalidates annotation Undo context owned by the old
+  // client, but plain file/image payloads are client-local data URLs — a gap
+  // reconnect or plugin-install rotation must not silently discard them.
+  if (state) {
+    const dropAnnotations = (attachments: readonly ChatAttachment[]) => {
+      releaseAttachments(attachments.filter((attachment) => attachment.browserAnnotation));
+      return attachments.filter((attachment) => !attachment.browserAnnotation);
+    };
+    state.chatAttachments = dropAnnotations(state.chatAttachments);
+    for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
+      fallback.attachments = dropAnnotations(fallback.attachments);
+    }
+    state.requestUpdate?.();
+  }
   context.chatAttachmentHandoff.clearPane(paneId);
-  // Rotating the token also invalidates any pending annotation Undo owned by the old client.
   return nextOwner;
 }
 

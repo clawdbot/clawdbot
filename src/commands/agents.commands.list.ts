@@ -1,4 +1,5 @@
 // Implements `openclaw agents list` text and JSON summaries.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
@@ -23,18 +24,19 @@ type AgentsListOptions = {
 };
 
 function formatSummary(summary: AgentSummary) {
+  const safe = sanitizeTerminalText;
   const defaultTag = summary.isDefault ? " (default)" : "";
   const header =
     summary.name && summary.name !== summary.id
-      ? `${summary.id}${defaultTag} (${summary.name})`
-      : `${summary.id}${defaultTag}`;
+      ? `${safe(summary.id)}${defaultTag} (${safe(summary.name)})`
+      : `${safe(summary.id)}${defaultTag}`;
 
   const identityParts = [];
   if (summary.identityEmoji) {
-    identityParts.push(summary.identityEmoji);
+    identityParts.push(safe(summary.identityEmoji));
   }
   if (summary.identityName) {
-    identityParts.push(summary.identityName);
+    identityParts.push(safe(summary.identityName));
   }
   const identityLine = identityParts.length > 0 ? identityParts.join(" ") : null;
   const identitySource =
@@ -48,27 +50,27 @@ function formatSummary(summary: AgentSummary) {
   if (identityLine) {
     lines.push(`  Identity: ${identityLine}${identitySource ? ` (${identitySource})` : ""}`);
   }
-  lines.push(`  Workspace: ${shortenHomePath(summary.workspace)}`);
-  lines.push(`  Agent dir: ${shortenHomePath(summary.agentDir)}`);
+  lines.push(`  Workspace: ${safe(shortenHomePath(summary.workspace))}`);
+  lines.push(`  Agent dir: ${safe(shortenHomePath(summary.agentDir))}`);
   if (summary.model) {
-    lines.push(`  Model: ${summary.model}`);
+    lines.push(`  Model: ${safe(summary.model)}`);
   }
   lines.push(`  Routing rules: ${summary.bindings}`);
 
   if (summary.routes?.length) {
-    lines.push(`  Routing: ${summary.routes.join(", ")}`);
+    lines.push(`  Routing: ${summary.routes.map(safe).join(", ")}`);
   }
   if (summary.providers?.length) {
     lines.push("  Providers:");
     for (const provider of summary.providers) {
-      lines.push(`    - ${provider}`);
+      lines.push(`    - ${safe(provider)}`);
     }
   }
 
   if (summary.bindingDetails?.length) {
     lines.push("  Routing rules:");
     for (const binding of summary.bindingDetails) {
-      lines.push(`    - ${binding}`);
+      lines.push(`    - ${safe(binding)}`);
     }
   }
   return lines.join("\n");

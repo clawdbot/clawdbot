@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
@@ -14,6 +15,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { readMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -50,7 +52,6 @@ import {
   GatewayClient,
   isGatewayConnectAssemblyError,
   type GatewayClientCloseInfo,
-  type GatewayClientOptions,
   type GatewayClientRequestOptions,
 } from "./client.js";
 import {
@@ -68,6 +69,8 @@ import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
 import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
+  ADMIN_SCOPE,
+  WRITE_SCOPE,
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
@@ -364,36 +367,10 @@ export function isGatewayExplicitAuthRequiredError(
   return value instanceof Error && value.name === "GatewayExplicitAuthRequiredError";
 }
 
-const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
-type GatewayRuntimeConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
 // Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
 // Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
 const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
   getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
-const defaultGatewayCallDeps: {
-  createGatewayClient: typeof defaultCreateGatewayClient;
-  getRuntimeConfig: GatewayRuntimeConfigLoader;
-  loadOrCreateDeviceIdentity: typeof loadOrCreateDeviceIdentity;
-  resolveGatewayPort: typeof resolveGatewayPortFromPaths;
-  resolveConfigPath: typeof resolveConfigPathFromPaths;
-  resolveStateDir: typeof resolveStateDirFromPaths;
-  loadGatewayTlsRuntime: typeof loadGatewayTlsRuntime;
-  loadDeviceAuthToken: typeof loadDeviceAuthToken;
-  loadOriginDeviceToken: typeof loadOriginDeviceToken;
-} = {
-  createGatewayClient: defaultCreateGatewayClient,
-  getRuntimeConfig: defaultGetRuntimeConfig,
-  loadOrCreateDeviceIdentity,
-  resolveGatewayPort: resolveGatewayPortFromPaths,
-  resolveConfigPath: resolveConfigPathFromPaths,
-  resolveStateDir: resolveStateDirFromPaths,
-  loadGatewayTlsRuntime,
-  loadDeviceAuthToken,
-  loadOriginDeviceToken,
-};
-const gatewayCallDeps = {
-  ...defaultGatewayCallDeps,
-};
 
 async function stopGatewayClient(client: GatewayClient): Promise<void> {
   try {
@@ -417,51 +394,23 @@ function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string |
 }
 
 async function loadGatewayConfig(): Promise<OpenClawConfig> {
-  const loadConfigFn =
-    typeof gatewayCallDeps.getRuntimeConfig === "function"
-      ? gatewayCallDeps.getRuntimeConfig
-      : typeof defaultGatewayCallDeps.getRuntimeConfig === "function"
-        ? defaultGatewayCallDeps.getRuntimeConfig
-        : defaultGetRuntimeConfig;
-  return await loadConfigFn();
+  return await defaultGetRuntimeConfig();
 }
 
 function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
-  if (
-    gatewayCallDeps.getRuntimeConfig !== defaultGetRuntimeConfig &&
-    typeof gatewayCallDeps.getRuntimeConfig === "function"
-  ) {
-    const config = gatewayCallDeps.getRuntimeConfig();
-    if (config && typeof (config as Promise<OpenClawConfig>).then === "function") {
-      throw new Error("async gateway config loader is not supported for connection details");
-    }
-    return config as OpenClawConfig;
-  }
   return readGatewayDispatchConfig();
 }
 
 function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
-  const resolveStateDirFn =
-    typeof gatewayCallDeps.resolveStateDir === "function"
-      ? gatewayCallDeps.resolveStateDir
-      : resolveStateDirFromPaths;
-  return resolveStateDirFn(env);
+  return resolveStateDirFromPaths(env);
 }
 
 function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
-  const resolveConfigPathFn =
-    typeof gatewayCallDeps.resolveConfigPath === "function"
-      ? gatewayCallDeps.resolveConfigPath
-      : resolveConfigPathFromPaths;
-  return resolveConfigPathFn(env, resolveGatewayStateDir(env));
+  return resolveConfigPathFromPaths(env, resolveGatewayStateDir(env));
 }
 
 function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
-  const resolveGatewayPortFn =
-    typeof gatewayCallDeps.resolveGatewayPort === "function"
-      ? gatewayCallDeps.resolveGatewayPort
-      : resolveGatewayPortFromPaths;
-  return resolveGatewayPortFn(config, env);
+  return resolveGatewayPortFromPaths(config, env);
 }
 
 export function buildGatewayConnectionDetails(
@@ -480,40 +429,6 @@ export function buildGatewayConnectionDetails(
     resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
   });
 }
-
-export const testing = {
-  setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
-    gatewayCallDeps.createGatewayClient =
-      deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
-    gatewayCallDeps.getRuntimeConfig =
-      deps?.getRuntimeConfig ?? defaultGatewayCallDeps.getRuntimeConfig;
-    gatewayCallDeps.loadOrCreateDeviceIdentity =
-      deps?.loadOrCreateDeviceIdentity ?? defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
-    gatewayCallDeps.resolveGatewayPort =
-      deps?.resolveGatewayPort ?? defaultGatewayCallDeps.resolveGatewayPort;
-    gatewayCallDeps.resolveConfigPath =
-      deps?.resolveConfigPath ?? defaultGatewayCallDeps.resolveConfigPath;
-    gatewayCallDeps.resolveStateDir =
-      deps?.resolveStateDir ?? defaultGatewayCallDeps.resolveStateDir;
-    gatewayCallDeps.loadGatewayTlsRuntime =
-      deps?.loadGatewayTlsRuntime ?? defaultGatewayCallDeps.loadGatewayTlsRuntime;
-    gatewayCallDeps.loadDeviceAuthToken =
-      deps?.loadDeviceAuthToken ?? defaultGatewayCallDeps.loadDeviceAuthToken;
-    gatewayCallDeps.loadOriginDeviceToken =
-      deps?.loadOriginDeviceToken ?? defaultGatewayCallDeps.loadOriginDeviceToken;
-  },
-  resetDepsForTests(): void {
-    gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
-    gatewayCallDeps.getRuntimeConfig = defaultGatewayCallDeps.getRuntimeConfig;
-    gatewayCallDeps.loadOrCreateDeviceIdentity = defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
-    gatewayCallDeps.resolveGatewayPort = defaultGatewayCallDeps.resolveGatewayPort;
-    gatewayCallDeps.resolveConfigPath = defaultGatewayCallDeps.resolveConfigPath;
-    gatewayCallDeps.resolveStateDir = defaultGatewayCallDeps.resolveStateDir;
-    gatewayCallDeps.loadGatewayTlsRuntime = defaultGatewayCallDeps.loadGatewayTlsRuntime;
-    gatewayCallDeps.loadDeviceAuthToken = defaultGatewayCallDeps.loadDeviceAuthToken;
-    gatewayCallDeps.loadOriginDeviceToken = defaultGatewayCallDeps.loadOriginDeviceToken;
-  },
-};
 
 function isLoopbackGatewayUrl(rawUrl: string): boolean {
   try {
@@ -557,7 +472,7 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
 
 function resolveDeviceIdentityForGatewayCall(): DeviceIdentity | null {
   try {
-    return gatewayCallDeps.loadOrCreateDeviceIdentity();
+    return loadOrCreateDeviceIdentity();
   } catch {
     // Read-only or restricted environments should still be able to call the
     // gateway with token/password auth without crashing before the RPC.
@@ -574,14 +489,14 @@ function loadStoredOperatorDeviceAuthToken(
   }
   try {
     if (deviceAuthScope) {
-      return gatewayCallDeps.loadOriginDeviceToken({
+      return loadOriginDeviceToken({
         gatewayScope: deviceAuthScope,
         deviceId: deviceIdentity.deviceId,
         role: "operator",
         env: process.env,
       });
     }
-    return gatewayCallDeps.loadDeviceAuthToken({
+    return loadDeviceAuthToken({
       deviceId: deviceIdentity.deviceId,
       role: "operator",
       env: process.env,
@@ -949,7 +864,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     };
     opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    const client: GatewayClient | undefined = gatewayCallDeps.createGatewayClient({
+    const client: GatewayClient | undefined = new GatewayClient({
       url,
       token,
       password,
@@ -1126,7 +1041,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     resolveTlsFingerprint: async (params) =>
       await resolveGatewayConnectionTlsFingerprint({
         ...params,
-        loadGatewayTlsRuntime: gatewayCallDeps.loadGatewayTlsRuntime,
+        loadGatewayTlsRuntime,
       }),
   });
   ensureRemoteModeUrlConfigured({
@@ -1260,7 +1175,7 @@ export async function buildGatewayProbeConnectionDetails(
     resolveTlsFingerprint: async (params) =>
       await resolveGatewayConnectionTlsFingerprint({
         ...params,
-        loadGatewayTlsRuntime: gatewayCallDeps.loadGatewayTlsRuntime,
+        loadGatewayTlsRuntime,
       }),
   });
   ensureRemoteModeUrlConfigured({
@@ -1273,22 +1188,60 @@ export async function buildGatewayProbeConnectionDetails(
   };
 }
 
+function shouldEscalateSessionCreateCwdScope(params: {
+  opts: CallGatewayBaseOptions;
+  scopes: readonly OperatorScope[];
+  error: unknown;
+}): boolean {
+  if (
+    params.opts.method !== "sessions.create" ||
+    !isRecord(params.opts.params) ||
+    !normalizeOptionalString(params.opts.params.cwd) ||
+    params.scopes.length !== 1 ||
+    params.scopes[0] !== WRITE_SCOPE
+  ) {
+    return false;
+  }
+  const errorRecord = isRecord(params.error) ? params.error : undefined;
+  const missingScope = readMissingScopeErrorDetails(errorRecord?.details);
+  return (
+    missingScope?.missingScope === ADMIN_SCOPE && missingScope.requiredScopes.includes(ADMIN_SCOPE)
+  );
+}
+
+async function callGatewayWithScopeEscalation<T>(
+  opts: CallGatewayBaseOptions,
+  scopes: OperatorScope[],
+): Promise<T> {
+  try {
+    return await callGatewayWithScopes<T>(opts, scopes);
+  } catch (error) {
+    // sessions.create checks filesystem-backed cwd containment before mutation.
+    // Retry only that structured, pre-mutation escalation on an admin connection.
+    if (!shouldEscalateSessionCreateCwdScope({ opts, scopes, error })) {
+      throw error;
+    }
+    return await callGatewayWithScopes<T>(opts, [ADMIN_SCOPE]);
+  }
+}
+
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
-  const scopes = Array.isArray(opts.scopes)
-    ? opts.scopes
-    : isGatewayMethodClassified(opts.method)
-      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
-      : CLI_DEFAULT_OPERATOR_SCOPES;
-  return await callGatewayWithScopes(opts, scopes);
+  if (Array.isArray(opts.scopes)) {
+    return await callGatewayWithScopes(opts, opts.scopes);
+  }
+  const scopes = isGatewayMethodClassified(opts.method)
+    ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
+    : CLI_DEFAULT_OPERATOR_SCOPES;
+  return await callGatewayWithScopeEscalation(opts, scopes);
 }
 
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
 ): Promise<T> {
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params);
-  return await callGatewayWithScopes(opts, scopes);
+  return await callGatewayWithScopeEscalation(opts, scopes);
 }
 
 export async function callGateway<T = Record<string, unknown>>(

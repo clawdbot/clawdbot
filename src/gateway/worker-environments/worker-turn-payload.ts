@@ -26,7 +26,7 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
-import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
   type WorkerReplayMessageWindowUnavailable,
@@ -135,8 +135,12 @@ export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMe
   return { kind: "complete", messages: projected };
 }
 
-type WorkerLaunchPlan =
-  | { kind: "launch"; descriptor: WorkerLaunchDescriptor }
+// Node hosts append their own bounded websocket endpoint after sizing; reserve
+// its 4 KiB URL, TLS pin, keys, and JSON escaping before admitting replay bytes.
+const WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES = 4_608;
+
+type WorkerLaunchFit =
+  | { kind: "launch"; plan: WorkerLaunchPlan }
   | {
       kind: "local-fallback";
       reason: "provider-replay-launch-payload-limit";
@@ -146,10 +150,10 @@ type WorkerLaunchPlan =
 
 /** Fits replay context before minting the exact worker-bound identity bearer. */
 export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
-  build: (identityToken: string, messages: WorkerTranscriptMessage[]) => WorkerLaunchDescriptor;
+  build: (identityToken: string, messages: WorkerTranscriptMessage[]) => WorkerLaunchPlan;
   messages: WorkerTranscriptMessage[];
   runtimeIdentity: AgentRuntimeIdentityTokenParams;
-}): Promise<WorkerLaunchPlan> {
+}): Promise<WorkerLaunchFit> {
   const tokenBytes = measureAgentRuntimeIdentityTokenBytes(params.runtimeIdentity);
   const plan = fitLaunchDescriptor(
     (messages) => params.build("x".repeat(tokenBytes), messages),
@@ -164,23 +168,24 @@ export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
   }
   return {
     kind: "launch",
-    descriptor: {
-      ...plan.descriptor,
-      assignment: { ...plan.descriptor.assignment, agentRuntimeIdentityToken: token },
+    plan: {
+      ...plan.plan,
+      assignment: { ...plan.plan.assignment, agentRuntimeIdentityToken: token },
     },
   };
 }
 
 function fitLaunchDescriptor(
-  build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchDescriptor,
+  build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchPlan,
   messages: WorkerTranscriptMessage[],
-): WorkerLaunchPlan {
+): WorkerLaunchFit {
   let initialMessages = messages;
   while (true) {
-    const descriptor = build(initialMessages);
-    const bytes = Buffer.byteLength(JSON.stringify(descriptor), "utf8");
+    const plan = build(initialMessages);
+    const bytes =
+      Buffer.byteLength(JSON.stringify(plan), "utf8") + WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES;
     if (bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
-      return { kind: "launch", descriptor };
+      return { kind: "launch", plan };
     }
     const replayIndex = initialMessages.findLastIndex(
       (message) => message.role === "assistant" && message.providerReplay !== undefined,

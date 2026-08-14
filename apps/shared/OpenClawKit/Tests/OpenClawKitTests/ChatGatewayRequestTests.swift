@@ -158,6 +158,13 @@ struct ChatGatewayRequestTests {
         #expect(fork.params["parentSessionKey"]?.value as? String == "agent:reviewer:telegram:group:1")
         #expect(fork.params["agentId"]?.value as? String == "reviewer")
         #expect(fork.params["fork"]?.value as? Bool == true)
+        #expect(fork.params["forkFrom"] == nil)
+
+        let activeFork = OpenClawChatGatewayRequests.forkSession(
+            parentSessionKey: "agent:reviewer:telegram:group:1",
+            agentID: "reviewer",
+            fromLastCompleted: true)
+        #expect(activeFork.params["forkFrom"]?.value as? String == "last-completed")
 
         let create = OpenClawChatGatewayRequests.createSession(
             key: "agent:reviewer:new",

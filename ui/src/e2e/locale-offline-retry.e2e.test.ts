@@ -3,6 +3,7 @@ import type { BrowserContext, Page, Route } from "playwright";
 import { expect, it } from "vitest";
 import { SUPPORTED_LOCALES } from "../i18n/lib/registry.ts";
 import {
+  controlUiBundledGatewayUrl,
   installMockGateway,
   startControlUiE2eServer,
   type MockGatewayControls,
@@ -90,7 +91,9 @@ suite.define(() => {
   it("applies a locale whose first chunk request failed after the Gateway reconnects", async () => {
     const context = await createContext();
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const gateway = await installMockGateway(page, {
+      webSocketPassthroughPrefixes: [`${controlUiBundledGatewayUrl(suite.server.baseUrl)}/?token=`],
+    });
     let abortedLocaleRequests = 0;
     const abortFrenchLocale = async (route: Route) => {
       abortedLocaleRequests += 1;

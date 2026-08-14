@@ -6,6 +6,10 @@
  */
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  ComputerUseCapabilityDescriptor,
+  ComputerUseV2ActionName,
+} from "../../plugins/computer-use-contract.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const listNodesMock = vi.fn();
@@ -49,6 +53,23 @@ function macComputerNode(overrides?: Record<string, unknown>) {
     commands: ["screen.snapshot", "computer.act"],
     ...overrides,
   };
+}
+
+function v2Descriptor(actions: ComputerUseV2ActionName[]): ComputerUseCapabilityDescriptor {
+  return {
+    contractVersion: 2 as const,
+    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+    actions,
+    targets: ["screen", "window", "element"] as const,
+    deliveryModes: ["background", "foreground"] as const,
+    observations: ["image", "accessibility"] as const,
+    features: { recording: false, agentCursor: false, multiDisplay: false },
+  };
+}
+
+function readActionEnum(tool: ComputerTool): string[] {
+  const schema = tool.parameters as { properties?: { action?: { enum?: string[] } } };
+  return schema.properties?.action?.enum ?? [];
 }
 
 function screenshotPayload(screenIndex = 0, base64 = TINY_PNG_BASE64) {
@@ -180,7 +201,9 @@ function mockComputerActError(error: Error, action?: string) {
     ) {
       throw error;
     }
-    return screenshotPayload();
+    return request.command === COMPUTER_ACT_COMMAND
+      ? { payload: { ok: true } }
+      : screenshotPayload();
   });
 }
 
@@ -291,6 +314,32 @@ describe("computer screenshot context binding", () => {
 });
 
 describe("createComputerTool schema", () => {
+  it("keeps an undeclared node on the exact v1 action list", () => {
+    expect(readActionEnum(createComputerTool())).toEqual([
+      "screenshot",
+      "left_click",
+      "right_click",
+      "middle_click",
+      "double_click",
+      "triple_click",
+      "mouse_move",
+      "left_click_drag",
+      "left_mouse_down",
+      "left_mouse_up",
+      "scroll",
+      "type",
+      "key",
+      "hold_key",
+      "wait",
+    ]);
+  });
+
+  it("filters the model schema to a preselected v2 descriptor", () => {
+    const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps", "get_window_state"];
+    const tool = createComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+    expect(readActionEnum(tool)).toEqual(actions);
+  });
+
   it("publishes Codex-compatible fixed-size coordinate arrays", () => {
     const properties = (
       createComputerTool().parameters as {
@@ -332,7 +381,102 @@ describe("createComputerTool execution", () => {
       });
     });
     listNodesMock.mockResolvedValue([macComputerNode()]);
-    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+      (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
+        ? { payload: { ok: true } }
+        : screenshotPayload(),
+    );
+  });
+
+  it("rebuilds the visible action enum from the selected node declaration", async () => {
+    const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps", "get_window_state"];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    const tool = createVisionComputerTool();
+    expect(readActionEnum(tool)).toHaveLength(15);
+
+    await tool.execute("select", { action: "screenshot" });
+
+    expect(readActionEnum(tool)).toEqual(actions);
+  });
+
+  it("projects a provider observation without taking a duplicate desktop screenshot", async () => {
+    const actions: ComputerUseV2ActionName[] = ["get_window_state"];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    callGatewayToolMock.mockResolvedValue({
+      payload: {
+        ok: true,
+        effect: "confirmed",
+        observation: {
+          kind: "window",
+          base64: TINY_PNG_BASE64,
+          format: "png",
+          width: 1,
+          height: 1,
+          observationId: "observation-1",
+          elements: [
+            {
+              elementRef: "element-1",
+              role: "button",
+              label: "Save",
+              bounds: { x: 0, y: 0, width: 1, height: 1 },
+            },
+          ],
+        },
+      },
+    });
+    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+
+    const result = await tool.execute("observe", {
+      action: "get_window_state",
+      windowRef: "window-1",
+    });
+
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "image", mimeType: "image/png" }),
+    );
+    expect(callGatewayToolMock).toHaveBeenCalledOnce();
+    expect(readLastComputerActParams()).toEqual({
+      action: "get_window_state",
+      windowRef: "window-1",
+    });
+    expect(sleepMock).not.toHaveBeenCalledWith(500, expect.anything());
+  });
+
+  it("rejects stale semantic references before dispatch", async () => {
+    const actions: ComputerUseV2ActionName[] = ["get_window_state", "set_value"];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    callGatewayToolMock.mockResolvedValue({
+      payload: {
+        ok: true,
+        observation: { kind: "window", observationId: "observation-current" },
+      },
+    });
+    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+    await tool.execute("observe", { action: "get_window_state", windowRef: "window-1" });
+    callGatewayToolMock.mockClear();
+
+    await expect(
+      tool.execute("write", {
+        action: "set_value",
+        windowRef: "window-1",
+        elementRef: "element-1",
+        observationId: "observation-stale",
+        value: "hello",
+        deliveryMode: "background",
+      }),
+    ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects contract-only actions even when a node advertises them", async () => {
+    const actions: ComputerUseV2ActionName[] = ["browser_click"];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+
+    await expect(tool.execute("browser", { action: "browser_click" })).rejects.toThrow(
+      "COMPUTER_CONTRACT_MISMATCH",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -560,7 +704,11 @@ describe("createComputerTool execution", () => {
   });
 
   it("targets the last screenshot's display when a coordinate action omits screenIndex", async () => {
-    callGatewayToolMock.mockResolvedValue(screenshotPayload(1));
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+      (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
+        ? { payload: { ok: true } }
+        : screenshotPayload(1),
+    );
     const { tool, frameId } = await createToolWithFrame({}, { screenIndex: 1 }, "call");
     // The model looks at display 1, then clicks a coordinate from that screenshot
     // without repeating screenIndex.
@@ -583,7 +731,11 @@ describe("createComputerTool execution", () => {
   });
 
   it("rejects a coordinate action that retargets a different display", async () => {
-    callGatewayToolMock.mockResolvedValue(screenshotPayload(1));
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+      (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
+        ? { payload: { ok: true } }
+        : screenshotPayload(1),
+    );
     const { tool, frameId } = await createToolWithFrame({}, { screenIndex: 1 }, "call");
     await expect(
       executeClick(tool, frameId, { coordinate: [10, 20], screenIndex: 0 }, "call"),

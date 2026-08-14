@@ -165,7 +165,8 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
       if (
         params.signal.aborted ||
         (!isAbortError(err) && isTimeoutError(err)) ||
-        completedChunks === 0
+        completedChunks === 0 ||
+        summary === undefined
       ) {
         throw err;
       }
@@ -180,7 +181,7 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
       });
       const partial = new Error("partial summarization failure");
       (partial as PartialSummaryError).partialSummary =
-        `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
+        `${summary}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
       throw partial;
     }
   }

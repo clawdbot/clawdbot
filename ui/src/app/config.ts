@@ -38,6 +38,7 @@ type ApplicationConfig = {
     avatarReason: string | null;
   };
   serverVersion: string | null;
+  serverBuildId?: string | null;
   devGitBranch: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
@@ -75,6 +76,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
     avatarReason: null,
   },
   serverVersion: null,
+  serverBuildId: null,
   devGitBranch: null,
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
@@ -142,6 +144,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
       avatarReason: identity.avatarReason ?? null,
     },
     serverVersion: parsed.serverVersion ?? null,
+    serverBuildId: parsed.serverBuildId ?? null,
     devGitBranch:
       typeof parsed.devGitBranch === "string" && parsed.devGitBranch.trim()
         ? parsed.devGitBranch.trim()

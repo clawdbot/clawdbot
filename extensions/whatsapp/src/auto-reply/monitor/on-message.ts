@@ -60,6 +60,7 @@ export function createWebOnMessageHandler(params: {
   replyLogger: ReturnType<(typeof import("openclaw/plugin-sdk/runtime-env"))["getChildLogger"]>;
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 }) {
   const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean => {
     if (msg.admission.ingress.decisiveGateId === "legacy-flat-compat") {
@@ -125,6 +126,7 @@ export function createWebOnMessageHandler(params: {
       replyResolver: params.replyResolver,
       replyLogger: params.replyLogger,
       backgroundTasks: params.backgroundTasks,
+      buildContext: params.buildContext,
     };
     if (opts?.groupHistory !== undefined) {
       processParams.groupHistory = opts.groupHistory;

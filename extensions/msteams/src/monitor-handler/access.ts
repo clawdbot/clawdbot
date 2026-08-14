@@ -4,6 +4,7 @@ import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -114,6 +115,8 @@ export async function resolveMSTeamsSenderAccess(params: {
   accountId?: string;
   activity: MSTeamsTurnContext["activity"];
   hasControlCommand?: boolean;
+  conversationThreadId?: string;
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   const activity = params.activity;
   const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
@@ -166,8 +169,9 @@ export async function resolveMSTeamsSenderAccess(params: {
     conversation: {
       kind: isDirectMessage ? "direct" : convType === "channel" ? "channel" : "group",
       id: conversationId,
-      parentId: activity.channelData?.team?.id,
+      threadId: params.conversationThreadId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     route: channelIngressRoutes(
       !isDirectMessage &&
         channelGate.allowlistConfigured && {
@@ -200,6 +204,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   });
   return {
     ...resolved,
+    channelIngress: resolved,
     pairing,
     isDirectMessage,
     conversationId,

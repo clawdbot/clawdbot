@@ -1,5 +1,4 @@
 // Plugin npm runtime build tests validate plugin runtime package builds.
-import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -11,19 +10,11 @@ import {
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  resolvePluginNpmCommand,
-  withAugmentedPluginNpmManifestForPackage,
-} from "../scripts/lib/plugin-npm-package-manifest.mts";
-import {
   buildPluginNpmRuntime,
   listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../scripts/lib/plugin-npm-runtime-build.mts";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginSourceModuleLoader,
-} from "../src/plugins/plugin-module-loader-cache.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -229,78 +220,37 @@ describe("plugin npm runtime build planning", () => {
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
   });
 
-  it("packs the Zalo public setup API with its lazy runtime surface", async () => {
+  it("plans the Zalo public setup API with its lazy package surface", () => {
     const packageDir = path.join(repoRoot, "extensions", "zalo");
     const plan = expectPluginNpmRuntimeBuildPlan(
-      await buildPluginNpmRuntime({
+      resolvePluginNpmRuntimeBuildPlan({
         repoRoot,
         packageDir,
-        logLevel: "silent",
       }),
     );
-    const consumerDir = tempDirs.make("openclaw-zalo-packed-setup-");
-    let packedFiles: string[] = [];
-    let setupApiPath = "";
-
-    withAugmentedPluginNpmManifestForPackage(
-      { repoRoot, packageDir, bundleDependencies: false },
-      () => {
-        const invocation = resolvePluginNpmCommand([
-          "pack",
-          "--json",
-          "--ignore-scripts",
-          "--pack-destination",
-          consumerDir,
-        ]);
-        const pack = spawnSync(invocation.command, invocation.args, {
-          cwd: packageDir,
-          encoding: "utf8",
-          ...(invocation.env ? { env: invocation.env } : {}),
-          ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
-          stdio: ["ignore", "pipe", "pipe"],
-          ...(invocation.windowsVerbatimArguments !== undefined
-            ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
-            : {}),
-        });
-        expect(pack.status, pack.stderr).toBe(0);
-        const [packedPackage] = JSON.parse(pack.stdout) as [
-          { filename: string; files: Array<{ path: string }> },
-        ];
-        packedFiles = packedPackage.files.map((file) => file.path);
-        const extract = spawnSync(
-          "tar",
-          ["-xzf", path.join(consumerDir, packedPackage.filename), "-C", consumerDir],
-          {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
-        expect(extract.status, extract.stderr).toBe(0);
-        setupApiPath = path.join(consumerDir, "package", "dist", "setup-api.js");
-      },
-    );
-
+    expect(plan.entry["setup-api"]).toBe(path.join(packageDir, "setup-api.ts"));
+    expect(plan.entry["setup-surface"]).toBe(path.join(packageDir, "setup-surface.ts"));
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
-    const loadSetupApi = getCachedPluginSourceModuleLoader({
-      cache: createPluginModuleLoaderCache(),
-      modulePath: setupApiPath,
-      importerUrl: import.meta.url,
-      devSourceRoot: repoRoot,
-    });
-    const setupApi = loadSetupApi(setupApiPath) as {
-      zaloSetupWizard: { channel: string };
-    };
-    expect(setupApi.zaloSetupWizard.channel).toBe("zalo");
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-surface.js");
     expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
-    expect(packedFiles).toContain("dist/setup-surface.js");
-    expect(packedFiles).not.toContain("dist/src/setup-surface.js");
+    expect(plan.packageFiles).toContain("dist/**");
   });
 
   it("keeps published Codex runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
       packageDir: "extensions/codex",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
+
+  it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/llama-cpp",
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);

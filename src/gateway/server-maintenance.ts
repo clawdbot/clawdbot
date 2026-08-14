@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -9,6 +10,8 @@ import {
 } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
+import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sqlite.js";
+import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
@@ -91,6 +94,7 @@ export function startGatewayMaintenanceTimers(params: {
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
+  runDevicePairSetupCompletionGc?: (nowMs: number) => unknown;
   enableSkillCurator?: boolean;
   runSkillCollectionReconcile?: () => Promise<unknown>;
 }): {
@@ -164,16 +168,23 @@ export function startGatewayMaintenanceTimers(params: {
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
   void performWorktreeGc();
 
-  // Queue media has its own reference-aware retention policy and runs even when
-  // the general media TTL sweep is disabled.
+  // Queue tombstone expiry and reference-aware media GC share one maintenance
+  // cycle even when the general media TTL sweep is disabled.
   const runDeliveryQueueMediaGc =
-    params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
+    params.runDeliveryQueueMediaGc ??
+    (async () => {
+      try {
+        pruneExpiredDeliveryQueueTombstones();
+      } finally {
+        await pruneOrphanedDeliveryQueueMedia();
+      }
+    });
   let deliveryQueueMediaGcStartedAtMs = 0;
   const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
     try {
       await runDeliveryQueueMediaGc();
     } catch (error) {
-      params.logHealth.error(`delivery queue media cleanup failed: ${formatError(error)}`);
+      params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
     } finally {
       deliveryQueueMediaGcLoader.clear();
     }
@@ -185,6 +196,26 @@ export function startGatewayMaintenanceTimers(params: {
     return deliveryQueueMediaGcLoader.load();
   };
   void performDeliveryQueueMediaGc();
+
+  const runDevicePairSetupCompletionGc =
+    params.runDevicePairSetupCompletionGc ??
+    ((nowMs: number) => pruneExpiredDevicePairSetupCompletions({ nowMs }));
+  let devicePairSetupCompletionGcInFlight: Promise<void> | null = null;
+  const performDevicePairSetupCompletionGc = (nowMs: number) => {
+    if (devicePairSetupCompletionGcInFlight) {
+      return devicePairSetupCompletionGcInFlight;
+    }
+    devicePairSetupCompletionGcInFlight = Promise.resolve(runDevicePairSetupCompletionGc(nowMs))
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
+      })
+      .finally(() => {
+        devicePairSetupCompletionGcInFlight = null;
+      });
+    return devicePairSetupCompletionGcInFlight;
+  };
+  void performDevicePairSetupCompletionGc(Date.now());
 
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
@@ -208,6 +239,7 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    void performDevicePairSetupCompletionGc(now);
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();
     }
@@ -283,7 +315,15 @@ export function startGatewayMaintenanceTimers(params: {
     pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
 
     for (const [runId, entry] of params.chatAbortControllers) {
-      if (entry.projectSessionTerminalPending === true) {
+      // A stamped terminal observation whose async projection clear never ran
+      // (dropped claim, swallowed handler error) would otherwise pin the entry
+      // forever: phantom active run in sessions.list, pinned dedupe key,
+      // skipped media GC. Past the grace window the entry re-enters the
+      // ordinary expiry branches below, which are terminal-safe.
+      const terminalClearOverdue =
+        typeof entry.projectSessionTerminalObservedAt === "number" &&
+        now - entry.projectSessionTerminalObservedAt > AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
+      if (entry.projectSessionTerminalPending === true && !terminalClearOverdue) {
         continue;
       }
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
@@ -309,11 +349,17 @@ export function startGatewayMaintenanceTimers(params: {
         removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
         continue;
       }
-      abortChatRunById(params, {
+      const aborted = abortChatRunById(params, {
         runId,
         sessionKey: entry.sessionKey,
         stopReason: "timeout",
       });
+      // A non-abortable expired entry (signal already aborted, frozen reply
+      // op) whose owner cleanup was lost would otherwise survive every sweep:
+      // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
+      if (!aborted.aborted) {
+        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+      }
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;

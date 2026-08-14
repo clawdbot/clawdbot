@@ -16,7 +16,7 @@ import {
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
-  NODE_WORKER_SUPERVISOR_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
@@ -106,6 +106,7 @@ function makeClient(
     version?: string;
     caps?: string[];
     commands?: string[];
+    computerUse?: unknown;
     workerRuns?: WorkerAdmissionHandshake;
     permissions?: Record<string, boolean>;
     declaredCaps?: string[];
@@ -139,6 +140,7 @@ function makeClient(
       },
       caps: opts.caps ?? [],
       commands: opts.commands ?? [],
+      computerUse: opts.computerUse,
       workerRuns: opts.workerRuns,
       permissions: opts.permissions,
       declaredCaps: opts.declaredCaps,
@@ -292,6 +294,27 @@ function authorizeSystemRun(registry: NodeRegistry, overrides: Partial<SystemRun
 }
 
 describe("gateway/node-registry", () => {
+  it("retains the validated Computer Use declaration on the live session", () => {
+    const registry = createNodeRegistry();
+    const computerUse = {
+      contractVersion: 2,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+      actions: ["screenshot", "left_click"],
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    };
+    const client = makeClient("conn-computer", "node-computer", [], {
+      commands: ["screen.snapshot", "computer.act"],
+      computerUse,
+    });
+
+    registerNodeSession(registry, client, {});
+
+    expect(registry.get("node-computer")?.computerUse).toEqual(computerUse);
+  });
+
   it("rejects registration without an authenticated pairing identity", () => {
     const registry = new NodeRegistry();
     const client = makeClient("conn-unbound", "node-unbound");
@@ -321,7 +344,7 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
-  it.each(NODE_WORKER_SUPERVISOR_COMMANDS)(
+  it.each(NODE_WORKER_PRIVATE_COMMANDS)(
     "rejects private command %s through the generic invoke surface",
     async (command) => {
       const registry = createNodeRegistry();

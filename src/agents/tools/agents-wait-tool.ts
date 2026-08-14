@@ -70,6 +70,9 @@ function completionResult(entry: SubagentRunRecord) {
     status: completion.status,
     result: resolveSubagentCompletionResultText(entry) ?? "",
     ...(completion.structured !== undefined ? { structured: completion.structured } : {}),
+    ...(entry.execution.outcome?.status === "error"
+      ? { error: entry.execution.outcome.error }
+      : {}),
     ...(completion.schemaError ? { schemaError: completion.schemaError } : {}),
     sessionKey: entry.childSessionKey,
     ...(entry.label ? { label: entry.label } : {}),

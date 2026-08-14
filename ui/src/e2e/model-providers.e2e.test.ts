@@ -20,6 +20,7 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 const NOW = Date.now();
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/model-providers");
+const utilityHelpArtifactDir = path.resolve(".artifacts/control-ui-e2e/utility-model-help");
 const readinessArtifactDir = path.resolve(".artifacts/control-ui-e2e/models-provider-readiness");
 const redactedConfigValue = "[redacted]";
 const openaiInputValue = ["e2e", "test", "key"].join("-");
@@ -62,6 +63,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     if (recordVisuals) {
       await mkdir(artifactDir, { recursive: true });
+      await mkdir(utilityHelpArtifactDir, { recursive: true });
       await mkdir(readinessArtifactDir, { recursive: true });
     }
   });
@@ -71,7 +73,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("surfaces rejected provider credentials as the primary setup action", async () => {
+  it("defers live provider discovery until refresh while preserving model setup", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -80,7 +82,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const config = { auth: { profiles: { "openai:chatgpt": { provider: "openai" } } } };
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "models.probe", "openclaw.setup.detect"],
       methodResponses: {
         "config.get": {
@@ -95,7 +97,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           cases: [
             { match: { view: "configured" }, response: { models: [] } },
             {
-              match: { view: "all", includeProviderCapabilities: true },
+              match: { view: "all", agentId: "main", refresh: true },
               response: {
                 models: [],
                 providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
@@ -135,8 +137,19 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .poll(async () => readiness.textContent())
         .toContain("Connect a verified AI model");
       await expect.poll(async () => readiness.textContent()).toContain("Model required");
-      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials rejected");
+      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials configured");
       await expect.poll(async () => openaiCard.textContent()).not.toContain("Signed in");
+      expect(
+        (await gateway.getRequests("models.list")).filter(
+          (request) => (request.params as { view?: string } | undefined)?.view === "all",
+        ),
+      ).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({
+          params: { agentId: "main", preparedOnly: true, view: "configured" },
+        }),
+      ]);
+      expect(await page.getByRole("heading", { name: "Add provider" }).count()).toBe(0);
       expect(await page.locator(".model-providers__defaults").count()).toBe(0);
 
       if (recordVisuals) {
@@ -166,6 +179,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         await page.setViewportSize({ height: 1000, width: 1440 });
       }
 
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials rejected");
+      expect(
+        (await gateway.getRequests("models.list")).filter(
+          (request) => (request.params as { view?: string } | undefined)?.view === "all",
+        ),
+      ).toHaveLength(1);
+
       await readiness.getByRole("button", { name: "Connect a verified AI model" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     } finally {
@@ -189,6 +210,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       methodResponses: {
         "models.authStatus": {
           ts: NOW,
+          providerCapabilities: [
+            { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
+          ],
           providers: [
             {
               provider: "claude-cli",
@@ -274,7 +300,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .poll(async () => claudeCard.locator(".settings-row__desc").first().textContent())
         .toContain("anthropic");
       await expect.poll(async () => claudeCard.textContent()).toContain("Max 20x");
-      await expect.poll(async () => claudeCard.textContent()).toContain("Ready");
+      await expect.poll(async () => claudeCard.textContent()).toContain("Credentials configured");
       await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
       await claudeCard.locator(".provider-usage-progress").first().waitFor();
 
@@ -297,6 +323,175 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect.poll(async () => page.locator(".model-providers__row").count()).toBe(4);
     } finally {
       await context.close();
+    }
+  });
+
+  it("explains the utility model with accessible pointer, keyboard, and narrow-layout behavior", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const context = await browser.newContext({
+        colorScheme,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const config = {
+        agents: { defaults: { model: "openai/gpt-5.5" } },
+        models: { providers: { openai: providerConfig(redactedConfigValue) } },
+      };
+      await installMockGateway(page, {
+        models: [
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+          {
+            id: "gpt-5.6-luna",
+            name: "GPT-5.6 Luna",
+            provider: "openai",
+            available: true,
+          },
+        ],
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            hash: `utility-help-${colorScheme}`,
+            issues: [],
+            raw: JSON.stringify(config),
+            valid: true,
+          },
+          "models.authStatus": { ts: NOW, providers: [] },
+          "usage.status": { updatedAt: NOW, providers: [] },
+          "sessions.usage": { aggregates: { byProvider: [] } },
+        },
+      });
+
+      try {
+        await page.goto(`${server.baseUrl}settings/model-providers`);
+        await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
+        const defaults = page.locator(".model-providers__defaults");
+        const utilityField = defaults.locator(".field").nth(1);
+        const utilityLabel = utilityField.locator(".model-providers__utility-label");
+        await utilityField.waitFor();
+        await expect
+          .poll(() => modelPickerValue(utilityField.locator("wa-select")))
+          .toBe("__openclaw_automatic_utility__");
+
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-default-full.png`),
+          });
+          await utilityField.screenshot({
+            animations: "disabled",
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-default-crop.png`),
+          });
+        }
+
+        const helpButton = defaults.getByRole("button", { name: "About the utility model" });
+        await expect.poll(() => helpButton.count()).toBe(1);
+        expect(await helpButton.getAttribute("aria-haspopup")).toBe("dialog");
+
+        const defaultColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
+        await helpButton.hover();
+        await expect
+          .poll(() => helpButton.evaluate((node) => getComputedStyle(node).color))
+          .not.toBe(defaultColor);
+
+        await helpButton.click();
+        const popover = page.locator("wa-popover.model-providers__utility-help-popover");
+        const popoverDialog = popover.locator("dialog");
+        const popoverBody = popover.locator('[part="body"]');
+        await expect.poll(() => popoverDialog.isVisible()).toBe(true);
+        await expect.poll(() => popover.textContent()).toContain("short background tasks");
+        await expect.poll(() => popover.textContent()).toContain("primary model provider");
+
+        expect(
+          await popover.evaluate((node) => ({
+            distance: Reflect.get(node, "distance"),
+            placement: Reflect.get(node, "placement"),
+            skidding: Reflect.get(node, "skidding"),
+          })),
+        ).toEqual({ distance: 8, placement: "top", skidding: 0 });
+        const helpButtonBox = await helpButton.boundingBox();
+        const labelBox = await utilityLabel.boundingBox();
+        const popoverBox = await popoverBody.boundingBox();
+        if (!helpButtonBox || !labelBox || !popoverBox) {
+          throw new Error("expected utility label, help trigger, and popover bounds");
+        }
+        expect(popoverBox.y + popoverBox.height).toBeLessThan(helpButtonBox.y);
+        const helpButtonCenter = helpButtonBox.x + helpButtonBox.width / 2;
+        const popoverCenter = popoverBox.x + popoverBox.width / 2;
+        expect(Math.abs(helpButtonCenter - popoverCenter)).toBeLessThanOrEqual(1);
+
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-open-full.png`),
+          });
+          const x = Math.min(labelBox.x, popoverBox.x);
+          const y = Math.max(0, popoverBox.y);
+          const right = Math.max(labelBox.x + labelBox.width, popoverBox.x + popoverBox.width);
+          const bottom = Math.max(labelBox.y + labelBox.height, popoverBox.y + popoverBox.height);
+          await page.screenshot({
+            animations: "disabled",
+            clip: {
+              x,
+              y,
+              width: right - x,
+              height: bottom - y,
+            },
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-open-crop.png`),
+          });
+        }
+
+        await page.locator(".page-title", { hasText: "Models" }).first().click();
+        await expect.poll(() => popoverDialog.isHidden()).toBe(true);
+
+        await helpButton.focus();
+        await page.keyboard.press("Tab");
+        await page.keyboard.press("Shift+Tab");
+        await expect
+          .poll(() => helpButton.evaluate((node) => node.matches(":focus-visible")))
+          .toBe(true);
+        await page.keyboard.press("Enter");
+        await expect.poll(() => popoverDialog.isVisible()).toBe(true);
+        await expect
+          .poll(() => popover.evaluate((node) => node.shadowRoot?.activeElement?.localName))
+          .toBe("dialog");
+        await page.keyboard.press("Escape");
+        await expect.poll(() => popoverDialog.isHidden()).toBe(true);
+        expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
+        await expect
+          .poll(() => helpButton.evaluate((node) => node === document.activeElement))
+          .toBe(true);
+
+        await page.setViewportSize({ height: 844, width: 390 });
+        await utilityField.scrollIntoViewIfNeeded();
+        await helpButton.click();
+        await expect.poll(() => popoverDialog.isVisible()).toBe(true);
+        await expect
+          .poll(() =>
+            page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+          )
+          .toBe(true);
+        const mobilePopoverBox = await popoverBody.boundingBox();
+        if (!mobilePopoverBox) {
+          throw new Error("expected utility help popover bounds on mobile");
+        }
+        expect(mobilePopoverBox.x).toBeGreaterThanOrEqual(0);
+        expect(mobilePopoverBox.x + mobilePopoverBox.width).toBeLessThanOrEqual(390);
+
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-mobile-open.png`),
+          });
+        }
+      } finally {
+        await context.close();
+      }
     }
   });
 
@@ -433,7 +628,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               },
             },
             {
-              match: { view: "all", includeProviderCapabilities: true },
+              match: { view: "all", agentId: "main", refresh: true },
               response: {
                 models: [
                   {
@@ -464,6 +659,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.authStatus": {
           ts: NOW,
+          providerCapabilities: [
+            { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
+          ],
           providers: [
             {
               provider: "openai",
@@ -495,6 +695,16 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const openaiCard = page.locator('[data-provider-id="openai"]');
       await openaiCard.waitFor();
+      expect(
+        (await gateway.getRequests("models.list")).filter(
+          (request) => (request.params as { view?: string } | undefined)?.view === "all",
+        ),
+      ).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({
+          params: { agentId: "main", preparedOnly: true, view: "configured" },
+        }),
+      ]);
       await expect.poll(async () => openaiCard.textContent()).toContain("API key set in config");
       await expect
         .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
@@ -588,6 +798,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       await gateway.setMethodResponse("models.authStatus", {
         ts: NOW,
+        providerCapabilities: [
+          { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+          { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+          { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
+        ],
         providers: [
           {
             provider: "openai",

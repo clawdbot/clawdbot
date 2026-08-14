@@ -132,7 +132,22 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     if (!callback) {
       callback = (element?: Element) => {
         if (element instanceof HTMLElement) {
-          this.virtualizerController.getVirtualizer().measureElement(element);
+          if (element.isConnected) {
+            this.virtualizerController.getVirtualizer().measureElement(element);
+          } else {
+            // Lit invokes refs before the row is connected. Measuring a new
+            // key there records offsetHeight=0, so a following row can share
+            // its transform and paint over it until ResizeObserver catches up.
+            queueMicrotask(() => {
+              if (
+                element.isConnected &&
+                element.dataset.virtualRowKey === key &&
+                this.rowIndexesByKey.has(key)
+              ) {
+                this.virtualizerController.getVirtualizer().measureElement(element);
+              }
+            });
+          }
           return;
         }
         // Re-stamps (e.g. the chat<->dashboard face switch) re-invoke each
