@@ -167,7 +167,7 @@ export function buildMemorySearchUnavailableResult(
 
 const DEFAULT_SUPPLEMENT_SEARCH_TIMEOUT_MS = 10_000;
 
-export class SupplementSearchTimeoutError extends Error {
+class SupplementSearchTimeoutError extends Error {
   constructor(pluginId: string, timeoutMs: number) {
     super(`supplement "${pluginId}" search did not settle within ${timeoutMs}ms`);
     this.name = "SupplementSearchTimeoutError";
@@ -231,8 +231,7 @@ export async function searchMemoryCorpusSupplements(params: {
   );
   const results: MemoryCorpusSearchResult[] = [];
   const failures: string[] = [];
-  for (let i = 0; i < settled.length; i++) {
-    const outcome = settled[i];
+  for (const [i, outcome] of settled.entries()) {
     if (outcome.status === "fulfilled") {
       results.push(...outcome.value);
     } else {
