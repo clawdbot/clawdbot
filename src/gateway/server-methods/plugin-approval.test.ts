@@ -321,6 +321,63 @@ describe("createPluginApprovalHandlers", () => {
       expect(finalResult.decision).toBe("allow-once");
     });
 
+    it("sanitizes title/description/detail at creation so every surface gets safe text", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          // Bidi override + zero-width space: the classic reviewer-spoof pair.
+          title: "Deploy‮yolped",
+          description: "safe​text",
+          detail: "line‪one",
+          severity: "warning",
+          twoPhase: true,
+        },
+        { respond },
+      );
+      const handlerPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
+      const approvalId = await waitForAcceptedApproval(respond);
+      const stored = manager.getSnapshot(approvalId)?.request;
+      expect(stored?.title).toBe("Deploy\\u{202E}yolped");
+      expect(stored?.description).toBe("safe\\u{200B}text");
+      expect(stored?.detail).toBe("line\\u{202A}one");
+      // The live broadcast payload is built from the stored record, so it is
+      // now safe for channels/push/web without per-surface re-sanitizing.
+      const requestedBroadcast = broadcastCall(opts);
+      expect(requestedBroadcast.payload.request).toMatchObject({
+        title: "Deploy\\u{202E}yolped",
+        description: "safe\\u{200B}text",
+      });
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
+
+    it("rejects a title whose sanitized form exceeds the display limit", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      // 20 invisibles expand to \u{202E} escapes (8 chars each = 160 > 80 cap)
+      // while the raw title passes protocol validation at 26 code points.
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: `spoof${"‮".repeat(20)}x`,
+          description: "plain description",
+          twoPhase: true,
+        },
+        { respond },
+      );
+      await expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
+      const error = expectResponseRejected(respond);
+      expect(error.message).toContain("exceeds the display limit");
+    });
+
     it("delivers requests to iOS push with the exec-equivalent visibility gate", async () => {
       const handleRequested = vi.fn(async () => true);
       const handlers = createPluginApprovalHandlers(manager, {
