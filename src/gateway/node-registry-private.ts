@@ -5,7 +5,7 @@ import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-i
 import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   isPrivateNodeInvokeCommand,
-  NODE_WORKER_SUPERVISOR_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -61,7 +61,7 @@ type NodeInvokeParams = {
   isDispatchAuthorized?: () => boolean;
 };
 
-type NodeWorkerSupervisorCommand = (typeof NODE_WORKER_SUPERVISOR_COMMANDS)[number];
+type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
 export type NodeWorkerSupervisorNodeProof = {
   nodeId: string;
@@ -79,7 +79,7 @@ export type NodeWorkerSupervisorTransport = {
   listCurrentNodes(): Promise<readonly NodeWorkerSupervisorNodeProof[]>;
   invoke(params: {
     node: NodeWorkerSupervisorNodeProof;
-    command: NodeWorkerSupervisorCommand;
+    command: NodeWorkerPrivateCommand;
     params?: unknown;
     timeoutMs?: number;
     signal?: AbortSignal;
@@ -481,7 +481,7 @@ export function registerNodeRegistryPrivateRuntime(
       });
     },
     invoke: async (params) => {
-      if (!NODE_WORKER_SUPERVISOR_COMMANDS.includes(params.command)) {
+      if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
         return {
           ok: false,
           error: { code: "INVALID_REQUEST", message: "private node command is not allowed" },
