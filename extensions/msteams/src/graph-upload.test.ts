@@ -277,6 +277,39 @@ describe("graph upload helpers", () => {
     ).rejects.toThrow("SharePoint upload response missing required fields");
   });
 
+  it("rejects a null upload response body", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(null));
+
+    await expect(
+      uploadToSharePoint({
+        filename: "null.txt",
+        fetchFn: withFetchPreconnect(fetchFn),
+      }),
+    ).rejects.toThrow("SharePoint upload response missing required fields");
+  });
+
+  it("rejects a primitive string upload response body", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse("not-an-object"));
+
+    await expect(
+      uploadToSharePoint({
+        filename: "primitive.txt",
+        fetchFn: withFetchPreconnect(fetchFn),
+      }),
+    ).rejects.toThrow("SharePoint upload response missing required fields");
+  });
+
+  it("rejects a numeric upload response body", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(42));
+
+    await expect(
+      uploadToSharePoint({
+        filename: "numeric.txt",
+        fetchFn: withFetchPreconnect(fetchFn),
+      }),
+    ).rejects.toThrow("SharePoint upload response missing required fields");
+  });
+
   it("bounds upload error bodies without requiring response.text()", async () => {
     const fetchFn = vi.fn(async () =>
       bodyOnlyErrorResponse(`${"upload-denied ".repeat(4096)}tail-marker`, 413),
@@ -618,3 +651,4 @@ describe("buildTeamsFileInfoCard", () => {
     });
   });
 });
+
