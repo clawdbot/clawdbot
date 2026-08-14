@@ -5,6 +5,7 @@ import {
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -15,6 +16,7 @@ import {
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -81,7 +83,10 @@ function supervisorMocks(supervisor: NodeWorkerSupervisorControl): SupervisorMoc
 async function invokePrivate(params: {
   command: string;
   paramsJSON?: string;
-  supervisor: NodeWorkerSupervisorControl;
+  supervisor?: NodeWorkerSupervisorControl;
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+  workspace?: NodeWorkerWorkspaceRuntime;
 }) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
   await handleInvoke(
@@ -94,7 +99,14 @@ async function invokePrivate(params: {
     { request } as unknown as GatewayClient,
     { current: async () => [] },
     undefined,
-    { workerSupervisor: params.supervisor },
+    {
+      ...(params.supervisor ? { workerSupervisor: params.supervisor } : {}),
+      ...(params.workspace ? { workerWorkspace: params.workspace } : {}),
+      gatewayUrl: params.gatewayUrl ?? "wss://gateway.example/tenant",
+      ...(params.gatewayTlsFingerprint
+        ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+        : {}),
+    },
   );
   return {
     request,
@@ -139,6 +151,12 @@ describe("node-host worker supervisor commands", () => {
 
     const mocks = supervisorMocks(supervisor);
     expect(mocks[method].mock.calls).toHaveLength(1);
+    if (method === "launch") {
+      expect(mocks.launch.mock.calls[0]?.[1]).toEqual({
+        kind: "websocket",
+        url: "wss://gateway.example/tenant/__openclaw__/worker",
+      });
+    }
     if (method === "cancel") {
       expect(mocks.cancel.mock.calls[0]?.[0]).toEqual(cancelInput(receipt));
     }
@@ -159,6 +177,92 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("gatewayNamespace");
     expect(payload).not.toHaveProperty("descriptor");
     expect(payload).not.toHaveProperty("errorText");
+  });
+
+  it("preserves the connected Gateway TLS pin in the node-owned worker endpoint", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+
+    await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      paramsJSON: JSON.stringify(input),
+      supervisor,
+      gatewayUrl: "wss://gateway.example/tenant/",
+      gatewayTlsFingerprint: "aa:bb:cc",
+    });
+
+    expect(supervisorMocks(supervisor).launch.mock.calls[0]?.[1]).toEqual({
+      kind: "websocket",
+      url: "wss://gateway.example/tenant/__openclaw__/worker",
+      tlsFingerprint: "aa:bb:cc",
+    });
+  });
+
+  it("rejects private worker controls when the node-local runtime is disabled", async () => {
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: "launch-1" }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "node worker runtime unavailable" },
+    });
+  });
+
+  it("rejects workspace argv that targets an absolute path outside the owned workspace", async () => {
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("node-worker-workspace-invoke-"),
+      env: { PATH: process.env.PATH },
+    });
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      paramsJSON: JSON.stringify({
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        generation: 4,
+        argv: [process.execPath, "-e", "process.stdout.write('escaped')"],
+      }),
+      workspace,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
+
+  it("resets only the identity-derived workspace before running the initial command", async () => {
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("node-worker-workspace-reset-"),
+      env: { PATH: process.env.PATH },
+    });
+    const base = {
+      gatewayNamespace: "gateway-1",
+      environmentId: "environment-1",
+      sessionId: "session-1",
+      generation: 4,
+    };
+    const invokeWorkspace = async (argv: string[], resetWorkspace?: boolean) =>
+      await invokePrivate({
+        command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+        paramsJSON: JSON.stringify({
+          ...base,
+          argv,
+          ...(resetWorkspace ? { resetWorkspace } : {}),
+        }),
+        workspace,
+      });
+
+    expect((await invokeWorkspace(["sh", "-c", "printf stale > marker"])).result?.ok).toBe(true);
+    const reset = await invokeWorkspace(["sh", "-c", 'test ! -e marker && printf %s "$PWD"'], true);
+    const payload = JSON.parse(reset.result?.payloadJSON ?? "{}") as {
+      workspaceDir?: string;
+      stdout?: string;
+    };
+    expect(reset.result?.ok).toBe(true);
+    expect(payload.stdout).toBe(payload.workspaceDir);
   });
 
   it("returns completed worker output without internal process fields", async () => {
