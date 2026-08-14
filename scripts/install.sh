@@ -2874,7 +2874,7 @@ install_openclaw_from_git() {
     validate_git_checkout_head "$repo_dir" || return 1
     if [[ ! -d "$repo_dir" ]]; then
         mkdir -p "$(dirname "$repo_dir")"
-        run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"
+        run_quiet_step "Cloning OpenClaw" git clone --filter=blob:none "$repo_url" "$repo_dir" # Git warns and falls back if filtering is unsupported.
     fi
 
     local git_ref
