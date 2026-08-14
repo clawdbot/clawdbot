@@ -232,7 +232,7 @@ describe("gateway tool runtime identity", () => {
     ).rejects.toThrow("terminal source reply requires trusted agent runtime identity");
   });
 
-  it("mints message action identity for split policy and durable run sessions", async () => {
+  it("mints split-session message action identity and rejects policy-session substitution", async () => {
     const policySessionKey = "agent:ops:telegram:default:direct:alice";
     const runSessionKey = "agent:ops:main";
     const operationalRunInstance = createOperationalRunInstanceRef("run-split-session");
@@ -258,6 +258,19 @@ describe("gateway tool runtime identity", () => {
         operationalRunInstance,
       },
       async () => {
+        await expect(
+          resolveMessageActionAgentRuntimeIdentityToken({
+            opts: {},
+            target: "local",
+            turnCapability,
+            turnCapabilitySessionKey: "agent:ops:telegram:default:direct:mallory",
+            runId: operationalRunInstance.runId,
+            sessionId: "session-split-session",
+            sourceReplyFinal: true,
+            sourceReplyToolCallId: "message-call-substituted-session",
+          }),
+        ).rejects.toThrow("terminal source reply requires an active turn capability");
+
         const token = await resolveMessageActionAgentRuntimeIdentityToken({
           opts: {},
           target: "local",
