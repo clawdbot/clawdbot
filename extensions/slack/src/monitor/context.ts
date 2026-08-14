@@ -37,7 +37,7 @@ import {
   type SlackSuggestedPromptsInput,
   updateSlackSuggestedPrompts,
 } from "./suggested-prompts.js";
-import { createSlackSystemEventSessionKeyResolver } from "./system-event-session.js";
+import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
 export {
   buildSlackAssistantThreadMetadata,
@@ -110,13 +110,13 @@ export type SlackMonitorContext = {
 
   logger: ReturnType<typeof getChildLogger>;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
-  resolveSlackSystemEventSessionKey: (params: {
+  resolveSlackSystemEventRoute: (params: {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
     threadTs?: string | null;
     eventScope?: SlackEventScope;
-  }) => string;
+  }) => { agentId: string; sessionKey: string };
   isChannelAllowed: (params: {
     teamId?: string;
     channelId?: string;
@@ -277,12 +277,11 @@ export function createSlackMonitorContext(params: {
     return id ? readLruMapEntry(channelCache, scopedKey(id, eventScope))?.info.type : undefined;
   };
 
-  const resolveSlackSystemEventSessionKey = createSlackSystemEventSessionKeyResolver({
+  const resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
     cfg: params.cfg,
     accountId: params.accountId,
     getTeamId: () => ctx.teamId,
     mainKey: params.mainKey,
-    sessionScope: params.sessionScope,
     threadInheritParent: params.threadInheritParent,
     recallSlackChannelType,
   });
@@ -544,7 +543,7 @@ export function createSlackMonitorContext(params: {
     mediaMaxBytes: params.mediaMaxBytes,
     logger,
     shouldDropMismatchedSlackEvent,
-    resolveSlackSystemEventSessionKey,
+    resolveSlackSystemEventRoute,
     isChannelAllowed,
     resolveChannelName,
     rememberSlackChannelType,

@@ -2191,11 +2191,11 @@ describe("server-channels auto restart", () => {
     expect(manager.getAutostartSuppression()).toBeNull();
     expect(startAccount).not.toHaveBeenCalled();
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.lastError).toBe(
-      "ambient channel credentials suppressed for dev gateway",
+      "ambient channel credentials suppressed; configure the channel or start the gateway with --ambient-channels",
     );
   });
 
-  it("suppresses ambient dev channel autostart while allowing manual starts", async () => {
+  it("suppresses ambient channel autostart while allowing manual starts", async () => {
     const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({
@@ -2205,7 +2205,7 @@ describe("server-channels auto restart", () => {
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     expect(startAccount).not.toHaveBeenCalled();
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.lastError).toBe(
-      "ambient channel credentials suppressed for dev gateway",
+      "ambient channel credentials suppressed; configure the channel or start the gateway with --ambient-channels",
     );
 
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });

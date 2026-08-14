@@ -180,7 +180,7 @@ export function emitAgentSendSessionLifecycleTransition(
         sessionId: string;
         storePath: string;
         sessionFile?: string;
-        agentId?: string;
+        agentId: string;
         workspaceDir?: string;
         previousSessionId?: string;
         previousSessionFile?: string;

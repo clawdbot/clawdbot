@@ -187,6 +187,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     resolveOutboundChannelPlugin({
       channel: resolvedChannel,
       cfg: params.cfg,
+      agentId: params.agentId,
       allowBootstrap: true,
     });
   if (!plugin) {

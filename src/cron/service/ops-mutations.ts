@@ -38,6 +38,7 @@ import {
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
+import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
 import type {
   CronAddResult,
   CronAddOptions,
@@ -187,7 +188,16 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  await persistOrRestore(state, snapshot, { suppressScheduledJobId: nextJob.id });
+  const defaultAgentId = resolveCurrentDefaultAgentId(state);
+  const ownerChanged =
+    resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
+    resolveEffectiveJobAgentId(nextJob, defaultAgentId);
+  await persistOrRestore(state, snapshot, {
+    suppressScheduledJobId: nextJob.id,
+    transactionHooks: ownerChanged
+      ? cronRunReceiptOwnerMutationHooks({ state, jobId: nextJob.id })
+      : undefined,
+  });
   if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
@@ -447,7 +457,7 @@ export async function removeStaleJobFamily(
   });
 }
 
-export async function updateLoadedJob(params: {
+async function updateLoadedJob(params: {
   state: CronServiceState;
   id: string;
   patch: CronJobPatch;

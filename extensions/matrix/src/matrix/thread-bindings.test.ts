@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -72,6 +73,7 @@ describe("matrix thread bindings", () => {
   function createBindingManager(
     params: {
       auth?: MatrixAuth;
+      cfg?: OpenClawConfig;
       stateDir?: string;
       idleTimeoutMs?: number;
       maxAgeMs?: number;
@@ -80,7 +82,7 @@ describe("matrix thread bindings", () => {
     } = {},
   ) {
     return createMatrixThreadBindingManager({
-      cfg: {},
+      cfg: params.cfg ?? {},
       accountId,
       auth: params.auth ?? auth,
       client: matrixClient,
@@ -253,16 +255,18 @@ describe("matrix thread bindings", () => {
   });
 
   it("posts intro messages inside existing Matrix threads for current placement", async () => {
-    await createStaticThreadBindingManager();
+    const cfg = { agents: { list: [{ id: "main" }, { id: "molty" }] } };
+    await createBindingManager({ cfg });
 
     const binding = await bindCurrentThread({
+      targetSessionKey: "agent:molty:subagent:child",
       metadata: {
         introText: "intro thread",
       },
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro thread", {
-      cfg: {},
+      cfg,
       client: {},
       accountId: "ops",
       threadId: "$thread",
@@ -274,7 +278,8 @@ describe("matrix thread bindings", () => {
       parentConversationId: "!room:example",
     });
     expect(resolved?.bindingId).toBe(binding.bindingId);
-    expect(resolved?.targetSessionKey).toBe("agent:ops:subagent:child");
+    expect(resolved?.targetSessionKey).toBe("agent:molty:subagent:child");
+    expect(binding.metadata?.agentId).toBe("molty");
   });
 
   it("expires idle bindings via the sweeper", async () => {

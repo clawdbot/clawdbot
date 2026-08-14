@@ -5,6 +5,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
+import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import {
@@ -31,7 +32,6 @@ import {
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
-  applyServiceTierPricing,
   logResponsesFailedNoDetails,
   ResponsesStreamFailure,
   safeDebugValue,
@@ -180,7 +180,10 @@ type ResponsesTransportExecutorOptions = {
   createResponseStream: (
     params: ResponsesStreamParams,
   ) => ReturnType<typeof createResponsesStreamWithEncryptedContentRetry>;
-  pricingOptions?: (options: OpenAIResponsesOptions | undefined) => ResponsesPricingOptions;
+  pricingOptions?: (
+    options: OpenAIResponsesOptions | undefined,
+    model: Model,
+  ) => ResponsesPricingOptions;
 };
 
 function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
@@ -456,7 +459,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         }
         try {
           const terminal = await processResponsesStream(responseStream, output, stream, model, {
-            ...config.pricingOptions?.(responsesOptions),
+            ...config.pricingOptions?.(responsesOptions, model),
             firstEventTimeoutMs:
               getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
             abortFirstEventStream: firstEvent.abort,
@@ -515,7 +518,13 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
     createClient: createOpenAIResponsesClient,
     buildRequest: buildOpenAIResponsesParams,
     createResponseStream: createResponsesStreamWithEncryptedContentRetry,
-    pricingOptions: (options) => ({ serviceTier: options?.serviceTier, applyServiceTierPricing }),
+    pricingOptions: (options, model) => ({
+      serviceTier: options?.serviceTier,
+      // One canonical service-tier pricing table; a transport-local copy drifted
+      // from provider pricing (gpt-5.5 priority 2.5x) and understated costs.
+      applyServiceTierPricing: (usage, serviceTier) =>
+        applyResponsesServiceTierPricing(usage, serviceTier, model),
+    }),
   });
 }
 

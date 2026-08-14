@@ -534,6 +534,27 @@ export function upsertCronJobRow(
   return normalized;
 }
 
+export function deleteCronJobRowInDatabase(
+  db: DatabaseSync,
+  storeKey: string,
+  jobId: string,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .deleteFrom("cron_job_scratch")
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", jobId),
+  );
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .deleteFrom("cron_jobs")
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", jobId),
+  );
+}
+
 /** Updates only mutable runtime columns without rewriting full job config JSON. */
 export function updateCronRuntimeRows(
   db: DatabaseSync,
