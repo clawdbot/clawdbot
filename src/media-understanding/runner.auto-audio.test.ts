@@ -477,8 +477,9 @@ describe("runCapability auto audio entries", () => {
     expect(seenPrompt).toBeUndefined();
   });
 
-  it("keeps explicit and English-compatible audio prompts", async () => {
+  it("keeps explicit and English-hint audio prompts, omits default on autodetect", async () => {
     const seenPrompts: Array<string | undefined> = [];
+    let autodetectPrompt: string | undefined;
     const runCase = async (audio: MediaUnderstandingConfig) => {
       await runAutoAudioCase({
         transcribeAudio: async (req) => {
@@ -508,18 +509,33 @@ describe("runCapability auto audio entries", () => {
         models: [{ provider: "openai", model: "whisper-1" }],
       });
     }
-    await runCase({
-      enabled: true,
-      models: [{ provider: "openai", model: "whisper-1" }],
-    });
-
+    // Explicit prompts and explicit English hints keep the prompt. The
+    // autodetect path (no language, no prompt) must omit OpenClaw's English
+    // default so it cannot leak into the transcript (see #123305).
     expect(seenPrompts).toEqual([
       "Transcribe in Russian.",
       "Transcribe the audio.",
       "Transcribe the audio.",
       "Transcribe the audio.",
-      "Transcribe the audio.",
     ]);
+
+    await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        autodetectPrompt = req.prompt;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      cfgExtra: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [{ provider: "openai", model: "whisper-1" }],
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>,
+    });
+    expect(autodetectPrompt).toBeUndefined();
   });
 
   it("uses mistral when only mistral key is configured", async () => {
