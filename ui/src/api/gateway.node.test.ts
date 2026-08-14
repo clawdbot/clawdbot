@@ -162,6 +162,7 @@ type ConnectFrame = {
   method?: string;
   params?: {
     auth?: { token?: string; bootstrapToken?: string; password?: string; deviceToken?: string };
+    client: { buildId?: string };
     maxProtocol?: number;
     minProtocol?: number;
     caps?: string[];

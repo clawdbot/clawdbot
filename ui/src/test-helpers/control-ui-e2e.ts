@@ -800,7 +800,7 @@ function normalizeScenario(
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
-    serverVersion: scenario.serverVersion?.trim() || "2026.7.10",
+    serverVersion: scenario.serverVersion?.trim() || "e2e",
     deviceAuthMigrationPending: scenario.deviceAuthMigrationPending ?? false,
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
