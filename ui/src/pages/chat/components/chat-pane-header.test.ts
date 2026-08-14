@@ -12,6 +12,7 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import { renderSessionRowBadges } from "../../../components/session-row-badges.ts";
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
@@ -556,11 +557,35 @@ describe("chat pane header", () => {
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
   });
 
-  it("shows an incognito indicator for in-memory threads", () => {
+  it("qualifies the session title for in-memory threads", () => {
     const { container } = mount({ session: row({ incognito: true }) });
-    expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
-      "Incognito session",
+    const badge = container.querySelector(".chat-pane__incognito");
+    expect(badge?.getAttribute("aria-label")).toBe("Incognito session");
+    // The qualifier describes this session, so it travels with the title rather
+    // than sitting at the header edge where it reads as a window-level mode.
+    expect(badge?.closest(".chat-pane__session-identity")).not.toBeNull();
+    expect(badge?.nextElementSibling?.className).toContain("chat-pane__session-title");
+    expect(container.querySelector(".chat-pane__workspace-menu .chat-pane__incognito")).toBeNull();
+  });
+
+  it("hides the qualifier for ordinary sessions", () => {
+    expect(mount().container.querySelector(".chat-pane__incognito")).toBeNull();
+  });
+
+  it("draws incognito with the same glyph in the header and the session row", () => {
+    const header = mount({ session: row({ incognito: true }) });
+    const rowContainer = document.createElement("div");
+    document.body.append(rowContainer);
+    containers.push(rowContainer);
+    render(
+      html`${renderSessionRowBadges({ hasAutomation: false, incognito: true })}`,
+      rowContainer,
     );
+
+    const headerGlyph = header.container.querySelector(".chat-pane__incognito svg")?.innerHTML;
+    const rowGlyph = rowContainer.querySelector(".session-row-badge--incognito svg")?.innerHTML;
+    expect(headerGlyph).toBeTruthy();
+    expect(rowGlyph).toBe(headerGlyph);
   });
 
   it("hides one branch and lists multiple branches with the active tip marked", () => {

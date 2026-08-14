@@ -5306,6 +5306,7 @@ export const en: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       offlineHint: "Offline — messages will be queued and sent when the connection returns.",
       offlineQueuedHint: "Offline — {count} queued; messages send when the connection returns.",
+      incognitoRetention: "Stays in memory and disappears when the Gateway restarts",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",

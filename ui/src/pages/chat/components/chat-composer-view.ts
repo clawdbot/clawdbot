@@ -212,11 +212,26 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       ${disabledBanner}
       ${showComposerInput
         ? html`<div
-            class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
+            class="agent-chat__input ${props.offline
+              ? "agent-chat__input--offline"
+              : ""} ${activeSession?.incognito ? "agent-chat__input--incognito" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
             @pointerdown=${(event: PointerEvent) => focusComposerFromChrome(event, canCompose)}
             ${ref(state.composerInputRef ?? undefined)}
           >
+            ${activeSession?.incognito
+              ? html`<div class="agent-chat__incognito-note">
+                  <span class="agent-chat__incognito-icon" aria-hidden="true"
+                    >${icons.hatGlasses}</span
+                  >
+                  <span class="agent-chat__incognito-label"
+                    >${t("chat.sessionHeader.incognito")}</span
+                  >
+                  <span class="agent-chat__incognito-detail"
+                    >${t("chat.composer.incognitoRetention")}</span
+                  >
+                </div>`
+              : nothing}
             ${props.offline
               ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
                   ${props.queuedOutboxCount

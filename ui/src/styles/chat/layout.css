@@ -2464,6 +2464,58 @@ button.chat-reply-preview--message:disabled {
   line-height: 1.3;
 }
 
+/* Incognito belongs to the session, so it frames the whole composer instead of
+   riding along as a transient status line. A dashed edge is the quietest way to
+   say "this box keeps nothing" without borrowing the warning or accent color of
+   a state that is neither a problem nor an action. */
+.agent-chat__input--incognito,
+.agent-chat__input--incognito:focus-within {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--muted) 58%, var(--border));
+}
+
+.agent-chat__incognito-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px var(--chat-box-inset);
+  border-bottom: 1px dashed color-mix(in srgb, var(--muted) 30%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.agent-chat__incognito-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.agent-chat__incognito-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.5px;
+}
+
+.agent-chat__incognito-label {
+  flex: 0 0 auto;
+  color: var(--text);
+}
+
+.agent-chat__incognito-detail {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A phone composer cannot spare the line for the explanation, but the label has
+   to survive: the user still needs to know which kind of session they are in. */
+@media (max-width: 640px) {
+  .agent-chat__incognito-detail {
+    display: none;
+  }
+}
+
 @supports (backdrop-filter: blur(1px)) {
   .agent-chat__input {
     backdrop-filter: blur(12px) saturate(1.6);
