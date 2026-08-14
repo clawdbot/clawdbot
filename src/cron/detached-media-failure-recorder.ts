@@ -11,25 +11,28 @@ export type DetachedMediaCronFailureRecordRequest = {
   error: string;
 };
 
-type DetachedMediaCronFailureRecorder = (
+export type DetachedMediaCronFailureRecorder = (
   request: DetachedMediaCronFailureRecordRequest,
 ) => Promise<void> | void;
 
-let recorder: DetachedMediaCronFailureRecorder | undefined;
+const recordersByStoreKey = new Map<string, DetachedMediaCronFailureRecorder>();
 
 export function registerDetachedMediaCronFailureRecorder(
+  storeKey: string,
   next: DetachedMediaCronFailureRecorder,
 ): () => void {
-  recorder = next;
+  // Same-store successors replace the writer; different stores remain
+  // independently addressable by each receipt's durable key.
+  recordersByStoreKey.set(storeKey, next);
   return () => {
-    if (recorder === next) {
-      recorder = undefined;
+    if (recordersByStoreKey.get(storeKey) === next) {
+      recordersByStoreKey.delete(storeKey);
     }
   };
 }
 
-export function getDetachedMediaCronFailureRecorder():
-  | DetachedMediaCronFailureRecorder
-  | undefined {
-  return recorder;
+export function getDetachedMediaCronFailureRecorder(
+  storeKey: string,
+): DetachedMediaCronFailureRecorder | undefined {
+  return recordersByStoreKey.get(storeKey);
 }

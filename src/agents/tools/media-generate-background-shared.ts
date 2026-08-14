@@ -8,6 +8,7 @@ import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getDetachedMediaCronFailureRecorder } from "../../cron/detached-media-failure-recorder.js";
 import type { AgentRunCronReceipt } from "../../infra/agent-run-registry-claim-values.js";
 import {
   clearAgentRunContext,
@@ -473,6 +474,12 @@ export function scheduleMediaGenerationTaskCompletion<
   run: () => Promise<T>;
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
 }) {
+  const receipt = params.handle?.originatingCronRunReceipt;
+  // Pin the originating writer before work detaches so a config reload cannot
+  // reroute its late failure to a replacement cron store.
+  const cronFailureRecorder = receipt
+    ? getDetachedMediaCronFailureRecorder(receipt.storeKey)
+    : undefined;
   const runBackgroundWork = async () => {
     let executed: T;
     try {
@@ -510,6 +517,7 @@ export function scheduleMediaGenerationTaskCompletion<
         handle: params.handle,
         error,
         toolName: params.toolName,
+        recorder: cronFailureRecorder,
       });
       params.lifecycle.failTaskRun({ handle: params.handle, error });
       return;

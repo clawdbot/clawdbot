@@ -49,6 +49,7 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type {
@@ -1385,12 +1386,12 @@ export function buildGatewayCronService(params: {
     getDefaultAgentId: () => cron.getDefaultAgentId(),
   };
   const automationEpoch = claimSessionAutomationEpoch();
+  const cronFailureRecorderStoreKey = cronStoreKey(storePath);
   let unregisterDetachedMediaCronFailureRecorder: (() => void) | undefined;
   const registerDetachedMediaFailureRecorder = () => {
-    // Keep the previous receipt-valid writer through reload startup, then
-    // replace it only after the successor scheduler has started successfully.
     unregisterDetachedMediaCronFailureRecorder?.();
     unregisterDetachedMediaCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
+      cronFailureRecorderStoreKey,
       async (request) => {
         await cron.recordDetachedMediaFailure(request);
       },
@@ -1409,6 +1410,10 @@ export function buildGatewayCronService(params: {
         );
       });
     } finally {
+      // In-flight detached tasks retain this store writer until settlement;
+      // otherwise stopping the owner removes it immediately.
+      unregisterDetachedMediaCronFailureRecorder?.();
+      unregisterDetachedMediaCronFailureRecorder = undefined;
       // Session rows must stop reporting automation from a stopped scheduler,
       // but a reload's replacement service may already own the registration.
       unregisterSessionAutomationSource(automationSource);

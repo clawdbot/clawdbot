@@ -6,7 +6,10 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { registerDetachedMediaCronFailureRecorder } from "../../cron/detached-media-failure-recorder.js";
+import {
+  getDetachedMediaCronFailureRecorder,
+  registerDetachedMediaCronFailureRecorder,
+} from "../../cron/detached-media-failure-recorder.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -68,7 +71,6 @@ import {
 } from "./media-generate-background-shared.js";
 
 beforeEach(() => {
-  registerDetachedMediaCronFailureRecorder(() => {})();
   resetGeneratedMediaTaskActivityForTests();
   subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
   subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReset();
@@ -854,8 +856,12 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       }),
     };
     const recordCronFailure = vi.fn(async () => {});
-    const unregisterCronFailureRecorder =
-      registerDetachedMediaCronFailureRecorder(recordCronFailure);
+    const unregisterCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
+      "store-1",
+      recordCronFailure,
+    );
+    const replacementCronFailure = vi.fn(async () => {});
+    let unregisterReplacementCronFailureRecorder: (() => void) | undefined;
 
     try {
       scheduleMediaGenerationTaskCompletion({
@@ -892,12 +898,19 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       const backgroundWork = scheduled[0]?.();
       await vi.waitFor(() => expect(lifecycle.wakeTaskCompletion).toHaveBeenCalled());
       expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+      unregisterCronFailureRecorder();
+      unregisterReplacementCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
+        "store-1",
+        replacementCronFailure,
+      );
       releaseWake?.();
       await backgroundWork;
     } finally {
       unregisterCronFailureRecorder();
+      unregisterReplacementCronFailureRecorder?.();
     }
 
+    expect(getDetachedMediaCronFailureRecorder("store-1")).toBeUndefined();
     expect(lifecycle.failTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         error: generationError,
@@ -917,6 +930,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         error: "Detached Image generation failed: provider returned no images",
       }),
     );
+    expect(replacementCronFailure).not.toHaveBeenCalled();
   });
 });
 

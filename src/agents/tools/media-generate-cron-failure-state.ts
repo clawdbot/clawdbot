@@ -1,5 +1,6 @@
 import {
   getDetachedMediaCronFailureRecorder,
+  type DetachedMediaCronFailureRecorder,
   type DetachedMediaCronFailureRecordRequest,
 } from "../../cron/detached-media-failure-recorder.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -12,10 +13,14 @@ export async function markOriginatingCronRunFailedFromMediaGeneration(params: {
   handle: MediaGenerationTaskHandle | null;
   error: unknown;
   toolName: string;
+  recorder?: DetachedMediaCronFailureRecorder;
 }): Promise<void> {
   const receipt = params.handle?.originatingCronRunReceipt;
-  const recorder = getDetachedMediaCronFailureRecorder();
-  if (!params.handle || !receipt || !recorder) {
+  if (!params.handle || !receipt) {
+    return;
+  }
+  const recorder = params.recorder ?? getDetachedMediaCronFailureRecorder(receipt.storeKey);
+  if (!recorder) {
     return;
   }
   const request: DetachedMediaCronFailureRecordRequest = {
