@@ -79,8 +79,12 @@ function hasStaleSqliteSessionEntryCandidate(
       .select(["entry_json", "session_key"])
       .where("updated_at", "<", cutoffMs)
       .where(
-        /* kysely-allow-raw: archivedAt lives inside the canonical JSON entry, not a SQL column. */
-        sql<boolean>`json_extract(entry_json, '$.archivedAt') IS NULL`,
+        /* kysely-allow-raw: archivedAt lives inside the canonical JSON entry, not a SQL column.
+         * The CASE guard keeps malformed legacy bytes from aborting unrelated session writes. */
+        sql<boolean>`CASE
+          WHEN json_valid(entry_json) THEN json_extract(entry_json, '$.archivedAt') IS NULL
+          ELSE 0
+        END`,
       )
       .orderBy("updated_at", "asc"),
   ).rows;

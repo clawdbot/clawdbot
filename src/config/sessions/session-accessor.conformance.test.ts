@@ -1323,6 +1323,33 @@ describe("sqlite session normalization", () => {
     ).toEqual({ entry_valid: 0 });
   });
 
+  it("writes a valid session beside an unrelated malformed legacy row", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
+      )
+      .run("agent:main:malformed", "malformed-session", "{ malformed", 0);
+
+    await expect(
+      replaceSessionEntry(
+        {
+          agentId: "main",
+          env,
+          sessionKey: "agent:main:valid",
+          storePath: paths.sqlitePath,
+        },
+        { sessionId: "valid-session", updatedAt: Date.now() },
+      ),
+    ).resolves.toMatchObject({ sessionId: "valid-session" });
+    expect(
+      database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:malformed"),
+    ).toEqual({ entry_json: "{ malformed" });
+  });
+
   it("exposes same-key rollover lineage when a killed session is replaced", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:telegram:group:-1003774691294:topic:29020";
