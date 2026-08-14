@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -575,7 +575,7 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("re-resolves a stale user session override when the selected profile becomes unusable", async () => {
+  it("keeps a valid user override during cooldown when a healthy sibling exists", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -620,9 +620,9 @@ describe("resolveSessionAuthProfileOverride", () => {
         isNewSession: false,
       });
 
-      expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverrideSource).toBe("user");
     });
   });
 
@@ -643,7 +643,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionEntry).toBeDefined();
       const sessionStore = { [sessionKey]: sessionEntry! };
 
-      await patchSessionEntry(scope, () => ({ label: "renamed", pinnedAt: undefined }));
+      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
       await clearSessionAuthProfileOverride({
         sessionEntry: sessionEntry!,
         sessionStore,
@@ -700,7 +700,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionEntry).toBeDefined();
       const sessionStore = { [sessionKey]: sessionEntry! };
 
-      await patchSessionEntry(scope, () => ({ label: "renamed", pinnedAt: undefined }));
+      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
       const resolved = await resolveOpenAiSession({
         agentDir,
         sessionEntry: sessionEntry!,
@@ -740,7 +740,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
       expect(sessionEntry).toBeDefined();
       const sessionStore = { [sessionKey]: sessionEntry! };
-      await patchSessionEntry(scope, () => ({ label: "renamed", pinnedAt: undefined }));
+      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
 
       const resolved = await resolveOpenAiSession({
         agentDir,
@@ -803,7 +803,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         if (persisted) {
           await replaceSessionEntry(scope, sessionEntry);
           sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" })!;
-          await patchSessionEntry(scope, () => ({
+          await patchSessionEntryCore(scope, () => ({
             ...latestEntry,
             authProfileOverrideSource: source,
             pinnedAt: undefined,
@@ -938,25 +938,21 @@ describe("resolveSessionAuthProfileOverride", () => {
             : undefined,
           usageStats: { [TEST_PRIMARY_PROFILE_ID]: createStats(Date.now() + 60_000) },
         });
-        if (hasHealthySibling) {
-          authStoreMocks.isProfileInCooldown.mockImplementation(
-            (_store: AuthProfileStore, profileId: string) => profileId === TEST_PRIMARY_PROFILE_ID,
-          );
-        }
+        authStoreMocks.isProfileInCooldown.mockReturnValue(false);
 
         const sessionEntry = createAutomaticSessionEntry({
           model: "model-y",
           authProfileOverrideCompactionCount: 0,
         });
         const sessionStore = { "agent:main:main": sessionEntry };
-
         const resolved = await resolveOpenAiSession({ agentDir, sessionEntry, sessionStore });
-
-        const expected = hasHealthySibling ? TEST_SECONDARY_PROFILE_ID : TEST_PRIMARY_PROFILE_ID;
-        expect(resolved).toBe(expected);
-        if (!hasHealthySibling) {
-          expect(sessionEntry.updatedAt).toBe(1);
-        }
+        expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
+        expect(authStoreMocks.isProfileInCooldown).toHaveBeenCalledWith(
+          expect.anything(),
+          TEST_PRIMARY_PROFILE_ID,
+          undefined,
+          "model-y",
+        );
       });
     },
   );

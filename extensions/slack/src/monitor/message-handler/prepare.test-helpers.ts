@@ -12,6 +12,7 @@ import type { SlackChannelConfigEntries } from "../channel-config.js";
 import { createSlackMonitorContext } from "../context.js";
 
 export function createInboundSlackTestContext(params: {
+  accountId?: string;
   app?: App;
   cfg: OpenClawConfig;
   appClient?: App["client"];
@@ -25,7 +26,7 @@ export function createInboundSlackTestContext(params: {
 }) {
   return createSlackMonitorContext({
     cfg: params.cfg,
-    accountId: "default",
+    accountId: params.accountId ?? "default",
     botToken: "token",
     app: params.app ?? ({ client: params.appClient ?? {} } as App),
     runtime: {} as RuntimeEnv,

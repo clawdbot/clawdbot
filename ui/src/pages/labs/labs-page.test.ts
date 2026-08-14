@@ -60,18 +60,6 @@ async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
   return { page, provider, runtimeConfig };
 }
 
-function labToggle(page: LabsPageElement, index: number, label: string) {
-  const toggle = page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch").item(index);
-  if (!toggle) {
-    throw new Error(`${label} toggle not rendered`);
-  }
-  return toggle;
-}
-
-function codeModeToggle(page: LabsPageElement) {
-  return labToggle(page, 0, "Code Mode");
-}
-
 function labRow(page: LabsPageElement, title: string) {
   const row = [...page.querySelectorAll<HTMLElement>(".settings-row")].find(
     (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
@@ -80,6 +68,26 @@ function labRow(page: LabsPageElement, title: string) {
     throw new Error(`${title} row not rendered`);
   }
   return row;
+}
+
+function labToggle(page: LabsPageElement, title: string) {
+  const toggle = labRow(page, title).querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  if (!toggle) {
+    throw new Error(`${title} toggle not rendered`);
+  }
+  return toggle;
+}
+
+function labDocsLink(page: LabsPageElement, title: string) {
+  const link = labRow(page, title).querySelector<HTMLAnchorElement>(".settings-row__desc a");
+  if (!link) {
+    throw new Error(`${title} documentation link not rendered`);
+  }
+  return link;
+}
+
+function codeModeToggle(page: LabsPageElement) {
+  return labToggle(page, "Code Mode");
 }
 
 describe("LabsPage", () => {
@@ -104,9 +112,11 @@ describe("LabsPage", () => {
     expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     expect(page.textContent).toContain("Swarm");
+    expect(page.textContent).toContain("Host Desktop");
+    expect(page.textContent).toContain("Cloud Worker Desktop");
     expect(codeModeToggle(page).checked).toBe(true);
 
-    const docs = [...page.querySelectorAll<HTMLAnchorElement>(".settings-row__desc a")];
+    const docs = LAB_FEATURES.map((feature) => labDocsLink(page, feature.title()));
     expect(docs.map((link) => link.href)).toEqual(LAB_FEATURES.map((feature) => feature.docsUrl));
     expect(docs.every((link) => link.target === "_blank")).toBe(true);
     expect(docs.every((link) => link.rel.includes("noopener"))).toBe(true);
@@ -124,7 +134,7 @@ describe("LabsPage", () => {
     expect(codeModeToggle(page).checked).toBe(true);
   });
 
-  it("writes an explicit false in the RFC 7396 merge patch when disabling", async () => {
+  it("delegates refresh ownership to the canonical patch flow when disabling", async () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { codeMode: { enabled: true } },
     });
@@ -138,7 +148,7 @@ describe("LabsPage", () => {
       raw: { tools: { codeMode: { enabled: false } } },
       note: "labs: update codeMode",
     });
-    expect(runtimeConfig.refresh).toHaveBeenCalledOnce();
+    expect(runtimeConfig.refresh).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -146,14 +156,12 @@ describe("LabsPage", () => {
       // The on position restores the shipped "auto" tier, never `true`: Labs
       // offers Auto/Off, and force-on stays a config-only power-user state.
       label: "Code Mode",
-      index: 0,
       sourceConfig: { tools: { codeMode: { enabled: false } } },
       expectedPatch: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
     },
     {
       label: "Swarm",
-      index: 1,
       sourceConfig: { tools: { swarm: { enabled: false } } },
       expectedPatch: { tools: { swarm: { enabled: true } } },
       note: "labs: update swarm",
@@ -163,37 +171,51 @@ describe("LabsPage", () => {
       // mode to "code", so a bare `enabled: true` would select the surface with
       // the weakest recall rather than the one this row advertises.
       label: "Tool Search",
-      index: 2,
       sourceConfig: { tools: { toolSearch: { enabled: false } } },
       expectedPatch: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
       note: "labs: update toolSearch",
     },
     {
       label: "Tool-loop detection",
-      index: 3,
       sourceConfig: { tools: { loopDetection: { enabled: false } } },
       expectedPatch: { tools: { loopDetection: { enabled: true } } },
       note: "labs: update loopDetection",
     },
     {
       label: "Lean tools for local models",
-      index: 4,
       sourceConfig: {},
       expectedPatch: { agents: { defaults: { experimental: { localModelLean: true } } } },
       note: "labs: update localModelLean",
     },
     {
+      label: "CLI agents",
+      sourceConfig: {},
+      expectedPatch: { gateway: { cliAgents: { enabled: true } } },
+      note: "labs: update cliAgents",
+    },
+    {
       // Not a boolean gate: the on state is the conservative `direct` mode, so
       // enabling here cannot start recording group or unknown conversations.
       label: "Message audit metadata",
-      index: 5,
       sourceConfig: { logging: { audit: { messages: "off" } } },
       expectedPatch: { logging: { audit: { messages: "direct" } } },
       note: "labs: update auditMessages",
     },
+    {
+      label: "Host Desktop",
+      sourceConfig: { desktop: { host: { enabled: false } } },
+      expectedPatch: { desktop: { host: { enabled: true } } },
+      note: "labs: update hostDesktop",
+    },
+    {
+      label: "Cloud Worker Desktop",
+      sourceConfig: { cloudWorkers: { desktop: false } },
+      expectedPatch: { cloudWorkers: { desktop: true } },
+      note: "labs: update workerDesktop",
+    },
   ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
-    const toggle = labToggle(page, testCase.index, testCase.label);
+    const toggle = labToggle(page, testCase.label);
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -206,29 +228,26 @@ describe("LabsPage", () => {
   });
 
   it("reads a mode-valued gate as on only for the mode this row offers", async () => {
-    const auditIndex = LAB_FEATURES.findIndex((feature) => feature.id === "auditMessages");
-
     const off = await mountPage({ logging: { audit: { messages: "off" } } });
-    expect(labToggle(off.page, auditIndex, "audit").checked).toBe(false);
+    expect(labToggle(off.page, "Message audit metadata").checked).toBe(false);
     off.provider.remove();
 
     const direct = await mountPage({ logging: { audit: { messages: "direct" } } });
-    expect(labToggle(direct.page, auditIndex, "audit").checked).toBe(true);
+    expect(labToggle(direct.page, "Message audit metadata").checked).toBe(true);
     direct.provider.remove();
 
     // `all` is broader than the mode this row offers, but it is still on. Showing
     // it as off would make the switch look available and quietly narrow a choice
     // the operator made deliberately somewhere else.
     const all = await mountPage({ logging: { audit: { messages: "all" } } });
-    expect(labToggle(all.page, auditIndex, "audit").checked).toBe(true);
+    expect(labToggle(all.page, "Message audit metadata").checked).toBe(true);
   });
 
   it("restores the default off mode from a broader audit mode", async () => {
-    const auditIndex = LAB_FEATURES.findIndex((feature) => feature.id === "auditMessages");
     const { page, runtimeConfig } = await mountPage({
       logging: { audit: { messages: "all" } },
     });
-    const toggle = labToggle(page, auditIndex, "audit");
+    const toggle = labToggle(page, "Message audit metadata");
 
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -240,16 +259,22 @@ describe("LabsPage", () => {
     });
   });
 
-  it("marks only the startup-scoped entry as needing a restart", async () => {
+  it("marks startup-scoped entries as needing a restart", async () => {
     const { page } = await mountPage({});
     const rows = [...page.querySelectorAll(".settings-row")];
 
     const restartRows = rows.filter((row) => row.textContent?.includes("restart"));
-    expect(restartRows).toHaveLength(1);
-    expect(restartRows[0]?.textContent).toContain("Message audit metadata");
+    expect(restartRows).toHaveLength(3);
+    expect(restartRows.map((row) => row.textContent)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Message audit metadata"),
+        expect.stringContaining("Host Desktop"),
+        expect.stringContaining("Cloud Worker Desktop"),
+      ]),
+    );
   });
 
-  it("shows default provenance and reset actions only for overrides", async () => {
+  it("shows default provenance without reset actions", async () => {
     const inherited = await mountPage({});
     expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Enabled");
     expect(labRow(inherited.page, "Swarm").textContent).toContain("Using default: Disabled");
@@ -267,7 +292,7 @@ describe("LabsPage", () => {
     expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Enabled");
     expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Disabled");
     expect(overridden.page.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(
-      2,
+      0,
     );
   });
 
@@ -300,10 +325,7 @@ describe("LabsPage", () => {
         },
       },
     });
-    const localModelLeanIndex = LAB_FEATURES.findIndex(
-      (feature) => feature.id === "localModelLean",
-    );
-    const toggle = labToggle(page, localModelLeanIndex, "local model lean");
+    const toggle = labToggle(page, "Lean tools for local models");
 
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -329,9 +351,9 @@ describe("LabsPage", () => {
       },
     });
 
-    labRow(page, "Lean tools for local models")
-      .querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
-      ?.click();
+    const toggle = labToggle(page, "Lean tools for local models");
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
@@ -340,36 +362,6 @@ describe("LabsPage", () => {
         wizard: { localModelLeanAutoModel: null },
       },
       note: "labs: update localModelLean",
-    });
-  });
-
-  it("restores an object gate without deleting sibling settings", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { loopDetection: { enabled: true, warningThreshold: 12 } },
-    });
-
-    labRow(page, "Tool-loop detection")
-      .querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
-      ?.click();
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { loopDetection: { enabled: null } } },
-      note: "labs: update loopDetection",
-    });
-  });
-
-  it("restores a shorthand gate at its owning parent path", async () => {
-    const { page, runtimeConfig } = await mountPage({ tools: { codeMode: "auto" } });
-
-    labRow(page, "Code Mode")
-      .querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
-      ?.click();
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: null } },
-      note: "labs: update codeMode",
     });
   });
 });
@@ -432,8 +424,6 @@ describe("LabsPage code mode enablement", () => {
 });
 
 describe("LabsPage tool search enablement", () => {
-  const toolSearchIndex = LAB_FEATURES.findIndex((feature) => feature.id === "toolSearch");
-
   // readToolSearchConfig + readBoolean(raw.enabled, configured): an object that
   // configures anything besides `enabled` is already on at runtime.
   it.each([
@@ -458,7 +448,7 @@ describe("LabsPage tool search enablement", () => {
   ])("reads $label as $expected", async ({ config, expected }) => {
     const { page, provider } = await mountPage(config);
 
-    expect(labToggle(page, toolSearchIndex, "Tool Search").checked).toBe(expected);
+    expect(labToggle(page, "Tool Search").checked).toBe(expected);
     provider.remove();
   });
 
@@ -466,7 +456,7 @@ describe("LabsPage tool search enablement", () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { toolSearch: { mode: "tools" } },
     });
-    const toggle = labToggle(page, toolSearchIndex, "Tool Search");
+    const toggle = labToggle(page, "Tool Search");
 
     expect(toggle.checked).toBe(true);
     expect(labRow(page, "Tool Search").textContent).toContain("Default: Disabled");
@@ -484,7 +474,7 @@ describe("LabsPage tool search enablement", () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { toolSearch: { enabled: false, mode: "tools" } },
     });
-    const toggle = labToggle(page, toolSearchIndex, "Tool Search");
+    const toggle = labToggle(page, "Tool Search");
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -495,27 +485,9 @@ describe("LabsPage tool search enablement", () => {
       note: "labs: update toolSearch",
     });
   });
-
-  it("resets an explicit enabled override as a Tool Search unit", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { toolSearch: { enabled: true } },
-    });
-
-    labRow(page, "Tool Search")
-      .querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
-      ?.click();
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { toolSearch: null } },
-      note: "labs: update toolSearch",
-    });
-  });
 });
 
 describe("LabsPage tool loop detection enablement", () => {
-  const loopDetectionIndex = LAB_FEATURES.findIndex((feature) => feature.id === "loopDetection");
-
   // Mirrors resolveToolLoopDetectionConfig and the detector default: only an
   // explicit true enables the rolling-history detectors.
   it.each([
@@ -533,7 +505,7 @@ describe("LabsPage tool loop detection enablement", () => {
   ])("reads $label as $expected", async ({ config, expected }) => {
     const { page, provider } = await mountPage(config);
 
-    expect(labToggle(page, loopDetectionIndex, "Tool-loop detection").checked).toBe(expected);
+    expect(labToggle(page, "Tool-loop detection").checked).toBe(expected);
     provider.remove();
   });
 
@@ -541,7 +513,7 @@ describe("LabsPage tool loop detection enablement", () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { loopDetection: { enabled: false, warningThreshold: 12 } },
     });
-    const toggle = labToggle(page, loopDetectionIndex, "Tool-loop detection");
+    const toggle = labToggle(page, "Tool-loop detection");
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -557,7 +529,7 @@ describe("LabsPage tool loop detection enablement", () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { loopDetection: { enabled: true, warningThreshold: 12 } },
     });
-    const toggle = labToggle(page, loopDetectionIndex, "Tool-loop detection");
+    const toggle = labToggle(page, "Tool-loop detection");
 
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));

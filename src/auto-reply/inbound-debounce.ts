@@ -108,7 +108,11 @@ function createInboundDebounceFlush(params: {
     onAdoptionFinalizing: () => source?.onAdoptionFinalizing?.(),
     onFailed: source?.onFailed
       ? async (error) => {
-          await source.onFailed?.(error);
+          try {
+            await source.onFailed?.(error);
+          } finally {
+            markAdmitted();
+          }
         }
       : undefined,
     onAbandoned: async () => {
@@ -121,9 +125,15 @@ function createInboundDebounceFlush(params: {
   } catch (error) {
     completion = Promise.reject(toErrorObject(error, "Inbound debounce dispatch failed"));
   }
-  // A skipped or failed dispatch may never call a lifecycle hook; its terminal
-  // completion must still release the keyed chain.
-  void completion.then(markAdmitted, markAdmitted);
+  // A failed dispatch must settle its source claim before releasing the keyed
+  // lane; an already-admitted turn owns its later completion failure.
+  completion = completion.then(markAdmitted).catch(async (error: unknown) => {
+    if (!admitted && lifecycle.onFailed) {
+      await Promise.allSettled([lifecycle.onFailed(error)]);
+    }
+    markAdmitted();
+    throw error;
+  });
   return { admission, completion };
 }
 

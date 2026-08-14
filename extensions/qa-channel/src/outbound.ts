@@ -15,6 +15,7 @@ type QaChannelTextSendParams = {
   accountId?: string | null;
   to: string;
   text: string;
+  isError?: boolean;
   threadId?: string | number | null;
   replyToId?: string | number | null;
   attachments?: QaBusAttachment[];
@@ -39,6 +40,7 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
       threadId: resolved.threadId,
     }),
     text: params.text,
+    isError: params.isError,
     senderId: account.botUserId,
     senderName: account.botDisplayName,
     threadId: resolved.threadId,

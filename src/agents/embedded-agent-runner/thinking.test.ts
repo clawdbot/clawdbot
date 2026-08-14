@@ -1276,5 +1276,26 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     // Same millisecond as compaction: treated as post-compaction; signature preserved
     expect(result).toBe(messages);
   });
+
+  it("parses numeric-looking compaction strings as dates before numeric message timestamps", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "s",
+        tokensBefore: 0,
+        timestamp: "2026",
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "old", thinkingSignature: "stale_sig" }],
+        timestamp: 1_000_000,
+      }),
+    ];
+
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    expect((result[1] as AssistantMessage).content).toEqual([
+      { type: "thinking", thinking: "old" },
+    ]);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

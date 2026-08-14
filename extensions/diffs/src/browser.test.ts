@@ -1,6 +1,7 @@
 // Diffs tests cover browser plugin behavior.
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
@@ -48,10 +49,16 @@ describe("PlaywrightDiffScreenshotter", () => {
   let rootDir: string;
   let outputPath: string;
   let cleanupRootDir: () => Promise<void>;
+  let originalPlatform: PropertyDescriptor;
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platformDescriptor) {
+      throw new Error("process.platform descriptor is unavailable");
+    }
+    originalPlatform = platformDescriptor;
     ({ PlaywrightDiffScreenshotter } = await import("./browser.js"));
     ({ rootDir, cleanup: cleanupRootDir } = await createTempDiffRoot("openclaw-diffs-browser-"));
     outputPath = path.join(rootDir, "preview.png");
@@ -59,9 +66,112 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   afterEach(async () => {
+    Object.defineProperty(process, "platform", originalPlatform);
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     await vi.runAllTimersAsync();
     vi.useRealTimers();
     await cleanupRootDir();
+  });
+
+  async function renderWithBrowserDiscovery(): Promise<{ executablePath?: string }> {
+    launchMock.mockResolvedValue(createMockBrowser([]));
+    const screenshotter = new PlaywrightDiffScreenshotter({ config: {}, browserIdleMs: 1_000 });
+    await screenshotter.screenshotHtml({
+      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
+      outputPath,
+      theme: "dark",
+      image: {
+        format: "png",
+        qualityPreset: "standard",
+        scale: 1,
+        maxWidth: 960,
+        maxPixels: 8_000_000,
+      },
+    });
+    return firstMockCall(launchMock, "browser launch")[0] as { executablePath?: string };
+  }
+
+  function stubWindowsBrowserDiscoveryEnv(params: {
+    localAppData: string;
+    programFiles: string;
+    programFilesX86: string;
+  }): void {
+    Object.defineProperty(process, "platform", {
+      ...originalPlatform,
+      value: "win32",
+    });
+    vi.stubEnv("PATH", "");
+    vi.stubEnv("OPENCLAW_BROWSER_EXECUTABLE_PATH", "");
+    vi.stubEnv("BROWSER_EXECUTABLE_PATH", "");
+    vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "");
+    vi.stubEnv("LOCALAPPDATA", params.localAppData);
+    vi.stubEnv("ProgramFiles", params.programFiles);
+    vi.stubEnv("ProgramFiles(x86)", params.programFilesX86);
+  }
+
+  it("uses the Windows per-user install root when LOCALAPPDATA is blank", async () => {
+    stubWindowsBrowserDiscoveryEnv({
+      localAppData: " \t ",
+      programFiles: "",
+      programFilesX86: "   ",
+    });
+    vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\test");
+    const chromePath = "C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe";
+    const accessMock = vi.spyOn(fs, "access").mockImplementation(async (candidate) => {
+      if (String(candidate) !== chromePath) {
+        throw new Error("ENOENT");
+      }
+    });
+
+    await expect(renderWithBrowserDiscovery()).resolves.toEqual(
+      expect.objectContaining({ executablePath: chromePath }),
+    );
+    expect(accessMock.mock.calls.map(([candidate]) => String(candidate))).toEqual([chromePath]);
+  });
+
+  it("uses standard Windows system roots when install-root overrides are blank", async () => {
+    stubWindowsBrowserDiscoveryEnv({
+      localAppData: " ",
+      programFiles: " \t ",
+      programFilesX86: "",
+    });
+    vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\test");
+    const accessMock = vi.spyOn(fs, "access").mockRejectedValue(new Error("ENOENT"));
+
+    await expect(renderWithBrowserDiscovery()).resolves.not.toHaveProperty("executablePath");
+    const candidates = accessMock.mock.calls.map(([candidate]) => String(candidate));
+    expect(candidates).toEqual([
+      "C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      "C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    ]);
+    expect(candidates.every((candidate) => path.win32.isAbsolute(candidate))).toBe(true);
+  });
+
+  it("preserves custom Windows install-root precedence", async () => {
+    stubWindowsBrowserDiscoveryEnv({
+      localAppData: "D:\\User Apps",
+      programFiles: "D:\\System Apps",
+      programFilesX86: "D:\\System Apps x86",
+    });
+    const customChromePath = "D:\\User Apps\\Google\\Chrome\\Application\\chrome.exe";
+    const accessMock = vi.spyOn(fs, "access").mockImplementation(async (candidate) => {
+      if (String(candidate) !== customChromePath) {
+        throw new Error("ENOENT");
+      }
+    });
+
+    await expect(renderWithBrowserDiscovery()).resolves.toEqual(
+      expect.objectContaining({ executablePath: customChromePath }),
+    );
+    expect(accessMock.mock.calls.map(([candidate]) => String(candidate))).toEqual([
+      customChromePath,
+    ]);
   });
 
   it("reuses the same browser across renders and closes it after the idle window", async () => {

@@ -6,6 +6,7 @@ scenario:
   coverage:
     primary:
       - agent-runtime.failure-recovery-reasoning-only-recovery
+      - agent-runtime.failure-recovery-no-fake-progress
     secondary:
       - agent-runtime.failure-recovery-retry-policy
   objective: Verify a GPT-style reasoning-only turn after a mutating write stays replay-unsafe and does not auto-retry.
@@ -14,20 +15,25 @@ scenario:
     - The agent performs the seeded mutating write.
     - Mock trace does not include an automatic reasoning-only retry instruction.
     - Mock trace stops after the write-side reasoning-only terminal turn instead of attempting a continuation.
+    - Exactly one visible warning reports that side effects may already have happened.
   docsRefs:
     - docs/help/testing.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
   execution:
     kind: flow
     summary: Verify reasoning-only turns after a write do not auto-retry.
     config:
+      requiredProviderMode: mock-openai
       requiredProvider: mock-openai
       promptSnippet: Reasoning-only after write safety check
       prompt: "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK."
       retryNeedle: recorded reasoning but did not produce a user-visible answer
       outputFile: reasoning-only-side-effect.txt
+      expectedWarning: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
+      forbiddenReplyNeedles: [SIDE-EFFECT-GUARD-OK, successfully, completed, complete]
 
 flow:
   steps:
@@ -41,6 +47,9 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - set: requestCursorBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
@@ -61,9 +70,9 @@ flow:
           value:
             expr: "await env.gateway.call('agent.wait', { runId: started.runId, timeoutMs: liveTurnTimeoutMs(env, 45000) }, { timeoutMs: liveTurnTimeoutMs(env, 50000) })"
         - assert:
-            expr: "['ok', 'completed', 'succeeded'].includes(String(waited?.status)) || (waited?.status === 'error' && String(waited?.error ?? '').trim().toLowerCase() === 'completed')"
+            expr: "String(waited?.status) === 'error' && String(waited?.error) === 'failed'"
             message:
-              expr: "`agent.wait returned ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
+              expr: "`agent.wait should expose the terminal no-visible-answer failure, got ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
         - call: fs.readFile
           saveAs: sideEffect
           args:
@@ -73,19 +82,49 @@ flow:
             expr: "sideEffect.includes('side effects already happened')"
             message:
               expr: "`side-effect file missing expected contents: ${sideEffect}`"
+        - set: warning
+          value:
+            expr: "(async () => { const deadline = Date.now() + liveTurnTimeoutMs(env, 30000); do { const message = state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').slice(outboundStartIndex).find((candidate) => candidate.conversation.id === 'qa-operator' && candidate.text === config.expectedWarning); if (message) { return message; } await sleep(100); } while (Date.now() < deadline); throw new Error('timed out waiting for the side-effect warning'); })()"
+        - call: sleep
+          args:
+            - 300
+        - set: scenarioOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => message.conversation.id === 'qa-operator')"
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - ref: sessionKey
         - if:
             expr: "Boolean(env.mock)"
             then:
               - set: scenarioRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+              - set: retryRequests
+                value:
+                  expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.retryNeedle))"
               - assert:
-                  expr: "scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.plannedToolName === 'write')"
-                  message: expected mutating write request in mock trace
+                  expr: "scenarioRequests.length === 2 && scenarioRequests[0]?.plannedToolName === 'write' && !scenarioRequests[1]?.plannedToolName"
+                  message:
+                    expr: "`expected exactly one write request plus one reasoning-only terminal request: ${JSON.stringify(scenarioRequests.map((request) => ({ cursor: request.cursor, tool: request.plannedToolName ?? null, callId: request.toolOutputCallId ?? null })))}`"
               - assert:
-                  expr: "!scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.retryNeedle))"
+                  expr: "retryRequests.length === 0"
                   message: reasoning-only retry instruction should not be injected after a write
               - assert:
-                  expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)).length === 2"
-                  message: expected exactly the write request plus the reasoning-only terminal request
-      detailsExpr: "env.mock ? `requests=${String(scenarioRequests?.length ?? 0)} sideEffect=${sideEffect.trim()}` : sideEffect"
+                  expr: "typeof scenarioRequests[0]?.plannedToolCallId === 'string' && scenarioRequests[0].plannedToolCallId.length > 0 && scenarioRequests[1]?.toolOutputCallId === scenarioRequests[0].plannedToolCallId && String(scenarioRequests[1]?.toolOutput ?? '').length > 0"
+                  message: committed write result did not match its planned tool call
+        - assert:
+            expr: "transcript.userMessageCount === 1 && transcript.assistantToolCallCounts.write === 1 && transcript.completedToolCallCounts.write === 1 && transcript.successfulToolCallCounts.write === 1"
+            message:
+              expr: "`write transcript did not persist exactly one successful side effect: ${JSON.stringify(transcript)}`"
+        - assert:
+            expr: "scenarioOutbound.length === 1 && warning.text === config.expectedWarning && scenarioOutbound[0]?.text === config.expectedWarning"
+            message:
+              expr: "`expected exactly one visible side-effect warning: ${JSON.stringify(scenarioOutbound.map((message) => message.text))}`"
+        - assert:
+            expr: "config.forbiddenReplyNeedles.every((needle) => !normalizeLowercaseStringOrEmpty(warning.text).includes(normalizeLowercaseStringOrEmpty(needle))) && !normalizeLowercaseStringOrEmpty(transcript.finalText).includes(normalizeLowercaseStringOrEmpty('SIDE-EFFECT-GUARD-OK'))"
+            message:
+              expr: "`side-effect warning or transcript claimed success/completion: warning=${warning.text} final=${transcript.finalText}`"
+      detailsExpr: "env.mock ? `requests=${String(scenarioRequests?.length ?? 0)} writes=${String(transcript.successfulToolCallCounts.write ?? 0)} warning=${warning.text}` : sideEffect"

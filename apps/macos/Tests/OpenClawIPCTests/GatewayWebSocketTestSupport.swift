@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+@testable import OpenClawKit
 
 extension WebSocketTasking {
     /// Keep unit-test doubles resilient to protocol additions.
@@ -9,6 +9,17 @@ extension WebSocketTasking {
 }
 
 enum GatewayWebSocketTestSupport {
+    static let identityFreeOperatorConnectOptions = GatewayConnectOptions(
+        role: "operator",
+        scopes: GatewayChannelActor.defaultOperatorConnectScopes,
+        caps: [],
+        commands: [],
+        permissions: [:],
+        clientId: "openclaw-macos",
+        clientMode: "ui",
+        clientDisplayName: "OpenClaw macOS Test",
+        includeDeviceIdentity: false)
+
     static func connectChallengeData(
         nonce: String = "test-nonce",
         ts: Int64 = 1_800_000_000_000) -> Data

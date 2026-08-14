@@ -45,6 +45,7 @@ export {
 export {
   runPartialStreamingPreviewScenario,
   runQuietStreamingPreviewScenario,
+  runStreamingReplacementRetentionScenario,
 } from "./scenario-runtime-streaming-preview.js";
 
 export {

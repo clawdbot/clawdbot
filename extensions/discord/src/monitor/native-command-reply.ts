@@ -12,6 +12,7 @@ import { chunkDiscordTextWithMode } from "../chunk.js";
 import type {
   ButtonInteraction,
   CommandInteraction,
+  MessagePayloadFile,
   StringSelectMenuInteraction,
   TopLevelComponents,
 } from "../internal/discord.js";
@@ -106,7 +107,7 @@ export async function deliverDiscordInteractionReply(params: {
   let payloadDelivered = false;
   const sendMessage = async (
     content: string,
-    files?: { name: string; data: Buffer }[],
+    files?: MessagePayloadFile[],
     components?: TopLevelComponents[],
   ) => {
     const contentPayload = content ? { content } : {};
@@ -118,13 +119,7 @@ export async function deliverDiscordInteractionReply(params: {
             ...(params.responseEphemeral !== undefined
               ? { ephemeral: params.responseEphemeral }
               : {}),
-            files: files.map((file) => {
-              if (file.data instanceof Blob) {
-                return { name: file.name, data: file.data };
-              }
-              const arrayBuffer = Uint8Array.from(file.data).buffer;
-              return { name: file.name, data: new Blob([arrayBuffer]) };
-            }),
+            files,
           }
         : {
             ...contentPayload,
@@ -174,6 +169,7 @@ export async function deliverDiscordInteractionReply(params: {
         return {
           name: loaded.fileName ?? "upload",
           data: loaded.buffer,
+          contentType: loaded.contentType,
         };
       }),
     );

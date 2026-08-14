@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +12,26 @@ vi.mock("./kill-tree.js", () => ({ signalProcessTree: mocks.signalProcessTree })
 vi.mock("@lydell/node-pty", () => ({ spawn: mocks.spawn }));
 
 const { spawnTerminalPty } = await import("./terminal-pty.js");
+
+const tempDirs: string[] = [];
+
+function createWindowsNpmShim(command: string) {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-shim-"));
+  tempDirs.push(binDir);
+  const entrypoint = path.join(binDir, "node_modules", "@openai", command, "bin", `${command}.js`);
+  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+  fs.writeFileSync(entrypoint, "", "utf8");
+  const relativeEntrypoint = path.relative(binDir, entrypoint).replaceAll(path.sep, "\\");
+  const shimPath = path.join(binDir, `${command}.cmd`);
+  fs.writeFileSync(
+    shimPath,
+    "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n" +
+      'IF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n' +
+      `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`,
+    "utf8",
+  );
+  return { entrypoint, shimPath };
+}
 
 function fakePty(pid = 4321) {
   return {
@@ -44,6 +67,9 @@ describe("terminal PTY teardown", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const tempDir of tempDirs.splice(0)) {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
@@ -59,7 +85,11 @@ describe("terminal PTY teardown", () => {
     const { handle, pty } = await spawnFakePty();
     handle.kill("SIGHUP");
     expect(mocks.signalProcessTree).not.toHaveBeenCalled();
-    expect(pty.kill).toHaveBeenCalledWith("SIGHUP");
+    if (process.platform === "win32") {
+      expect(pty.kill).toHaveBeenCalledWith();
+    } else {
+      expect(pty.kill).toHaveBeenCalledWith("SIGHUP");
+    }
   });
 
   it("tolerates an already-exited process", async () => {
@@ -152,24 +182,152 @@ describe("terminal PTY invocation", () => {
     );
   });
 
-  it.each([".cmd", ".bat"])("wraps Windows %s shims through ComSpec", async (extension) => {
+  it.each([
+    [".cmd", { ComSpec: "C:\\Windows\\System32\\cmd.exe" }, "C:\\Windows\\System32\\cmd.exe"],
+    [".bat", { COMSPEC: "C:\\Windows\\System32\\cmd.exe" }, "C:\\Windows\\System32\\cmd.exe"],
+    [".cmd", { cOmSpEc: "C:\\tools\\custom-cmd.exe" }, "C:\\tools\\custom-cmd.exe"],
+    [
+      ".bat",
+      {
+        ComSpec: "C:\\Windows\\System32\\ambient-cmd.exe",
+        COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+      },
+      "C:\\Windows\\System32\\cmd.exe",
+    ],
+  ])("wraps Windows %s shims through ComSpec", async (extension, env, expectedComSpec) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());
 
     await spawnTerminalPty({
       file: `C:\\Program Files\\Codex\\codex${extension}`,
       args: ["resume", "thread title"],
-      env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      env,
       cols: 80,
       rows: 24,
     });
 
     expect(mocks.spawn).toHaveBeenCalledWith(
-      "C:\\Windows\\System32\\cmd.exe",
+      expectedComSpec,
       ["/d", "/s", "/c", `""C:\\Program Files\\Codex\\codex${extension}" resume "thread title""`],
       expect.objectContaining({ cols: 80, rows: 24 }),
     );
   });
+
+  it.runIf(process.platform === "win32")(
+    "passes arbitrary Codex initial-message text literally through an npm shim",
+    async () => {
+      const { entrypoint, shimPath } = createWindowsNpmShim("codex");
+      mocks.spawn.mockReturnValueOnce(fakePty());
+
+      await spawnTerminalPty({
+        file: shimPath,
+        args: ["exec", "--", "Fix A&B and 100%"],
+        env: { PATH: path.dirname(process.execPath), PATHEXT: ".EXE;.CMD" },
+        cols: 80,
+        rows: 24,
+      });
+
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        process.execPath,
+        [entrypoint, "exec", "--", "Fix A&B and 100%"],
+        expect.objectContaining({ cols: 80, rows: 24 }),
+      );
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "uses PATH node.exe instead of a packaged non-Node host for an npm shim",
+    async () => {
+      const { entrypoint, shimPath } = createWindowsNpmShim("codex");
+      const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-node-"));
+      tempDirs.push(nodeDir);
+      const nodePath = path.join(nodeDir, "node.exe");
+      fs.linkSync(process.execPath, nodePath);
+      vi.spyOn(process, "execPath", "get").mockReturnValue(
+        "C:\\Program Files\\OpenClaw\\openclaw.exe",
+      );
+      mocks.spawn.mockReturnValueOnce(fakePty());
+
+      await spawnTerminalPty({
+        file: shimPath,
+        args: ["--", "literal"],
+        env: { PATH: nodeDir, PATHEXT: ".EXE;.CMD" },
+        cols: 80,
+        rows: 24,
+      });
+
+      const [command, argv] = mocks.spawn.mock.calls[0] ?? [];
+      expect(String(command).toLowerCase()).toBe(nodePath.toLowerCase());
+      expect(argv).toEqual([entrypoint, "--", "literal"]);
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "fails closed when an npm shim has no Node executable",
+    async () => {
+      const { shimPath } = createWindowsNpmShim("codex");
+      vi.spyOn(process, "execPath", "get").mockReturnValue(
+        "C:\\Program Files\\OpenClaw\\openclaw.exe",
+      );
+
+      await expect(
+        spawnTerminalPty({
+          file: shimPath,
+          args: ["--", "literal"],
+          env: { PATH: path.dirname(shimPath), PATHEXT: ".EXE;.CMD" },
+          cols: 80,
+          rows: 24,
+        }),
+      ).rejects.toThrow(/Node executable/);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "keeps unknown batch wrappers on the guarded cmd path",
+    async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-custom-"));
+      tempDirs.push(tempDir);
+      const wrapperPath = path.join(tempDir, "custom.cmd");
+      fs.writeFileSync(wrapperPath, "@ECHO off\r\necho custom\r\n", "utf8");
+
+      await expect(
+        spawnTerminalPty({
+          file: wrapperPath,
+          args: ["Fix A&B and 100%"],
+          env: { COMSPEC: "C:\\Windows\\System32\\cmd.exe" },
+          cols: 80,
+          rows: 24,
+        }),
+      ).rejects.toThrow("Unsafe Windows cmd.exe argument");
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "passes a bare-only native host directly to the PTY spawn owner",
+    async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-bare-"));
+      tempDirs.push(tempDir);
+      const barePath = path.join(tempDir, "bare-host");
+      fs.copyFileSync(process.execPath, barePath);
+      mocks.spawn.mockReturnValueOnce(fakePty());
+
+      await spawnTerminalPty({
+        file: barePath,
+        args: ["--version"],
+        env: {},
+        cols: 80,
+        rows: 24,
+      });
+
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        barePath,
+        ["--version"],
+        expect.objectContaining({ cols: 80, rows: 24 }),
+      );
+    },
+  );
 
   it("keeps executables and non-Windows commands direct", async () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");

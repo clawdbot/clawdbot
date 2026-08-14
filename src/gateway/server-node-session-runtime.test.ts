@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
+import { updateNodeRunnerInventory } from "./node-registry-private.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
@@ -23,7 +27,7 @@ function makeGatewayWsClient(connId: string, socket: TestSocket): GatewayWsClien
       role: "node",
       scopes: [],
       client: {
-        id: "node-client",
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
         version: "1.0.0",
         platform: "macos",
         mode: "node",
@@ -72,6 +76,56 @@ function registerNode(
 }
 
 describe("gateway node session runtime", () => {
+  test("publishes pairing-generation transitions to lifecycle consumers", () => {
+    const onPairingGenerationChanged = vi.fn();
+    const runtime = createGatewayNodeSessionRuntime({
+      broadcast: vi.fn(),
+      onPairingGenerationChanged,
+      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+      sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+    });
+    registerNode(runtime, "conn-original", "generation-a", []);
+    registerNode(runtime, "conn-replacement", "generation-b", []);
+
+    expect(onPairingGenerationChanged).toHaveBeenCalledWith({
+      nodeId: "node-a",
+      previousPairingGeneration: "generation-a",
+      nextPairingGeneration: "generation-b",
+      preserveSessionState: false,
+    });
+  });
+
+  test("broadcasts runner topology changes from publication and connection replacement", () => {
+    const broadcast = vi.fn();
+    const runtime = createRuntime(async () => "generation-a", broadcast);
+    registerNode(runtime, "conn-original", "generation-a", []);
+
+    expect(
+      updateNodeRunnerInventory({
+        registry: runtime.nodeRegistry,
+        nodeId: "node-a",
+        connId: "conn-original",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        },
+      }),
+    ).toEqual({ changed: true });
+    expect(broadcast).toHaveBeenLastCalledWith(
+      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+      { nodeId: "node-a" },
+      { dropIfSlow: true },
+    );
+
+    registerNode(runtime, "conn-replacement", "generation-a", []);
+
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenLastCalledWith(
+      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+      { nodeId: "node-a" },
+      { dropIfSlow: true },
+    );
+  });
+
   test("forwards subscribed payload json without parsing it again", async () => {
     const frames: string[] = [];
     const runtime = createRuntime(async () => "generation-a");
@@ -203,7 +257,6 @@ describe("gateway node session runtime", () => {
     const frames: string[] = [];
     registerNode(runtime, "conn-node-a", "generation-a", frames);
     runtime.nodeSubscribe("node-a", "main", "conn-node-a");
-
     currentPairingGeneration = "generation-b";
     expect(
       runtime.nodeRegistry.updateSurface(

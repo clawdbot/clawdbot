@@ -13,7 +13,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { buildAssistantMessage, createOllamaStreamFn, isOllamaCompatProvider } from "./stream.js";
+import {
+  buildAssistantMessage,
+  createOllamaStreamFn,
+  isOllamaCompatProvider,
+} from "./stream-api.js";
 
 function makeOllamaResponse(params: {
   content?: string;

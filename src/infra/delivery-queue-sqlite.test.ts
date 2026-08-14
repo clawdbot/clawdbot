@@ -6,6 +6,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   claimDeliveryQueueEntryPlatformSend,
   promoteDeliveryQueueEntryPlatformSend,
+  renewDeliveryQueueEntryPlatformSendLease,
 } from "./delivery-queue-sqlite-claim.js";
 import { commitStagedDeliveryQueueEntryOnceAcrossNamespaces } from "./delivery-queue-sqlite-namespace.js";
 import {
@@ -597,6 +598,35 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)?.platformSendStartedAt).toBeUndefined();
     });
 
+    it("atomically upgrades a legacy live reuse claim to renewable ownership", () => {
+      const id = `${boundedCronRetention.idPrefix}upgrade-reusable-claim`;
+      upsertDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: {
+          id,
+          enqueuedAt: Date.now(),
+          retryCount: 0,
+          completionRetention: boundedCronRetention,
+        },
+        stateDir,
+      });
+
+      const claimId = claimDeliveryQueueEntryPlatformSend({
+        queueName: QUEUE,
+        id,
+        stateDir,
+        requiresProducerClaim: true,
+      });
+
+      expect(claimId).toEqual(expect.any(String));
+      expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
+        recoveryState: "producer_claimed",
+        producerClaimId: claimId,
+        requiresProducerClaim: true,
+        availableAt: expect.any(Number),
+      });
+    });
+
     it("recovers an expired pre-provider producer lease without claiming platform delivery", () => {
       vi.useFakeTimers();
       try {
@@ -669,6 +699,116 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           platformSendStartedAt: expect.any(Number),
         });
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)?.producerClaimId).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["producer_claimed", "send_attempt_started", "unknown_after_send"] as const)(
+      "renews the exact unexpired explicit owner in %s",
+      (recoveryState) => {
+        vi.useFakeTimers();
+        try {
+          vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+          const id = `${boundedCronRetention.idPrefix}renew-${recoveryState}`;
+          const claimId = `claim-${recoveryState}`;
+          upsertDeliveryQueueEntry({
+            queueName: QUEUE,
+            entry: {
+              id,
+              enqueuedAt: Date.now(),
+              retryCount: 0,
+              requiresProducerClaim: true,
+              availableAt: Date.now() + 5_000,
+              ...(recoveryState === "producer_claimed"
+                ? { producerClaimId: claimId }
+                : {
+                    platformSendAttemptId: claimId,
+                    platformSendStartedAt: Date.now(),
+                  }),
+              recoveryState,
+            },
+            stateDir,
+          });
+          vi.setSystemTime(Date.now() + 1_000);
+
+          expect(
+            renewDeliveryQueueEntryPlatformSendLease({
+              queueName: QUEUE,
+              id,
+              claimId,
+              stateDir,
+            }),
+          ).toBe(Date.now() + 30_000);
+          expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
+            recoveryState,
+            availableAt: Date.now() + 30_000,
+            ...(recoveryState === "producer_claimed"
+              ? { producerClaimId: claimId }
+              : { platformSendAttemptId: claimId }),
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it("refuses to renew expired, mismatched, and non-explicit owners", () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+        const cases = [
+          {
+            id: `${boundedCronRetention.idPrefix}renew-expired`,
+            requiresProducerClaim: true,
+            producerClaimId: "expired-owner",
+            availableAt: Date.now(),
+            claimId: "expired-owner",
+          },
+          {
+            id: `${boundedCronRetention.idPrefix}renew-wrong-owner`,
+            requiresProducerClaim: true,
+            producerClaimId: "current-owner",
+            availableAt: Date.now() + 5_000,
+            claimId: "stale-owner",
+          },
+          {
+            id: `${boundedCronRetention.idPrefix}renew-legacy-owner`,
+            requiresProducerClaim: false,
+            producerClaimId: "legacy-owner",
+            availableAt: Date.now() + 5_000,
+            claimId: "legacy-owner",
+          },
+        ] as const;
+        for (const entry of cases) {
+          upsertDeliveryQueueEntry({
+            queueName: QUEUE,
+            entry: {
+              id: entry.id,
+              enqueuedAt: Date.now(),
+              retryCount: 0,
+              ...(entry.requiresProducerClaim
+                ? { requiresProducerClaim: entry.requiresProducerClaim }
+                : {}),
+              producerClaimId: entry.producerClaimId,
+              availableAt: entry.availableAt,
+              recoveryState: "producer_claimed",
+            },
+            stateDir,
+          });
+
+          expect(
+            renewDeliveryQueueEntryPlatformSendLease({
+              queueName: QUEUE,
+              id: entry.id,
+              claimId: entry.claimId,
+              stateDir,
+            }),
+          ).toBeUndefined();
+          expect(loadDeliveryQueueEntry(QUEUE, entry.id, stateDir)?.availableAt).toBe(
+            entry.availableAt,
+          );
+        }
       } finally {
         vi.useRealTimers();
       }
@@ -893,6 +1033,12 @@ describe("countFailedDeliveryQueueEntries", () => {
     } finally {
       vi.useRealTimers();
     }
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    db.prepare(
+      "UPDATE delivery_queue_entries SET failed_at = NULL WHERE queue_name = 'session'",
+    ).run();
 
     const counts = countFailedDeliveryQueueEntries(stateDir);
 
@@ -901,8 +1047,7 @@ describe("countFailedDeliveryQueueEntries", () => {
     expect(outbound?.count).toBe(2);
     expect(outbound?.oldestFailedAt).toBe(50_000);
     const session = counts.find((queue) => queue.queueName === "session");
-    expect(session?.count).toBe(1);
-    expect(session?.oldestFailedAt).toBe(70_000);
+    expect(session).toEqual({ queueName: "session", count: 1 });
     expect(loadDeliveryQueueEntries("outbound", stateDir).map((entry) => entry.id)).toEqual([
       "still-pending",
     ]);

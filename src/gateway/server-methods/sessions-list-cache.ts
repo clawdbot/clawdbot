@@ -1,17 +1,29 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
+import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
+import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import { readSessionAutomationVersion } from "../session-automation-index.js";
+import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
 import { isGatewayAdmin } from "../session-sharing.js";
+import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
+import type { SessionsListResult } from "../session-utils.types.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type SessionListFence = {
   agentRunIndexVersion: number;
+  lifecyclePersistenceVersion: number;
+  sessionAutomationVersion: number;
+  sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
+  sessionTranscriptUpdateVersion: number;
+  titleProjectionUnavailableVersion: number;
+  workerPlacementDiskSpaceVersion: number;
 };
-type SessionListOperation = SessionListFence & { promise: Promise<unknown> };
-type SessionListCompleted = SessionListFence & { result: unknown };
+type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
+type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
 type SessionListState = {
   completed: Map<string, SessionListCompleted>;
   config: OpenClawConfig;
@@ -24,14 +36,28 @@ const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListStat
 function readSessionListFence(context: GatewayRequestContext): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
+    lifecyclePersistenceVersion: readSessionLifecyclePersistenceVersion(),
+    sessionAutomationVersion: readSessionAutomationVersion(),
+    sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
+    // Rows embed transcript-derived previews/titles; a committed transcript
+    // write without a session mutation must still invalidate reuse.
+    sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
+    titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
+    workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
   };
 }
 
 function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
   return (
     value.agentRunIndexVersion === fence.agentRunIndexVersion &&
-    value.sessionsMutationVersion === fence.sessionsMutationVersion
+    value.lifecyclePersistenceVersion === fence.lifecyclePersistenceVersion &&
+    value.sessionAutomationVersion === fence.sessionAutomationVersion &&
+    value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
+    value.sessionsMutationVersion === fence.sessionsMutationVersion &&
+    value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
+    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
+    value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion
   );
 }
 
@@ -78,21 +104,47 @@ function rememberCompletedSessionList(
   }
 }
 
+function resolveSessionListExpiration(result: SessionsListResult): number | null | undefined {
+  let expiresAt: number | undefined;
+  for (const session of result.sessions) {
+    // Live work can settle without a session/index mutation, running durations tick,
+    // and a retained child can sit outside this page. None has a safe cache deadline.
+    if (session.hasActiveRun || session.hasActiveSubagentRun || session.childSessions?.length) {
+      return null;
+    }
+    const statusExpiration = session.agentStatus?.expiresAt;
+    if (
+      statusExpiration !== undefined &&
+      (expiresAt === undefined || statusExpiration < expiresAt)
+    ) {
+      expiresAt = statusExpiration;
+    }
+  }
+  return expiresAt;
+}
+
 export async function respondWithCachedSessionList(params: {
   client: GatewayClient | null;
   config: OpenClawConfig;
   context: GatewayRequestContext;
   request: SessionsListParams;
   respond: RespondFn;
-  run: () => Promise<unknown>;
+  run: () => Promise<SessionsListResult>;
 }): Promise<void> {
   const workKey = sessionListWorkKey(params.request, params.client);
   const state = sessionListState(params.context, params.config);
-  // Every input that can change a projected row must fence reuse. Store mutations and
-  // live-run transitions have separate owners, so their monotonic counters stay separate.
+  // Every input that can change a projected row must fence reuse. Session identity,
+  // Gateway projection, and live-run mutations have separate monotonic owners.
   const fence = readSessionListFence(params.context);
-  const completed = state.completed.get(workKey);
-  if (completed && matchesSessionListFence(completed, fence)) {
+  // Activity windows and child retention expire without mutations; hidden paginated rows
+  // prevent deriving a safe deadline, so only concurrent temporal requests share work.
+  const cacheCompleted = params.request.activeMinutes === undefined && !params.request.spawnedBy;
+  const completed = cacheCompleted ? state.completed.get(workKey) : undefined;
+  if (
+    completed &&
+    matchesSessionListFence(completed, fence) &&
+    (completed.expiresAt === undefined || completed.expiresAt > Date.now())
+  ) {
     params.respond(true, completed.result, undefined);
     return;
   }
@@ -107,8 +159,11 @@ export async function respondWithCachedSessionList(params: {
   const promise = Promise.resolve()
     .then(params.run)
     .then((result) => {
-      if (matchesSessionListFence(readSessionListFence(params.context), fence)) {
-        rememberCompletedSessionList(state, workKey, { ...fence, result });
+      if (cacheCompleted && matchesSessionListFence(readSessionListFence(params.context), fence)) {
+        const expiresAt = resolveSessionListExpiration(result);
+        if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
+          rememberCompletedSessionList(state, workKey, { ...fence, result, expiresAt });
+        }
       }
       return result;
     });

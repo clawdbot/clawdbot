@@ -1,17 +1,15 @@
 // Loads, updates, restores, and initializes exec approval policy state.
-import { isDeepStrictEqual } from "node:util";
 import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
-  isAgentDeletionBlocked,
 } from "../agents/agent-lifecycle-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { OpenClawStateLeaseError, withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   createFailClosedExecApprovalsFallback,
@@ -27,10 +25,11 @@ import {
   resetExecApprovalsMigrationGateForTest,
 } from "./exec-approvals-migration-gate.js";
 import {
-  EXEC_APPROVALS_MUTATION_LEASE_KEY,
-  EXEC_APPROVALS_MUTATION_LEASE_SCOPE,
+  assertExecApprovalsMutationAllowed,
+  assertExecApprovalsMutationAuthority,
   deleteExecApprovalsConfigRow,
-  type ExecApprovalsMutationLeaseOwner,
+  ExecApprovalsMutationFencedError,
+  type ExecApprovalsMutationAuthority,
   readExecApprovalsConfigRow,
   serializeExecApprovals,
   snapshotFromExecApprovalsRow,
@@ -39,8 +38,6 @@ import {
 
 const log = createSubsystemLogger("infra/exec-approvals");
 const WARN_INTERVAL_MS = 60_000;
-const EXEC_APPROVALS_DELETION_LEASE_MS = 120_000;
-const EXEC_APPROVALS_DELETION_LEASE_WAIT_MS = 10_000;
 let lastWarnAt: number | undefined;
 
 class ExecApprovalsStoreUnavailableError extends Error {
@@ -129,44 +126,8 @@ export function replaceExecApprovalsSnapshot(
 }
 
 type InternalExecApprovalsUpdate = ExecApprovalsUpdate & {
-  allowDeletedAgentRemoval?: string;
-  allowDeletedAgentRestore?: string;
-  leaseOwner?: ExecApprovalsMutationLeaseOwner;
+  authority?: ExecApprovalsMutationAuthority;
 };
-
-function assertNoDeletedAgentApprovalChanged(
-  current: ExecApprovalsFile,
-  next: ExecApprovalsFile,
-  params: Pick<
-    InternalExecApprovalsUpdate,
-    "allowDeletedAgentRemoval" | "allowDeletedAgentRestore"
-  >,
-): void {
-  const agentIds = new Set([
-    ...Object.keys(current.agents ?? {}),
-    ...Object.keys(next.agents ?? {}),
-  ]);
-  for (const agentId of agentIds) {
-    const currentPolicy = current.agents?.[agentId];
-    const nextPolicy = next.agents?.[agentId];
-    const allowedRemoval =
-      agentId === params.allowDeletedAgentRemoval &&
-      currentPolicy !== undefined &&
-      nextPolicy === undefined;
-    const allowedRestore =
-      agentId === params.allowDeletedAgentRestore &&
-      currentPolicy === undefined &&
-      nextPolicy !== undefined;
-    if (
-      isAgentDeletionBlocked(agentId) &&
-      !allowedRemoval &&
-      !allowedRestore &&
-      !isDeepStrictEqual(currentPolicy, nextPolicy)
-    ) {
-      throw new Error(`Exec approvals are unavailable while agent ${agentId} is deleted.`);
-    }
-  }
-}
 
 function updateExecApprovalsInTransaction(
   params: InternalExecApprovalsUpdate,
@@ -187,12 +148,17 @@ function updateExecApprovalsInTransaction(
       if (next === null) {
         return current;
       }
-      assertNoDeletedAgentApprovalChanged(current.file, next, params);
+      assertExecApprovalsMutationAllowed({
+        db,
+        current: current.file,
+        next,
+        authority: params.authority,
+      });
       const raw = serializeExecApprovals(next);
       if (current.exists && current.raw === raw) {
         return current;
       }
-      writeExecApprovalsConfigRow({ db, file: next, raw, leaseOwner: params.leaseOwner });
+      writeExecApprovalsConfigRow({ db, file: next, raw });
       return snapshotFromExecApprovalsRow({
         path: current.path,
         row: { raw_json: raw },
@@ -217,94 +183,85 @@ export async function updateExecApprovals(
   return updateExecApprovalsInTransaction(params);
 }
 
-/** Remove one deleted agent's policy, restoring only that entry if commit fails. */
+/** Remove one deleted agent's policy aliases, restoring them if commit fails. */
 export async function withAgentExecApprovalsRemoved<T>(
   agentId: string,
   commit: () => Promise<T>,
 ): Promise<T> {
   const key = normalizeAgentId(agentId);
+  const snapshot = readExecApprovalsSnapshot();
+  const operationId = readAgentDeletionJournal(key)?.operationId;
+  if (!operationId) {
+    throw new ExecApprovalsMutationFencedError();
+  }
+  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(
+    ([policyKey]) => normalizeAgentId(policyKey) === key,
+  );
+  if (removedPolicyEntries.length > 0) {
+    const updated = updateExecApprovalsInTransaction({
+      baseHash: snapshot.hash,
+      authority: { action: "remove", agentId: key, operationId },
+      update: (file) => {
+        const agents = { ...file.agents };
+        for (const [policyKey] of removedPolicyEntries) {
+          delete agents[policyKey];
+        }
+        return { ...file, agents };
+      },
+    });
+    if (!updated) {
+      throw new Error("Exec approvals changed while deleting agent; retry deletion.");
+    }
+  } else {
+    runOpenClawStateWriteTransaction(({ db }) => {
+      assertExecApprovalsMutationAuthority(db, {
+        action: "remove",
+        agentId: key,
+        operationId,
+      });
+    });
+  }
   try {
-    return await withOpenClawStateLease(
-      {
-        scope: EXEC_APPROVALS_MUTATION_LEASE_SCOPE,
-        key: EXEC_APPROVALS_MUTATION_LEASE_KEY,
-        database: { scope: "shared" },
-        leaseMs: EXEC_APPROVALS_DELETION_LEASE_MS,
-        waitMs: EXEC_APPROVALS_DELETION_LEASE_WAIT_MS,
-        leaseLabel: "exec approvals agent deletion lease",
-        operationLabel: "exec-approvals.agent-deletion.lease",
-      },
-      async (leaseOwner) => {
-        // Heartbeats retain the fence during a slow roster commit. If this process
-        // crashes, the persisted TTL expires and writers can proceed without cleanup.
-        const snapshot = readExecApprovalsSnapshot();
-        const removedPolicy = snapshot.file.agents?.[key];
-        if (removedPolicy !== undefined) {
-          const updated = updateExecApprovalsInTransaction({
-            baseHash: snapshot.hash,
-            allowDeletedAgentRemoval: key,
-            leaseOwner,
-            update: (file) => {
-              const agents = { ...file.agents };
-              delete agents[key];
-              return { ...file, agents };
-            },
-          });
-          if (!updated) {
-            throw new Error("Exec approvals changed while deleting agent; retry deletion.");
-          }
-        }
-        try {
-          return await commit();
-        } catch (error) {
-          if (error instanceof AgentDeletionCommitUncertainError) {
-            throw error;
-          }
-          if (removedPolicy !== undefined) {
-            try {
-              updateExecApprovalsInTransaction({
-                allowDeletedAgentRestore: key,
-                leaseOwner,
-                update: (file) => ({
-                  ...file,
-                  agents: { ...file.agents, [key]: removedPolicy },
-                }),
-              });
-            } catch (rollbackError) {
-              throw new AgentDeletionAuthorityRollbackError(
-                [error, rollbackError],
-                `Failed to roll back exec approvals deletion for agent ${key}.`,
-                { cause: error },
-              );
-            }
-          }
-          throw error;
-        }
-      },
-    );
+    return await commit();
   } catch (error) {
-    if (
-      error instanceof OpenClawStateLeaseError &&
-      error.code === "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
-    ) {
-      throw new ExecApprovalsStoreUnavailableError(error);
+    if (error instanceof AgentDeletionCommitUncertainError) {
+      throw error;
+    }
+    if (removedPolicyEntries.length > 0) {
+      try {
+        updateExecApprovalsInTransaction({
+          authority: { action: "restore", agentId: key, operationId },
+          update: (file) => ({
+            ...file,
+            agents: { ...file.agents, ...Object.fromEntries(removedPolicyEntries) },
+          }),
+        });
+      } catch (rollbackError) {
+        throw new AgentDeletionAuthorityRollbackError(
+          [error, rollbackError],
+          `Failed to roll back exec approvals deletion for agent ${key}.`,
+          { cause: error },
+        );
+      }
     }
     throw error;
   }
 }
 
-function restoreExecApprovalsSnapshotInTransaction(
-  snapshot: ExecApprovalsSnapshot,
-  leaseOwner?: ExecApprovalsMutationLeaseOwner,
-): void {
+function restoreExecApprovalsSnapshotInTransaction(snapshot: ExecApprovalsSnapshot): void {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const current = snapshotFromExecApprovalsRow({
+        path: resolveExecApprovalsDisplayPath(),
+        row: readExecApprovalsConfigRow(db),
+      });
+      assertExecApprovalsMutationAllowed({ db, current: current.file, next: snapshot.file });
       if (!snapshot.exists) {
-        deleteExecApprovalsConfigRow(db, leaseOwner);
+        deleteExecApprovalsConfigRow(db);
         return;
       }
       const raw = snapshot.raw ?? serializeExecApprovals(snapshot.file);
-      writeExecApprovalsConfigRow({ db, file: snapshot.file, raw, leaseOwner });
+      writeExecApprovalsConfigRow({ db, file: snapshot.file, raw });
     },
     {},
     { operationLabel: "exec-approvals.restore" },
@@ -330,6 +287,7 @@ export async function restoreExecApprovalsSnapshotLocked(
       if (current.hash !== baseHash) {
         return false;
       }
+      assertExecApprovalsMutationAllowed({ db, current: current.file, next: snapshot.file });
       if (!snapshot.exists) {
         deleteExecApprovalsConfigRow(db);
       } else {

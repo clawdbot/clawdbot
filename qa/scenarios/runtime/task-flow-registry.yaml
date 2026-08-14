@@ -1,0 +1,38 @@
+title: TaskFlow registry lifecycle
+
+scenario:
+  id: task-flow-registry
+  surface: automation
+  category: automation.background-tasks-and-flows
+  coverage:
+    primary:
+      - automation.managed-flows
+      - automation.mirrored-flows
+      - automation.openclaw-tasks-flow
+      - automation.flow-audit-and-maintenance
+  objective: Verify managed and mirrored TaskFlows cross the durable registry, operator CLI, audit, and maintenance boundaries.
+  successCriteria:
+    - A managed flow persists revision-checked wait, resume, and completion state across a canonical SQLite registry reload.
+    - Owner-scoped flow access returns the durable managed flow and rejects a different owner.
+    - A real detached subagent task automatically creates, links, updates, and persists its mirrored one-task flow.
+    - The production TaskFlow list and show commands expose durable managed and mirrored records with linked task state.
+    - The production TaskFlow cancel command records and finalizes cancellation for a managed flow.
+    - Flow audit identifies stale, childless, cancel-stuck durable state before maintenance reconciles it.
+    - Flow maintenance finalizes the stuck cancellation and prunes only the expired terminal flow.
+  docsRefs:
+    - docs/automation/taskflow.md
+    - docs/automation/tasks.md
+    - docs/cli/tasks.md
+  codeRefs:
+    - src/tasks/task-flow-registry.ts
+    - src/tasks/task-flow-registry.store.sqlite.ts
+    - src/tasks/task-flow-registry.audit.ts
+    - src/tasks/task-flow-registry.maintenance.ts
+    - src/tasks/task-executor.ts
+    - src/tasks/task-flow-owner-access.ts
+    - src/commands/flows.ts
+    - src/tasks/task-flow-registry.e2e.test.ts
+  execution:
+    kind: vitest
+    path: src/tasks/task-flow-registry.e2e.test.ts
+    summary: Run managed, mirrored, CLI, audit, and maintenance TaskFlow lifecycles against isolated SQLite state.

@@ -31,12 +31,14 @@ function projectSidebarSession(
     sessionsResult: null,
     sessionsAgentId: null,
     showCron: false,
+    showSystem: false,
     statusFilter: "active",
     compareSessions: () => 0,
     highlightCurrentSession: false,
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
     outboxCountForSessionKey: () => 0,
+    hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
   });
@@ -56,6 +58,13 @@ function projectDraftOwnership(
 }
 
 describe("sidebar session live-run projection", () => {
+  it("projects the durable last-message preview", () => {
+    expect(
+      projectSidebarSession({ lastMessagePreview: "The final reply is durable." })
+        .lastMessagePreview,
+    ).toBe("The final reply is durable.");
+  });
+
   it.each([
     ["legacy running status", { status: "running" }, true],
     ["confirmed active run", { status: "running", hasActiveRun: true }, true],
@@ -65,6 +74,34 @@ describe("sidebar session live-run projection", () => {
     ["archived active run", { status: "running", hasActiveRun: true, archived: true }, false],
   ] as const)("normalizes %s before publishing sidebar state", (_name, row, expected) => {
     expect(projectSidebarSession(row).hasActiveRun).toBe(expected);
+  });
+
+  it("carries active cloud disk pressure into the existing sidebar badge model", () => {
+    const projected = projectSidebarSession({
+      placement: {
+        state: "active",
+        environmentId: "environment-disk",
+        generation: 1,
+        activeOwnerEpoch: 2,
+        workspaceBaseManifestRef: "manifest-disk",
+        remoteWorkspaceDir: "/workspace/disk",
+        workerBundleHash: "a".repeat(64),
+        createdAtMs: 10,
+        updatedAtMs: 20,
+        stateChangedAtMs: 15,
+        diskSpace: {
+          status: "critical",
+          availableBytes: 50,
+          totalBytes: 1_000,
+          observedAtMs: 25,
+        },
+      },
+    });
+
+    expect(projected).toMatchObject({
+      placementState: "active",
+      diskSpaceStatus: "critical",
+    });
   });
 });
 
@@ -250,16 +287,18 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     },
     sessionsAgentId: null,
     showCron: false,
+    showSystem: false,
     statusFilter: "active",
     compareSessions: () => 0,
     highlightCurrentSession: true,
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
     outboxCountForSessionKey: () => 0,
+    hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
   });
 
-  expect(navigation.visibleSessions).toHaveLength(1);
-  expect(navigation.visibleSessions[0]?.workSession).toBe(true);
+  expect(navigation.visibleSessionRows).toHaveLength(1);
+  expect(navigation.toSidebarSession(navigation.visibleSessionRows[0]!).workSession).toBe(true);
 });

@@ -74,7 +74,7 @@ describe("new-session route catalog target", () => {
       agentsList: {
         defaultId: "roboclaw",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "roboclaw" }],
       },
     });
@@ -104,7 +104,7 @@ describe("new-session route catalog target", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
       staleRosterClient: true,
@@ -119,7 +119,7 @@ describe("new-session route catalog target", () => {
     agentsState.agentsList = {
       defaultId: "roboclaw",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "roboclaw" }, { id: "research" }],
     };
     const data = await loadNewSessionData(context, "?agent=research&catalog=claude");

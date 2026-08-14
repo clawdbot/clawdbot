@@ -31,7 +31,7 @@ scenario:
   codeRefs:
     - extensions/qa-lab/src/suite-runtime-agent-session.ts
     - extensions/qa-lab/src/suite-runtime-gateway.ts
-    - src/agents/main-session-restart-recovery.ts
+    - src/agents/main-session-recovery/main-session-restart-recovery.ts
   execution:
     kind: flow
     summary: Run a fixture-backed audit with GPT-5.4 while replacing the Gateway child three times at durable wait checkpoints.

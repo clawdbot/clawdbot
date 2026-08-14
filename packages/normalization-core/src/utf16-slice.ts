@@ -62,3 +62,16 @@ export function truncateUtf16Safe(input: string, maxLen: number): string {
   }
   return sliceUtf16Safe(input, 0, limit);
 }
+
+/** Truncates text and appends a marker while preserving the caller's reserved width contract. */
+export function truncateWithMarker(
+  value: string,
+  max: number,
+  options: { marker: string; reserve: number; trimEnd: boolean },
+): string {
+  if (value.length <= max) {
+    return value;
+  }
+  const prefix = truncateUtf16Safe(value, max - options.reserve);
+  return `${options.trimEnd ? prefix.trimEnd() : prefix}${options.marker}`;
+}

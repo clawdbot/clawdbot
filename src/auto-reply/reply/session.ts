@@ -19,7 +19,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -45,12 +45,12 @@ import {
 } from "../../config/sessions/terminal-status.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  SESSION_TOTAL_TOKENS_VERSION,
   type GroupKeyResolution,
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
 import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
@@ -91,6 +91,7 @@ import {
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type {
   FinalizedRuntimeMsgContext,
@@ -318,7 +319,7 @@ function resolveInitSessionStateAttemptContext(
     storePath: resolveSessionStorePathForScope({
       agentId,
       sessionKey: sessionCtxForState.SessionKey,
-      storePath: resolveStorePath(cfg.session?.store, { agentId }),
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     }),
   };
 }
@@ -375,6 +376,40 @@ function selectSessionModelOverride(
     providerOverride: entry.providerOverride,
     modelOverrideSource: entry.modelOverrideSource,
     modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+  };
+}
+
+function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionEntry> {
+  const preservedSelection = resolveResetPreservedSelection({ entry });
+  return {
+    thinkingLevel: entry.thinkingLevel,
+    verboseLevel: entry.verboseLevel,
+    traceLevel: entry.traceLevel,
+    reasoningLevel: entry.reasoningLevel,
+    ttsAuto: entry.ttsAuto,
+    responseUsage: entry.responseUsage,
+    ...selectSessionModelOverride(preservedSelection),
+    authProfileOverride: preservedSelection.authProfileOverride,
+    authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
+    label: entry.label,
+    displayName: entry.displayName,
+    // Notice debt survives rollover: erasing it here would recreate the
+    // silent ambiguous-loss outcome the debt exists to prevent.
+    pendingDeliveryNotice: entry.pendingDeliveryNotice,
+    spawnedBy: entry.spawnedBy,
+    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+    spawnedCwd: entry.spawnedCwd,
+    parentSessionKey: entry.parentSessionKey,
+    parentSessionId: entry.parentSessionId,
+    forkedFromParent: entry.forkedFromParent,
+    forkSource: entry.forkSource,
+    createdVia: entry.createdVia,
+    createdActor: entry.createdActor,
+    createdAt: entry.createdAt,
+    spawnDepth: entry.spawnDepth,
+    subagentRole: entry.subagentRole,
+    subagentControlScope: entry.subagentControlScope,
   };
 }
 
@@ -491,30 +526,7 @@ async function initSessionStateAttemptLocked(
   let abortedLastRun;
   let resetTriggered = false;
 
-  let persistedThinking: string | undefined;
-  let persistedVerbose: string | undefined;
-  let persistedTrace: string | undefined;
-  let persistedReasoning: string | undefined;
-  let persistedTtsAuto: TtsAutoMode | undefined;
-  let persistedResponseUsage: SessionEntry["responseUsage"];
-  let persistedModelSelection: SessionModelOverrideSelection | undefined;
-  let persistedAuthProfileOverride: string | undefined;
-  let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
-  let persistedAuthProfileOverrideCompactionCount: number | undefined;
-  let persistedLabel: string | undefined;
-  let persistedSpawnedBy: SessionEntry["spawnedBy"];
-  let persistedSpawnedWorkspaceDir: SessionEntry["spawnedWorkspaceDir"];
-  let persistedSpawnedCwd: SessionEntry["spawnedCwd"];
-  let persistedParentSessionKey: SessionEntry["parentSessionKey"];
-  let persistedForkedFromParent: SessionEntry["forkedFromParent"];
-  let persistedForkSource: SessionEntry["forkSource"];
-  let persistedCreatedVia: SessionEntry["createdVia"];
-  let persistedCreatedActor: SessionEntry["createdActor"];
-  let persistedCreatedAt: SessionEntry["createdAt"];
-  let persistedSpawnDepth: SessionEntry["spawnDepth"];
-  let persistedSubagentRole: SessionEntry["subagentRole"];
-  let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
-  let persistedDisplayName: SessionEntry["displayName"];
+  let preservedState: Partial<SessionEntry> | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -734,6 +746,7 @@ async function initSessionStateAttemptLocked(
   if (previousSessionEntry) {
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
       activeReplySessionId: previousSessionEntry.sessionId,
+      agentId,
     });
   }
 
@@ -747,17 +760,7 @@ async function initSessionStateAttemptLocked(
     sessionId = reusableEntry.sessionId;
     systemSent = reusableEntry.systemSent ?? false;
     abortedLastRun = reusableEntry.abortedLastRun ?? false;
-    persistedThinking = reusableEntry.thinkingLevel;
-    persistedVerbose = reusableEntry.verboseLevel;
-    persistedTrace = reusableEntry.traceLevel;
-    persistedReasoning = reusableEntry.reasoningLevel;
-    persistedTtsAuto = reusableEntry.ttsAuto;
-    persistedResponseUsage = reusableEntry.responseUsage;
-    persistedModelSelection = selectSessionModelOverride(reusableEntry);
-    persistedAuthProfileOverride = reusableEntry.authProfileOverride;
-    persistedAuthProfileOverrideSource = reusableEntry.authProfileOverrideSource;
-    persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
-    persistedLabel = reusableEntry.label;
+    preservedState = selectSessionModelOverride(reusableEntry);
   } else {
     // Durable resets retain their transcript identity for cursor continuity; ACP
     // resets still rotate the local session id that owns provider conversation state.
@@ -778,46 +781,19 @@ async function initSessionStateAttemptLocked(
     // resetTriggered === false), reverting the session to the default model
     // despite the `Model set to ... for this session` ack (#90119, #69301).
     if (entry) {
-      const preservedSelection = resolveResetPreservedSelection({ entry });
-      persistedModelSelection = selectSessionModelOverride(preservedSelection);
-      persistedAuthProfileOverride = preservedSelection.authProfileOverride;
-      persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
-      persistedAuthProfileOverrideCompactionCount =
-        preservedSelection.authProfileOverrideCompactionCount;
       // Behavior overrides carry across ANY new-session mint (explicit /new AND
       // implicit daily/idle rollover), mirroring the model/auth carry above
       // (#90119). Any persisted level is safe to forward — user `/think` or a
       // spawn-applied default (subagent-spawn-thinking.ts) — so unlike model
       // overrides these need no fallback-provenance filtering (#92562).
-      persistedThinking = entry.thinkingLevel;
-      persistedVerbose = entry.verboseLevel;
-      persistedTrace = entry.traceLevel;
-      persistedReasoning = entry.reasoningLevel;
-      persistedTtsAuto = entry.ttsAuto;
-      persistedResponseUsage = entry.responseUsage;
-      persistedLabel = entry.label;
-      persistedDisplayName = entry.displayName;
       // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
       // Lineage/control facts belong to the session node and survive ANY rollover
       // from an existing entry, following the #90119 carry pattern.
-      persistedSpawnedBy = entry.spawnedBy;
-      persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
-      persistedSpawnedCwd = entry.spawnedCwd;
-      persistedParentSessionKey = entry.parentSessionKey;
-      persistedForkedFromParent = entry.forkedFromParent;
-      persistedForkSource = entry.forkSource;
-      persistedCreatedVia = entry.createdVia;
-      persistedCreatedActor = entry.createdActor;
-      persistedCreatedAt = entry.createdAt;
-      persistedSpawnDepth = entry.spawnDepth;
-      persistedSubagentRole = entry.subagentRole;
-      persistedSubagentControlScope = entry.subagentControlScope;
+      preservedState = resolveReplySessionRolloverState(entry);
     }
   }
 
   const baseEntry = !isNewSession && effectiveFreshEntry ? reusableEntry : undefined;
-  const modelSelection =
-    persistedModelSelection ?? (baseEntry ? selectSessionModelOverride(baseEntry) : undefined);
   const usageFamilyKey = previousSessionEntry
     ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
     : baseEntry?.usageFamilyKey;
@@ -868,14 +844,14 @@ async function initSessionStateAttemptLocked(
         accountIdRaw: ctx.AccountId,
         persistedLastAccountId: baseDeliveryContext?.accountId,
       });
-  // Only fall back to persisted threadId for thread sessions. Non-thread
-  // sessions (e.g. DM without topics) must not inherit a stale threadId from a
-  // previous interaction that happened inside a topic/thread.
+  // Internal turns share the established external route and must not erase its
+  // thread. External non-thread turns still clear stale thread routing.
+  const preservePersistedThread = isThread || isInternalMessageChannel(originatingChannelRaw);
   const lastThreadIdRaw = isSystemEvent
     ? baseDeliveryContext?.threadId
     : (ctx.MessageThreadId ??
       ctx.TransportThreadId ??
-      (isThread ? baseDeliveryContext?.threadId : undefined));
+      (preservePersistedThread ? baseDeliveryContext?.threadId : undefined));
   const delivery = isSystemEvent
     ? normalizeSessionDeliveryState({
         route: isThread ? baseDeliveryRoute : stripThreadFromSessionRoute(baseDeliveryRoute),
@@ -897,6 +873,7 @@ async function initSessionStateAttemptLocked(
     !entry && ctx.SessionCreation ? buildSessionCreationStamp(ctx.SessionCreation) : undefined;
   sessionEntry = {
     ...baseEntry,
+    ...preservedState,
     sessionId,
     lifecycleRevision: isNewSession ? crypto.randomUUID() : baseEntry?.lifecycleRevision,
     updatedAt: Date.now(),
@@ -907,48 +884,22 @@ async function initSessionStateAttemptLocked(
     agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     systemSent,
     abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
-    // Persist previously stored thinking/verbose levels when present.
-    thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
-    verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
-    traceLevel: persistedTrace ?? baseEntry?.traceLevel,
-    reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
-    ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
-    responseUsage: persistedResponseUsage ?? baseEntry?.responseUsage,
     pinnedAt: entry?.pinnedAt,
     usageFamilyKey,
     usageFamilySessionIds,
     previousSessionId: baseEntry?.previousSessionId,
-    modelOverride: modelSelection?.modelOverride,
-    providerOverride: modelSelection?.providerOverride,
-    modelOverrideSource: modelSelection?.modelOverrideSource,
-    modelOverrideRouteResolution: modelSelection?.modelOverrideRouteResolution,
-    authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
-    authProfileOverrideSource:
-      persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
-    authProfileOverrideCompactionCount:
-      persistedAuthProfileOverrideCompactionCount ?? baseEntry?.authProfileOverrideCompactionCount,
     cliSessionIds: baseEntry?.cliSessionIds,
     cliSessionBindings: baseEntry?.cliSessionBindings,
     claudeCliSessionId: baseEntry?.claudeCliSessionId,
-    label: persistedLabel ?? baseEntry?.label,
-    spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
-    spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,
-    spawnedCwd: persistedSpawnedCwd ?? baseEntry?.spawnedCwd,
-    parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
-    forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
-    forkSource: persistedForkSource ?? baseEntry?.forkSource,
-    createdVia: persistedCreatedVia ?? baseEntry?.createdVia ?? creationStamp?.createdVia,
-    createdActor: persistedCreatedActor ?? baseEntry?.createdActor ?? creationStamp?.createdActor,
-    createdAt: persistedCreatedAt ?? baseEntry?.createdAt ?? creationStamp?.createdAt,
-    spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
-    subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
-    subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
+    createdVia: preservedState?.createdVia ?? baseEntry?.createdVia ?? creationStamp?.createdVia,
+    createdActor:
+      preservedState?.createdActor ?? baseEntry?.createdActor ?? creationStamp?.createdActor,
+    createdAt: preservedState?.createdAt ?? baseEntry?.createdAt ?? creationStamp?.createdAt,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
     queueCap: baseEntry?.queueCap,
     queueDrop: baseEntry?.queueDrop,
-    displayName: persistedDisplayName ?? baseEntry?.displayName,
     chatType: baseEntry?.chatType,
     delivery,
     groupId: baseEntry?.groupId,
@@ -1008,6 +959,7 @@ async function initSessionStateAttemptLocked(
     // inherit history without a fresh count, so keep those explicitly unknown.
     sessionEntry.totalTokens = 0;
     sessionEntry.totalTokensFresh = true;
+    sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
@@ -1150,7 +1102,12 @@ async function initSessionStateAttemptLocked(
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
     const runtimePolicySessionKey =
-      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
+      resolveRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        ctx: sessionCtxForState,
+        sessionKey,
+      }) ?? sessionKey;
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
@@ -1186,7 +1143,7 @@ async function initSessionStateAttemptLocked(
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
-          cfg,
+          agentId,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
@@ -1216,7 +1173,7 @@ async function initSessionStateAttemptLocked(
       const payload = buildSessionStartHookPayload({
         sessionId: effectiveSessionId,
         sessionKey,
-        cfg,
+        agentId,
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {

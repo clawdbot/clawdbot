@@ -81,6 +81,42 @@ describe("createTerminalLaunchPolicy", () => {
     }
   });
 
+  it("keeps restart and commit restrictions isolated across agents", () => {
+    const baseConfig: OpenClawConfig = {
+      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+
+    policy.prepareConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "alpha", sandbox: { mode: "all" } }, { id: "beta" }],
+        },
+      },
+      { restartPending: true },
+    );
+    policy.prepareConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "alpha" }, { id: "beta", sandbox: { mode: "all" } }],
+        },
+      },
+      { restartPending: false },
+    );
+
+    expect(policy.resolve("alpha").ok).toBe(false);
+    expect(policy.resolve("beta").ok).toBe(false);
+
+    policy.acceptConfig({ retireRejectedRestart: false });
+    expect(policy.resolve("alpha").ok).toBe(false);
+    expect(policy.resolve("beta").ok).toBe(true);
+
+    policy.acceptConfig({ retireRejectedRestart: true });
+    expect(policy.resolve("alpha").ok).toBe(true);
+  });
+
   it("keeps current launch details until a restart-bound change takes effect", () => {
     const workspace = tempDirs.make("term-policy-");
     const policy = createTerminalLaunchPolicy({

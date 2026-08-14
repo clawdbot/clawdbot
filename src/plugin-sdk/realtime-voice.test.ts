@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createRealtimeVoiceAudioQueue,
+  normalizeRealtimeVoiceResponseOutcome,
   RealtimeVoiceSessionLifecycle,
   type RealtimeVoiceSessionConnection,
 } from "./realtime-voice.js";
@@ -164,7 +165,7 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     expect(openTransport).not.toHaveBeenCalled();
   });
 
-  it("settles connect attempts once and releases timeout and abort ownership", async () => {
+  it("starts connect timeouts explicitly and releases timeout and abort ownership", async () => {
     vi.useFakeTimers();
     try {
       const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
@@ -179,6 +180,7 @@ describe("RealtimeVoiceSessionLifecycle", () => {
         timeoutMs: 10,
       });
 
+      attempt.startTimeout();
       attempt.resolve(true);
       attempt.reject(new Error("late failure"));
       await expect(attempt.promise).resolves.toBeUndefined();
@@ -200,6 +202,11 @@ describe("RealtimeVoiceSessionLifecycle", () => {
         timeoutMs: 10,
       });
       const rejected = expect(timeoutAttempt.promise).rejects.toThrow("timed out");
+      await vi.advanceTimersByTimeAsync(10);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      timeoutAttempt.startTimeout();
+      timeoutAttempt.startTimeout();
       await vi.advanceTimersByTimeAsync(10);
       await rejected;
 
@@ -230,7 +237,87 @@ describe("RealtimeVoiceSessionLifecycle", () => {
   });
 });
 
+describe("normalizeRealtimeVoiceResponseOutcome", () => {
+  it.each([
+    [
+      { id: "resp-complete", status: "completed" },
+      { responseId: "resp-complete", status: "completed" },
+    ],
+    [
+      { id: "resp-cancel", status: "cancelled", status_details: { reason: "client_cancelled" } },
+      { responseId: "resp-cancel", status: "cancelled", reason: "client_cancelled" },
+    ],
+    [
+      {
+        id: "resp-failed",
+        status: "failed",
+        status_details: {
+          reason: "provider_error",
+          error: { code: "rate_limit", type: "server_error", message: "slow down" },
+        },
+      },
+      {
+        responseId: "resp-failed",
+        status: "failed",
+        reason: "provider_error",
+        error: { code: "rate_limit", type: "server_error", message: "slow down" },
+        message: "Test response failed: provider_error: slow down",
+      },
+    ],
+    [
+      { status: "incomplete", status_details: { reason: "max_output_tokens" } },
+      {
+        responseId: "resp-fallback",
+        status: "incomplete",
+        reason: "max_output_tokens",
+        message: "Test response incomplete: max_output_tokens",
+      },
+    ],
+    [
+      { id: "", status: "unexpected" },
+      {
+        responseId: "resp-fallback",
+        status: "failed",
+        reason: "invalid_response_status",
+        error: { type: "invalid_response_status", message: "invalid status unexpected" },
+        message: "Test response failed: invalid status unexpected",
+      },
+    ],
+    [
+      undefined,
+      {
+        responseId: "resp-fallback",
+        status: "failed",
+        reason: "invalid_response_status",
+        error: { type: "invalid_response_status", message: "missing terminal status" },
+        message: "Test response failed: missing terminal status",
+      },
+    ],
+  ])("normalizes %#", (response, expected) => {
+    expect(
+      normalizeRealtimeVoiceResponseOutcome({
+        providerLabel: "Test",
+        response,
+        responseId: "resp-fallback",
+      }),
+    ).toEqual(expected);
+  });
+});
+
 describe("createRealtimeVoiceAudioQueue", () => {
+  it("releases byte budget as queued audio is consumed", () => {
+    const queue = createRealtimeVoiceAudioQueue("reject-newest");
+    const first = Buffer.alloc(512 * 1024, 0x01);
+    const second = Buffer.alloc(512 * 1024, 0x02);
+
+    expect(queue.enqueue(first)).toBe(true);
+    expect(queue.enqueue(second)).toBe(true);
+    expect(queue.enqueue(Buffer.from([0x03]))).toBe(false);
+    expect(queue.dequeue()).toEqual(first);
+    expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
+    expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
+  });
+
   it("drops the oldest audio and resets accounting on clear", () => {
     const queue = createRealtimeVoiceAudioQueue("drop-oldest");
     for (let index = 0; index < 322; index += 1) {

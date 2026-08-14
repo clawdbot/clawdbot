@@ -4,6 +4,7 @@
  * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
  * maps high-level actions onto browser control client calls.
  */
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
 import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
@@ -16,8 +17,8 @@ import {
   executeActAction,
   executeConsoleAction,
   executeDownloadAction,
-  executeExtractAction,
   executeTabsAction,
+  formatBrowserExternalToolResult,
 } from "./browser-tool.actions.js";
 import {
   type AnyAgentTool,
@@ -31,7 +32,6 @@ import {
   browserFocusTab,
   browserImportProfile,
   browserNavigate,
-  browserPageContent,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
@@ -40,18 +40,13 @@ import {
   browserStart,
   browserStatus,
   browserStop,
-  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
-  extractAssistantText,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
-  htmlToMarkdown,
   jsonResult,
   listNodes,
   normalizeOptionalString,
-  normalizeWhitespace,
-  prepareSimpleCompletionModelForAgent,
   readPositiveIntegerParam,
   readStringParam,
   readStringValue,
@@ -60,14 +55,13 @@ import {
   resolveRuntimeImageSanitization,
   resolveProfile,
   saveMediaBuffer,
-  sanitizeHtml,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-  validateJsonSchemaValue,
 } from "./browser-tool.runtime.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
+import { resolveBrowserNavigationTimeoutMs } from "./browser/act-policy.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
@@ -84,7 +78,6 @@ const browserToolDeps = {
   browserFocusTab,
   browserImportProfile,
   browserNavigate,
-  browserPageContent,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
@@ -93,23 +86,16 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
-  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
-  extractAssistantText,
   getRuntimeConfig,
   imageResultFromFile,
-  htmlToMarkdown,
   listNodes,
-  normalizeWhitespace,
   normalizeBrowserScreenshot,
   saveMediaBuffer,
-  sanitizeHtml,
-  prepareSimpleCompletionModelForAgent,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-  validateJsonSchemaValue,
 };
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -376,13 +362,18 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
     provider?: string;
     model?: string;
   };
+  screenshotResultMode?: "image" | "path";
+  persistScreenshot?: (params: {
+    sourcePath: string;
+    type: "png" | "jpeg";
+    targetId?: string;
+  }) => Promise<string>;
   mediaScope?: {
     sessionKey?: string;
     channel?: string;
@@ -625,7 +616,10 @@ export function createBrowserTool(opts?: {
             }
           };
           await sessionTabs.trackOpened(opened, closeOpenedTab);
-          return jsonResult(stripBrowserOpenInternalMetadata(opened));
+          return formatBrowserExternalToolResult({
+            kind: "tabs",
+            payload: stripBrowserOpenInternalMetadata(opened),
+          });
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -694,18 +688,6 @@ export function createBrowserTool(opts?: {
             proxyRequest,
             onTabActivity: sessionTabs.touch,
           });
-        case "extract":
-          return await executeExtractAction({
-            input: params,
-            baseUrl,
-            profile,
-            proxyRequest,
-            agentId: opts?.agentId ?? "main",
-            agentDir: opts?.agentDir,
-            signal,
-            deps: browserToolDeps,
-            onTabActivity: sessionTabs.touch,
-          });
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
           const fullPage = Boolean(params.fullPage);
@@ -741,6 +723,31 @@ export function createBrowserTool(opts?: {
                 profile,
               });
           sessionTabs.touch(readStringValue(result.targetId) ?? targetId);
+          if (opts?.screenshotResultMode === "path") {
+            const artifactPath = opts.persistScreenshot
+              ? await opts.persistScreenshot({
+                  sourcePath: result.path,
+                  type,
+                  targetId: readStringValue(result.targetId) ?? targetId,
+                })
+              : result.path;
+            if (artifactPath.length > 4_096) {
+              throw new Error("Browser screenshot artifact path exceeds 4096 characters");
+            }
+            const resultRecord = result as Record<string, unknown>;
+            const resultTargetId = readStringValue(resultRecord.targetId) ?? targetId;
+            const resultUrl = readStringValue(resultRecord.url);
+            return jsonResult({
+              ok: resultRecord.ok === true,
+              path: artifactPath,
+              ...(resultTargetId ? { targetId: truncateUtf16Safe(resultTargetId, 256) } : {}),
+              ...(resultUrl ? { url: truncateUtf16Safe(resultUrl, 2_048) } : {}),
+              ...(Array.isArray(resultRecord.annotations)
+                ? { annotationCount: resultRecord.annotations.length }
+                : {}),
+              media: { outbound: false },
+            });
+          }
           const screenshotPath = result.path;
           const screenshotCfg = browserToolDeps.getRuntimeConfig();
           const imageSanitization = resolveRuntimeImageSanitization();
@@ -815,10 +822,13 @@ export function createBrowserTool(opts?: {
             }
           } catch (err) {
             // Fall back to returning the raw image block so the agent loop can
-            // still recover. Provider/runtime error messages are untrusted
-            // input too, so defang line-start final-reply media directives.
+            // still recover. Provider/runtime errors are untrusted page input;
+            // preserve their trust boundary and defang reply-media directives.
             const rawReason = err instanceof Error ? err.message : String(err);
-            const reason = neutralizeMediaDirectives(rawReason);
+            const reason = wrapExternalContent(neutralizeMediaDirectives(rawReason), {
+              source: "browser",
+              includeWarning: false,
+            });
             const extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
             return await browserToolDeps.imageResultFromFile({
               label: "browser:screenshot",
@@ -839,6 +849,10 @@ export function createBrowserTool(opts?: {
         case "navigate": {
           const targetUrl = readTargetUrlParam(params);
           const targetId = readStringParam(params, "targetId");
+          const timeoutMs =
+            requestedTimeoutMs === undefined
+              ? undefined
+              : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
           const result = proxyRequest
             ? await proxyRequest({
                 method: "POST",
@@ -847,23 +861,30 @@ export function createBrowserTool(opts?: {
                 body: {
                   url: targetUrl,
                   targetId,
+                  timeoutMs,
                 },
+                timeoutMs,
               })
             : await browserToolDeps.browserNavigate(baseUrl, {
                 url: targetUrl,
                 targetId,
+                timeoutMs,
                 profile,
               });
           const navigatedTargetId =
             readStringValue((result as { targetId?: unknown }).targetId) ?? targetId;
           sessionTabs.touch(navigatedTargetId);
+          const formatted = formatBrowserExternalToolResult({
+            kind: (result as { download?: unknown }).download ? "download" : "act",
+            payload: result,
+          });
           // A navigation that resolved to a download leaves the document
           // unchanged, so inline page state would describe the wrong thing.
           if ((result as { download?: unknown }).download) {
-            return jsonResult(result);
+            return formatted;
           }
           return await appendNavigatedPageState({
-            result: jsonResult(result),
+            result: formatted,
             targetId: navigatedTargetId,
             baseUrl,
             profile,

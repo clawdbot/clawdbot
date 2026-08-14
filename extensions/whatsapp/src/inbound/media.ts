@@ -7,13 +7,6 @@ import { extractContextInfo } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
-class WhatsAppInboundMediaLimitExceededError extends Error {
-  constructor(maxBytes: number) {
-    super(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
-    this.name = "WhatsAppInboundMediaLimitExceededError";
-  }
-}
-
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
   const normalized = normalizeMessageContent(message);
   return normalized;
@@ -57,7 +50,7 @@ export async function downloadInboundMedia(
     fileName,
   ).catch((err: unknown) => {
     if (err instanceof Error && /Media exceeds/i.test(err.message)) {
-      throw new WhatsAppInboundMediaLimitExceededError(maxBytes);
+      throw new Error(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
     }
     throw err;
   });

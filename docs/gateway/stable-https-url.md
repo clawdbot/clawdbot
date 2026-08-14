@@ -11,7 +11,7 @@ Tailscale Serve gives your Gateway one HTTPS URL without exposing the Gateway po
 
 The result is `https://<host>.<tailnet>.ts.net`, reachable from permitted devices on your tailnet and not from the public internet. The matching WebSocket URL is `wss://<host>.<tailnet>.ts.net`.
 
-If you need a public URL, use [Tailscale Funnel](/gateway/tailscale#public-internet-funnel-shared-password) instead. Funnel is public, and OpenClaw requires password auth for it.
+If you need a public URL, use [Tailscale Funnel](/gateway/tailscale#public-internet-funnel-%2B-shared-password) instead. Funnel is public, and OpenClaw requires password auth for it.
 
 ## Before you begin
 

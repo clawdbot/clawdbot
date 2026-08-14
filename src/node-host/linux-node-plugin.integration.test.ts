@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,10 +26,31 @@ function resetPluginState(): void {
   resetNodeHostPluginRegistry();
 }
 
+const tempBundledRoots: string[] = [];
+
+function createLinuxNodeBundledRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-linux-node-plugin-"));
+  try {
+    fs.symlinkSync(
+      path.resolve("extensions/linux-node"),
+      path.join(root, "linux-node"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  } catch (error) {
+    fs.rmSync(root, { force: true, recursive: true });
+    throw error;
+  }
+  tempBundledRoots.push(root);
+  return root;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetPluginState();
+  for (const root of tempBundledRoots.splice(0)) {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
 });
 
 describe("linux-node node-host integration", () => {
@@ -38,6 +60,7 @@ describe("linux-node node-host integration", () => {
     if (!platformDescriptor) {
       throw new Error("process.platform descriptor unavailable");
     }
+    const bundledRoot = createLinuxNodeBundledRoot();
     Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
 
     const fakeBinDir = path.resolve(".artifacts", "linux-node-test-bin");
@@ -49,7 +72,7 @@ describe("linux-node node-host integration", () => {
       return originalAccessSync(candidate, mode);
     });
     vi.stubEnv("PATH", `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`);
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledRoot);
     vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
 

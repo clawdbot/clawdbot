@@ -4,14 +4,24 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CONTROL_UI_PERFORMANCE_BUDGETS,
   collectControlUiPerformanceMetrics,
   evaluateControlUiPerformanceBudgets,
   extractControlUiStartupAssetPaths,
   formatControlUiPerformanceReport,
   runControlUiPerformanceCheck,
-} from "../../scripts/check-control-ui-performance.mjs";
+} from "../../scripts/check-control-ui-performance.mts";
 
 const tempDirs: string[] = [];
+const tsxImport = import.meta.resolve("tsx");
+
+function runControlUiPerformanceCli(scriptPath: string, args: string[], cwd: string) {
+  return spawnSync(
+    process.execPath,
+    ["--import", tsxImport, fs.realpathSync(scriptPath), ...args],
+    { cwd, encoding: "utf8" },
+  );
+}
 
 function createDistFixture() {
   const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-performance-"));
@@ -195,38 +205,64 @@ describe("Control UI performance budgets", () => {
     );
   });
 
-  it("allows startup JS growth within the ratchet tolerance", () => {
+  it("allows CI-measured startup JS growth within the ratchet tolerance", () => {
     const violations = evaluateControlUiPerformanceBudgets(
-      createMetrics(11_024),
-      looseBudgets,
-      startupBaseline(10_000),
+      createMetrics(326_672),
+      { ...looseBudgets, startupJsGzipBytes: 319 * 1024, largestJsGzipBytes: 400_000 },
+      startupBaseline(325_675),
     );
 
     expect(violations).toEqual([]);
   });
 
   it("fails startup JS growth over the ratchet tolerance with update guidance", () => {
-    const metrics = createMetrics(11_025);
-    const baseline = startupBaseline(10_000);
+    const metrics = createMetrics(326_700);
+    const baseline = startupBaseline(325_675);
+    const budgets = {
+      ...looseBudgets,
+      startupJsGzipBytes: 319 * 1024,
+      largestJsGzipBytes: 400_000,
+    };
 
     expect(
-      evaluateControlUiPerformanceBudgets(metrics, looseBudgets, baseline).map(
-        (entry) => entry.metric,
-      ),
-    ).toContain("startup JS gzip vs baseline");
-    expect(formatControlUiPerformanceReport(metrics, looseBudgets, baseline)).toContain(
-      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --startup-js-bytes 11025 --reason "<reason>"',
+      evaluateControlUiPerformanceBudgets(metrics, budgets, baseline).map((entry) => entry.metric),
+    ).toContain("startup JS gzip");
+    expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
+      "startup JS gzip: 319.0 KiB exceeds 319.0 KiB (326700 B vs 326699 B)",
+    );
+    expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
+      "limits: 10 requests, 319.0 KiB gzip",
     );
   });
 
-  it("enforces the fixed startup JS ceiling even when the baseline is higher", () => {
-    const budgets = { ...looseBudgets, startupJsGzipBytes: 10_000 };
+  it("rejects committed startup JS baselines above the fixed cap", () => {
+    const budgets = {
+      ...looseBudgets,
+      startupJsGzipBytes: 319 * 1024,
+      largestJsGzipBytes: 400_000,
+    };
 
     expect(
       evaluateControlUiPerformanceBudgets(
-        createMetrics(10_001),
+        createMetrics(319 * 1024),
         budgets,
-        startupBaseline(1_000_000),
+        startupBaseline(319 * 1024 + 1),
+      ).map((entry) => entry.metric),
+    ).toEqual(["startup JS gzip baseline"]);
+  });
+
+  it("rejects startup JS measurements above the cap plus tolerance", () => {
+    const budgets = {
+      ...looseBudgets,
+      startupJsGzipBytes: 319 * 1024,
+      largestJsGzipBytes: 400_000,
+    };
+
+    expect(
+      evaluateControlUiPerformanceBudgets(
+        createMetrics(320 * 1024 + 1),
+        budgets,
+        startupBaseline(319 * 1024),
       ).map((entry) => entry.metric),
     ).toEqual(["startup JS gzip"]);
   });
@@ -258,6 +294,33 @@ describe("Control UI performance budgets", () => {
     );
   });
 
+  it("fails closed when the startup baseline exceeds the configured cap", () => {
+    const { distDir, writeAsset } = createDistFixture();
+    fs.writeFileSync(
+      path.join(distDir, "index.html"),
+      '<script type="module" src="./assets/index-a.js"></script>\n' +
+        '<link rel="stylesheet" href="./assets/index-c.css">\n',
+    );
+    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
+    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    const baselinePath = path.join(distDir, "baseline.json");
+    fs.writeFileSync(
+      baselinePath,
+      JSON.stringify({
+        startupJsGzipBytes: CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes + 1,
+        reason: "invalid test baseline",
+        updatedAt: "2026-08-11",
+      }),
+    );
+
+    expect(() => runControlUiPerformanceCheck(distDir, undefined, baselinePath)).toThrow(
+      new RegExp(
+        `startupJsGzipBytes at most ${CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes}`,
+        "u",
+      ),
+    );
+  });
+
   it("updates the baseline from local or explicit CI metrics", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-budget-cli-"));
     tempDirs.push(rootDir);
@@ -268,8 +331,8 @@ describe("Control UI performance budgets", () => {
     fs.mkdirSync(scriptsDir, { recursive: true });
     fs.mkdirSync(configDir, { recursive: true });
     fs.mkdirSync(assetsDir, { recursive: true });
-    const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mjs");
-    fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mjs"), scriptPath);
+    const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mts");
+    fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mts"), scriptPath);
     fs.writeFileSync(
       path.join(distDir, "index.html"),
       '<script type="module" src="./assets/index-a.js"></script>\n' +
@@ -285,10 +348,7 @@ describe("Control UI performance budgets", () => {
       fs.writeFileSync(`${assetPath}.br`, Buffer.alloc(sizes.brotliBytes));
     }
 
-    const result = spawnSync(process.execPath, [fs.realpathSync(scriptPath), "--update-baseline"], {
-      cwd: rootDir,
-      encoding: "utf8",
-    });
+    const result = runControlUiPerformanceCli(scriptPath, ["--update-baseline"], rootDir);
 
     expect(result.status, result.stderr).toBe(0);
     expect(
@@ -301,10 +361,10 @@ describe("Control UI performance budgets", () => {
       updatedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/u),
     });
 
-    const customReasonResult = spawnSync(
-      process.execPath,
-      [fs.realpathSync(scriptPath), "--update-baseline", "--reason", "fixture update"],
-      { cwd: rootDir, encoding: "utf8" },
+    const customReasonResult = runControlUiPerformanceCli(
+      scriptPath,
+      ["--update-baseline", "--reason", "fixture update"],
+      rootDir,
     );
     expect(customReasonResult.status, customReasonResult.stderr).toBe(0);
     expect(
@@ -314,17 +374,10 @@ describe("Control UI performance budgets", () => {
     ).toMatchObject({ startupJsGzipBytes: 65, reason: "fixture update" });
 
     fs.rmSync(distDir, { recursive: true });
-    const explicitBytesResult = spawnSync(
-      process.execPath,
-      [
-        fs.realpathSync(scriptPath),
-        "--update-baseline",
-        "--startup-js-bytes",
-        "321",
-        "--reason",
-        "CI measurement",
-      ],
-      { cwd: rootDir, encoding: "utf8" },
+    const explicitBytesResult = runControlUiPerformanceCli(
+      scriptPath,
+      ["--update-baseline", "--startup-js-bytes", "321", "--reason", "CI measurement"],
+      rootDir,
     );
     expect(explicitBytesResult.status, explicitBytesResult.stderr).toBe(0);
     expect(
@@ -333,10 +386,10 @@ describe("Control UI performance budgets", () => {
       ),
     ).toMatchObject({ startupJsGzipBytes: 321, reason: "CI measurement" });
 
-    const beyondRatchetResult = spawnSync(
-      process.execPath,
-      [fs.realpathSync(scriptPath), "--update-baseline", "--startup-js-bytes", "4418"],
-      { cwd: rootDir, encoding: "utf8" },
+    const beyondRatchetResult = runControlUiPerformanceCli(
+      scriptPath,
+      ["--update-baseline", "--startup-js-bytes", "4418"],
+      rootDir,
     );
     expect(beyondRatchetResult.status).toBe(1);
     expect(beyondRatchetResult.stderr).toContain(

@@ -11,6 +11,7 @@ function extractSqliteUsageSnapshot(message: unknown): SessionTranscriptUsageSna
     return null;
   }
   const record = message as {
+    api?: unknown;
     model?: unknown;
     provider?: unknown;
     usage?: unknown;
@@ -21,7 +22,8 @@ function extractSqliteUsageSnapshot(message: unknown): SessionTranscriptUsageSna
       : undefined;
   const usage = normalizeUsage(usageRaw);
   const normalizedUsage = usage ?? {};
-  const totalTokens = deriveSessionTotalTokens({ usage });
+  const legacyCliUsage = record.api === "cli" && usageRaw && usageRaw.contextUsage === undefined;
+  const totalTokens = legacyCliUsage ? undefined : deriveSessionTotalTokens({ usage });
   const modelProvider = typeof record.provider === "string" ? record.provider.trim() : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : undefined;
   const costUsd =
@@ -50,6 +52,11 @@ function extractSqliteUsageSnapshot(message: unknown): SessionTranscriptUsageSna
     ...(typeof normalizedUsage.cacheWrite === "number"
       ? { cacheWrite: normalizedUsage.cacheWrite }
       : {}),
+    ...(legacyCliUsage
+      ? { contextUsage: { state: "unavailable" } as const }
+      : normalizedUsage.contextUsage
+        ? { contextUsage: normalizedUsage.contextUsage }
+        : {}),
     ...(typeof totalTokens === "number" ? { totalTokens, totalTokensFresh: true } : {}),
     ...(typeof costUsd === "number" && Number.isFinite(costUsd) ? { costUsd } : {}),
   };
@@ -98,7 +105,17 @@ export function aggregateSqliteUsageSnapshots(
       cacheWrite += snapshot.cacheWrite;
       sawCacheWrite = true;
     }
-    if (typeof snapshot.totalTokens === "number") {
+    if (snapshot.contextUsage) {
+      aggregate.contextUsage = snapshot.contextUsage;
+    } else if (typeof snapshot.totalTokens === "number") {
+      delete aggregate.contextUsage;
+    }
+    if (snapshot.contextUsage?.state === "unavailable") {
+      // Match JSONL aggregation: the marker clears older context until a later
+      // per-call snapshot replaces it during this forward scan.
+      delete aggregate.totalTokens;
+      delete aggregate.totalTokensFresh;
+    } else if (typeof snapshot.totalTokens === "number") {
       aggregate.totalTokens = snapshot.totalTokens;
       aggregate.totalTokensFresh = true;
     }

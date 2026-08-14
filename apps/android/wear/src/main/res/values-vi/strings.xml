@@ -11,7 +11,7 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đọc chính tả"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Trực tiếp"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Luồng"</string>
-    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mở chuỗi hội thoại"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mở luồng"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Vuốt →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Giữ"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chạm"</string>

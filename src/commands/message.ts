@@ -1,4 +1,5 @@
 /** CLI entrypoint for channel message actions. */
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -15,7 +16,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
-import { parsePositiveIntOrUndefined } from "../cli/program/helpers.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
@@ -159,7 +159,7 @@ export async function messageCommand(
   }
 
   const { formatMessageCliText } = await import("./message-format.js");
-  const displayLimit = parsePositiveIntOrUndefined(opts.limit);
+  const displayLimit = parseStrictPositiveInteger(opts.limit);
   for (const line of formatMessageCliText(result, { displayLimit })) {
     runtime.log(line);
   }

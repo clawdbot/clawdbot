@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/github-link-hovercard-registration.ts";
-import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.ts";
+import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.runtime.ts";
 import "../components/modal-dialog.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
@@ -125,7 +125,7 @@ describe("native link routing", () => {
     anchor.textContent = "#102691";
     provider.append(anchor);
     document.body.append(provider);
-    anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    anchor.focus();
     await vi.waitFor(() => expect(document.querySelector(".github-link-hovercard")).not.toBeNull());
 
     click(anchor);

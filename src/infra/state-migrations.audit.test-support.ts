@@ -4,7 +4,7 @@ import path from "node:path";
 import { vi } from "vitest";
 import { listConfigAuditRecordsForTests } from "../config/io.audit.test-support.js";
 import { listSystemAgentAuditEntriesForTests } from "../system-agent/audit.test-support.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
 const AUDIT_SCRUB_PATTERN = Buffer.from(" \t".repeat(16));
@@ -121,7 +121,7 @@ export class AuditMigrationFixture {
 export const withAuditMigrationFixture = (
   run: (fixture: AuditMigrationFixture) => Promise<void>,
 ): Promise<void> =>
-  withTempDir({ prefix: "openclaw-audit-migration-" }, (stateDir) =>
+  withTestDir({ prefix: "openclaw-audit-migration-" }, (stateDir) =>
     run(new AuditMigrationFixture(stateDir)),
   );
 

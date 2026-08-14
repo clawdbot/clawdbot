@@ -14,10 +14,10 @@ import type { ChatLog } from "./components/chat-log.js";
 import { refreshTuiAgentList } from "./tui-agent-list-refresh.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import {
-  asString,
+  formatPrimitiveString,
   extractTextFromMessage,
   formatTuiErrorMessage,
-  isCommandMessage,
+  isCommandMarkedMessage,
 } from "./tui-formatters.js";
 import { readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
@@ -49,7 +49,7 @@ type SessionActionContext = {
   agentNames: Map<string, string>;
   initialSessionInput: string;
   initialSessionAgentId: string | null;
-  resolveSessionKey: (raw?: string) => string;
+  resolveSessionSelection: (raw?: string) => { key: string; agentId: string };
   updateHeader: () => void;
   updateFooter: () => void;
   updateAutocompleteProvider: () => void;
@@ -70,7 +70,7 @@ export function createSessionActions(context: SessionActionContext) {
     agentNames,
     initialSessionInput,
     initialSessionAgentId,
-    resolveSessionKey,
+    resolveSessionSelection,
     updateHeader,
     updateFooter,
     updateAutocompleteProvider,
@@ -126,9 +126,10 @@ export function createSessionActions(context: SessionActionContext) {
         state.currentAgentId =
           state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
       }
-      const nextSessionKey = resolveSessionKey(initialSessionInput);
-      if (nextSessionKey !== state.currentSessionKey) {
-        state.currentSessionKey = nextSessionKey;
+      const nextSelection = resolveSessionSelection(initialSessionInput);
+      state.currentAgentId = nextSelection.agentId;
+      if (nextSelection.key !== state.currentSessionKey) {
+        state.currentSessionKey = nextSelection.key;
       }
       state.initialSessionApplied = true;
     } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
@@ -417,7 +418,7 @@ export function createSessionActions(context: SessionActionContext) {
     try {
       const history = await client.loadHistory({
         sessionKey: selection.sessionKey,
-        ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
+        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
         limit: opts.historyLimit ?? 200,
       });
       if (!isCurrentLoad()) {
@@ -492,7 +493,7 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of projection.entries) {
         const message = entry.message as Record<string, unknown>;
-        if (isCommandMessage(message)) {
+        if (isCommandMarkedMessage(message)) {
           const text = extractTextFromMessage(message);
           if (text) {
             chatLog.addSystem(text);
@@ -528,8 +529,8 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         if (message.role === "toolResult") {
-          const toolCallId = asString(message.toolCallId, "");
-          const toolName = asString(message.toolName, "tool");
+          const toolCallId = formatPrimitiveString(message.toolCallId, "");
+          const toolName = formatPrimitiveString(message.toolName, "tool");
           const component = chatLog.startTool(toolCallId, toolName, {});
           component.setResult(
             {
@@ -561,8 +562,8 @@ export function createSessionActions(context: SessionActionContext) {
       // we stopped watching after switching away, so the persisted history above
       // does not contain it; render the partial and re-adopt the run so further
       // deltas (now that this session is active again) continue it.
-      const inFlightRunId = asString(record.inFlightRun?.runId, "");
-      const inFlightText = asString(record.inFlightRun?.text, "");
+      const inFlightRunId = formatPrimitiveString(record.inFlightRun?.runId, "");
+      const inFlightText = formatPrimitiveString(record.inFlightRun?.text, "");
       if (inFlightRunId) {
         // Render any buffered partial (embedded runtimes); Codex has none mid-run.
         if (inFlightText) {
@@ -594,10 +595,10 @@ export function createSessionActions(context: SessionActionContext) {
 
   const setSession = async (rawKey: string) => {
     const previousSelection = captureSessionSelection();
-    const nextKey = resolveSessionKey(rawKey);
+    const nextSelection = resolveSessionSelection(rawKey);
+    const nextKey = nextSelection.key;
     const selectionChanged = !(
-      normalizeAgentId(parseAgentSessionKey(nextKey)?.agentId ?? previousSelection.agentId) ===
-        previousSelection.agentId &&
+      nextSelection.agentId === previousSelection.agentId &&
       agentSessionKeysMatchByRequestKey(nextKey, previousSelection.sessionKey)
     );
     if (selectionChanged) {
@@ -609,7 +610,7 @@ export function createSessionActions(context: SessionActionContext) {
         scope: readTuiSessionProjectionScope(state),
       });
     }
-    updateAgentFromSessionKey(nextKey);
+    state.currentAgentId = nextSelection.agentId;
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
     submit.clearPendingSubmit(state);
@@ -662,7 +663,7 @@ export function createSessionActions(context: SessionActionContext) {
       // ids may no longer exist in local UI state.
       const result = await client.abortChat({
         sessionKey: selection.sessionKey,
-        ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
+        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
       });
       if (!isCurrentSessionSelection(selection)) {
         return;

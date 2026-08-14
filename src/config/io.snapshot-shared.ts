@@ -8,6 +8,7 @@ export function createConfigFileSnapshot(params: {
   includedPaths?: readonly string[];
   includeProvenance?: ConfigFileSnapshot["includeProvenance"];
   agentRosterIncludeOwned?: boolean;
+  bindingsIncludeOwned?: boolean;
   exists: boolean;
   raw: string | null;
   parsed: unknown;
@@ -31,11 +32,15 @@ export function createConfigFileSnapshot(params: {
           includeProvenance: params.includeProvenance.map((entry) => ({
             ...entry,
             path: [...entry.path],
+            ...(entry.targetPaths ? { targetPaths: [...entry.targetPaths] } : {}),
           })),
         }
       : {}),
     ...(params.agentRosterIncludeOwned !== undefined
       ? { agentRosterIncludeOwned: params.agentRosterIncludeOwned }
+      : {}),
+    ...(params.bindingsIncludeOwned !== undefined
+      ? { bindingsIncludeOwned: params.bindingsIncludeOwned }
       : {}),
     exists: params.exists,
     raw: params.raw,

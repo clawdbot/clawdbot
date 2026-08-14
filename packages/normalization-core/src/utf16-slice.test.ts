@@ -4,6 +4,7 @@ import {
   avoidTrailingHighSurrogateBreak,
   sliceUtf16Safe,
   truncateUtf16Safe,
+  truncateWithMarker,
 } from "./utf16-slice.js";
 
 describe("avoidTrailingHighSurrogateBreak", () => {
@@ -103,5 +104,54 @@ describe("truncateUtf16Safe", () => {
   it("returns empty string when truncating at surrogate pair boundary", () => {
     const input = "👨👩";
     expect(truncateUtf16Safe(input, 1)).toBe("");
+  });
+});
+
+describe("truncateWithMarker", () => {
+  it.each([
+    {
+      name: "returns values at the boundary unchanged",
+      value: "hello",
+      max: 5,
+      options: { marker: "...", reserve: 3, trimEnd: false },
+      expected: "hello",
+    },
+    {
+      name: "reserves marker width",
+      value: "hello world",
+      max: 8,
+      options: { marker: "...", reserve: 3, trimEnd: false },
+      expected: "hello...",
+    },
+    {
+      name: "supports markers outside the limit",
+      value: "hello world",
+      max: 5,
+      options: { marker: "...", reserve: 0, trimEnd: false },
+      expected: "hello...",
+    },
+    {
+      name: "trims only the truncated prefix",
+      value: "hello   world",
+      max: 9,
+      options: { marker: "...", reserve: 3, trimEnd: true },
+      expected: "hello...",
+    },
+    {
+      name: "keeps surrogate pairs well formed",
+      value: "ab🚀tail",
+      max: 4,
+      options: { marker: "…", reserve: 1, trimEnd: false },
+      expected: "ab…",
+    },
+    {
+      name: "preserves marker output at zero limits",
+      value: "hello",
+      max: 0,
+      options: { marker: "…", reserve: 1, trimEnd: false },
+      expected: "…",
+    },
+  ] as const)("$name", ({ value, max, options, expected }) => {
+    expect(truncateWithMarker(value, max, options)).toBe(expected);
   });
 });

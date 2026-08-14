@@ -1,15 +1,14 @@
 // Cron service job tests cover job creation, updates, and runtime scheduling.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
-  applyDeclarativeJobSpec,
-  applyJobPatch,
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
-  createJob,
   nextWakeAtMs,
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
-} from "./service/jobs.js";
+} from "./service/jobs-scheduling.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import type { CronJob, CronJobPatch } from "./types.js";
 
@@ -558,6 +557,49 @@ function createMockState(
   } as unknown as CronServiceState;
 }
 
+describe("time schedule validation", () => {
+  const now = Date.parse("2026-08-10T00:00:00.000Z");
+  const input = (anchorMs?: number) => ({
+    name: "Date boundary interval",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs },
+    sessionTarget: "main" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "systemEvent" as const, text: "tick" },
+  });
+
+  it("rejects intervals with no representable next run while preserving the inclusive boundary", () => {
+    expect(() => createJob(createMockState(now), input())).toThrow(
+      "cron every schedule has no upcoming run time and would never fire",
+    );
+    expect(createJob(createMockState(now), input(0)).state.nextRunAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
+  });
+
+  it("rejects invalid one-shot timestamps at the service boundary", () => {
+    const maxAt = new Date(MAX_DATE_TIMESTAMP_MS).toISOString();
+    expect(
+      createJob(createMockState(now), {
+        name: "Maximum one-shot",
+        enabled: true,
+        schedule: { kind: "at", at: maxAt },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      }).state.nextRunAtMs,
+    ).toBe(MAX_DATE_TIMESTAMP_MS);
+    expect(() =>
+      createJob(createMockState(now), {
+        name: "Invalid one-shot",
+        enabled: true,
+        schedule: { kind: "at", at: String(MAX_DATE_TIMESTAMP_MS + 1) },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+    ).toThrow("Date-valid absolute timestamp");
+  });
+});
+
 describe("announce delivery channel validation", () => {
   const now = Date.parse("2026-08-02T12:00:00.000Z");
   const configuredChannels = ["reef", "discord"];
@@ -759,6 +801,35 @@ describe("cron tool authority defaults", () => {
       toolsAllow: ["read", "cron"],
       toolsAllowIsDefault: true,
     });
+  });
+
+  it("repairs a missing anchor when converging an unchanged every schedule", () => {
+    const createdAtMs = now - 30_000;
+    const job = createJob(createMockState(now), {
+      name: "legacy declaration",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    job.createdAtMs = createdAtMs;
+    job.schedule = { kind: "every", everyMs: 60_000 };
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      },
+      { enabledExplicit: false, nowMs: now },
+    );
+
+    expect(job.schedule).toEqual({ kind: "every", everyMs: 60_000, anchorMs: createdAtMs });
   });
 
   it("adopts explicit authority when a declaration becomes tool-bearing", () => {
@@ -1233,6 +1304,38 @@ describe("cron stagger defaults", () => {
     applyJobPatch(job, {
       schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
     });
+
+    expect(job.schedule).toEqual({
+      kind: "cron",
+      expr: "0 * * * *",
+      tz: "America/Los_Angeles",
+      staggerMs: 120_000,
+    });
+  });
+
+  it("preserves staggering when declarative convergence keeps the cron expression", () => {
+    const now = Date.now();
+    const job = createJob(createMockState(now), {
+      name: "declared hourly",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      },
+      { enabledExplicit: false, nowMs: now },
+    );
 
     expect(job.schedule).toEqual({
       kind: "cron",

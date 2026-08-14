@@ -3,6 +3,7 @@
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { WebSocket } from "ws";
 import { type HelloOk, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
@@ -14,7 +15,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { rawDataToString } from "../infra/ws.js";
+import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -25,9 +26,10 @@ import {
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { startGatewayServer } from "./server.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 /** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getFreeGatewayPort(): Promise<number> {
+export async function getGatewayE2ePortBlock(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
@@ -54,6 +56,8 @@ export async function connectGatewayClient(params: {
   connectChallengeTimeoutMs?: number;
   preauthHandshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
+  minProtocol?: number;
+  maxProtocol?: number;
   timeoutMs?: number;
   timeoutMessage?: string;
 }) {
@@ -102,6 +106,8 @@ export async function connectGatewayClient(params: {
       ...(params.requestTimeoutMs !== undefined
         ? { requestTimeoutMs: params.requestTimeoutMs }
         : {}),
+      minProtocol: params.minProtocol,
+      maxProtocol: params.maxProtocol,
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
@@ -263,23 +269,47 @@ export async function startGatewayWithClient(params: {
   token: string;
   clientDisplayName?: string;
 }) {
-  await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
-  process.env.OPENCLAW_CONFIG_PATH = params.configPath;
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
+  const gatewayStartupEnv = captureEnv([...GATEWAY_STARTUP_MUTATED_ENV_KEYS]);
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  try {
+    await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
+    process.env.OPENCLAW_CONFIG_PATH = params.configPath;
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    clearSessionStoreCacheForTest();
 
-  const port = await getFreeGatewayPort();
-  const server = await startGatewayServer(port, {
-    bind: "loopback",
-    auth: { mode: "token", token: params.token },
-    controlUiEnabled: false,
-  });
-  const client = await connectGatewayClient({
-    url: `ws://127.0.0.1:${port}`,
-    token: params.token,
-    clientDisplayName: params.clientDisplayName,
-  });
+    const port = await getGatewayE2ePortBlock();
+    const startedServer = await startGatewayServer(port, {
+      bind: "loopback",
+      auth: { mode: "token", token: params.token },
+      controlUiEnabled: false,
+    });
+    server = startedServer;
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: params.token,
+      clientDisplayName: params.clientDisplayName,
+    });
 
-  return { port, server, client };
+    return {
+      port,
+      client,
+      server: {
+        close: async (...args: Parameters<typeof startedServer.close>) => {
+          try {
+            await startedServer.close(...args);
+          } finally {
+            gatewayStartupEnv.restore();
+          }
+        },
+      },
+    };
+  } catch (error) {
+    try {
+      await server?.close({ reason: "gateway E2E client setup failed" });
+    } finally {
+      gatewayStartupEnv.restore();
+    }
+    throw error;
+  }
 }

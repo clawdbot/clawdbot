@@ -11,10 +11,14 @@ import {
   cleanupTrackedTempDirsAsync,
   makeTrackedTempDirAsync,
 } from "./test-helpers/fs-fixtures.js";
+import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import {
+  prepareConfigForPendingPluginDirectoryRemovalSet,
+  recordPluginPackageUninstallPlan,
+} from "./uninstall-package-plan.js";
+import {
   applyPluginUninstallDirectoryRemoval,
-  removePluginFromConfig,
   planPluginUninstall,
   resolveUninstallChannelConfigKeys,
 } from "./uninstall.js";
@@ -28,8 +32,19 @@ vi.mock("../process/exec.js", () => ({
 type PluginConfig = NonNullable<OpenClawConfig["plugins"]>;
 type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
 
-async function uninstallPlugin(params: Parameters<typeof planPluginUninstall>[0]) {
-  const plan = planPluginUninstall(params);
+async function uninstallPlugin(
+  params: Parameters<typeof planPluginUninstall>[0] & {
+    runtimePluginIds?: readonly string[];
+    runtimeLoadPaths?: readonly string[];
+  },
+) {
+  const { runtimePluginIds, runtimeLoadPaths, ...planParams } = params;
+  const plan = planPluginUninstall(
+    recordPluginPackageUninstallPlan(planParams, {
+      runtimePluginIds: runtimePluginIds ?? [params.pluginId],
+      ...(runtimeLoadPaths ? { runtimeLoadPaths } : {}),
+    }),
+  );
   if (!plan.ok) {
     return plan;
   }
@@ -148,6 +163,15 @@ function createGitInstallRecord(pluginId = "my-plugin", installPath?: string): P
   };
 }
 
+function createMarketplaceInstallRecord(installPath: string): PluginInstallRecord {
+  return {
+    source: "marketplace",
+    installPath,
+    marketplaceSource: "release-fixtures",
+    marketplacePlugin: "my-plugin",
+  };
+}
+
 function createPathInstallRecord(
   installPath = "/path/to/plugin",
   sourcePath = installPath,
@@ -240,6 +264,26 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   });
 }
 
+it("stages only runtime child entries while a package directory removal is pending", () => {
+  const staged = prepareConfigForPendingPluginDirectoryRemovalSet(
+    {
+      plugins: {
+        entries: {
+          "pack/one": { enabled: true },
+          "pack/two": { enabled: true },
+        },
+      },
+    },
+    ["pack/one", "pack/two"],
+  );
+
+  expect(staged.plugins?.entries).toEqual({
+    "pack/one": { enabled: false },
+    "pack/two": { enabled: false },
+  });
+  expect(staged.plugins?.entries).not.toHaveProperty("pack");
+});
+
 async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   const pluginDir = path.join(baseDir, pluginId);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -303,6 +347,53 @@ describe("resolveUninstallChannelConfigKeys", () => {
         channelIds: ["defaults", "discord", "discord", "modelByChannel", "slack"],
       }),
     ).toEqual(["discord", "slack"]);
+  });
+});
+
+describe("planPluginUninstall package ownership", () => {
+  it("removes every owned child policy while planning one owner install removal", () => {
+    const result = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: {
+            plugins: {
+              allow: ["pack/one", "pack/two", "other"],
+              deny: ["pack/two"],
+              entries: {
+                "pack/one": { enabled: true },
+                "pack/two": { enabled: false },
+                other: { enabled: true },
+              },
+              installs: {
+                pack: { source: "path", installPath: "/managed/pack" },
+              },
+              slots: { memory: "pack/two" },
+            },
+          },
+          pluginId: "pack",
+          deleteFiles: false,
+        },
+        { runtimePluginIds: ["pack/one", "pack/two"] },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.directoryRemoval).toBeNull();
+    expect(result.config.plugins).toEqual({
+      allow: ["other"],
+      entries: { other: { enabled: true } },
+      slots: { memory: "memory-core" },
+    });
+    expect(result.actions).toMatchObject({
+      entry: true,
+      install: true,
+      allowlist: true,
+      denylist: true,
+      memorySlot: true,
+    });
   });
 });
 
@@ -382,6 +473,76 @@ describe("removePluginFromConfig", () => {
 
     expect(result.plugins?.load?.paths).toEqual(expectedPaths);
     expect(actions.loadPath).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "marketplace install path",
+      installRecord: createMarketplaceInstallRecord("/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin", "/managed/my-plugin/child", "/other/path"],
+      expectedPaths: ["/managed/my-plugin/child", "/other/path"],
+      expectedChanged: true,
+    },
+    {
+      name: "npm install path",
+      installRecord: createNpmInstallRecord("my-plugin", "/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin", "/managed/my-plugin/child", "/other/path"],
+      expectedPaths: ["/managed/my-plugin/child", "/other/path"],
+      expectedChanged: true,
+    },
+    {
+      name: "absent load paths",
+      installRecord: createMarketplaceInstallRecord("/managed/my-plugin"),
+      loadPaths: undefined,
+      expectedPaths: undefined,
+      expectedChanged: false,
+    },
+    {
+      name: "mismatched and child paths",
+      installRecord: createNpmInstallRecord("my-plugin", "/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin-other", "/managed/my-plugin/child"],
+      expectedPaths: ["/managed/my-plugin-other", "/managed/my-plugin/child"],
+      expectedChanged: false,
+    },
+  ])(
+    "cleans only the exact $name from load.paths",
+    ({ installRecord, loadPaths, expectedPaths, expectedChanged }) => {
+      const config = createPluginConfig({
+        installs: { "my-plugin": installRecord },
+        loadPaths,
+      });
+
+      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+      expect(result.plugins?.load?.paths).toEqual(expectedPaths);
+      expect(actions.loadPath).toBe(expectedChanged);
+    },
+  );
+
+  it("removes a canonical marketplace install path without removing siblings", async () => {
+    const tempRoot = path.join(process.cwd(), ".tmp");
+    await fs.mkdir(tempRoot, { recursive: true });
+    const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-uninstall-marketplace-path-"));
+    try {
+      const installPath = path.join(tempDir, "managed", "my-plugin");
+      const linkedPath = path.join(tempDir, "my-plugin-link");
+      const siblingPath = path.join(tempDir, "managed", "my-plugin-other");
+      await fs.mkdir(installPath, { recursive: true });
+      await fs.symlink(installPath, linkedPath, "dir");
+      const config = createPluginConfig({
+        installs: {
+          "my-plugin": createMarketplaceInstallRecord(installPath),
+        },
+        loadPaths: [linkedPath, siblingPath],
+      });
+
+      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+      expect(result.plugins?.load?.paths).toEqual([siblingPath]);
+      expect(actions.loadPath).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("removes absolute load path for a workspace-relative install source path", async () => {
@@ -989,12 +1150,12 @@ describe("uninstallPlugin", () => {
       baseDir: tempDir,
     });
 
-    const plan = planPluginUninstall({
-      config,
-      pluginId,
-      deleteFiles: true,
-      extensionsDir,
-    });
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        { config, pluginId, deleteFiles: true, extensionsDir },
+        { runtimePluginIds: [pluginId] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1034,21 +1195,26 @@ describe("uninstallPlugin", () => {
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
-    const plan = planPluginUninstall({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
-        installs: {
-          "openclaw-kitchen-sink-fixture": {
-            source: "npm",
-            spec: "@openclaw/kitchen-sink@1.0.0",
-            installPath: pluginDir,
-          },
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
         },
-      }),
-      pluginId: "openclaw-kitchen-sink-fixture",
-      deleteFiles: true,
-      extensionsDir,
-    });
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1099,21 +1265,26 @@ describe("uninstallPlugin", () => {
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
-    const plan = planPluginUninstall({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
-        installs: {
-          "openclaw-kitchen-sink-fixture": {
-            source: "npm",
-            spec: "@openclaw/kitchen-sink@1.0.0",
-            installPath: pluginDir,
-          },
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
         },
-      }),
-      pluginId: "openclaw-kitchen-sink-fixture",
-      deleteFiles: true,
-      extensionsDir,
-    });
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {

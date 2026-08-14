@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -74,14 +75,6 @@ async function withStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T>
 
 async function withQueue<T>(fn: (queue: MattermostIngressQueue) => Promise<T>): Promise<T> {
   return await withStateDir(async (stateDir) => await fn(createQueue(stateDir, "default")));
-}
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolvePromise = () => {};
-  const promise = new Promise<void>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return { promise, resolve: resolvePromise };
 }
 
 function testLifecycle() {
@@ -161,8 +154,8 @@ describe("Mattermost durable ingress", () => {
       const dispatchBBeforeRestart = vi.fn<MattermostIngressDispatch>(async () => undefined);
       const monitorA = startMonitor(queueA, dispatchA, "account-a");
       const monitorBBeforeRestart = startMonitor(queueB, dispatchBBeforeRestart, "account-b");
-      const admissionStored = createDeferred();
-      const releaseAdmission = createDeferred();
+      const admissionStored = createDeferred<void>();
+      const releaseAdmission = createDeferred<void>();
       const enqueueB = queueB.enqueue.bind(queueB);
       queueB.enqueue = async (...args) => {
         const result = await enqueueB(...args);

@@ -41,24 +41,25 @@ describe("toggleSessionWorkspace", () => {
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
   });
-});
 
-describe("custodian panel toggle", () => {
-  it("is available only while the gateway is connected and advertises chat", () => {
+  it("carries the saved bottom dock across session workspace state", () => {
     const state = {
       client: null,
       connected: false,
       handleOpenSidebar: vi.fn(),
-      hello: gatewayHello(["openclaw.chat"]),
+      hello: null,
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
+      settings: { chatWorkspaceDock: "bottom" },
       sessions: {},
     } as unknown as SessionWorkspaceHost;
 
-    expect(createSessionWorkspaceProps(state).onToggleCustodian).toBeUndefined();
+    const workspace = createSessionWorkspaceProps(state);
+    expect(workspace.dock).toBe("bottom");
 
-    state.connected = true;
-    expect(createSessionWorkspaceProps(state).onToggleCustodian).toBeTypeOf("function");
+    workspace.onSetDock("right");
+    expect(createSessionWorkspaceProps(state).dock).toBe("right");
+    expect(state.settings?.chatWorkspaceDock).toBe("right");
   });
 });
 

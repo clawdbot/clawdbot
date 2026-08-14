@@ -54,7 +54,9 @@ import {
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -640,12 +642,6 @@ async function resolveImagesForRequest(
   return images;
 }
 
-export const testOnlyOpenAiHttp = {
-  resolveImagesForRequest,
-  resolveOpenAiChatCompletionsLimits,
-  resolveChatCompletionUsage,
-};
-
 function buildAgentPrompt(
   messagesUnknown: unknown,
   activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
@@ -989,7 +985,12 @@ export async function handleOpenAiHttpRequest(
       useMessageChannelHeader: true,
     }));
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -1191,6 +1192,7 @@ export async function handleOpenAiHttpRequest(
   let resultResolved = false;
   let closed = false;
   let observedTerminalLifecycle = false;
+  let terminalStreamError: { message: string; type: string; code?: string } | undefined;
   let terminalLifecyclePhase: "end" | "error" = "end";
   let stopWatchingDisconnect = () => {};
 
@@ -1209,6 +1211,10 @@ export async function handleOpenAiHttpRequest(
     finalizeScheduled = true;
     queueMicrotask(() => {
       if (closed) {
+        return;
+      }
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
         return;
       }
       closed = true;
@@ -1257,6 +1263,20 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      // SSE deltas cannot retract bytes already delivered to the OpenAI client.
+      if (
+        replace &&
+        typeof text === "string" &&
+        !toolChoiceConstraint &&
+        !text.startsWith(streamedAssistantText)
+      ) {
+        terminalStreamError ??= {
+          message: "Assistant output cannot be represented as an append-only response stream.",
+          type: "api_error",
+        };
+        return;
+      }
+
       // Snapshots include prefixes held during tag-boundary filtering; the raw
       // delta alone can omit a literal leading less-than.
       const content =
@@ -1297,10 +1317,28 @@ export async function handleOpenAiHttpRequest(
       }
       if (phase === "end" || phase === "error") {
         observedTerminalLifecycle = true;
+        if (phase === "error" && terminalLifecyclePhase !== "error") {
+          terminalStreamError ??= {
+            message: normalizeOptionalString(evt.data?.error) ?? "Agent run failed",
+            type: "api_error",
+          };
+        }
         requestFinalize();
       }
     }
   });
+
+  const finishStreamWithError = (error: { message: string; type: string; code?: string }) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    writeSse(res, { error });
+    writeDone(res);
+    res.end();
+  };
 
   // Agent cleanup and deferred SSE delivery have independent lifetimes;
   // shutdown must wait until both have settled, whichever finishes last.
@@ -1332,6 +1370,11 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
+        return;
+      }
+
       finalUsage = resolveChatCompletionUsage(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
@@ -1346,17 +1389,10 @@ export async function handleOpenAiHttpRequest(
           pendingToolCalls,
         })
       ) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, {
-          error: {
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
-            type: "api_error",
-          },
+        finishStreamWithError({
+          message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+          type: "api_error",
         });
-        writeDone(res);
-        res.end();
         return;
       }
 
@@ -1416,26 +1452,22 @@ export async function handleOpenAiHttpRequest(
       terminalLifecyclePhase = "error";
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       if (isClientToolNameConflictError(err)) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, {
-          error: { message: "invalid tool configuration", type: "invalid_request_error" },
+        finishStreamWithError({
+          message: "invalid tool configuration",
+          type: "invalid_request_error",
         });
-        writeDone(res);
-        res.end();
         return;
       }
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, { error: mapped.error });
-        writeDone(res);
-        res.end();
+        finishStreamWithError(mapped.error);
         return;
       }
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
+        return;
+      }
+      // Runs without a producer-owned terminal retain the visible-error fallback.
       const content = "Error: internal error";
       writeAssistantContentChunk(res, {
         runId,

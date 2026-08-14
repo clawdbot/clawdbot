@@ -5,7 +5,7 @@ import {
 } from "./state-migrations.receipts.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
-export { markLegacyMigrationSourceRemoved as markSourceRemoved } from "./state-migrations.receipts.js";
+export { markLegacyMigrationSourceRemoved } from "./state-migrations.receipts.js";
 
 export type MigrationReceipt = {
   sourceKey: string;

@@ -341,7 +341,7 @@ export async function admitMSTeamsMessage(params: {
       });
       return null;
     }
-    if (!senderAccess.allowed && senderAccess.reasonCode === "group_policy_not_allowlisted") {
+    if (!senderAccess.allowed) {
       const allowMatch = resolveMSTeamsAllowlistMatch({
         allowFrom: effectiveGroupAllowFrom,
         senderId,

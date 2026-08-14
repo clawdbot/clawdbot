@@ -60,7 +60,7 @@ vLLM serves open-source (and some custom) models through an **OpenAI-compatible*
 For non-interactive setup (CI, scripting), pass the base URL, key, and model directly:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice vllm \
   --custom-base-url "http://127.0.0.1:8000/v1" \

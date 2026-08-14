@@ -13,16 +13,8 @@ import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
 export { isLikelyMutatingToolName };
 
-// File-mutation tools that operate on the same `path` target identity.
-// Recovery is allowed across these even when the tool name differs (e.g.
-// edit-fails-then-write-succeeds on the same path), because the user-visible
-// invariant is "the file at this path is in the desired state."
-//
-// `apply_patch` is intentionally excluded: production `apply_patch` calls take
-// only an opaque `input` patch string, so `buildToolActionFingerprint` cannot
-// extract a `path=` segment from real call args. Including `apply_patch` here
-// would only match handcrafted-fingerprint test inputs, not real recoveries.
-const FILE_MUTATING_TOOL_NAMES = new Set(["edit", "write"]);
+// File-mutation tools that can recover the same path through another tool.
+const FILE_MUTATING_TOOL_NAMES = new Set(["apply_patch", "edit", "write"]);
 
 // Args aliases that identify the file target on a file-mutating call.
 const FILE_TARGET_PATH_ARG_KEYS = ["path", "file_path", "filePath", "filepath", "file"] as const;
@@ -370,6 +362,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       return typeof record?.model === "string" && record.model.trim().length > 0;
     case "gateway":
       return action == null || !GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "portal":
+      return action !== "list";
     case "nodes":
       return action == null || !NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {
@@ -416,11 +410,13 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
     case "mobile_ui":
       return action != null && MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":
-      return action === "list" || action === "inspect";
+      return action === "list" || action === "inspect" || action === "read";
     case "transcripts":
       return action === "status";
     case "gateway":
       return action != null && GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "portal":
+      return action === "list";
     case "nodes":
       return action != null && NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {
@@ -544,6 +540,18 @@ export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActi
     if (existing.actionFingerprint == null || next.actionFingerprint == null) {
       return false;
     }
+    const includesPatch = [existing.toolName, next.toolName].some(
+      (toolName) => normalizeLowercaseStringOrEmpty(toolName) === "apply_patch",
+    );
+    const sameFileTarget =
+      isFileMutatingToolName(existing.toolName) &&
+      isFileMutatingToolName(next.toolName) &&
+      existing.fileTarget !== undefined &&
+      next.fileTarget !== undefined &&
+      fileTargetsEqual(existing.fileTarget, next.fileTarget);
+    if (includesPatch) {
+      return sameFileTarget;
+    }
     if (existing.actionFingerprint === next.actionFingerprint) {
       return true;
     }
@@ -551,16 +559,7 @@ export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActi
     // clears an unresolved file-mutation failure even when the tool name
     // differs (e.g. edit→write self-heal). Compared structurally on
     // `fileTarget` so paths containing `|` cannot over-match.
-    if (
-      isFileMutatingToolName(existing.toolName) &&
-      isFileMutatingToolName(next.toolName) &&
-      existing.fileTarget !== undefined &&
-      next.fileTarget !== undefined &&
-      fileTargetsEqual(existing.fileTarget, next.fileTarget)
-    ) {
-      return true;
-    }
-    return false;
+    return sameFileTarget;
   }
   return existing.toolName === next.toolName && (existing.meta ?? "") === (next.meta ?? "");
 }

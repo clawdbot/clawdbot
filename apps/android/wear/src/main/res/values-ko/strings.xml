@@ -6,7 +6,7 @@
     <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이전 %1$s"</string>
     <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다음 %1$s"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"제어"</string>
-    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"말하기"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"대화"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Watch 오디오 실패"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"받아쓰기"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"라이브"</string>
@@ -29,9 +29,9 @@
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"말하는 중"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"듣는 중"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결 중"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"생각하는 중"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"생각 중"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"입력 중"</string>
-    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보내는 중"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"전송 중"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"에이전트 작업 중"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"오류"</string>
     <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"준비됨"</string>
@@ -41,7 +41,7 @@
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"대화 시작"</string>
     <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"시계에서 말하거나 입력하세요. 페어링된 휴대전화가 인증된 OpenClaw 세션을 통해 메시지를 전송합니다."</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"현재 세션"</string>
-    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"화면 모드"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"모양"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다크"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"라이트"</string>
     <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"답변 자동 음성 재생"</string>

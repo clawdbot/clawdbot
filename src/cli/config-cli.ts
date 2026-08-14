@@ -435,9 +435,9 @@ export function registerConfigCli(program: Command) {
       false,
     )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")
-    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec)")
+    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec|store)")
     .option("--ref-id <id>", "SecretRef builder: ref id")
-    .option("--provider-source <source>", "Provider builder: source (env|file|exec)")
+    .option("--provider-source <source>", "Provider builder: source (env|file|exec|store)")
     .option(
       "--provider-allowlist <envVar>",
       "Provider builder (env): allowlist entry (repeatable)",
@@ -475,16 +475,6 @@ export function registerConfigCli(program: Command) {
       "Provider builder (exec): trusted directory (repeatable)",
       collectOption,
       [] as string[],
-    )
-    .option(
-      "--provider-allow-insecure-path",
-      "Provider builder (file|exec): bypass strict path permission checks",
-      false,
-    )
-    .option(
-      "--provider-allow-symlink-command",
-      "Provider builder (exec): allow command symlink path",
-      false,
     )
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
     .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")

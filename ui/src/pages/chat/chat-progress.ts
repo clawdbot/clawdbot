@@ -36,6 +36,7 @@ export function buildCompactionDividerItem(
         ? `divider:compaction:${marker.id}`
         : `divider:compaction:${timestamp}:${index}`,
     label: t("chat.compaction.label"),
+    icon: "foldVertical",
     ...(tokensSaved === null
       ? {}
       : {
@@ -45,6 +46,24 @@ export function buildCompactionDividerItem(
         }),
     description: t("chat.compaction.description"),
     action: { kind: "session-checkpoints", label: t("chat.compaction.openCheckpoints") },
+    timestamp,
+  };
+}
+
+export function buildResetDividerItem(
+  marker: Record<string, unknown>,
+  timestamp: number,
+  index: number,
+): Extract<ChatItem, { kind: "divider" }> {
+  return {
+    kind: "divider",
+    key:
+      typeof marker.id === "string"
+        ? `divider:reset:${marker.id}`
+        : `divider:reset:${timestamp}:${index}`,
+    label: t("chat.sessionReset.label"),
+    icon: "rotateCcw",
+    description: t("chat.sessionReset.description"),
     timestamp,
   };
 }

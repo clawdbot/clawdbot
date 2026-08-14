@@ -8,7 +8,7 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-resolution";
 import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeString } from "./comment-shared.js";
+import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   FeishuConfig,
   FeishuAccountConfig,

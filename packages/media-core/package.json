@@ -19,6 +19,11 @@
       "import": "./dist/base64.mjs",
       "default": "./dist/base64.mjs"
     },
+    "./attachment-classify": {
+      "types": "./dist/attachment-classify.d.mts",
+      "import": "./dist/attachment-classify.mjs",
+      "default": "./dist/attachment-classify.mjs"
+    },
     "./constants": {
       "types": "./dist/constants.d.mts",
       "import": "./dist/constants.mjs",
@@ -65,6 +70,6 @@
     "file-type": "22.0.1"
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/base64.ts src/constants.ts src/content-length.ts src/file-name.ts src/inbound-path-policy.ts src/inline-image-data-url.ts src/media-source-url.ts src/mime.ts src/read-byte-stream-with-limit.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/attachment-classify.ts src/base64.ts src/constants.ts src/content-length.ts src/file-name.ts src/inbound-path-policy.ts src/inline-image-data-url.ts src/media-source-url.ts src/mime.ts src/read-byte-stream-with-limit.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   }
 }

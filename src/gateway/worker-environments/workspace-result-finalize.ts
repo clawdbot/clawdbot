@@ -15,7 +15,9 @@ import {
 
 type WorkspaceResultFinalizationStore = Pick<
   WorkerSessionPlacementStore,
-  "completeWorkspaceResultAndReleaseTurn" | "recordWorkspaceResultConflict"
+  | "closeWorkerTurnToolState"
+  | "completeWorkspaceResultAndReleaseTurn"
+  | "recordWorkspaceResultConflict"
 >;
 
 type WorkspaceResultConflictReport = Required<WorkerWorkspaceResultConflict> | { cleared: true };
@@ -94,6 +96,7 @@ export function settleStagedWorkspaceResult(
 export async function settleStagedWorkspaceResult(
   params: StagedWorkspaceResultSettlement,
 ): Promise<WorkerSessionPlacementRecord> {
+  await params.placements.closeWorkerTurnToolState(params.turnClaim);
   const cleanupRef =
     params.stagedResultRef && !params.conflictRetained
       ? isWorkerWorkspaceResultCleanupRef(params.stagedResultRef)

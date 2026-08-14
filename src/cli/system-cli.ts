@@ -117,37 +117,26 @@ export function registerSystemCli(program: Command) {
     });
   });
 
-  addGatewayClientOptions(
-    heartbeat
-      .command("enable")
-      .description("Enable heartbeats")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: SystemGatewayOpts) => {
-    await runSystemGatewayCommand(opts, async () => {
-      return await callGatewayFromCli(
-        "set-heartbeats",
-        opts,
-        { enabled: true },
-        { expectFinal: false },
-      );
+  for (const [name, enabled] of [
+    ["enable", true],
+    ["disable", false],
+  ] as const) {
+    addGatewayClientOptions(
+      heartbeat
+        .command(name)
+        .description(`${enabled ? "Enable" : "Disable"} heartbeats`)
+        .option("--json", "Output JSON", false),
+    ).action(async (opts: SystemGatewayOpts) => {
+      await runSystemGatewayCommand(opts, async () => {
+        return await callGatewayFromCli(
+          "set-heartbeats",
+          opts,
+          { enabled },
+          { expectFinal: false },
+        );
+      });
     });
-  });
-
-  addGatewayClientOptions(
-    heartbeat
-      .command("disable")
-      .description("Disable heartbeats")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: SystemGatewayOpts) => {
-    await runSystemGatewayCommand(opts, async () => {
-      return await callGatewayFromCli(
-        "set-heartbeats",
-        opts,
-        { enabled: false },
-        { expectFinal: false },
-      );
-    });
-  });
+  }
 
   addGatewayClientOptions(
     system

@@ -1,3 +1,5 @@
+// Sanctioned low-level scope/Kysely entry point for doctor, migrations, and infrastructure.
+// Runtime feature code imports the session accessor barrel instead of this module.
 import path from "node:path";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
@@ -37,6 +39,7 @@ type SessionSqliteDatabase = Pick<
   | "session_members"
   | "session_nodes"
   | "session_suggestions"
+  | "session_transcript_active_events"
   | "session_transcript_index_state"
   | "session_windows"
   | "transcript_rewrite_watermarks"
@@ -70,6 +73,11 @@ export type ResolvedTranscriptScope = ResolvedSqliteScope & {
 type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
+
+export type SessionSqliteTargetResolutionCache = Map<
+  NodeJS.ProcessEnv | undefined,
+  Map<string, ReturnType<typeof resolveSqliteTargetFromSessionStorePath>>
+>;
 
 const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
@@ -165,6 +173,7 @@ export function resolveSqliteReadScope(
     SessionTranscriptReadScope,
     "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
   >,
+  targetCache?: SessionSqliteTargetResolutionCache,
 ): ResolvedSqliteReadScope {
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
   const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -177,11 +186,15 @@ export function resolveSqliteReadScope(
     : scope.storePath;
   const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
   const storeTarget = effectiveStorePath
-    ? resolveSqliteTargetFromSessionStorePath(effectiveStorePath, {
-        agentId: effectiveAgentId,
-        defaultAgentId: scope.defaultAgentId,
-        ...(scope.env ? { env: scope.env } : {}),
-      })
+    ? resolveCachedSqliteStoreTarget(
+        {
+          agentId: effectiveAgentId,
+          defaultAgentId: scope.defaultAgentId,
+          env: scope.env,
+          storePath: effectiveStorePath,
+        },
+        targetCache,
+      )
     : undefined;
   const agentId = resolveSqliteAgentId({
     scopedAgentId: effectiveAgentId,
@@ -199,6 +212,40 @@ export function resolveSqliteReadScope(
     ...(storeTarget ? { path: storeTarget.path } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };
+}
+
+function resolveCachedSqliteStoreTarget(
+  params: {
+    agentId?: string;
+    defaultAgentId?: string;
+    env?: NodeJS.ProcessEnv;
+    storePath: string;
+  },
+  targetCache: SessionSqliteTargetResolutionCache | undefined,
+): ReturnType<typeof resolveSqliteTargetFromSessionStorePath> {
+  if (!targetCache) {
+    return resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.agentId,
+      defaultAgentId: params.defaultAgentId,
+      ...(params.env ? { env: params.env } : {}),
+    });
+  }
+  // Store ownership is stable for this batch. Scope the cache to the caller so later requests
+  // still observe owner changes after migration, install, or doctor flows.
+  const envCache = targetCache.get(params.env) ?? new Map();
+  targetCache.set(params.env, envCache);
+  const cacheKey = JSON.stringify([params.storePath, params.agentId, params.defaultAgentId]);
+  const cached = envCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const resolved = resolveSqliteTargetFromSessionStorePath(params.storePath, {
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+    ...(params.env ? { env: params.env } : {}),
+  });
+  envCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 export function resolveSqliteStoreScope(
@@ -273,9 +320,10 @@ export function resolveSqliteTranscriptReadScope(
     SessionTranscriptReadScope,
     "agentId" | "env" | "sessionId" | "sessionKey" | "storePath"
   >,
+  targetCache?: SessionSqliteTargetResolutionCache,
 ): ResolvedTranscriptReadScope {
   return {
-    ...resolveSqliteReadScope(scope),
+    ...resolveSqliteReadScope(scope, targetCache),
     sessionId: scope.sessionId,
   };
 }

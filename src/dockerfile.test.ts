@@ -10,6 +10,7 @@ const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
 const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
+const composeSetupScriptPath = join(repoRoot, "scripts/e2e/compose-setup.sh");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const fullReleaseValidationWorkflowPath = join(
   repoRoot,
@@ -44,6 +45,28 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("127.0.0.1:18789/healthz");
     expect(compose).toContain('"dist/docker-healthcheck.js"');
     expect(compose).not.toContain("127.0.0.1:18789/healthz");
+  });
+
+  it("executes the documented Compose health command and validates JSON envelopes", async () => {
+    const docs = await readFile(dockerInstallDocsPath, "utf8");
+    const composeSetup = await readFile(composeSetupScriptPath, "utf8");
+    const gatewayHealthCommand =
+      'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"';
+
+    expect(docs).toContain(`docker compose exec openclaw-gateway sh -lc '${gatewayHealthCommand}'`);
+    expect(docs).not.toContain('node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"');
+    expect(composeSetup).toContain(
+      `"\${COMPOSE[@]}" exec -T openclaw-gateway sh -lc '${gatewayHealthCommand}'`,
+    );
+    expect(composeSetup.match(/gateway health --token "\$TOKEN" --json/g)).toHaveLength(2);
+    expect(composeSetup).toContain('assert_gateway_health_json "gateway service"');
+    expect(composeSetup).toContain('assert_gateway_health_json "CLI sidecar"');
+    expect(composeSetup).toContain('--detail "gateway:documentedHealthCommand=passed"');
+    expect(composeSetup).toContain('--detail "gateway:healthJsonEnvelope=passed"');
+    expect(composeSetup).toContain('--detail "cli:healthJsonEnvelope=passed"');
+    expect(composeSetup).not.toContain('dist/index.js health --token "$TOKEN"');
+    expect(composeSetup).toContain('-v "$PROJECT_DIR:/target"');
+    expect(composeSetup).toContain("rm -rf /target/* /target/.[!.]* /target/..?*");
   });
 
   it("does not force an external Dockerfile frontend pull", async () => {
@@ -524,8 +547,8 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("Build and push amd64 browser image");
     expect(workflow).toContain("Build and push arm64 browser image");
     expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
-    expect(workflow).toContain('${GHCR_IMAGE}:${version}-browser"');
-    expect(workflow).toContain('${DOCKERHUB_IMAGE}:${version}-browser"');
+    expect(workflow).toContain('${GHCR_IMAGE}:${image_version}-browser"');
+    expect(workflow).toContain('${DOCKERHUB_IMAGE}:${image_version}-browser"');
     expect(workflow).not.toContain("main-browser-amd64");
     expect(workflow).not.toContain("main-browser-arm64");
     expect(workflow).toContain("Smoke test amd64 browser image");
@@ -549,8 +572,8 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("Login to Docker Hub");
     expect(workflow).toContain('images=("${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}")');
     expect(workflow).toContain("DOCKERHUB_TAGS: ${{ steps.tags.outputs.dockerhub }}");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-amd64");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-arm64");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-amd64");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-arm64");
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
@@ -564,14 +587,15 @@ describe("Dockerfile", () => {
     expect(workflow).toContain('! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$');
     expect(workflow).toContain('git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"');
     expect(workflow).toContain('"${tag_sha}" != "${RELEASE_SHA}"');
+    expect(workflow).toContain('! "${IMAGE_TAG_SUFFIX}" =~ ^-r[0-9]{8}$');
     expect(workflow).toContain('"v${package_version}" != "${RELEASE_TAG}"');
     expect(workflow).toContain("^v${package_version}-[1-9][0-9]*$");
     expect(workflow).not.toContain("workflow_dispatch:");
     expect(workflow).not.toContain("push:\n");
     expect(workflow).toContain("(-(beta\\.)?[1-9][0-9]*)?");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-slim");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-browser");
     expect(workflow).toContain("node workflow-source/scripts/lib/docker-release-policy.mjs");
     expect(workflow).not.toContain("needs.resolve_release_policy.outputs.default_aliases");
     expect(workflow).not.toContain("needs.resolve_release_policy.outputs.slim_aliases");

@@ -27,4 +27,60 @@ describe("legacy config migrate validation", () => {
       'Set tools.profile to "full" so tools.allow controls explicit configured-section grants directly.',
     ]);
   });
+
+  it("returns schema-valid config after removing unsupported OTel grpc", () => {
+    const res = migrateLegacyConfig({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          endpoint: "http://otel-collector:4317",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.partiallyValid).toBeUndefined();
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
+    });
+  });
+
+  it("validates resolved OTel values while retaining authored interpolation", () => {
+    const authored = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "${OTEL_LOGS_EXPORTER}",
+          protocol: "grpc",
+        },
+      },
+    };
+    const resolved = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfig(authored, {
+      authoredRaw: authored,
+      resolvedRaw: resolved,
+    });
+
+    expect(res.partiallyValid).toBeUndefined();
+    expect(res.config?.diagnostics?.otel?.logsExporter).toBe("stdout");
+    expect(res.sourceConfig?.diagnostics?.otel?.logsExporter).toBe("${OTEL_LOGS_EXPORTER}");
+    expect(res.config?.diagnostics?.otel?.protocol).toBeUndefined();
+    expect(res.sourceConfig?.diagnostics?.otel?.protocol).toBeUndefined();
+  });
 });

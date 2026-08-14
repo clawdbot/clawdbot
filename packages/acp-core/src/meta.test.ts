@@ -1,10 +1,17 @@
 // ACP Core tests cover meta behavior.
 import { describe, expect, it } from "vitest";
-import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
+import {
+  readBool,
+  readMetadataNumber,
+  readMetadataString,
+  readNonNegativeInteger,
+} from "./meta.js";
 
 describe("ACP metadata readers", () => {
   it("returns the first normalized string value", () => {
-    expect(readString({ old: "  ", current: " session-1 " }, ["old", "current"])).toBe("session-1");
+    expect(readMetadataString({ old: "  ", current: " session-1 " }, ["old", "current"])).toBe(
+      "session-1",
+    );
   });
 
   it("preserves false boolean values", () => {
@@ -12,8 +19,8 @@ describe("ACP metadata readers", () => {
   });
 
   it("accepts finite numbers and rejects non-numeric values", () => {
-    expect(readNumber({ first: "1", second: 0 }, ["first", "second"])).toBe(0);
-    expect(readNumber({ first: Number.POSITIVE_INFINITY }, ["first"])).toBeUndefined();
+    expect(readMetadataNumber({ first: "1", second: 0 }, ["first", "second"])).toBe(0);
+    expect(readMetadataNumber({ first: Number.POSITIVE_INFINITY }, ["first"])).toBeUndefined();
   });
 
   it("accepts zero as a non-negative integer", () => {
