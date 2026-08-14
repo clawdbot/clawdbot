@@ -9,6 +9,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
+import "./sidebar-attention.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";

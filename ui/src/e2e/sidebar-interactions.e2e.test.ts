@@ -160,7 +160,7 @@ suite.define(() => {
     }
   });
 
-  it("moves Automations attention from the direct row into More when unpinned", async () => {
+  it("moves Automations attention from the direct row into More when hidden", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
