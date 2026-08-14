@@ -246,7 +246,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs queue media cleanup at startup and hourly", async () => {
+  it("runs queue and setup cleanup on their maintenance cadences", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
@@ -254,8 +254,10 @@ describe("startGatewayMaintenanceTimers", () => {
 
     await vi.advanceTimersByTimeAsync(0);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
+    expect(deps.runDevicePairSetupCompletionGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
+    expect(deps.runDevicePairSetupCompletionGc).toHaveBeenCalledTimes(61);
     expect(pruneExpiredDeliveryQueueTombstonesMock).not.toHaveBeenCalled();
 
     await stopMaintenanceTimers(timers);
@@ -274,20 +276,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(2);
     expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(2);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("prunes retained setup outcomes at startup and every maintenance minute", async () => {
-    vi.useFakeTimers();
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const deps = createMaintenanceTimerDeps();
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(deps.runDevicePairSetupCompletionGc).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(deps.runDevicePairSetupCompletionGc).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);
   });
