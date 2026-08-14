@@ -1941,7 +1941,8 @@ export const en: TranslationMap = {
     pages: "Pages",
     pinned: "Pinned",
     customize: "Customize sidebar",
-    customizeReset: "Reset pinned items",
+    customizeShow: "Show {item} in sidebar",
+    customizeHide: "Hide {item} from sidebar",
     workboardGroup: "WorkBoard",
   },
   terminal: {

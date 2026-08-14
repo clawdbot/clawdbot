@@ -1,6 +1,7 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { parseSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
@@ -19,6 +20,12 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
+import {
+  buildSidebarCustomizerEntries,
+  buildSidebarCustomizerSections,
+  renderSidebarCustomizer,
+  type SidebarCustomizerItem,
+} from "./app-sidebar-customizer.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarAttention,
@@ -77,6 +84,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     count: 0,
     severity: null as "danger" | "warning" | null,
   };
+  @state() private sidebarCustomizerOpen = false;
+
+  private sidebarCustomizerReturnFocus: HTMLElement | null = null;
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
@@ -431,6 +441,97 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     });
   }
 
+  openSidebarCustomizer(trigger: HTMLElement | null = null): void {
+    this.sidebarMenus.dismissTransientMenus();
+    this.sidebarCustomizerReturnFocus = trigger;
+    this.sidebarCustomizerOpen = true;
+    void this.updateComplete.then(() =>
+      this.querySelector<HTMLElement>(".sidebar-customizer button:not([disabled])")?.focus(),
+    );
+  }
+
+  private closeSidebarCustomizer(): void {
+    this.sidebarCustomizerOpen = false;
+    const returnFocus = this.sidebarCustomizerReturnFocus;
+    this.sidebarCustomizerReturnFocus = null;
+    void this.updateComplete.then(() => {
+      if (returnFocus?.isConnected) {
+        returnFocus.focus();
+      } else {
+        this.querySelector<HTMLElement>(".sidebar-nav__more")?.focus();
+      }
+    });
+  }
+
+  private toggleSidebarCustomizerItem(item: SidebarCustomizerItem): void {
+    if (item.kind === "entry" && item.entry) {
+      const canonical = this.reconciledSidebarZone().sidebarEntries;
+      const next = canonical.includes(item.entry)
+        ? canonical.filter((candidate) => candidate !== item.entry)
+        : [...canonical, item.entry];
+      this.onUpdateSidebarEntries?.(next);
+      return;
+    }
+    if (item.id.startsWith("catalog:")) {
+      setStoredSessionCatalogHidden(item.id.slice("catalog:".length), item.visible);
+    }
+  }
+
+  private sidebarCustomizerEntries(): SidebarCustomizerItem[] {
+    return buildSidebarCustomizerEntries({
+      canonical: this.reconciledSidebarZone().sidebarEntries,
+      enabledRouteIds: this.enabledRouteIds,
+      workboards: this.workboardBoards,
+    });
+  }
+
+  private sidebarCustomizerSections(): SidebarCustomizerItem[] {
+    const navigationState = this.getSessionNavigationState();
+    const visibleSessions = this.selectedAgentSessionRows(navigationState);
+    const { sections } = this.zonedVisibleSections(visibleSessions);
+    return buildSidebarCustomizerSections({
+      sections,
+      catalogLabels: new Map(
+        this.sessionData.sessionCatalogs.map((catalog) => [catalog.id, catalog.label]),
+      ),
+      hiddenCatalogIds: this.hiddenSessionCatalogIds,
+    });
+  }
+
+  private renderSidebarCustomizer() {
+    return renderSidebarCustomizer({
+      entries: this.sidebarCustomizerEntries(),
+      sections: this.sidebarCustomizerSections(),
+      onToggle: (item) => this.toggleSidebarCustomizerItem(item),
+      onBack: () => this.closeSidebarCustomizer(),
+      onEntryDragStart: (event, item) => {
+        const entry = item.entry ? parseSidebarEntry(item.entry) : null;
+        if (entry?.type === "route") {
+          this.sessionOrganizer.startSidebarRouteDrag(event, entry.route);
+        } else if (entry?.type === "workboard") {
+          this.sessionOrganizer.startSidebarWorkboardDrag(event, entry.boardId);
+        }
+      },
+      onEntryDragOver: (event, entry) =>
+        this.sessionOrganizer.handleSidebarZoneDragOver(event, entry),
+      onEntryDragLeave: (event) => this.sessionOrganizer.handleSidebarZoneDragLeave(event),
+      onEntryDrop: (event, entry) => this.sessionOrganizer.handleSidebarZoneDrop(event, entry),
+      onSectionDragStart: (sectionId) => this.startSidebarSectionDrag(sectionId),
+      onSectionDragOver: (event, sectionId, category) =>
+        this.sectionDragOver(event, sectionId, category),
+      onSectionDragLeave: (event, sectionId, category) =>
+        this.sectionDragLeave(event, sectionId, category),
+      onSectionDrop: (event, sectionId, category) => this.sectionDrop(event, sectionId, category),
+      onDragEnd: (kind) => {
+        if (kind === "section") {
+          this.finishSidebarSectionDrag();
+        } else {
+          this.sessionOrganizer.finishSidebarEntryDrag();
+        }
+      },
+    });
+  }
+
   openCatalogMenu(
     request: CatalogSessionMenuRequest,
     x: number,
@@ -510,87 +611,95 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         }}
       >
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
-          ${renderAppSidebarBrand(this)}
-          <div
-            class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData
-              .sessionsScrollState} ${this.sidebarScrolling
-              ? "sidebar-shell__body--scrolling"
-              : ""}"
-            @scroll=${(event: Event) =>
-              this.handleSidebarScroll(event.currentTarget as HTMLElement)}
-          >
-            <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
-              <div
-                class="nav-section__items"
-                @dragover=${(event: DragEvent) =>
-                  this.sessionOrganizer.handleSidebarZoneDragOver(event)}
-                @dragleave=${(event: DragEvent) =>
-                  this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
-                @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
-              >
-                ${renderAppSidebarHomeRow(this)}
-                ${sidebarZone.entries.map((entry) =>
-                  renderAppSidebarZoneEntry(
-                    this,
-                    entry,
-                    sidebarZone.sessionRows,
-                    sidebarZone.workboardRows,
-                  ),
-                )}
-                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
-                  (tab) => renderAppSidebarPluginTabEntry(this, tab),
-                )}
-                ${renderAppSidebarMoreRow(this)}
-              </div>
-            </nav>
-            ${this.renderSessions()}
-          </div>
-          <div class="sidebar-shell__footer">
-            ${renderAppSidebarAttention(this)}
-            <openclaw-sidebar-update-card
-              .updateAvailable=${this.updateAvailable}
-              .updateSchedule=${this.updateSchedule}
-              .heldUpdateCampaignId=${this.heldUpdateCampaignId}
-              .updateBusy=${this.updateBusy}
-              .statusBanner=${this.updateStatusBanner}
-              .watchUpdateProgress=${this.watchUpdateProgress}
-              .canUpdate=${this.canUpdate}
-              .canHoldUpdate=${this.canHoldUpdate}
-              .onUpdate=${this.onUpdate}
-              .refreshRequired=${this.refreshRequired}
-              .onRefresh=${this.onRefresh}
-              .onHoldUpdate=${this.onHoldUpdate}
-            ></openclaw-sidebar-update-card>
-            <openclaw-lobster-pet
-              .seed=${lobsterPetSeed(this.sessionKey)}
-              .mode=${resolveLobsterPetMode(
-                !this.offline,
-                this.sessionData.sessionsResult?.sessions,
-              )}
-              .runOutcome=${resolveLobsterRunOutcome(this.sessionData.sessionsResult?.sessions)}
-              .visitsEnabled=${this.lobsterPetVisits}
-              .soundsEnabled=${this.lobsterPetSounds}
-              .gatewayVersion=${this.gatewayVersion}
-              .onVisitsDisabled=${this.refreshAppearanceSettings}
-            ></openclaw-lobster-pet>
-            ${this.devGitBranch
-              ? html`<openclaw-tooltip .content=${this.devGitBranch}>
-                  <div class="sidebar-footer-branch">
-                    <span class="sidebar-footer-branch__icon" aria-hidden="true"
-                      >${icons.gitBranch}</span
+          ${this.sidebarCustomizerOpen
+            ? html`<div class="sidebar-customizer__brand" inert>${renderAppSidebarBrand(this)}</div>
+                ${this.renderSidebarCustomizer()}`
+            : html`${renderAppSidebarBrand(this)}
+                <div
+                  class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData
+                    .sessionsScrollState} ${this.sidebarScrolling
+                    ? "sidebar-shell__body--scrolling"
+                    : ""}"
+                  @scroll=${(event: Event) =>
+                    this.handleSidebarScroll(event.currentTarget as HTMLElement)}
+                >
+                  <nav
+                    class="sidebar-nav"
+                    @contextmenu=${this.sidebarMenus.openSidebarCustomizerFromContext}
+                  >
+                    <div
+                      class="nav-section__items"
+                      @dragover=${(event: DragEvent) =>
+                        this.sessionOrganizer.handleSidebarZoneDragOver(event)}
+                      @dragleave=${(event: DragEvent) =>
+                        this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
+                      @drop=${(event: DragEvent) =>
+                        this.sessionOrganizer.handleSidebarZoneDrop(event)}
                     >
-                    <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
-                  </div>
-                </openclaw-tooltip>`
-              : nothing}
-            ${renderAppSidebarFooterBar(this)}
-          </div>
+                      ${renderAppSidebarHomeRow(this)}
+                      ${sidebarZone.entries.map((entry) =>
+                        renderAppSidebarZoneEntry(
+                          this,
+                          entry,
+                          sidebarZone.sessionRows,
+                          sidebarZone.workboardRows,
+                        ),
+                      )}
+                      ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
+                        (tab) => renderAppSidebarPluginTabEntry(this, tab),
+                      )}
+                      ${renderAppSidebarMoreRow(this)}
+                    </div>
+                  </nav>
+                  ${this.renderSessions()}
+                </div>
+                <div class="sidebar-shell__footer">
+                  ${renderAppSidebarAttention(this)}
+                  <openclaw-sidebar-update-card
+                    .updateAvailable=${this.updateAvailable}
+                    .updateSchedule=${this.updateSchedule}
+                    .heldUpdateCampaignId=${this.heldUpdateCampaignId}
+                    .updateBusy=${this.updateBusy}
+                    .statusBanner=${this.updateStatusBanner}
+                    .watchUpdateProgress=${this.watchUpdateProgress}
+                    .canUpdate=${this.canUpdate}
+                    .canHoldUpdate=${this.canHoldUpdate}
+                    .onUpdate=${this.onUpdate}
+                    .refreshRequired=${this.refreshRequired}
+                    .onRefresh=${this.onRefresh}
+                    .onHoldUpdate=${this.onHoldUpdate}
+                  ></openclaw-sidebar-update-card>
+                  <openclaw-lobster-pet
+                    .seed=${lobsterPetSeed(this.sessionKey)}
+                    .mode=${resolveLobsterPetMode(
+                      !this.offline,
+                      this.sessionData.sessionsResult?.sessions,
+                    )}
+                    .runOutcome=${resolveLobsterRunOutcome(
+                      this.sessionData.sessionsResult?.sessions,
+                    )}
+                    .visitsEnabled=${this.lobsterPetVisits}
+                    .soundsEnabled=${this.lobsterPetSounds}
+                    .gatewayVersion=${this.gatewayVersion}
+                    .onVisitsDisabled=${this.refreshAppearanceSettings}
+                  ></openclaw-lobster-pet>
+                  ${this.devGitBranch
+                    ? html`<openclaw-tooltip .content=${this.devGitBranch}>
+                        <div class="sidebar-footer-branch">
+                          <span class="sidebar-footer-branch__icon" aria-hidden="true"
+                            >${icons.gitBranch}</span
+                          >
+                          <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
+                        </div>
+                      </openclaw-tooltip>`
+                    : nothing}
+                  ${renderAppSidebarFooterBar(this)}
+                </div>`}
         </div>
-        ${this.sidebarMenus.renderCustomizeMenu()} ${this.sidebarMenus.renderMoreMenu()}
-        ${this.sidebarMenus.renderAgentMenu()} ${this.sidebarMenus.renderIdentityMenu()}
-        ${this.sidebarMenus.renderSessionMenu()} ${this.sidebarMenus.catalogMenu.render()}
-        ${this.sidebarMenus.renderSessionGroupMenu()} ${this.sidebarMenus.renderSessionSortMenu()}
-        ${this.sidebarMenus.renderCatalogViewMenu()}
+        ${this.sidebarMenus.renderMoreMenu()} ${this.sidebarMenus.renderAgentMenu()}
+        ${this.sidebarMenus.renderIdentityMenu()} ${this.sidebarMenus.renderSessionMenu()}
+        ${this.sidebarMenus.catalogMenu.render()} ${this.sidebarMenus.renderSessionGroupMenu()}
+        ${this.sidebarMenus.renderSessionSortMenu()} ${this.sidebarMenus.renderCatalogViewMenu()}
       </aside>
     `;
   }

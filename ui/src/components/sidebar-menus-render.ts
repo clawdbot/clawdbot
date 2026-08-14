@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
@@ -15,7 +14,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
-import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   renderSidebarCatalogViewMenu,
@@ -28,52 +27,6 @@ import type {
   SidebarMenusController,
   SidebarMenusControllerHost,
 } from "./sidebar-menus-controller.ts";
-
-export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
-  const { host } = controller;
-  const position = controller.customizeMenuPosition;
-  const trigger = controller.customizeMenuTrigger;
-  return renderSidebarCustomizeMenu({
-    position,
-    sidebarEntries: host.sidebarEntries,
-    preferencesBrowserOnly: host.preferencesBrowserOnly,
-    isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-    workboardBoards: host.workboardBoards,
-    workboardRenderers: host.workboardRenderers,
-    onTabAway: () => trigger?.focus(),
-    onClose: (restoreFocus) => {
-      if (controller.customizeMenuPosition !== position) {
-        return;
-      }
-      controller.closeCustomizeMenu({ restoreFocus });
-    },
-    onToggleRoute: (routeId) => {
-      const entry = serializeSidebarEntry({ type: "route", route: routeId });
-      const canonical = host.reconciledSidebarZone().sidebarEntries;
-      const next = canonical.includes(entry)
-        ? canonical.filter((candidate) => candidate !== entry)
-        : [...canonical, entry];
-      host.onUpdateSidebarEntries?.(next);
-    },
-    onToggleWorkboardBoard: (boardId) => {
-      const entry = serializeSidebarEntry({ type: "workboard", boardId });
-      const canonical = host.reconciledSidebarZone().sidebarEntries;
-      const next = canonical.includes(entry)
-        ? canonical.filter((candidate) => candidate !== entry)
-        : [...canonical, entry];
-      host.onUpdateSidebarEntries?.(next);
-    },
-    onReset: () => {
-      // Canonical list, not the render list: unknown-state session slots
-      // (other agents, still-loading caches) must survive a route reset.
-      const sessions = host
-        .reconciledSidebarZone()
-        .sidebarEntries.filter((entry) => entry.startsWith("session:"));
-      host.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
-      controller.closeCustomizeMenu({ restoreFocus: true });
-    },
-  });
-}
 
 export function renderSidebarAgentMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
@@ -419,11 +372,9 @@ export function renderSidebarMoreMenuForController(controller: SidebarMenusContr
     onPreloadRoute: (routeId, event) => controller.preloadRoute(routeId, event),
     onCancelPreload: (event) => controller.cancelPreload(event),
     onEditPinnedItems: () => {
-      const customizePosition = controller.moreMenuPosition;
       const customizeTrigger = controller.moreMenuTrigger;
-      if (customizePosition) {
-        controller.openCustomizeMenu(customizePosition.x, customizePosition.y, customizeTrigger);
-      }
+      controller.closeMoreMenu();
+      host.openSidebarCustomizer(customizeTrigger);
     },
   });
 }

@@ -45,7 +45,6 @@ type SidebarMenuAgent = {
 };
 
 interface SidebarMenusControllerState {
-  customizeMenuPosition: { x: number; y: number } | null;
   moreMenuPosition: { x: number; y: number } | null;
   sessionMenu: SidebarSessionMenuState | null;
   sessionMenuWork: SessionMenuWork | null;
@@ -60,7 +59,6 @@ interface SidebarMenusControllerState {
 type SidebarMenusRenderer = {
   renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
   renderSidebarCatalogViewMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCustomizeMenuForController(controller: SidebarMenusController): unknown;
   renderSidebarIdentityMenuForController(controller: SidebarMenusController): unknown;
   renderSidebarMoreMenuForController(controller: SidebarMenusController): unknown;
   renderSidebarSessionGroupMenuForController(controller: SidebarMenusController): unknown;
@@ -86,9 +84,9 @@ export interface SidebarMenusControllerHost
   readonly onPairMobile?: () => void;
   readonly onRetryConnect?: () => void;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
+  openSidebarCustomizer(trigger?: HTMLElement | null): void;
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   readonly pinnedAgentIds: readonly string[];
-  readonly preferencesBrowserOnly: boolean;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
@@ -135,7 +133,6 @@ export interface SidebarMenusControllerHost
 
 /** Popup ownership and stateless menu-renderer wiring. */
 export class SidebarMenusController implements ReactiveController, SidebarMenusControllerState {
-  customizeMenuPosition: { x: number; y: number } | null = null;
   moreMenuPosition: { x: number; y: number } | null = null;
   sessionMenu: SidebarSessionMenuState | null = null;
   sessionMenuWork: SessionMenuWork | null = null;
@@ -147,7 +144,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
 
-  customizeMenuTrigger: HTMLElement | null = null;
   moreMenuTrigger: HTMLElement | null = null;
   sessionMenuTrigger: HTMLElement | null = null;
   private sessionMenuWorkVersion = 0;
@@ -215,7 +211,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   // keep document-level shortcuts alive even when an ancestor is hidden.
   dismissTransientMenus(): boolean {
     const hadTransientMenu = Boolean(
-      this.customizeMenuPosition ||
       this.moreMenuPosition ||
       this.sessionMenu ||
       this.catalogMenu.isOpen ||
@@ -225,7 +220,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       this.agentMenuPosition ||
       this.identityMenuPosition,
     );
-    this.closeCustomizeMenu();
     this.closeMoreMenu();
     this.closeSessionMenu();
     this.catalogMenu.close();
@@ -256,31 +250,10 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     return this.host.enabledRouteIds?.includes(routeId) ?? true;
   }
 
-  readonly openCustomizeMenuFromContext = (event: MouseEvent) => {
+  readonly openSidebarCustomizerFromContext = (event: MouseEvent) => {
     event.preventDefault();
-    this.openCustomizeMenu(event.clientX, event.clientY);
+    this.host.openSidebarCustomizer(event.currentTarget as HTMLElement);
   };
-
-  openCustomizeMenu(x: number, y: number, trigger: HTMLElement | null = null) {
-    const menuWidth = 240;
-    const menuMaxHeight = 420;
-    this.loadMenuRenderer();
-    this.dismissTransientMenus();
-    this.customizeMenuTrigger = trigger;
-    this.updateState("customizeMenuPosition", {
-      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
-      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
-    });
-  }
-
-  closeCustomizeMenu(options: { restoreFocus?: boolean } = {}) {
-    const trigger = this.customizeMenuTrigger;
-    this.customizeMenuTrigger = null;
-    this.updateState("customizeMenuPosition", null);
-    if (options.restoreFocus) {
-      trigger?.focus();
-    }
-  }
 
   toggleMoreMenu(trigger: HTMLElement) {
     if (this.moreMenuPosition) {
@@ -477,7 +450,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.loadMenuRenderer();
     const menuWidth = 240;
     const rect = trigger.getBoundingClientRect();
-    this.closeCustomizeMenu();
     this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
@@ -532,10 +504,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     if (options.restoreFocus) {
       trigger?.focus();
     }
-  }
-
-  renderCustomizeMenu() {
-    return this.menuRenderer?.renderSidebarCustomizeMenuForController(this) ?? nothing;
   }
 
   renderAgentMenu() {

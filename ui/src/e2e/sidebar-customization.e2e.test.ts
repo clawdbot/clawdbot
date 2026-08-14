@@ -244,10 +244,12 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const sidebar = page.locator("openclaw-app-sidebar");
-      const pinnedItems = sidebar.locator(
+      const visiblePageItems = sidebar.locator(
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await expect
+        .poll(() => trimmedTextContents(visiblePageItems))
+        .toEqual(["Automations", "Plugins"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
@@ -497,7 +499,7 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await captureUiProof(page, "01-default-pinned.png");
+      await captureUiProof(page, "01-default-sidebar.png");
 
       const moreButton = sidebar.locator(".sidebar-nav__more");
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
@@ -512,54 +514,69 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(sidebar.locator(".nav-item__text")))
         .toContain("Logbook");
-      await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
+      await expect.poll(() => trimmedTextContents(visiblePageItems)).not.toContain("Logbook");
       // Workboard ships disabled, so it stays hidden from navigation entirely.
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .not.toContain("Workboard");
 
       await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
-      const menu = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-      );
-      // The pin editor replaces the More menu in place.
+      const customizer = sidebar.locator(".sidebar-customizer");
+      // The customizer replaces the sidebar body instead of opening a second menu.
       await expect.poll(() => moreMenu.count()).toBe(0);
+      await expect.poll(() => customizer.isVisible()).toBe(true);
+      const homeRow = customizer.locator('[data-sidebar-customizer-id="fixed:home"]');
+      const sessionsRow = customizer.locator('[data-sidebar-customizer-id="ungrouped"]');
+      await expect.poll(() => homeRow.locator("button, .sidebar-customizer__grip").count()).toBe(0);
       await expect
-        .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
-        .not.toContain("Workboard");
-      const tasksItem = menu.getByRole("menuitemcheckbox", { name: "Tasks" });
-      await expect.poll(() => tasksItem.getAttribute("aria-checked")).toBe("false");
-      // Ask OpenClaw moved to Settings (#111686): custodian is not a sidebar
-      // nav route anymore, so the pin editor does not offer it.
-      await expect
-        .poll(() => menu.getByRole("menuitemcheckbox", { name: "OpenClaw" }).count())
+        .poll(() => sessionsRow.locator(".sidebar-customizer__visibility").count())
         .toBe(0);
-      await captureUiProof(page, "02-customize-menu.png");
-
-      await tasksItem.click();
+      const tasksRow = customizer.locator('[data-sidebar-customizer-id="route:tasks"]');
+      await expect.poll(() => tasksRow.getAttribute("class")).toContain("--hidden");
+      // Ask OpenClaw moved to Settings (#111686): custodian is not a sidebar
+      // nav route anymore, so the customizer does not offer it.
+      await expect.poll(() => customizer.getByText("OpenClaw", { exact: true }).count()).toBe(0);
+      for (const theme of ["light", "dark"] as const) {
+        await setThemeMode(page, theme);
+        await captureSettingsSidebarProof(customizer, `02-customizer-${theme}.png`);
+      }
+      await page.emulateMedia({ reducedMotion: "reduce" });
       await expect
-        .poll(() => trimmedTextContents(pinnedItems))
+        .poll(() => tasksRow.evaluate((row) => getComputedStyle(row).animationName))
+        .toBe("none");
+
+      await tasksRow.getByRole("button", { name: "Show Tasks in sidebar" }).click();
+      await expect.poll(() => tasksRow.getAttribute("class")).not.toContain("--hidden");
+      await customizer.getByRole("button", { name: "Back" }).click();
+      await expect
+        .poll(() => trimmedTextContents(visiblePageItems))
         .toEqual(["Automations", "Plugins", "Tasks"]);
       await page.reload();
       await expect
-        .poll(() => trimmedTextContents(pinnedItems))
+        .poll(() => trimmedTextContents(visiblePageItems))
         .toEqual(["Automations", "Plugins", "Tasks"]);
-      // The More menu is transient: closed after reload, unpinned routes inside.
+      // The More menu is transient: closed after reload, secondary routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
-      const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
+      const editPersistedCustomization = moreMenu.getByRole("menuitem", {
         name: "Customize sidebar",
       });
-      await expect.poll(() => editPersistedPinnedItems.isVisible()).toBe(true);
+      await expect.poll(() => editPersistedCustomization.isVisible()).toBe(true);
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .not.toContain("Tasks");
       await captureUiProof(page, "03-persisted-customization.png");
 
-      await editPersistedPinnedItems.click();
-      await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await editPersistedCustomization.click();
+      await customizer
+        .locator('[data-sidebar-customizer-id="route:tasks"]')
+        .getByRole("button", { name: "Hide Tasks from sidebar" })
+        .click();
+      await customizer.getByRole("button", { name: "Back" }).click();
+      await expect
+        .poll(() => trimmedTextContents(visiblePageItems))
+        .toEqual(["Automations", "Plugins"]);
 
       // The shell chrome search button is the command palette entry point.
       const searchButton = page.locator(".shell-chrome-controls__search");

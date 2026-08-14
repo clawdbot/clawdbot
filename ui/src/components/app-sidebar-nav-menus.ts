@@ -7,9 +7,7 @@ import {
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   navigationIconForRoute,
-  serializeSidebarEntry,
   type NavigationRouteId,
-  SIDEBAR_NAV_ROUTES,
   type SidebarNavRoute,
   sidebarMoreRoutes,
   titleForRoute,
@@ -18,7 +16,6 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { pluginTabSearch } from "../pages/plugin/route.ts";
-import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import { icons, type IconName } from "./icons.ts";
 import type { SidebarAutomationAttention } from "./sidebar-attention-items.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
@@ -240,99 +237,6 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
         <wa-dropdown-item class="sidebar-customize-menu__item" value="customize">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings2}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customize")}</span>
-        </wa-dropdown-item>
-      </wa-dropdown>
-    </openclaw-menu-surface>
-  `;
-}
-
-type SidebarCustomizeMenuParams = {
-  position: SidebarMenuPosition | null;
-  sidebarEntries: readonly string[];
-  preferencesBrowserOnly: boolean;
-  isRouteEnabled: (routeId: NavigationRouteId) => boolean;
-  workboardBoards: readonly SidebarWorkboardBoard[];
-  workboardRenderers?: SidebarWorkboardRenderers;
-  onToggleRoute: (routeId: SidebarNavRoute) => void;
-  onToggleWorkboardBoard: (boardId: string) => void;
-  onReset: () => void;
-  onTabAway: () => void;
-  onClose: (restoreFocus: boolean) => void;
-};
-
-export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
-  const position = params.position;
-  if (!position) {
-    return nothing;
-  }
-  return html`
-    <openclaw-menu-surface>
-      <wa-dropdown
-        class="sidebar-customize-menu sidebar-pin-editor-menu"
-        .open=${true}
-        placement="bottom-start"
-        .distance=${0}
-        aria-label=${t("nav.customize")}
-        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-          event.preventDefault();
-          const value = event.detail.item.value;
-          if (value === "reset") {
-            params.onReset();
-          } else if (value?.startsWith("workboard:")) {
-            const boardId = value.slice("workboard:".length);
-            if (params.workboardBoards.some((board) => board.id === boardId)) {
-              params.onToggleWorkboardBoard(boardId);
-            }
-          } else if (value && SIDEBAR_NAV_ROUTES.includes(value as SidebarNavRoute)) {
-            params.onToggleRoute(value as SidebarNavRoute);
-          }
-        }}
-        @keydown=${(event: KeyboardEvent) =>
-          trackDropdownKeyboardDismissal(event, params.onTabAway)}
-        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
-      >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          aria-label=${t("nav.customize")}
-          style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-        ></button>
-        <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
-        ${params.preferencesBrowserOnly
-          ? html`<div class="sidebar-customize-menu__provenance" role="note">
-              ${t("quickSettings.personal.browserOnly")}
-            </div>`
-          : nothing}
-        ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
-          const visible = params.sidebarEntries.includes(
-            serializeSidebarEntry({ type: "route", route: routeId }),
-          );
-          return html`
-            <wa-dropdown-item
-              class="sidebar-customize-menu__item"
-              type="checkbox"
-              value=${routeId}
-              .checked=${visible}
-            >
-              <span slot="icon" class="nav-item__icon" aria-hidden="true"
-                >${icons[navigationIconForRoute(routeId)]}</span
-              >
-              <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-            </wa-dropdown-item>
-          `;
-        })}
-        ${params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
-          ? params.workboardRenderers?.renderCustomize(
-              params.workboardBoards,
-              params.sidebarEntries,
-            )
-          : nothing}
-        <div class="sidebar-customize-menu__separator" role="separator"></div>
-        <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
-          <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
         </wa-dropdown-item>
       </wa-dropdown>
     </openclaw-menu-surface>

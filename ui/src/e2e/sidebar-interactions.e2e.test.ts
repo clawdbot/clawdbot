@@ -127,31 +127,22 @@ suite.define(() => {
       expect(menuGap).toBeGreaterThanOrEqual(4);
       expect(menuGap).toBeLessThanOrEqual(7);
       await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
-      const pinItems = sidebar
-        .locator(
-          "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-        )
-        .locator('[role="menuitem"], [role="menuitemcheckbox"]');
-      // The pin editor installs roving focus after the outgoing More menu yields.
+      const customizer = sidebar.locator(".sidebar-customizer");
+      const customizerButtons = customizer.getByRole("button");
       await expect
         .poll(() =>
-          pinItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
+          customizerButtons.first().evaluate((element) => element === document.activeElement),
         )
-        .toBe(1);
-      await expect
-        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
         .toBe(true);
-      await page.keyboard.press("End");
+      await page.keyboard.press("Tab");
       await expect
-        .poll(() => pinItems.last().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Home");
-      await expect
-        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
+        .poll(() =>
+          customizerButtons.nth(1).evaluate((element) => element === document.activeElement),
+        )
         .toBe(true);
       await page.keyboard.press("Escape");
 
-      await expect.poll(() => page.locator(".sidebar-customize-menu").count()).toBe(0);
+      await expect.poll(() => customizer.count()).toBe(0);
       await expect
         .poll(() => moreButton.evaluate((element) => element === document.activeElement))
         .toBe(true);
@@ -212,8 +203,8 @@ suite.define(() => {
         .getByRole("menuitem", { name: "Customize sidebar" })
         .click();
       await sidebar
-        .locator("wa-dropdown.sidebar-pin-editor-menu")
-        .getByRole("menuitemcheckbox", { name: "Automations" })
+        .locator('[data-sidebar-customizer-id="route:cron"]')
+        .getByRole("button", { name: "Hide Automations from sidebar" })
         .click();
       await page.keyboard.press("Escape");
 
@@ -232,7 +223,7 @@ suite.define(() => {
     }
   });
 
-  it("moves focus through the sidebar pin editor with menu keys", async () => {
+  it("enters sidebar customization through the More menu keyboard owner", async () => {
     const { context, page } = await openSidebarCustomizationPage(suite);
 
     try {
@@ -247,42 +238,27 @@ suite.define(() => {
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
-      await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
-      const menu = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-      );
-      const menuItems = menu.locator('[role="menuitem"], [role="menuitemcheckbox"]');
-      await expect
-        .poll(() =>
-          menuItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
-        )
-        .toBe(1);
-      await expect
-        .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => menuItems.nth(1).evaluate((element) => element === document.activeElement))
-        .toBe(true);
       await page.keyboard.press("End");
       await expect
-        .poll(() => menuItems.last().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Tab");
-      await expect.poll(() => menu.count()).toBe(0);
-      await expect
         .poll(() =>
-          page.evaluate(() => {
-            const active = document.activeElement;
-            return active !== document.body && active?.closest(".sidebar-customize-menu") === null;
-          }),
+          moreMenu
+            .getByRole("menuitem", { name: "Customize sidebar" })
+            .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
+      await page.keyboard.press("Enter");
+      const customizer = sidebar.locator(".sidebar-customizer");
+      const buttons = customizer.getByRole("button");
+      await expect
+        .poll(() => buttons.first().evaluate((element) => element === document.activeElement))
+        .toBe(true);
+
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => buttons.nth(1).evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => customizer.count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
