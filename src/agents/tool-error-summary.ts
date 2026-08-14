@@ -27,6 +27,7 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
+  acknowledgementAction?: string;
   actionFingerprint?: string;
   fileTarget?: FileTarget;
   terminalDiagnostic?: ProcessTerminalDiagnostic;

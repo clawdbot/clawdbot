@@ -138,6 +138,20 @@ describe("tool mutation helpers", () => {
     expect(
       buildToolMutationState("message", { action: "send", to: "forum:1" }).mutatingAction,
     ).toBe(true);
+    expect(
+      buildToolMutationState("message", { action: "send", to: "forum:1" }).acknowledgementAction,
+    ).toBe("send");
+    expect(
+      buildToolMutationState("message", { action: "delete", id: "message:1" })
+        .acknowledgementAction,
+    ).toBe("delete");
+    expect(
+      buildToolMutationState("file_write", { path: "/tmp/report.md", content: "done" }),
+    ).toMatchObject({
+      mutatingAction: true,
+      acknowledgementAction: "write",
+      fileTarget: { path: "/tmp/report.md" },
+    });
     expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
     for (const action of ["cancel", "kill", "steer"]) {
       expect(
@@ -150,6 +164,10 @@ describe("tool mutation helpers", () => {
     expect(
       buildToolMutationState("sessions_spawn", { task: "inspect the failure" }).mutatingAction,
     ).toBe(true);
+    expect(
+      buildToolMutationState("sessions_spawn", { task: "inspect the failure" })
+        .acknowledgementAction,
+    ).toBe("spawn");
     expect(buildToolMutationState("process", { action: "clear" }).mutatingAction).toBe(true);
     expect(buildToolMutationState("process", { action: "remove" }).mutatingAction).toBe(true);
     expect(
@@ -192,9 +210,16 @@ describe("tool mutation helpers", () => {
       true,
     );
     expect(
+      buildToolMutationState("create_goal", { sessionKey: "agent:main" }).acknowledgementAction,
+    ).toBe("create");
+    expect(
       buildToolMutationState("update_goal", { sessionKey: "agent:main", status: "complete" })
         .mutatingAction,
     ).toBe(true);
+    expect(
+      buildToolMutationState("update_goal", { sessionKey: "agent:main", status: "complete" })
+        .acknowledgementAction,
+    ).toBe("update");
   });
 
   it("classifies computer observations as replay-safe and input as mutating", () => {
@@ -222,6 +247,7 @@ describe("tool mutation helpers", () => {
       const state = buildToolMutationState("computer", { action });
       expect(state.mutatingAction, action).toBe(true);
       expect(state.replaySafe, action).toBe(false);
+      expect(state.acknowledgementAction, action).toBe(action);
       expect(state.actionFingerprint, action).toBe(`tool=computer|action=${action}`);
     }
     expect(isMutatingToolCall("computer", {})).toBe(true);

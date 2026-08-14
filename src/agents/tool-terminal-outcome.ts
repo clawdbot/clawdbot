@@ -61,6 +61,9 @@ export function createToolTerminalObserver(
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
         mutatingAction,
+        ...(mutatingAction && mutation.acknowledgementAction
+          ? { acknowledgementAction: mutation.acknowledgementAction }
+          : {}),
         ...(mutatingAction && mutation.actionFingerprint
           ? { actionFingerprint: mutation.actionFingerprint }
           : {}),

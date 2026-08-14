@@ -91,6 +91,129 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "missing");
   });
 
+  it.each([
+    {
+      toolName: "write",
+      text: "The write failed, so I couldn't save the file.",
+      acknowledgementAction: "write",
+    },
+    {
+      toolName: "edit",
+      text: "I couldn't modify the file, so no changes were applied.",
+      acknowledgementAction: "edit",
+    },
+    {
+      toolName: "message",
+      text: "The message send failed, so I couldn't reply.",
+      acknowledgementAction: "send",
+    },
+    {
+      toolName: "message",
+      text: "The message could not be sent.",
+      acknowledgementAction: "send",
+    },
+    {
+      toolName: "file_write",
+      text: "I couldn't write the file, so the artifact was not saved.",
+      acknowledgementAction: "write",
+    },
+    {
+      toolName: "create_goal",
+      text: "I couldn't create the goal because the backend rejected it.",
+      acknowledgementAction: "create",
+    },
+    {
+      toolName: "update_goal",
+      text: "The goal update failed, so the status stayed unchanged.",
+      acknowledgementAction: "update",
+    },
+    {
+      toolName: "sessions_spawn",
+      text: "I couldn't spawn the worker session.",
+      acknowledgementAction: "spawn",
+    },
+  ])(
+    "suppresses $toolName warnings when assistant output acknowledges the same failed action",
+    ({ toolName, text, acknowledgementAction }) => {
+      const payloads = buildPayloads({
+        assistantTexts: [text],
+        lastAssistant: makeStoppedAssistant(),
+        lastToolError: {
+          toolName,
+          error: "operation failed",
+          mutatingAction: true,
+          acknowledgementAction,
+        },
+      });
+
+      expectSinglePayloadSummary(payloads, { text });
+    },
+  );
+
+  it.each([
+    {
+      toolName: "write",
+      title: "Write",
+      text: "I couldn't create the goal because the backend rejected it.",
+      acknowledgementAction: "write",
+    },
+    {
+      toolName: "sessions_spawn",
+      title: "Sessions_spawn",
+      text: "I couldn't create the goal because the backend rejected it.",
+      acknowledgementAction: "spawn",
+    },
+    {
+      toolName: "edit",
+      title: "Edit",
+      text: "The goal update failed, so the status stayed unchanged.",
+      acknowledgementAction: "edit",
+    },
+    {
+      toolName: "update_goal",
+      title: "Update_goal",
+      text: "I couldn't modify the file, so no changes were applied.",
+      acknowledgementAction: "update",
+    },
+    {
+      toolName: "message",
+      title: "Message",
+      text: "The command failed at first, then passed after I reran it.",
+      acknowledgementAction: "send",
+    },
+    {
+      toolName: "message",
+      title: "Message",
+      text: "The message could not be sent.",
+      acknowledgementAction: "delete",
+    },
+    {
+      toolName: "file_write",
+      title: "File_write",
+      text: "The file failed validation, so I fixed it and the check passed.",
+      acknowledgementAction: "write",
+    },
+  ])(
+    "keeps $toolName warnings when assistant output acknowledges a different failure",
+    ({ toolName, title, text, acknowledgementAction }) => {
+      const payloads = buildPayloads({
+        assistantTexts: [text],
+        lastAssistant: makeStoppedAssistant(),
+        lastToolError: {
+          toolName,
+          error: "operation failed",
+          mutatingAction: true,
+          acknowledgementAction,
+        },
+      });
+
+      expect(payloads).toHaveLength(2);
+      expect(payloads[0]?.text).toBe(text);
+      expect(payloads[1]?.isError).toBe(true);
+      expect(payloads[1]?.text).toContain(title);
+    },
+  );
+
   it("keeps mutating tool warnings when assistant error artifacts are not user-facing", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],

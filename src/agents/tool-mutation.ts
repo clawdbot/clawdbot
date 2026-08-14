@@ -14,7 +14,7 @@ import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 export { isLikelyMutatingToolName };
 
 // File-mutation tools that can recover the same path through another tool.
-const FILE_MUTATING_TOOL_NAMES = new Set(["apply_patch", "edit", "write"]);
+const FILE_MUTATING_TOOL_NAMES = new Set(["apply_patch", "edit", "file_write", "write"]);
 
 // Args aliases that identify the file target on a file-mutating call.
 const FILE_TARGET_PATH_ARG_KEYS = ["path", "file_path", "filePath", "filepath", "file"] as const;
@@ -130,6 +130,7 @@ export type FileTarget = {
 type ToolMutationState = {
   mutatingAction: boolean;
   replaySafe: boolean;
+  acknowledgementAction?: string;
   actionFingerprint?: string;
   fileTarget?: FileTarget;
 };
@@ -144,6 +145,45 @@ type ToolActionRef = {
 function normalizeActionName(value: unknown): string | undefined {
   const normalized = normalizeOptionalLowercaseString(value)?.replace(/[\s-]+/g, "_");
   return normalized || undefined;
+}
+
+function resolveAcknowledgementAction(toolName: string, args: unknown): string | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
+  const record = asRecord(args);
+  const action = normalizeActionName(record?.action);
+  if (!isMutatingToolCall(toolName, args)) {
+    return undefined;
+  }
+  if (normalized === "write" || normalized.endsWith("_write")) {
+    return "write";
+  }
+  if (normalized === "edit" || normalized === "apply_patch" || normalized.endsWith("_edit")) {
+    return "edit";
+  }
+  if (normalized === "message" && action) {
+    return action;
+  }
+  if (
+    normalized === "sessions_send" ||
+    normalized === "conversations_send" ||
+    normalized === "conversations_turn" ||
+    normalized.includes("send")
+  ) {
+    return "send";
+  }
+  if (normalized === "create_goal") {
+    return "create";
+  }
+  if (normalized === "update_goal") {
+    return "update";
+  }
+  if (normalized === "sessions_spawn") {
+    return "spawn";
+  }
+  if (action) {
+    return action;
+  }
+  return normalized.replace(/_/g, " ");
 }
 
 function readShellCommand(record: Record<string, unknown> | undefined): string | undefined {
@@ -332,6 +372,7 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
 
   switch (normalized) {
     case "write":
+    case "file_write":
     case "edit":
     case "apply_patch":
     case "sessions_spawn":
@@ -525,9 +566,11 @@ export function buildToolMutationState(
 ): ToolMutationState {
   const actionFingerprint = buildToolActionFingerprint(toolName, args, meta);
   const fileTarget = extractFileTarget(toolName, args);
+  const acknowledgementAction = resolveAcknowledgementAction(toolName, args);
   return {
     mutatingAction: actionFingerprint != null,
     replaySafe: isReplaySafeToolCall(toolName, args),
+    ...(acknowledgementAction !== undefined ? { acknowledgementAction } : {}),
     actionFingerprint,
     ...(fileTarget !== undefined ? { fileTarget } : {}),
   };

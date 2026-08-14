@@ -775,6 +775,30 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("does not duplicate a passive heartbeat acknowledgement of a mutating failure", () => {
+    const notificationText = "The message could not be sent.";
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: true,
+        summary: notificationText,
+        notificationText,
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+        acknowledgementAction: "send",
+      },
+    });
+
+    expectSinglePayloadText(payloads, notificationText);
+    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
+      toolName: "message",
+    });
+  });
+
   it("uses a structured blocked heartbeat response as the failure acknowledgement", () => {
     const payloads = buildPayloads({
       heartbeatToolResponse: {

@@ -43,6 +43,50 @@ describe("tool terminal outcome observer", () => {
     ).toBeUndefined();
   });
 
+  it("records semantic acknowledgement actions for mutating terminal failures", () => {
+    expect(
+      createToolTerminalObserver("run-acknowledgement-action")({
+        toolName: "create_goal",
+        arguments: { sessionKey: "agent:main" },
+        outcome: "failure",
+        failure: { error: "goal store unavailable" },
+      }).lastToolError,
+    ).toMatchObject({
+      toolName: "create_goal",
+      mutatingAction: true,
+      acknowledgementAction: "create",
+    });
+
+    expect(
+      createToolTerminalObserver("run-acknowledgement-action-file-write")({
+        toolName: "file_write",
+        arguments: { path: "/tmp/report.md", content: "done" },
+        outcome: "failure",
+        failure: { error: "paired node unavailable" },
+      }).lastToolError,
+    ).toMatchObject({
+      toolName: "file_write",
+      mutatingAction: true,
+      acknowledgementAction: "write",
+      fileTarget: { path: "/tmp/report.md" },
+    });
+  });
+
+  it("preserves distinct message actions for acknowledgement matching", () => {
+    expect(
+      createToolTerminalObserver("run-message-acknowledgement-action")({
+        toolName: "message",
+        arguments: { action: "delete", id: "message:1" },
+        outcome: "failure",
+        failure: { error: "delete failed" },
+      }).lastToolError,
+    ).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+      acknowledgementAction: "delete",
+    });
+  });
+
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {
     const runId = "run-2";
     const toolCallId = "call-1";
