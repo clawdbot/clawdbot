@@ -115,6 +115,7 @@ function renderSessionSection(params: {
       ${renderSidebarSessionSectionHeader({
         sectionId: section.id,
         disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
+        onToggle: () => host.toggleSection(section.id),
         onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
         onFinishDrag: () => host.finishSidebarSectionDrag(),
         onContextMenu: group

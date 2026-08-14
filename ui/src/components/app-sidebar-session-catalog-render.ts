@@ -180,6 +180,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
         ${renderSidebarSessionSectionHeader({
           sectionId,
           disabledReason: params.sectionDragDisabledReason,
+          onToggle: () => params.onToggleSection(sectionId),
           onStartDrag: params.onStartSectionDrag,
           onFinishDrag: params.onFinishSectionDrag,
           onContextMenu: (event) => {

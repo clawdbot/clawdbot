@@ -6,6 +6,7 @@ export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
   content: TemplateResult;
   disabledReason?: string;
+  onToggle: () => void;
   onStartDrag: (sectionId: string) => void;
   onFinishDrag: () => void;
   onContextMenu?: (event: MouseEvent) => void;
@@ -52,7 +53,7 @@ export function renderSidebarSessionSectionHeader(params: {
       }}
       @contextmenu=${params.onContextMenu ?? nothing}
     >
-      <span class="sidebar-session-group-drag-handle" aria-hidden="true"
+      <span class="sidebar-session-group-drag-handle" aria-hidden="true" @click=${params.onToggle}
         >${icons.gripVertical}</span
       >
       ${params.content}

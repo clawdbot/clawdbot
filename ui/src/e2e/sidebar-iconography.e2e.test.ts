@@ -123,10 +123,16 @@ suite.define(() => {
         );
         await groupHeader.hover();
         const groupGrip = groupHeader.locator(".sidebar-session-group-drag-handle svg");
+        const groupToggle = groupHeader.locator(".sidebar-session-group-toggle");
         const groupAction = groupHeader.locator(".sidebar-session-group-actions");
         await expect.poll(() => groupGrip.isVisible()).toBe(true);
         await expect.poll(() => groupAction.isVisible()).toBe(true);
         await expect.poll(() => groupAction.locator('circle[fill="currentColor"]').count()).toBe(3);
+        const groupExpanded = await groupToggle.getAttribute("aria-expanded");
+        await groupGrip.click();
+        await expect.poll(() => groupToggle.getAttribute("aria-expanded")).not.toBe(groupExpanded);
+        await groupGrip.click();
+        await expect.poll(() => groupToggle.getAttribute("aria-expanded")).toBe(groupExpanded);
         await groupAction.hover();
         await captureSidebarUiUnionProof(
           page,
