@@ -12,7 +12,6 @@ import type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatState } from "./chat-history.ts";
 import type { ChatModelCatalogMode } from "./chat-model-catalog.ts";
-import type { ChatModelCatalogMode } from "./chat-model-catalog.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
