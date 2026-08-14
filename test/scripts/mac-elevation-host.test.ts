@@ -8,6 +8,109 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/mac-elevation-host.sh";
 
+function writeExecutable(filePath: string, contents: string): void {
+  writeFileSync(filePath, contents, "utf8");
+  chmodSync(filePath, 0o755);
+}
+
+function createStatusHarness(permissionMode: "fail" | "invalid") {
+  const tempRoot = tempDirs.make(`openclaw-elevation-status-${permissionMode}-`);
+  const binDir = path.join(tempRoot, "bin");
+  const appPath = path.join(tempRoot, "OpenClaw.app");
+  const stateDir = path.join(tempRoot, "state");
+  const launchAgentsDir = path.join(tempRoot, "Library", "LaunchAgents");
+  mkdirSync(path.join(appPath, "Contents", "MacOS"), { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  mkdirSync(launchAgentsDir, { recursive: true });
+  writeFileSync(path.join(appPath, "Contents", "Info.plist"), "fixture", "utf8");
+  writeFileSync(
+    path.join(launchAgentsDir, "ai.openclaw.mac.elevation-host.plist"),
+    "fixture",
+    "utf8",
+  );
+
+  writeExecutable(
+    path.join(binDir, "codesign"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'if [[ "$*" == *"--entitlements"* ]]; then',
+      "  printf '%s\\n' '<plist><dict/></plist>'",
+      "  exit 0",
+      "fi",
+      'if [[ "$*" == *"-dv"* ]]; then',
+      "  printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
+      "  printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  writeExecutable(
+    path.join(binDir, "launchctl"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'if [[ "${1:-}" == "print" && "${2:-}" == */ai.openclaw.mac.elevation-host ]]; then',
+      "  printf '%s\\n' '    pid = 4242'",
+      "  exit 0",
+      "fi",
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  writeExecutable(
+    path.join(binDir, "plutil"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'case "${2:-}" in',
+      "  CFBundleIdentifier) printf '%s\\n' 'ai.openclaw.mac' ;;",
+      "  OpenClawGitCommit) printf '%040d\\n' 0 ;;",
+      "  PeekabooSourceCommit) printf '%040d\\n' 1 ;;",
+      '  ProgramArguments) printf \'["%s/Contents/MacOS/OpenClaw","--elevation-host"]\\n\' "$TEST_APP_PATH" ;;',
+      "  RunAtLoad|KeepAlive) printf '%s\\n' 'true' ;;",
+      "  *) exit 1 ;;",
+      "esac",
+      "",
+    ].join("\n"),
+  );
+  writeExecutable(path.join(binDir, "lipo"), "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
+  writeExecutable(path.join(binDir, "pgrep"), "#!/bin/sh\nexit 1\n");
+  writeExecutable(path.join(binDir, "spctl"), "#!/bin/sh\nexit 0\n");
+  writeExecutable(path.join(binDir, "xcrun"), "#!/bin/sh\nexit 0\n");
+  writeExecutable(
+    path.join(binDir, "peekaboo"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'if [[ "${1:-}" == "bridge" ]]; then',
+      '  printf \'%s\\n\' \'{"success":true,"data":{"selected":{"handshake":{"hostIdentity":{"processIdentifier":4242}}}}}\'',
+      "  exit 0",
+      "fi",
+      'if [[ "${1:-}" == "permissions" ]]; then',
+      '  if [[ "$TEST_PEEKABOO_MODE" == "fail" ]]; then exit 7; fi',
+      "  printf '%s\\n' '{not-json'",
+      "  exit 0",
+      "fi",
+      "exit 2",
+      "",
+    ].join("\n"),
+  );
+
+  return {
+    appPath,
+    stateDir,
+    env: {
+      ...process.env,
+      HOME: tempRoot,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      TEST_APP_PATH: appPath,
+      TEST_PEEKABOO_MODE: permissionMode,
+    },
+  };
+}
+
 describe("mac elevation host command contract", () => {
   it("documents package and transactional lifecycle commands without probing macOS", () => {
     const result = spawnSync("bash", [scriptPath, "--help"], {
@@ -75,6 +178,30 @@ describe("mac elevation host command contract", () => {
     expect(installBody).toContain("tcc_summary || true");
     expect(statusBody).toContain("tcc_summary || return $?");
   });
+
+  it.each([
+    ["fail", "TCC: unknown (permission probe failed)"],
+    ["invalid", "TCC: unknown (permission probe returned invalid status)"],
+  ] as const)(
+    "fails closed when the TCC permission probe returns %s output",
+    (mode, diagnostic) => {
+      const harness = createStatusHarness(mode);
+      const result = spawnSync(
+        "/bin/bash",
+        [scriptPath, "status", "--app", harness.appPath, "--state-dir", harness.stateDir],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: harness.env,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(4);
+      expect(result.stdout).toContain("Elevation host ready: pid=4242");
+      expect(result.stdout).toContain(diagnostic);
+      expect(result.stdout).not.toContain("TCC: ready");
+    },
+  );
 
   it("builds an immutable source-addressed notarized ZIP and receipt", () => {
     const script = readFileSync(scriptPath, "utf8");
