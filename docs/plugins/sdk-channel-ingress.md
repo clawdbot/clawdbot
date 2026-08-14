@@ -176,6 +176,25 @@ precedence. The deprecated fields remain through the current Plugin SDK major
 and are planned for removal in the next major after bundled and known external
 plugins migrate.
 
+### Bundled channel declarations
+
+Bundled channels use the strongest claim supported by every receive path that
+shares an identity declaration. These are channel-authorization claims, not
+execution-identity assurance:
+
+| Channel         | Identifier claim                                                                    | Authoritative transport or session fact                                                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discord         | numeric user ID: `verified`; names and tags: `mutable`                              | Discord supplies `author.id` or `user.id` on events delivered over the authenticated bot-token Gateway session.                                                                              |
+| Google Chat     | `sender.name`: `verified`; email: `mutable`                                         | The webhook validates Google's signed token, issuer, and configured audience before consuming the Google-owned event body.                                                                   |
+| IRC             | server connection prefix and `user@host`: `asserted`; nick-based aliases: `mutable` | The selected IRC server vouches for the connection prefix, but the generic transport does not prove account ownership.                                                                       |
+| Mattermost      | post user ID: `verified`; username: `mutable`                                       | The authenticated Mattermost WebSocket emits server-owned post events whose `post.user_id` identifies the author.                                                                            |
+| Microsoft Teams | sender and conversation IDs: `asserted`; sender name: `mutable`                     | Bot Framework authenticates the connector activity, but the plugin does not independently prove exact ownership of every ID representation.                                                  |
+| Slack           | user and workspace-user IDs: `asserted`; names and slugs: `mutable`                 | Direct Slack delivery binds user IDs, while relay mode authenticates the relay peer without an end-to-end exact-sender attestation. The shared declaration uses the defensible common claim. |
+
+If a receive path cannot support the declaration shared by its channel, split
+the declaration or supply a weaker per-message claim. Never infer a stronger
+claim from message text, routing, or host evidence-carrier integrity.
+
 ## Access groups
 
 `accessGroup:<name>` entries stay redacted. Core resolves static

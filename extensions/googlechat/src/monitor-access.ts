@@ -65,6 +65,8 @@ function normalizeGoogleChatEmailEntry(entry: string): string | null {
 
 const googleChatIngressIdentity = defineStableChannelIngressIdentity({
   key: "sender-id",
+  // Google signs the webhook for the configured audience before sender.name is consumed.
+  authentication: "verified",
   normalizeEntry: normalizeGoogleChatStableEntry,
   normalizeSubject: normalizeUserId,
   aliases: [
@@ -73,7 +75,7 @@ const googleChatIngressIdentity = defineStableChannelIngressIdentity({
       kind: GOOGLECHAT_EMAIL_KIND,
       normalizeEntry: normalizeGoogleChatEmailEntry,
       normalizeSubject: normalizeEntryValue,
-      dangerous: true,
+      authentication: "mutable",
     },
   ],
   isWildcardEntry: (entry) => normalizeEntryValue(entry) === "*",

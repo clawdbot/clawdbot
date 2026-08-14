@@ -65,6 +65,8 @@ function normalizeDiscordNameSubject(value: string): string | null {
 const discordIngressIdentity = defineStableChannelIngressIdentity({
   key: "discordUserId",
   kind: DISCORD_USER_ID_KIND,
+  // Discord binds author/user.id on events delivered over the authenticated bot-token session.
+  authentication: "verified",
   normalizeEntry: normalizeDiscordIdEntry,
   normalizeSubject: (value) => value.trim() || null,
   sensitivity: "pii",
@@ -78,7 +80,7 @@ const discordIngressIdentity = defineStableChannelIngressIdentity({
     kind: DISCORD_USER_NAME_KIND,
     normalizeEntry,
     normalizeSubject: normalizeDiscordNameSubject,
-    dangerous: true,
+    authentication: "mutable",
     sensitivity: "pii",
   })),
 });

@@ -122,6 +122,9 @@ function normalizeSlackNameSlugEntry(entry: string): string | null {
 const slackIngressIdentity = defineStableChannelIngressIdentity({
   key: "senderId",
   kind: "stable-id",
+  // Direct Slack transports bind this id, while relay mode only authenticates its relay peer.
+  // The shared declaration therefore uses the strongest claim defensible for every mode.
+  authentication: "asserted",
   normalizeEntry: normalizeSlackBareUserEntry,
   normalizeSubject: normalizeSlackUserId,
   sensitivity: "pii",
@@ -129,6 +132,7 @@ const slackIngressIdentity = defineStableChannelIngressIdentity({
     {
       key: "workspaceSenderId",
       kind: SLACK_WORKSPACE_USER_ID_KIND,
+      authentication: "asserted",
       normalizeEntry: normalizeSlackWorkspaceUserEntry,
       normalizeSubject: normalizeSlackWorkspaceUserEntry,
       sensitivity: "pii",
@@ -143,7 +147,7 @@ const slackIngressIdentity = defineStableChannelIngressIdentity({
       kind: SLACK_USER_NAME_KIND,
       normalizeEntry,
       normalizeSubject: normalizeSlackNameSubject,
-      dangerous: true,
+      authentication: "mutable",
       sensitivity: "pii" as const,
     })),
   ],

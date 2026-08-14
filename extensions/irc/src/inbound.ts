@@ -46,6 +46,8 @@ type IrcGroupPolicy = "open" | "allowlist" | "disabled";
 
 const ircIngressIdentity = defineStableChannelIngressIdentity({
   key: "irc-id",
+  // The IRC server vouches for the connection prefix, but does not bind it to an account owner.
+  authentication: "asserted",
   normalizeEntry: normalizeIrcStableEntry,
   normalizeSubject: normalizeLowercaseStringOrEmpty,
   sensitivity: "pii",
@@ -55,12 +57,13 @@ const ircIngressIdentity = defineStableChannelIngressIdentity({
       kind: "stable-id" as const,
       normalizeEntry: normalizeIrcNickUserEntry,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
-      dangerous: true,
+      authentication: "mutable",
       sensitivity: "pii" as const,
     },
     {
       key: "irc-id-nick-host",
       kind: "stable-id" as const,
+      authentication: "asserted",
       normalizeEntry: normalizeIrcNickHostEntry,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
       sensitivity: "pii" as const,
@@ -70,7 +73,7 @@ const ircIngressIdentity = defineStableChannelIngressIdentity({
       kind: IRC_NICK_KIND,
       normalizeEntry: normalizeIrcNickEntry,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
-      dangerous: true,
+      authentication: "mutable",
       sensitivity: "pii",
     },
   ],
