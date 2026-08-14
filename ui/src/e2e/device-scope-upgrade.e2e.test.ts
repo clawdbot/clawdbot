@@ -335,10 +335,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       }
       await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
 
-      await waitForLayoutSettled(page, ".content, openclaw-update-banner .callout");
+      const scopeUpgradeCallout = page.locator("openclaw-device-scope-upgrade-banner .callout");
+      await scopeUpgradeCallout.waitFor();
+      await waitForLayoutSettled(page, ".content, openclaw-device-scope-upgrade-banner .callout");
       const calloutInsetDelta = await page.evaluate(() => {
         const content = document.querySelector<HTMLElement>(".content");
-        const callout = document.querySelector<HTMLElement>("openclaw-update-banner .callout");
+        const callout = document.querySelector<HTMLElement>(
+          "openclaw-device-scope-upgrade-banner .callout",
+        );
         if (!content || !callout) {
           throw new Error("Missing content or scope-upgrade callout after layout settled");
         }
