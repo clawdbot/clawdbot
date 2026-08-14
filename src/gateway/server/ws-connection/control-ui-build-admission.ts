@@ -1,7 +1,7 @@
 import { GATEWAY_CLIENT_IDS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { isGatewayHostBrowserOrigin } from "../../origin-check.js";
 
-export type ControlUiBuildMismatch = {
+type ControlUiBuildMismatch = {
   gatewayBuildId: string;
   clientBuildId: string | null;
 };

@@ -1,10 +1,10 @@
 import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
+  ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-  ConnectErrorDetailCodes,
   formatConnectErrorMessage,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
@@ -19,16 +19,14 @@ import {
   type ErrorShape,
   type EventFrame,
   type HelloOk,
-  shouldPauseGatewayReconnect,
   resolveGatewayConnectScopes,
-  readConnectErrorDetailCode,
   selectGatewayConnectAuth,
   shouldRetryGatewayWithDeviceToken,
   isRetryableGatewayStartupUnavailableError,
-  resolveGatewayStartupRetryAfterMs,
-  resolveSafeTimeoutDelayMs,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  resolveGatewayStartupRetryAfterMs,
+  resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 import type {
@@ -54,6 +52,14 @@ import {
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
+import {
+  enrichProtocolMismatchDetails,
+  isLegacyGatewayBuildIdSchemaError,
+  isNonRecoverableConnectError,
+  resolveGatewayErrorDetailCode,
+} from "./gateway-connect-errors.ts";
+
+export { resolveGatewayErrorDetailCode };
 
 export class GatewayRequestError extends GatewayProtocolRequestError {
   constructor(error: ErrorShape) {
@@ -65,54 +71,6 @@ export class GatewayRequestError extends GatewayProtocolRequestError {
     });
     this.name = "GatewayRequestError";
   }
-}
-
-function enrichProtocolMismatchDetails(message: string | undefined, details: unknown): unknown {
-  if (readConnectErrorDetailCode(details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
-    return details;
-  }
-  if (!message?.toLowerCase().includes("protocol mismatch")) {
-    return details;
-  }
-  return {
-    code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
-    clientMinProtocol: MIN_CLIENT_PROTOCOL_VERSION,
-    clientMaxProtocol: PROTOCOL_VERSION,
-    ...(details && typeof details === "object" && !Array.isArray(details) ? details : {}),
-  };
-}
-
-export function resolveGatewayErrorDetailCode(
-  error: { details?: unknown } | null | undefined,
-): string | null {
-  return readConnectErrorDetailCode(error?.details);
-}
-
-function isLegacyGatewayBuildIdSchemaError(
-  error: GatewayProtocolRequestError,
-  clientBuildId: string | undefined,
-): boolean {
-  const message = error.message.toLowerCase();
-  return Boolean(
-    clientBuildId &&
-    message.includes("invalid connect params") &&
-    message.includes("unexpected property") &&
-    message.includes("buildid"),
-  );
-}
-
-/**
- * Connect failures that cannot recover while client and server state stay unchanged.
- * AUTH_TOKEN_MISMATCH stays out: the close handler owns its bounded cached-token retry.
- */
-function isNonRecoverableConnectError(error: { details?: unknown } | undefined): boolean {
-  if (!error) {
-    return false;
-  }
-  return shouldPauseGatewayReconnect({
-    details: error.details,
-    protocolMismatchIsTerminal: true,
-  });
 }
 
 function isLoopbackIPv4Host(host: string): boolean {

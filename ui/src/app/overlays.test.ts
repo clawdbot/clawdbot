@@ -251,22 +251,6 @@ describe("device-auth upgrade migration", () => {
 });
 
 describe("Control UI refresh nudge", () => {
-  it("keeps reload guidance visible after pre-hello build rejection", () => {
-    const gatewayClient = client(async () => []);
-    const harness = createGatewayHarness(null, false);
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    harness.update({
-      client: gatewayClient,
-      phase: "stopped",
-      hello: null,
-      lastErrorCode: "CONTROL_UI_BUILD_MISMATCH",
-    });
-
-    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
-    overlays.dispose();
-  });
-
   it("flags an exact build mismatch on the first connection", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);

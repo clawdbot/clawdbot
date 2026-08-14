@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import { rawDataToString } from "../../../infra/ws.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
@@ -99,7 +100,12 @@ afterEach(() => {
 describe("Control UI build admission over WebSocket", () => {
   it("rejects a legacy same-origin document before registration or RPC dispatch", async () => {
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await withDeadline(new Promise<void>((resolve) => wss.once("listening", resolve)), "listen");
+    await withDeadline(
+      new Promise<void>((resolve) => {
+        wss.once("listening", resolve);
+      }),
+      "listen",
+    );
     const address = wss.address();
     if (!address || typeof address === "string") {
       throw new Error("WebSocket test server did not expose a port");
@@ -157,17 +163,24 @@ describe("Control UI build admission over WebSocket", () => {
       },
     });
     try {
-      await withDeadline(new Promise<void>((resolve) => ws.once("open", resolve)), "open");
+      await withDeadline(
+        new Promise<void>((resolve) => {
+          ws.once("open", resolve);
+        }),
+        "open",
+      );
       const response = withDeadline(
         new Promise<Record<string, unknown>>((resolve) => {
-          ws.once("message", (data) =>
-            resolve(JSON.parse(String(data)) as Record<string, unknown>),
-          );
+          ws.once("message", (data) => {
+            resolve(JSON.parse(rawDataToString(data)) as Record<string, unknown>);
+          });
         }),
         "connect rejection",
       );
       const closed = withDeadline(
-        new Promise<number>((resolve) => ws.once("close", (code) => resolve(code))),
+        new Promise<number>((resolve) => {
+          ws.once("close", (code) => resolve(code));
+        }),
         "socket close",
       );
       ws.send(
@@ -209,7 +222,12 @@ describe("Control UI build admission over WebSocket", () => {
       expect(handleGatewayRequestMock).not.toHaveBeenCalled();
     } finally {
       ws.terminate();
-      await withDeadline(new Promise<void>((resolve) => wss.close(() => resolve())), "cleanup");
+      await withDeadline(
+        new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        }),
+        "cleanup",
+      );
     }
   });
 });

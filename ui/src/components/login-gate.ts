@@ -125,16 +125,15 @@ function resolveLoginFailureFeedback(
   const lower = normalizeLowercaseStringOrEmpty(rawError);
 
   if (lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
-    return {
+    return buildFeedback({
       kind: "build-mismatch",
-      title: t("chat.sidebar.serverUpdatedTitle"),
-      summary: t("chat.sidebar.serverUpdatedRefresh"),
+      rawError,
+      titleKey: "chat.sidebar.serverUpdatedTitle",
+      summaryKey: "chat.sidebar.serverUpdatedRefresh",
       refreshAction: { label: t("login.failure.protocol.refresh") },
-      steps: [],
+      stepKeys: [],
       docsHref: "https://docs.openclaw.ai/web/control-ui",
-      docsLabel: t("login.failure.docsAuth"),
-      rawError: redactLoginFailureError(rawError),
-    };
+    });
   }
 
   const pairing = resolvePairingHint(false, rawError, lastErrorCode);
