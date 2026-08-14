@@ -809,7 +809,9 @@ suite.define(() => {
       const main = page.getByRole("main");
       await main.locator('[data-chat-thinking-select="true"]').click();
       await gateway.deferNext("sessions.patch");
-      await main.locator('[data-chat-thinking-slider="true"]').press("ArrowLeft");
+      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
+      await thinkingSlider.press("ArrowLeft");
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params).thinkingLevel).toBe("medium");
 
