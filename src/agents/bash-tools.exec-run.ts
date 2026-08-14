@@ -404,9 +404,11 @@ export function createExecTool(
 
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
         const storeEnv = await resolveStoreEnv();
-        const canReachGatewayProxy = host === "gateway" || host === "sandbox";
+        // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
+        // cannot use its sentinels, so both sides of the contract stay absent.
+        const useSecretEgress = secretEgressEnabled && host === "gateway";
         let secretEgressEnv: Record<string, string> | undefined;
-        if (secretEgressEnabled && canReachGatewayProxy) {
+        if (useSecretEgress) {
           if (!defaults?.operationalRunInstance) {
             throw new Error("Secret egress proxy requires an admitted agent run instance");
           }
@@ -424,7 +426,7 @@ export function createExecTool(
           defaultPathPrepend,
           pluginEnv: resolvedExecEnvState?.pluginEnv,
           storeEnv: storeEnv.env,
-          storeSecretEnv: secretEgressEnv ? storeEnv.secretSentinels : undefined,
+          storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
           secretEgressEnv,
           warnings,
         });

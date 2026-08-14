@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Subprocess
 
 final class MacNodeCodexThreadCatalogClient: @unchecked Sendable {
     private let loadRoot: () -> [String: Any]
@@ -82,23 +83,21 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     private final class Connection: @unchecked Sendable {
         enum Lifecycle {
             case running
-            case stopping(abortive: Bool)
+            case stopping
         }
 
         let generation = UUID()
         let invocation: MacNodeCodexThreadCatalog.ResolvedInvocation
         let initializeRequestID: Int
-        let process = Process()
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        var process: ManagedProcess?
+        var cleanupTask: Task<Void, Never>?
         var stdoutBuffer = Data()
         var initialized = false
-        var exited = false
         var stdoutReachedEOF = false
         var lifecycle: Lifecycle = .running
-        var stopWaiters: [CheckedContinuation<Void, Never>] = []
-        var stopDeadline: DispatchSourceTimer?
 
         init(
             invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
@@ -111,7 +110,8 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private static let maxQueuedRequests = 64
     private static let maxStdoutDrainBytes = 256 * 1024
-    private static let stopDeadlineSeconds = AppTerminationTiming.cleanupDeadlineSeconds * 0.75
+    private static let gracefulShutdownTimeout: Duration = .seconds(
+        AppTerminationTiming.cleanupDeadlineSeconds * 0.75)
 
     private let queue = DispatchQueue(label: "ai.openclaw.codex-thread-catalog")
     private let idleTimeoutSeconds: Double
@@ -132,9 +132,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     deinit {
         self.cancelIdleTimer()
-        // Runtime/coordinator teardown awaits shutdown(). Deinit stays EOF-only
-        // best effort so it cannot create a second untracked process-reaper path.
-        try? self.connection?.stdinPipe.fileHandleForWriting.close()
+        self.connection?.process?.requestTermination()
     }
 
     func request(
@@ -190,7 +188,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     func shutdown() async {
-        await withCheckedContinuation { continuation in
+        let cleanup: Task<Void, Never>? = await withCheckedContinuation { continuation in
             self.queue.async {
                 self.cancelIdleTimer()
                 if let active = self.active {
@@ -202,9 +200,10 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 for request in pending {
                     self.complete(request, with: .failure(CancellationError()))
                 }
-                self.stopConnection(abortive: false, waiter: continuation)
+                continuation.resume(returning: self.stopConnection(abortive: false))
             }
         }
+        await cleanup?.value
     }
 
     private func takeRequestIDOnQueue() -> Int {
@@ -233,8 +232,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         let request = self.pending[0]
         if let connection = self.connection {
             guard case .running = connection.lifecycle else { return }
-            if connection.exited ||
-                !connection.process.isRunning ||
+            if connection.process?.isRunning != true ||
                 connection.invocation != request.invocation
             {
                 // Invocation replacement is graceful, but the successor remains
@@ -258,20 +256,11 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             invocation: request.invocation,
             initializeRequestID: self.takeRequestIDOnQueue())
         self.connection = connection
-        let process = connection.process
-        process.executableURL = URL(fileURLWithPath: request.invocation.executable)
-        process.arguments = request.invocation.arguments
-        process.currentDirectoryURL = request.invocation.cwd
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         for key in request.invocation.clearEnv {
             environment.removeValue(forKey: key)
         }
-        process.environment = environment
-        process.standardInput = connection.stdinPipe
-        process.standardOutput = connection.stdoutPipe
-        process.standardError = connection.stderrPipe
-
         // DispatchSource readability callbacks may be followed by future drain
         // loops. Keep both pipes non-blocking so an open App Server cannot stall
         // the catalog handshake after emitting one JSON-RPC frame.
@@ -289,21 +278,48 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 handle.readabilityHandler = nil
             }
         }
-        process.terminationHandler = { [weak self] _ in
-            guard let self else { return }
-            self.queue.async {
-                self.handleTermination(generation: generation)
+        let configuration = Subprocess.Configuration(
+            .path(.init(request.invocation.executable)),
+            arguments: Arguments(request.invocation.arguments),
+            environment: ManagedProcess.environment(from: environment),
+            workingDirectory: request.invocation.cwd.map { .init($0.path) })
+        // Leave enough of the app's cleanup budget for group termination and joined reaping.
+        let process = ManagedProcess.launch(
+            configuration: configuration,
+            stdin: connection.stdinPipe.fileHandleForReading,
+            stdout: connection.stdoutPipe.fileHandleForWriting,
+            stderr: connection.stderrPipe.fileHandleForWriting,
+            closeStdinForGracefulShutdown: connection.stdinPipe.fileHandleForWriting,
+            gracefulShutdownTimeout: Self.gracefulShutdownTimeout)
+        connection.process = process
+        Task { [weak self] in
+            let started = await (try? process.waitUntilStarted()) != nil
+            self?.queue.async { [weak self] in
+                self?.finishConnectionLaunch(started: started, generation: generation)
             }
         }
+    }
 
-        do {
-            try process.run()
-        } catch {
+    private func finishConnectionLaunch(
+        started: Bool,
+        generation: UUID)
+    {
+        guard let connection = self.connection,
+              connection.generation == generation,
+              connection.cleanupTask == nil
+        else { return }
+        guard started, let process = connection.process else {
             self.discardUnstartedConnection(connection)
             self.finishActive(
                 .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
                 restartConnection: false)
             return
+        }
+        Task { [weak self, completionTask = process.completionTask] in
+            _ = await completionTask.value
+            self?.queue.async { [weak self] in
+                self?.handleTermination(generation: generation)
+            }
         }
         do {
             try self.write(
@@ -373,6 +389,11 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             }
             if errno == EINTR { continue }
             if errno == EAGAIN || errno == EWOULDBLOCK {
+                if connection.process?.isRunning == false {
+                    self.queue.asyncAfter(deadline: .now() + .milliseconds(1)) { [weak self] in
+                        self?.drainStdout(from: handle, generation: generation)
+                    }
+                }
                 return
             }
             connection.stdoutReachedEOF = true
@@ -457,7 +478,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private func handleTermination(generation: UUID) {
         guard let connection = self.connection, connection.generation == generation else { return }
-        connection.exited = true
         // A short-lived server can exit before its readability callback runs.
         // Drain its final frame before projecting termination onto the request.
         if !connection.stdoutReachedEOF {
@@ -471,8 +491,9 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     private func finishTerminatedConnectionIfNeeded(generation: UUID) {
         guard let connection = self.connection,
               connection.generation == generation,
-              connection.exited,
-              connection.stdoutReachedEOF
+              connection.process?.isRunning == false,
+              connection.stdoutReachedEOF,
+              connection.cleanupTask == nil
         else { return }
 
         let wasRunning = if case .running = connection.lifecycle {
@@ -562,92 +583,53 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         self.idleTimer = nil
     }
 
-    private func stopConnection(
-        abortive: Bool,
-        waiter: CheckedContinuation<Void, Never>? = nil)
-    {
-        guard let connection = self.connection else {
-            waiter?.resume()
-            return
+    @discardableResult
+    private func stopConnection(abortive: Bool) -> Task<Void, Never>? {
+        guard let connection = self.connection else { return nil }
+        if let cleanupTask = connection.cleanupTask {
+            if abortive {
+                connection.process?.requestTermination(gracefully: false)
+            }
+            return cleanupTask
         }
-        if let waiter {
-            connection.stopWaiters.append(waiter)
-        }
-        switch connection.lifecycle {
-        case let .stopping(wasAbortive):
-            if abortive, !wasAbortive {
-                connection.lifecycle = .stopping(abortive: true)
-                if connection.process.isRunning {
-                    connection.process.terminate()
+        guard let process = connection.process else { return nil }
+        connection.lifecycle = .stopping
+        let generation = connection.generation
+        let cleanupTask = Task { [weak self] in
+            await process.terminate(gracefully: !abortive)
+            await withCheckedContinuation { continuation in
+                guard let self else {
+                    continuation.resume()
+                    return
+                }
+                self.queue.async {
+                    if let current = self.connection, current.generation == generation {
+                        if !current.stdoutReachedEOF {
+                            self.drainStdout(
+                                from: current.stdoutPipe.fileHandleForReading,
+                                generation: generation)
+                        }
+                        self.retireConnection(current)
+                        self.startNextIfNeeded()
+                    }
+                    continuation.resume()
                 }
             }
-        case .running:
-            connection.lifecycle = .stopping(abortive: abortive)
-            try? connection.stdinPipe.fileHandleForWriting.close()
-            self.scheduleStopDeadline(for: connection)
-            if abortive, connection.process.isRunning {
-                connection.process.terminate()
-            } else if !connection.process.isRunning {
-                connection.exited = true
-                self.drainStdout(
-                    from: connection.stdoutPipe.fileHandleForReading,
-                    generation: connection.generation)
-                self.finishTerminatedConnectionIfNeeded(generation: connection.generation)
-            }
         }
+        connection.cleanupTask = cleanupTask
+        return cleanupTask
     }
 
     private func discardUnstartedConnection(_ connection: Connection) {
         guard self.connection?.generation == connection.generation else { return }
         self.connection = nil
         self.closeLocalPipeHandles(connection)
-        connection.process.terminationHandler = nil
     }
 
     private func retireConnection(_ connection: Connection) {
         guard self.connection?.generation == connection.generation else { return }
         self.connection = nil
-        connection.stopDeadline?.cancel()
-        connection.stopDeadline = nil
         self.closeLocalPipeHandles(connection)
-        connection.process.terminationHandler = nil
-        let waiters = connection.stopWaiters
-        connection.stopWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
-    }
-
-    private func scheduleStopDeadline(for connection: Connection) {
-        let generation = connection.generation
-        let timer = DispatchSource.makeTimerSource(queue: self.queue)
-        timer.schedule(deadline: .now() + Self.stopDeadlineSeconds)
-        timer.setEventHandler { [weak self] in
-            self?.forceStopConnection(generation: generation)
-        }
-        connection.stopDeadline = timer
-        timer.resume()
-    }
-
-    private func forceStopConnection(generation: UUID) {
-        guard let connection = self.connection,
-              connection.generation == generation,
-              case .stopping = connection.lifecycle
-        else { return }
-        connection.stopDeadline?.cancel()
-        connection.stopDeadline = nil
-        if connection.process.isRunning {
-            Darwin.kill(connection.process.processIdentifier, SIGKILL)
-        }
-        // stdout is O_NONBLOCK from launch, so descendants retaining the write
-        // end yield EAGAIN here instead of holding the lifecycle queue.
-        self.drainStdout(
-            from: connection.stdoutPipe.fileHandleForReading,
-            generation: generation)
-        guard self.connection?.generation == generation else { return }
-        self.closeLocalPipeHandles(connection)
-        connection.stdoutReachedEOF = true
-        self.finishTerminatedConnectionIfNeeded(generation: generation)
     }
 
     private func closeLocalPipeHandles(_ connection: Connection) {

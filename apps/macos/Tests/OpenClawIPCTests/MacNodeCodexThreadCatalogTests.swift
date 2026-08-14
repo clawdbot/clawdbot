@@ -1041,6 +1041,43 @@ extension MacNodeCodexThreadCatalogTests {
         await client.shutdown()
     }
 
+    @Test func `explicit shutdown reaps a graceful App Server and its descendants`() async throws {
+        let fake = try makeAppServer(
+            preamble: #"""
+            printf '%s\n' "$$" > "${0}.leader.pid"
+            trap 'touch "${0}.term"; exit 0' TERM
+            """#,
+            body: #"""
+            /bin/sh -c 'trap "" HUP TERM; printf "%s\n" "$$" > "$1"; while :; do /bin/sleep 1; done' \
+              descendant "${0}.descendant.pid" </dev/null >/dev/null 2>&1 &
+            while [ ! -s "${0}.descendant.pid" ]; do /bin/sleep 0.01; done
+            while IFS= read -r request; do
+              id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+              printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+            done
+            touch "${0}.eof"
+            trap 'touch "${0}.term"' TERM
+            /bin/sleep 0.35
+            touch "${0}.graceful-exit"
+            """#)
+        let leaderPIDFile = URL(fileURLWithPath: fake.executable.path + ".leader.pid")
+        let descendantPIDFile = URL(fileURLWithPath: fake.executable.path + ".descendant.pid")
+        defer { TestProcessSupport.killLeakedProcesses(in: [descendantPIDFile, leaderPIDFile]) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        let leaderPID = try await TestProcessSupport.waitForPID(in: leaderPIDFile)
+        let descendantPID = try await TestProcessSupport.waitForPID(in: descendantPIDFile)
+
+        await client.shutdown()
+
+        #expect(FileManager.default.fileExists(atPath: fake.executable.path + ".eof"))
+        #expect(FileManager.default.fileExists(atPath: fake.executable.path + ".graceful-exit"))
+        #expect(!FileManager.default.fileExists(atPath: fake.executable.path + ".term"))
+        #expect(TestProcessSupport.processIsGone(leaderPID))
+        #expect(TestProcessSupport.processIsGone(descendantPID))
+    }
+
     @Test func `shuts down an idle lifecycle client`() async throws {
         let fake = try makeEmptyListServer(blocksEOFExit: true)
         let client = CodexAppServerThreadClient(idleTimeoutSeconds: 0.05)
