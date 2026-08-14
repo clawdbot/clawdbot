@@ -103,11 +103,6 @@ describe("prepareTailscaleConfigMigration", () => {
       { tailscale: { mode: "off" as const } },
       serveStatus({ hostPort: 8443 }),
     ],
-    [
-      "a configured Service",
-      { tailscale: { mode: "off" as const, serviceName: "svc:openclaw" } },
-      serveStatus(),
-    ],
     ["authentication disabled", { auth: { mode: "none" as const } }, serveStatus()],
   ])("warns instead of guessing how to migrate %s", async (_label, gatewayOverrides, stdout) => {
     const cfg: OpenClawConfig = {

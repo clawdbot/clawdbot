@@ -59,9 +59,6 @@ export function mergeGatewayTailscaleConfig(
   if (override.mode !== undefined) {
     merged.mode = override.mode;
   }
-  if (override.serviceName !== undefined) {
-    merged.serviceName = override.serviceName;
-  }
   if (override.preserveFunnel !== undefined) {
     merged.preserveFunnel = override.preserveFunnel;
   }

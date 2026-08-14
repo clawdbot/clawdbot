@@ -37,8 +37,14 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
 const GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE: LegacyConfigRule = {
   path: ["gateway", "tailscale", "resetOnExit"],
   message:
-    'gateway.tailscale.resetOnExit is retired because route cleanup cannot be ownership-safe. Run "openclaw doctor --fix".',
+    'gateway.tailscale.resetOnExit is retired because managed routes now follow the Gateway lifecycle automatically. Run "openclaw doctor --fix".',
   match: (value) => typeof value === "boolean",
+};
+
+const GATEWAY_TAILSCALE_SERVICE_NAME_RULE: LegacyConfigRule = {
+  path: ["gateway", "tailscale", "serviceName"],
+  message:
+    'gateway.tailscale.serviceName is retired because named Services require persistent background routes that cannot follow the Gateway lifecycle. Run "openclaw doctor --fix".',
 };
 
 const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
@@ -75,6 +81,26 @@ function escapeControlForLog(value: string): string {
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
+    id: "gateway.tailscale.service-name-remove",
+    describe: "Disable managed ingress and remove the retired Tailscale Service name",
+    legacyRules: [GATEWAY_TAILSCALE_SERVICE_NAME_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const tailscale = getRecord(gateway?.tailscale);
+      if (!gateway || !tailscale || !Object.hasOwn(tailscale, "serviceName")) {
+        return;
+      }
+      delete tailscale.serviceName;
+      tailscale.mode = "off";
+      gateway.tailscale = tailscale;
+      raw.gateway = gateway;
+      changes.push(
+        "Removed gateway.tailscale.serviceName and set gateway.tailscale.mode=off because named Services cannot use lifecycle-owned routes. " +
+          "Inspect the retained Service route, then run `tailscale serve clear <service-name>`; set gateway.tailscale.mode=serve to use device Serve instead.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "gateway.tailscale.reset-on-exit-remove",
     describe: "Remove the retired Tailscale route-cleanup preference",
     legacyRules: [GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE],
@@ -90,7 +116,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       raw.gateway = gateway;
       changes.push(
         cleanupWasEnabled
-          ? "Removed gateway.tailscale.resetOnExit; managed Tailscale routes now persist until the operator explicitly turns them off."
+          ? "Removed gateway.tailscale.resetOnExit; managed Tailscale routes now end automatically with the Gateway lifecycle."
           : "Removed retired gateway.tailscale.resetOnExit config.",
       );
     },

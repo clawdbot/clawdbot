@@ -178,6 +178,7 @@ export async function inspectTailscaleServeGatewayUrlsWithRunner(
 export function resolveTailscalePublishedHost(params: {
   tailscaleMode: string;
   tailnetHost: string | null;
+  /** @deprecated Managed Gateway ingress no longer supports named Services. */
   serviceName?: string | null;
 }): string | null {
   const tailnetHost = params.tailnetHost?.trim();
@@ -189,7 +190,7 @@ export function resolveTailscalePublishedHost(params: {
   if (!serviceName) {
     return tailnetHost;
   }
-  // Tailscale Serve service names compose with DNS hosts, not raw tailnet IP addresses.
+  // Preserve the shipped plugin SDK formatter while managed Gateway routes reject Services.
   if (/^[\d.:]+$/.test(tailnetHost)) {
     return null;
   }

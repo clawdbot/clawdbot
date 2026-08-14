@@ -145,17 +145,6 @@ The iOS and Android apps connect directly to the Gateway WebSocket and do not ma
 
 See [iOS app setup](/platforms/ios) and [Android connection setup](/platforms/android#connection-runbook) for their pairing steps.
 
-## Optional stable vanity name
-
-To use a Tailscale Service name instead of the Gateway device hostname:
-
-```bash
-openclaw config set gateway.tailscale.serviceName svc:openclaw
-openclaw gateway restart
-```
-
-This publishes `https://openclaw.<tailnet>.ts.net`. The Gateway host must be an approved tagged node, and the Service may require admin-console approval before Serve can publish it. See [Tailscale Services](/gateway/tailscale#tailnet-only-serve) for the full setup constraints.
-
 ## Troubleshooting
 
 ### The URL times out from other devices

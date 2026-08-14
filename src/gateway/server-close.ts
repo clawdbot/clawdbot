@@ -1058,8 +1058,8 @@ export function createGatewayCloseHandler(
           });
         }
       } finally {
-        // Cleanup clears process-local publication state only. Persistent Tailscale
-        // routes are operator-owned and must not be rewritten or removed here.
+        // The foreground Tailscale session owns the route, so closing its claim
+        // releases the ephemeral backend before this lifecycle is forgotten.
         if (params.tailscaleCleanup) {
           await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
         }

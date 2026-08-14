@@ -3,10 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 import {
   inspectTailscaleServeGatewayUrlsWithRunner,
   resolveTailnetHostWithRunner,
+  resolveTailscalePublishedHost,
   resolveTailscaleServeGatewayUrlsWithRunner,
 } from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
+  it("keeps the deprecated named-Service formatter for shipped plugin SDK callers", () => {
+    expect(
+      resolveTailscalePublishedHost({
+        tailscaleMode: "serve",
+        tailnetHost: "node.tailnet.ts.net",
+        serviceName: "svc:openclaw",
+      }),
+    ).toBe("openclaw.tailnet.ts.net");
+  });
+
   it("returns null when no runner is provided", async () => {
     await expect(resolveTailnetHostWithRunner()).resolves.toBeNull();
   });

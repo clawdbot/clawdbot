@@ -361,14 +361,7 @@ async function resolveGatewayUrl(
     const publishedHost = resolveTailscalePublishedHost({
       tailscaleMode,
       tailnetHost: host,
-      serviceName: cfg.gateway?.tailscale?.serviceName,
     });
-    if (!publishedHost) {
-      return {
-        error:
-          "Tailscale Serve serviceName is configured, but Service MagicDNS could not be derived.",
-      };
-    }
     return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 

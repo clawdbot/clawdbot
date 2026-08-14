@@ -806,11 +806,10 @@ Gateway or node host and check `openclaw nodes pending` again.
   value, so repeated failures from one localhost origin do not automatically
   lock out a different origin.
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
-- `tailscale.serviceName`: optional Tailscale Service name for Serve mode, such
-  as `svc:openclaw`. When set, OpenClaw passes it to `tailscale serve
---service` so the Control UI can be exposed through a named Service instead
-  of the device hostname. The value must use Tailscale's `svc:<dns-label>`
-  Service name format; startup reports the derived Service URL.
+  OpenClaw holds the route as a foreground claim, so startup fails unless the
+  route is active and the route is released when the Gateway stops. Named
+  Tailscale Services are unsupported because the Tailscale CLI permits them
+  only as persistent background routes.
 - `tailscale.preserveFunnel`: deprecated migration guard. When `true` and
   `tailscale.mode = "serve"`, OpenClaw checks `tailscale funnel status` before
   re-applying Serve at startup. If that status cannot be inspected, startup

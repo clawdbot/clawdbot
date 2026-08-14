@@ -69,7 +69,8 @@ The QR command advertises Tailscale URLs only when OpenClaw owns the route throu
 If an older setup used `gateway.bind=lan` with a persistent default HTTPS Serve
 route, run `openclaw doctor` to preview migration to managed ingress. Apply it
 with `openclaw doctor --fix`, then restart the Gateway. Doctor leaves custom
-Serve ports and Tailscale Services unchanged and prints manual guidance.
+Serve ports unchanged. Retired named-Service config is removed with managed
+ingress disabled, and Doctor prints manual route-cleanup guidance.
 
 With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
 

@@ -65,15 +65,6 @@ describe("mergeGatewayTailscaleConfig", () => {
       ),
     ).toEqual({ mode: "serve", preserveFunnel: true });
   });
-
-  it("preserves explicit serviceName overrides", () => {
-    expect(
-      mergeGatewayTailscaleConfig(
-        { mode: "serve", serviceName: "svc:old-openclaw" },
-        { serviceName: "svc:openclaw" },
-      ),
-    ).toEqual({ mode: "serve", serviceName: "svc:openclaw" });
-  });
 });
 
 describe("ensureGatewayStartupAuth", () => {

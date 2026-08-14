@@ -209,6 +209,8 @@ OpenClaw advertises Tailscale setup URLs only when it owns the route through
 rejects Tailscale-shaped proxy ingress. Run `openclaw doctor` to preview the
 safe default-route migration, then `openclaw doctor --fix` and restart the
 Gateway. Custom Serve ports and Tailscale Services require manual migration.
+For a retired `gateway.tailscale.serviceName` config, Doctor disables managed
+ingress and prints the command needed to clear the retained Service route.
 
 ### Approve a node device
 

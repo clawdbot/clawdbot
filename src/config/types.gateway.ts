@@ -254,8 +254,6 @@ export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 export type GatewayTailscaleConfig = {
   /** Tailscale exposure mode for the Gateway control UI. */
   mode?: GatewayTailscaleMode;
-  /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
-  serviceName?: string;
   /**
    * Detect an external Funnel route left on the ordinary Gateway listener and
    * leave exposure unchanged with migration guidance. Gateway-authenticated

@@ -1801,7 +1801,7 @@ describe("legacy diagnostics OTel protocol migrate", () => {
 
 describe("retired gateway Tailscale cleanup config migrate", () => {
   it.each([
-    [true, "managed Tailscale routes now persist"],
+    [true, "managed Tailscale routes now end automatically"],
     [false, "Removed retired gateway.tailscale.resetOnExit"],
   ])("removes resetOnExit=%s while preserving sibling settings", (resetOnExit, message) => {
     const raw = {
@@ -1810,7 +1810,7 @@ describe("retired gateway Tailscale cleanup config migrate", () => {
         tailscale: {
           mode: "serve",
           resetOnExit,
-          serviceName: "svc:openclaw",
+          preserveFunnel: true,
         },
       },
     };
@@ -1822,9 +1822,32 @@ describe("retired gateway Tailscale cleanup config migrate", () => {
 
     expect(res.config?.gateway?.tailscale).toEqual({
       mode: "serve",
-      serviceName: "svc:openclaw",
+      preserveFunnel: true,
     });
     expect(res.changes).toEqual([expect.stringContaining(message)]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("removes a managed Service and disables ingress until the operator chooses a device route", () => {
+    const raw = {
+      gateway: {
+        bind: "loopback",
+        tailscale: {
+          mode: "serve",
+          serviceName: "svc:openclaw",
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+      "gateway.tailscale.serviceName",
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({ mode: "off" });
+    expect(res.changes).toEqual([
+      expect.stringMatching(/serviceName.*mode=off.*tailscale serve clear/s),
+    ]);
     expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });
 });

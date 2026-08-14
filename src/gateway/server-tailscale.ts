@@ -2,8 +2,7 @@
 // Applies Serve/Funnel routes and returns optional shutdown cleanup.
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  enableTailscaleFunnel,
-  enableTailscaleServe,
+  claimTailscaleRoute,
   getTailnetHostname,
   getTailnetHostnameAfterServe,
   hasTailscaleFunnelRouteForPort,
@@ -17,7 +16,6 @@ export async function startGatewayTailscaleExposure(params: {
   port: number;
   backend?: GatewayTailscaleIngressEndpoint;
   preserveFunnel?: boolean;
-  serviceName?: string;
   controlUiBasePath?: string;
   logTailscale: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<(() => Promise<void>) | null> {
@@ -28,22 +26,8 @@ export async function startGatewayTailscaleExposure(params: {
     throw new Error("Managed Tailscale ingress failed to start");
   }
   const backendTarget = params.backend.port;
-  const serviceName =
-    params.tailscaleMode === "serve" ? params.serviceName?.trim() || undefined : undefined;
   const effectiveMode = params.tailscaleMode;
   let clearPublishedOrigin: (() => void) | undefined;
-
-  const applyRoute = async (target: number | string) => {
-    if (params.tailscaleMode === "serve") {
-      if (serviceName) {
-        await enableTailscaleServe(target, undefined, serviceName);
-      } else {
-        await enableTailscaleServe(target);
-      }
-      return;
-    }
-    await enableTailscaleFunnel(target);
-  };
   if (params.tailscaleMode === "serve" && params.preserveFunnel === true) {
     let preservedFunnel: boolean;
     try {
@@ -65,26 +49,28 @@ export async function startGatewayTailscaleExposure(params: {
     }
   }
 
+  let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
   try {
-    await applyRoute(backendTarget);
+    claim = await claimTailscaleRoute(params.tailscaleMode, backendTarget);
     const host = await (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
     ).catch(() => null);
+    if (!claim.isActive()) {
+      throw new Error(`Managed Tailscale ${params.tailscaleMode} claim exited during startup`);
+    }
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
       const publicHost = resolveTailscalePublishedHost({
         tailscaleMode: effectiveMode,
         tailnetHost: host,
-        serviceName: effectiveMode === "serve" ? serviceName : undefined,
       });
       if (publicHost) {
         clearPublishedOrigin = prepareMcpAppChannelOrigin({
           origin: `https://${publicHost}`,
           reachability: effectiveMode === "funnel" ? "internet" : "tailnet",
         });
-        const serviceLabel = serviceName ? ` for ${serviceName}` : "";
         params.logTailscale.info(
-          `${params.tailscaleMode} enabled${serviceLabel}: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
+          `${params.tailscaleMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
         );
       } else {
         params.logTailscale.info(`${params.tailscaleMode} enabled`);
@@ -93,11 +79,25 @@ export async function startGatewayTailscaleExposure(params: {
       params.logTailscale.info(`${params.tailscaleMode} enabled`);
     }
   } catch (err) {
+    clearPublishedOrigin?.();
+    await claim?.stop();
     params.logTailscale.warn(`${params.tailscaleMode} failed: ${formatErrorMessage(err)}`);
     throw err;
   }
 
-  return async () => {
+  let stopping = false;
+  void claim.exited.then(() => {
+    if (stopping) {
+      return;
+    }
     clearPublishedOrigin?.();
+    params.logTailscale.warn(
+      `${params.tailscaleMode} route claim exited; managed Tailscale ingress is unavailable until the Gateway restarts`,
+    );
+  });
+  return async () => {
+    stopping = true;
+    clearPublishedOrigin?.();
+    await claim.stop();
   };
 }

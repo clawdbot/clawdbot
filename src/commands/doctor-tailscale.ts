@@ -75,11 +75,10 @@ export async function prepareTailscaleConfigMigration(params: {
   }
 
   // The managed startup command owns the device's default HTTPS root. Custom ports
-  // and Services need an operator-selected target, so Doctor must not guess at them.
+  // need an operator-selected target, so Doctor must not guess at them.
   const migrationIsUnambiguous =
     inspection.urls.length === 1 &&
     isCanonicalServeUrl(inspection.urls[0] ?? "") &&
-    !gateway.tailscale?.serviceName &&
     gateway.auth?.mode !== "none";
   if (!migrationIsUnambiguous) {
     return result(

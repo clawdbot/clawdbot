@@ -51,7 +51,6 @@ export async function startGatewayServerCore(
               const { startGatewayTailscaleExposure } = await import("./server-tailscale.js");
               const cleanup = await startGatewayTailscaleExposure({
                 tailscaleMode: gatewayKernel.tailscaleMode,
-                serviceName: gatewayKernel.tailscaleConfig.serviceName,
                 preserveFunnel: gatewayKernel.tailscaleConfig.preserveFunnel ?? false,
                 port,
                 backend,

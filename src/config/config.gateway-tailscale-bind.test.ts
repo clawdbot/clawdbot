@@ -35,30 +35,17 @@ describe("gateway tailscale bind validation", () => {
     expect(funnelRes.ok).toBe(true);
   });
 
-  it("validates Tailscale service names", () => {
-    const validRes = validateConfigObject({
+  it("rejects the retired Tailscale serviceName key from canonical config", () => {
+    const res = validateConfigObject({
       gateway: {
         bind: "loopback",
         tailscale: { mode: "serve", serviceName: "svc:openclaw-gateway" },
       },
     });
-    expect(validRes.ok).toBe(true);
 
-    for (const serviceName of ["openclaw", "svc:", "svc:-openclaw", "svc:OpenClaw"]) {
-      const res = validateConfigObject({
-        gateway: {
-          bind: "loopback",
-          tailscale: { mode: "serve", serviceName },
-        },
-      });
-      expect(res.ok).toBe(false);
-      if (!res.ok) {
-        expect(res.issues).toContainEqual({
-          path: "gateway.tailscale.serviceName",
-          message:
-            'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
-        });
-      }
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.path)).toContain("gateway.tailscale");
     }
   });
 
