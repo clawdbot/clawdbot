@@ -454,7 +454,9 @@ disconnect; at that boundary its old worker environment is treated as gone and
 the session placement reconciles normally. Pairing itself remains, so a later
 reconnect can provision a fresh environment. Legacy pairings without exact node
 disconnect history are retained fail-safe rather than expired from unrelated
-device activity.
+device activity. Removing the device pairing or only its node role invalidates
+clients first, then runs targeted environment and placement reconciliation
+before returning success; the periodic sweep retries any failed cleanup.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.

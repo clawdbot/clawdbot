@@ -41,6 +41,7 @@ import {
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import { scopeUpgradeHandlers } from "./device-scope-upgrade.js";
+import { reconcileRevokedDeviceWorker } from "./device-worker-revocation.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -522,6 +523,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     context.invalidateClientsForDevice?.(removed.deviceId, {
       reason: "device-pair-removed",
     });
+    await reconcileRevokedDeviceWorker(context, removed.deviceId);
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.removed",

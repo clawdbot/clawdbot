@@ -186,7 +186,10 @@ stated honestly (revision 1 undersold this):
   (unpaired or ceiling
   elapsed → normal orphan/reap path). A device-environment reaper keyed on
   unpair/dormancy — not on provider teardown proof — cleans rows,
-  credentials, and staged refs. Unreferenced terminal environment rows retain
+  credentials, and staged refs. Explicit device or node-role removal invalidates
+  clients, then runs targeted environment and placement reconciliation before
+  success returns; periodic reconciliation retries failed cleanup. Unreferenced
+  terminal environment rows retain
   seven days of operator diagnostics, then prune in bounded post-reconcile
   batches; any surviving placement keeps its environment provenance.
   Device-side GC of per-session workspace dirs and superseded bundles is a

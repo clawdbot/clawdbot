@@ -21,7 +21,9 @@ type DeviceWorkerRuntimeOptions = {
 };
 
 type DeviceWorkerAvailability = (deviceId: string) => Promise<boolean>;
+type DeviceWorkerReconciliation = (deviceId: string) => Promise<readonly string[]>;
 const DEVICE_WORKER_AVAILABILITY = new WeakMap<object, DeviceWorkerAvailability>();
+const DEVICE_WORKER_RECONCILIATION = new WeakMap<object, DeviceWorkerReconciliation>();
 
 export function bindDeviceWorkerAvailability(
   service: object,
@@ -36,6 +38,21 @@ export async function isDeviceWorkerAvailable(
 ): Promise<boolean> {
   const isAvailable = service ? DEVICE_WORKER_AVAILABILITY.get(service) : undefined;
   return isAvailable ? await isAvailable(deviceId) : false;
+}
+
+export function bindDeviceWorkerReconciliation(
+  service: object,
+  reconcile: DeviceWorkerReconciliation,
+): void {
+  DEVICE_WORKER_RECONCILIATION.set(service, reconcile);
+}
+
+export async function reconcileDeviceWorker(
+  service: object | undefined,
+  deviceId: string,
+): Promise<readonly string[]> {
+  const reconcile = service ? DEVICE_WORKER_RECONCILIATION.get(service) : undefined;
+  return reconcile ? await reconcile(deviceId) : [];
 }
 
 function requireDeviceId(profile: WorkerProfile): string {
