@@ -45,34 +45,10 @@ function selectionTextWithinChatBubble(
   return text.trim() ? text : null;
 }
 
-function createSelectionPopupButton(
-  label: string,
-  iconPath: string,
-  onActivate: () => void,
-): HTMLButtonElement {
+function createSelectionPopupButton(label: string, onActivate: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
-  button.setAttribute("aria-label", label);
-
-  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  icon.setAttribute("viewBox", "0 0 24 24");
-  icon.setAttribute("width", "14");
-  icon.setAttribute("height", "14");
-  icon.setAttribute("fill", "none");
-  icon.setAttribute("stroke", "currentColor");
-  icon.setAttribute("stroke-width", "2");
-  icon.setAttribute("stroke-linecap", "round");
-  icon.setAttribute("stroke-linejoin", "round");
-  icon.setAttribute("aria-hidden", "true");
-  icon.setAttribute("focusable", "false");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", iconPath);
-  icon.appendChild(path);
-
-  const text = document.createElement("span");
-  text.textContent = label;
-
-  button.append(icon, text);
+  button.textContent = label;
   // pointerdown would collapse the selection before click fires; the popup
   // must keep the selection alive until the action reads it.
   button.addEventListener("pointerdown", (event) => event.preventDefault());
@@ -98,15 +74,11 @@ function showChatSelectionPopup(
     action(selectionText);
   };
   popup.append(
-    createSelectionPopupButton(
-      t("chat.messages.moreDetails"),
-      "M12 3v2m0 14v2M5.6 5.6l1.5 1.5m9.8 9.8 1.5 1.5M3 12h2m14 0h2M5.6 18.4l1.5-1.5m9.8-9.8 1.5-1.5",
-      () => activate(actions.onMoreDetails),
+    createSelectionPopupButton(t("chat.messages.moreDetails"), () =>
+      activate(actions.onMoreDetails),
     ),
-    createSelectionPopupButton(
-      t("chat.messages.askInSideChat"),
-      "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
-      () => activate(actions.onAskSideChat),
+    createSelectionPopupButton(t("chat.messages.askInSideChat"), () =>
+      activate(actions.onAskSideChat),
     ),
   );
   document.body.appendChild(popup);

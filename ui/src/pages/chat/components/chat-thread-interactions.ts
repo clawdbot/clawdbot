@@ -354,7 +354,21 @@ function createMessageActionContextButton(params: {
   return { element: tooltip, button };
 }
 
+// :focus-visible turns back on at the next keypress, modifiers included, so a
+// bare Shift would ring the whole transcript long after a click put focus there.
+// Record how focus arrived on the scroll container and let the ring key off that.
+export function syncTranscriptFocusRing(event: FocusEvent | PointerEvent): void {
+  const thread = event.currentTarget;
+  if (!(thread instanceof HTMLElement)) {
+    return;
+  }
+  const arrivedByKeyboard =
+    event.type === "focusin" && event.target === thread && thread.matches(":focus-visible");
+  thread.toggleAttribute("data-keyboard-focus", arrivedByKeyboard);
+}
+
 export function handleTranscriptSelection(event: PointerEvent, props: TranscriptInteractionProps) {
+  syncTranscriptFocusRing(event);
   if (
     typeof props.onCompanionQuestion !== "function" ||
     typeof props.onCompanionPrefill !== "function"

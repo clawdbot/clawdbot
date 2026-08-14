@@ -9,6 +9,7 @@ import { t } from "../../../i18n/index.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptSelection,
+  syncTranscriptFocusRing,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import {
@@ -113,8 +114,14 @@ function renderTranscriptShell(
       aria-live="off"
       aria-relevant="additions"
       tabindex="0"
-      @focusin=${(event: FocusEvent) => transcript.handleFocusIn(event)}
-      @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
+      @focusin=${(event: FocusEvent) => {
+        transcript.handleFocusIn(event);
+        syncTranscriptFocusRing(event);
+      }}
+      @focusout=${(event: FocusEvent) => {
+        transcript.handleFocusOut(event);
+        syncTranscriptFocusRing(event);
+      }}
       @scroll=${props.onChatScroll}
       @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
       @keydown=${(event: KeyboardEvent) => {

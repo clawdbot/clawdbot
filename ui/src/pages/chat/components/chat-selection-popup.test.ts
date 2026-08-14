@@ -72,6 +72,8 @@ describe("chat selection popup", () => {
       "More details",
       "Ask in side chat",
     ]);
+    // The labels carry the meaning, so the compact toolbar ships no icon art.
+    expect(popup?.querySelectorAll("svg")).toHaveLength(0);
 
     buttons[0]?.click();
     expect(onMoreDetailsSpy).toHaveBeenCalledWith("Let's Encrypt cert");

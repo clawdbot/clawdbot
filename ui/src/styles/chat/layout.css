@@ -352,8 +352,17 @@ openclaw-chat-page {
   background: transparent;
 }
 
-/* The oversized clipped transcript owns its focus ring, so it stays inward to keep every edge visible. */
+/* Browsers turn :focus-visible back on at the next keypress, so the global ring
+   in base.css would frame the whole transcript when a modifier follows a click.
+   The transcript opts out and paints its own ring from the arrival modality
+   latched in syncTranscriptFocusRing; both selectors weigh the same, so source
+   order decides on a real keyboard arrival. The ring stays inward because the
+   oversized clipped transcript would otherwise lose an edge. */
 .chat-thread:focus-visible {
+  outline: none;
+}
+
+.chat-thread[data-keyboard-focus] {
   outline: 2px solid var(--muted-strong);
   outline-offset: -2px;
 }
@@ -1630,11 +1639,16 @@ button.chat-reply-preview--message:disabled {
   outline: none;
 }
 
+/* The actions share one surface: `overflow: hidden` clips their hover fill to
+   the container radius, and coarse pointers keep the platform touch target
+   carried by --menu-item-height. */
 .chat-selection-popup {
   position: fixed;
   z-index: 9999;
   display: flex;
   gap: 2px;
+  height: max(32px, var(--menu-item-height));
+  overflow: hidden;
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
@@ -1646,15 +1660,16 @@ button.chat-reply-preview--message:disabled {
 .chat-selection-popup button {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  padding: 5px 10px;
   border: none;
   background: none;
   color: var(--text);
-  min-height: var(--menu-item-height);
-  border-radius: var(--menu-item-radius);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.chat-selection-popup button + button {
+  border-left: 1px solid var(--border);
 }
 
 .chat-selection-popup button:hover,
@@ -1663,12 +1678,6 @@ button.chat-reply-preview--message:disabled {
   outline: none;
 }
 
-.chat-selection-popup button svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--muted);
-}
 .agent-chat__composer-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

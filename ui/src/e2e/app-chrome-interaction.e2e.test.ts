@@ -120,6 +120,15 @@ suite.define(() => {
         });
         await captureUiProof(page, "01-chat-selectable-transcript.png");
 
+        // The browser turns :focus-visible back on for the pointer-focused
+        // transcript at the first keydown, modifiers included; reaching for Shift
+        // while reading must not frame the reading surface.
+        await page.keyboard.press("Shift");
+        expect(await readFocusOutline(thread)).toMatchObject({
+          focusVisible: true,
+          outlineStyle: "none",
+        });
+
         await thread.focus();
         await page.keyboard.press("Tab");
         await expect
