@@ -25,15 +25,6 @@ function findLiteralOpeningDelimiter(
   return index;
 }
 
-function isParseableJson(text: string): boolean {
-  try {
-    JSON.parse(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function extractBalancedFrom(
   raw: string,
   start: number,
@@ -77,7 +68,7 @@ export function extractBalancedJsonPrefix(
   // inside a complete quoted span must not be mistaken for the real start.
   let inString = false;
   let escaped = false;
-  const openQuoteCheckpoints: number[] = [];
+  let openQuoteIndex = -1;
   for (let index = 0; index < raw.length; index += 1) {
     const char = raw[index];
     if (inString) {
@@ -92,7 +83,7 @@ export function extractBalancedJsonPrefix(
     }
     if (char === '"') {
       inString = true;
-      openQuoteCheckpoints.push(index);
+      openQuoteIndex = index;
       continue;
     }
     if (isJsonOpeningDelimiter(char, openers)) {
@@ -103,27 +94,12 @@ export function extractBalancedJsonPrefix(
     return null;
   }
 
-  // An unterminated quote can't reliably be told apart from real prose, so
-  // retry a literal (quote-blind) scan from each quote-opening checkpoint,
-  // most recent first. A candidate is only accepted once it parses as real
-  // JSON: that's what tells a genuine value hiding behind a malformed quote
-  // apart from actually digging back into already-closed, valid prose (whose
-  // non-JSON contents will fail to parse and must stay skipped).
-  for (let i = openQuoteCheckpoints.length - 1; i >= 0; i -= 1) {
-    const checkpoint = openQuoteCheckpoints[i];
-    if (checkpoint === undefined) {
-      continue;
-    }
-    const literalStart = findLiteralOpeningDelimiter(raw, checkpoint, openers);
-    if (literalStart >= raw.length) {
-      continue;
-    }
-    const fragment = extractBalancedFrom(raw, literalStart, openers);
-    if (fragment && isParseableJson(fragment.json)) {
-      return fragment;
-    }
-  }
-  return null;
+  // A quote still open at end-of-input is malformed input rather than prose.
+  // Its own span was never confirmed as quoted text, so a literal scan inside
+  // it is safe; completed quoted spans before it stay permanently skipped,
+  // even when that means extracting no fragment at all.
+  const literalStart = findLiteralOpeningDelimiter(raw, openQuoteIndex, openers);
+  return literalStart < raw.length ? extractBalancedFrom(raw, literalStart, openers) : null;
 }
 
 /** Extracts every balanced JSON object/array fragment from arbitrary text. */

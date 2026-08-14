@@ -40,15 +40,14 @@ describe("extractBalancedJsonPrefix", () => {
     expect(fragment).toBeNull();
   });
 
-  it("still recovers a later valid object after an unterminated leading quote", () => {
-    // A lone, never-closed quote in arbitrary prose must not be treated as
-    // opening a skippable span: doing so would swallow the rest of the text
-    // (including the real JSON) instead of just the malformed prose.
-    const raw = 'banner "unterminated then {"a":1}';
+  it("recovers a value found inside the unmatched quote's own span", () => {
+    // A quote still open at end-of-input was never confirmed as prose, so a
+    // literal scan of that span alone may still recover a real value.
+    const raw = 'banner "unterminated [1,2,3]';
 
     const fragment = extractBalancedJsonPrefix(raw);
 
-    expect(fragment?.json).toBe('{"a":1}');
+    expect(fragment?.json).toBe("[1,2,3]");
   });
 
   it("returns null when an unterminated quote leaves no delimiter behind", () => {
@@ -57,23 +56,34 @@ describe("extractBalancedJsonPrefix", () => {
     expect(fragment).toBeNull();
   });
 
-  it("does not resurrect a delimiter from an earlier, already-closed quoted span", () => {
-    // The unterminated-quote fallback must only rescan from its own unclosed
-    // span onward; rescanning from index 0 would pick `{not}` back up out of
-    // the first, already-completed quoted span instead of the real object.
-    const raw = '"first {not}" then "unterminated {"ok":true}';
+  it("never re-enters a completed quoted span, even when nothing else is recoverable", () => {
+    // Quote-safe contract: once a quoted span validly closes, its contents
+    // are prose. When a later unterminated quote makes the rest of the text
+    // ambiguous, the extractor returns no fragment instead of resurrecting
+    // the `{not}` delimiter out of the completed first span.
+    const raw = '"first {not}" then "unterminated no JSON';
 
     const fragment = extractBalancedJsonPrefix(raw);
 
-    expect(fragment?.json).toBe('{"ok":true}');
+    expect(fragment).toBeNull();
   });
 
-  it("does not fall back into an earlier closed span when the unmatched span has no JSON either", () => {
-    // The trailing unterminated span has no delimiter at all, so the fallback
-    // must not retry the earlier, already-closed "first {not}" span just
-    // because it happens to contain a brace - `{not}` isn't valid JSON and
-    // must stay skipped rather than being returned as a false recovery.
-    const raw = '"first {not}" then "unterminated no JSON';
+  it("never extracts parseable JSON that lives inside a completed quoted span", () => {
+    // The quoted text happens to contain valid JSON, but it was quoted as
+    // prose and must stay skipped - parseability is not proof it was a real
+    // value rather than quoted text.
+    const raw = '"{\\"stale\\":true}" then "unterminated no JSON';
+
+    const fragment = extractBalancedJsonPrefix(raw);
+
+    expect(fragment).toBeNull();
+  });
+
+  it("prefers no fragment over quote-blind recovery once spans have closed", () => {
+    // Here the toggle scan pairs the stray quote with the real JSON's own
+    // opening quote, so the object can only be recovered by re-entering a
+    // completed span. The quote-safe contract chooses null over guessing.
+    const raw = 'banner "unterminated then {"a":1}';
 
     const fragment = extractBalancedJsonPrefix(raw);
 
