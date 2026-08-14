@@ -426,4 +426,53 @@ describe("together video generation provider", () => {
     expect(media.reference_images).toHaveLength(1);
     expect(body).not.toHaveProperty("reference_images");
   });
+
+  it("rejects video dimensions outside the valid range", async () => {
+    const provider = buildTogetherVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "together",
+        model: "Wan-AI/Wan2.2-T2V-A14B",
+        prompt: "test",
+        cfg: {},
+        size: "99999x99999",
+      }),
+    ).rejects.toThrow(/out of range/i);
+  });
+
+  it("accepts valid video dimensions within range", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({
+        id: "video_456",
+        status: "in_progress",
+      }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "video_456",
+          status: "completed",
+          outputs: { video_url: "https://example.com/together2.mp4" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildTogetherVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "together",
+      model: "Wan-AI/Wan2.2-T2V-A14B",
+      prompt: "test",
+      cfg: {},
+      size: "1280x720",
+    });
+
+    const request = requireFirstPostJsonRequest(postJsonRequestMock, "Together request");
+    const body = requireRecord(request.body, "Together request body");
+    expect(body.width).toBe(1280);
+    expect(body.height).toBe(720);
+  });
 });

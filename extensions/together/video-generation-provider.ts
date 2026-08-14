@@ -37,6 +37,8 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const TOGETHER_MIN_DURATION_SECONDS = 1;
 const TOGETHER_MAX_DURATION_SECONDS = 10;
+const TOGETHER_MIN_VIDEO_DIMENSION = 1;
+const TOGETHER_MAX_VIDEO_DIMENSION = 8192;
 
 type TogetherVideoResponse = {
   id?: string;
@@ -234,8 +236,21 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       if (size) {
         const match = /^(\d+)x(\d+)$/u.exec(size);
         if (match) {
-          body.width = Number.parseInt(match[1] ?? "", 10);
-          body.height = Number.parseInt(match[2] ?? "", 10);
+          const width = asSafeIntegerInRange(Number.parseInt(match[1] ?? "", 10), {
+            min: TOGETHER_MIN_VIDEO_DIMENSION,
+            max: TOGETHER_MAX_VIDEO_DIMENSION,
+          });
+          const height = asSafeIntegerInRange(Number.parseInt(match[2] ?? "", 10), {
+            min: TOGETHER_MIN_VIDEO_DIMENSION,
+            max: TOGETHER_MAX_VIDEO_DIMENSION,
+          });
+          if (width === undefined || height === undefined) {
+            throw new Error(
+              `Together video size "${size}" is out of range; each dimension must be between ${TOGETHER_MIN_VIDEO_DIMENSION} and ${TOGETHER_MAX_VIDEO_DIMENSION} pixels.`,
+            );
+          }
+          body.width = width;
+          body.height = height;
         }
       }
       if (req.inputImages?.[0]) {
