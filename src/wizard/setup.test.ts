@@ -177,6 +177,13 @@ function providerPluginStub(
 }
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
+const ensureOnboardingConfig = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+    config,
+    agentId: "main",
+    bootstrapPending: true,
+  })),
+);
 const replaceConfigFile = vi.hoisted(() =>
   vi.fn(
     async (params: {
@@ -476,13 +483,10 @@ vi.mock("../config/config.js", async (importActual) => {
   };
 });
 vi.mock("../commands/onboard-agent.js", async () => {
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope-config.js");
   return {
-    ensureOnboardingConfig: async (config: OpenClawConfig) => ({
-      config,
-      agentId: resolveDefaultAgentId(config),
-      bootstrapPending: true,
-    }),
+    ensureOnboardingAgent: ensureOnboardingConfig,
+    validateFirstOnboardingAgentName: (value: string | undefined) =>
+      value?.trim() ? undefined : "Agent name is required.",
   };
 });
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -689,6 +693,42 @@ describe("runSetupWizard", () => {
     });
     runSetupMemoryImportStep.mockReset();
     runSetupMemoryImportStep.mockResolvedValue(undefined);
+    ensureOnboardingConfig.mockClear();
+  });
+
+  it("prompts for and stages the named first agent on a fresh install", async () => {
+    const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: "/tmp/openclaw-workspace",
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "What should we call your first agent?",
+        initialValue: "main",
+      }),
+    );
+    expect(ensureOnboardingConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/openclaw-workspace",
+        preserveCandidateRoster: false,
+        firstAgent: { name: "robby" },
+      }),
+    );
   });
 
   it("exits successfully after the auto-launched TUI returns", async () => {

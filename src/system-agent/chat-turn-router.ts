@@ -100,7 +100,11 @@ function preservePendingSetupModel(
   if (requestedModel && requestedModel !== pendingModel) {
     return operation;
   }
-  return { ...operation, ...(requestedModel ? {} : pendingModel ? { model: pendingModel } : {}) };
+  return {
+    ...operation,
+    ...(requestedModel ? {} : pendingModel ? { model: pendingModel } : {}),
+    ...(operation.agentName ? {} : pending.agentName ? { agentName: pending.agentName } : {}),
+  };
 }
 
 export class ChatTurnRouter {

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
+import { promptFirstOnboardingAgent } from "../commands/onboard-first-agent.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
@@ -52,18 +53,6 @@ const loadConfigLoggingModule = createLazyRuntimeModule(() => import("../config/
 const loadOnboardConfigModule = createLazyRuntimeModule(
   () => import("../commands/onboard-config.js"),
 );
-
-function hasConfiguredDefaultModel(config: OpenClawConfig): boolean {
-  return resolveAgentModelPrimaryValue(config.agents?.defaults?.model) !== undefined;
-}
-
-function isSetupImportFlowChoice(flow: SetupFlowChoice): boolean {
-  return flow === "import" || flow.startsWith("import:");
-}
-
-function resolveImportProviderFromFlowChoice(flow: SetupFlowChoice): string | undefined {
-  return flow.startsWith("import:") ? flow.slice("import:".length) : undefined;
-}
 
 export async function runSetupWizard(
   opts: OnboardOptions,
@@ -156,7 +145,8 @@ async function runSetupWizardOnce(
     command: formatCliCommand("openclaw configure"),
   });
   const manualHint = t("wizard.setup.flowAdvancedHint");
-  const hasExistingModelConfig = hasConfiguredDefaultModel(baseConfig);
+  const hasExistingModelConfig =
+    resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model) !== undefined;
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
   const migrationOptions = await listSetupMigrationOptions({
     baseConfig,
@@ -240,8 +230,8 @@ async function runSetupWizardOnce(
   let usedImportFlow = false;
   let acknowledgeMigrationPromotion: (() => Promise<void>) | undefined;
   let importedInferenceVerified = false;
-  while (opts.importFrom || isSetupImportFlowChoice(flow)) {
-    const importFrom = opts.importFrom ?? resolveImportProviderFromFlowChoice(flow);
+  while (opts.importFrom || flow === "import" || flow.startsWith("import:")) {
+    const importFrom = opts.importFrom ?? (flow.startsWith("import:") ? flow.slice(7) : undefined);
     prompter.disableBackNavigation?.();
     let migrationOutcome: Awaited<ReturnType<typeof runSetupMigrationImport>>;
     try {
@@ -533,6 +523,12 @@ async function runSetupWizardOnce(
     prompter,
     hasAuthoredRoster,
   });
+  const firstAgent = await promptFirstOnboardingAgent(
+    hasAuthoredRoster,
+    opts.agentName,
+    prompter,
+    opts.nonInteractive,
+  );
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
     baseConfig,
     requestedWorkspaceDir,
@@ -564,8 +560,16 @@ async function runSetupWizardOnce(
     prompter,
     runtime,
   });
-  const onboard = (await import("../commands/onboard-agent.js")).ensureOnboardingConfig;
-  nextConfig = (await onboard(gateway.nextConfig, workspaceDir, usedImportFlow, baseConfig)).config;
+  const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
+  nextConfig = (
+    await ensureOnboardingAgent({
+      config: gateway.nextConfig,
+      workspace: workspaceDir,
+      preserveCandidateRoster: usedImportFlow,
+      baseConfig,
+      ...(firstAgent ? { firstAgent } : {}),
+    })
+  ).config;
 
   let liveModelVerified = false;
   let setupConfigPersisted = false;
@@ -574,7 +578,7 @@ async function runSetupWizardOnce(
   if (
     opts.nonInteractive !== true &&
     !importedInferenceVerified &&
-    hasConfiguredDefaultModel(nextConfig) &&
+    resolveAgentModelPrimaryValue(nextConfig.agents?.defaults?.model) !== undefined &&
     ((usedImportFlow && keepExistingModelConfig) || opts.authChoice !== "skip")
   ) {
     const verificationTarget = resolveOnboardingAgentTarget(nextConfig);

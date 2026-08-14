@@ -509,6 +509,7 @@ export async function executeSetup(
         applySetup(
           {
             workspace,
+            ...(operation.agentName ? { firstAgent: { name: operation.agentName } } : {}),
             expectedInferenceRoute: verified.route,
             ...recovery?.applyOptions,
             surface,

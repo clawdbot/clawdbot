@@ -2,11 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createAgent: vi.fn(),
+  migrateLegacyMainSessionKeys: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
 }));
 
-vi.mock("../agents/agent-create.js", () => ({ createAgent: mocks.createAgent }));
+vi.mock("../agents/agent-create.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-create.js")>()),
+  createAgent: mocks.createAgent,
+}));
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: mocks.readConfigFileSnapshot }));
+vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
+  migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
+}));
 
 const { ensureOnboardingAgent } = await import("./onboard-agent.js");
 
@@ -21,6 +28,7 @@ describe("onboarding main-agent creation", () => {
       agentDir: "/tmp/agent",
       bootstrapPending: true,
     });
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValue({});
     mocks.readConfigFileSnapshot
       .mockResolvedValueOnce({
         exists: false,
@@ -68,6 +76,31 @@ describe("onboarding main-agent creation", () => {
         },
         gateway: { mode: "local", controlUi: { enabled: true } },
       },
+    });
+  });
+
+  it("stages a normalized named first agent and runs legacy-session convergence", async () => {
+    mocks.createAgent.mockResolvedValueOnce({
+      status: "created",
+      agentId: "robby",
+      name: "Robby!",
+      workspace: "/tmp/work",
+      agentDir: "/tmp/agent",
+      bootstrapPending: true,
+    });
+
+    await ensureOnboardingAgent({
+      config: {},
+      workspace: "/tmp/work",
+      firstAgent: { name: "Robby!" },
+    });
+
+    expect(mocks.createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: { id: "robby", name: "Robby!", workspace: "/tmp/work" } }),
+    );
+    expect(mocks.migrateLegacyMainSessionKeys).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ agents: expect.any(Object) }),
+      mode: "automatic",
     });
   });
 

@@ -166,6 +166,26 @@ describe("createAgent", () => {
     expect((mocks.persisted.agents as { list?: unknown }).list).toBeUndefined();
   });
 
+  it("replaces only the load-time compatibility roster when creating a named first agent", async () => {
+    await createAgent({
+      entry: { id: "robby", name: "robby", workspace: "/tmp/robby" },
+      bootstrapFirstAgent: true,
+    });
+
+    expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
+    expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeOptions: { allowedAgentRosterRemovals: ["main"] },
+      }),
+    );
+    expect(mocks.persisted).toMatchObject({
+      agents: { entries: { robby: expect.objectContaining({ workspace: "/tmp/robby" }) } },
+    });
+    expect(
+      (mocks.persisted.agents as { entries?: Record<string, unknown> }).entries,
+    ).not.toHaveProperty("main");
+  });
+
   it("keeps the first staged roster entry marker-free", async () => {
     mocks.config = { agents: { list: [] } };
 

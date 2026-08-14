@@ -1,15 +1,29 @@
 // First-run main-agent creation through the canonical agent service.
-import { createAgent } from "../agents/agent-create.js";
+import { createAgent, validateAgentIdInput } from "../agents/agent-create.js";
 import {
   listAgentEntries,
   resolveDefaultAgentId,
   toAgentEntriesRecord,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
+import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+
+export type FirstOnboardingAgent = { name: string };
+
+export function validateFirstOnboardingAgentName(value: string | undefined): string | undefined {
+  const name = value?.trim();
+  if (!name) {
+    return "Agent name is required.";
+  }
+  const validation = validateAgentIdInput(name, { allowBootstrapMain: true });
+  return validation.ok ? undefined : `${validation.message}. Choose another name.`;
+}
 
 function isInjectedMainRoster(config: OpenClawConfig): boolean {
   const roster = listAgentEntries(config);
@@ -44,6 +58,7 @@ function mergeOnboardingCandidate(params: {
 export async function ensureOnboardingAgent(params: {
   config: OpenClawConfig;
   workspace: string;
+  firstAgent?: FirstOnboardingAgent;
   preserveCandidateRoster?: boolean;
   baseConfig?: OpenClawConfig;
 }): Promise<{
@@ -76,7 +91,7 @@ export async function ensureOnboardingAgent(params: {
   }
   const effective = before.config;
   const candidateBase = params.baseConfig ?? effective;
-  if (before.exists && listAgentEntries(effective).length > 0) {
+  if (before.exists && hasResolvedRosterBeforeMigrations(before)) {
     return {
       config: mergeOnboardingCandidate({
         base: candidateBase,
@@ -87,13 +102,15 @@ export async function ensureOnboardingAgent(params: {
       bootstrapPending: false,
     };
   }
+  const firstAgentName = params.firstAgent?.name.trim() || "main";
   const created = await createAgent({
     entry: {
-      id: "main",
-      name: "main",
+      id: normalizeAgentId(firstAgentName),
+      name: firstAgentName,
       workspace: params.workspace,
     },
-    bootstrapMain: true,
+    bootstrapMain: normalizeAgentId(firstAgentName) === "main",
+    bootstrapFirstAgent: true,
     skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
     skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
   });
@@ -104,23 +121,16 @@ export async function ensureOnboardingAgent(params: {
   if (!after.valid) {
     throw new Error("Agent creation wrote an invalid OpenClaw config.");
   }
+  const config = mergeOnboardingCandidate({
+    base: candidateBase,
+    candidate: params.config,
+    currentRuntime: after.config,
+  });
+  await migrateLegacyMainSessionKeys({ cfg: after.config, mode: "automatic" });
   return {
-    config: mergeOnboardingCandidate({
-      base: candidateBase,
-      candidate: params.config,
-      currentRuntime: after.config,
-    }),
+    config,
     agentId: created.agentId,
     bootstrapPending: created.bootstrapPending,
     ...(after.hash !== undefined ? { configHash: after.hash } : {}),
   };
-}
-
-export function ensureOnboardingConfig(
-  config: OpenClawConfig,
-  workspace: string,
-  preserveCandidateRoster = false,
-  baseConfig?: OpenClawConfig,
-) {
-  return ensureOnboardingAgent({ config, workspace, preserveCandidateRoster, baseConfig });
 }

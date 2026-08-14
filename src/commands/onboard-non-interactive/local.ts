@@ -267,6 +267,7 @@ export async function runNonInteractiveLocalSetup(params: {
     config: nextConfig,
     workspace: workspaceDir,
     baseConfig,
+    firstAgent: { name: opts.agentName ?? "main" },
   });
   nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
   // First-agent creation is the first permitted config mutation. Preserve its
