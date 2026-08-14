@@ -32,6 +32,7 @@ import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import {
   renderSessionAttentionIcon,
+  renderSessionRunSpinner,
   sessionAttentionSubtitle,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
@@ -168,13 +169,13 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const hasComposerDraft = !active && host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
-  // Home rings run state around its leading icon; the trailing slot stays reserved for counts.
+  // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
     content:
       attention.kind === "none"
         ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
         : renderSessionAttentionIcon(attention),
-    running,
+    running: false,
     badge: unread ? renderSessionUnreadBadge() : nothing,
   });
   return html`
@@ -199,10 +200,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         host.openMainSession(agentId);
       }}
     >
-      ${attentionLabel || running
-        ? html`<openclaw-tooltip .content=${attentionLabel ?? t("sessionsView.activeRun")}
-            >${homeGlyph}</openclaw-tooltip
-          >`
+      ${attentionLabel
+        ? html`<openclaw-tooltip .content=${attentionLabel}>${homeGlyph}</openclaw-tooltip>`
         : homeGlyph}
       <span class="nav-item__text">${t("nav.home")}</span>
       ${sessionHasBoard(mainKey)
@@ -215,8 +214,9 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
             >
           </openclaw-tooltip>`
         : nothing}
-      ${outboxCount > 0 || hasComposerDraft
+      ${running || outboxCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
+            ${running ? renderSessionRunSpinner() : nothing}
             ${renderSessionRowBadges({ hasAutomation: false, outboxCount, hasComposerDraft })}
           </span>`
         : nothing}

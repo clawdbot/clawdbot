@@ -4211,6 +4211,18 @@ describe("gateway server chat", () => {
       expect(finalEvents).toHaveLength(1);
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(true);
+      const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
+      await expect(
+        createAgentTurnService({ context, isWebchatConnect: () => true }).waitForTurn({
+          runId: "idem-queued-followup",
+          timeoutMs: 10,
+        }),
+      ).resolves.toMatchObject({
+        runId: "idem-queued-followup",
+        status: "pending",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      });
 
       onQueueDisposition?.("queue-cap-old");
       expect(context.logGateway.info).toHaveBeenCalledWith(

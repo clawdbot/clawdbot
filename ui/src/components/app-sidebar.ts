@@ -85,6 +85,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
   private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
@@ -522,6 +523,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .visitsEnabled=${this.lobsterPetVisits}
               .soundsEnabled=${this.lobsterPetSounds}
               .gatewayVersion=${this.gatewayVersion}
+              .onVisitsDisabled=${this.refreshAppearanceSettings}
             ></openclaw-lobster-pet>
             ${this.devGitBranch
               ? html`<openclaw-tooltip .content=${this.devGitBranch}>

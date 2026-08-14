@@ -16,8 +16,10 @@ import {
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
+  NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -402,6 +404,7 @@ describe("gateway/node-registry", () => {
         pairingIdentity: "identity-a",
         pairingGeneration: "generation-a",
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerBuild: WORKER_RUNS,
         workerRuns: WORKER_RUNS,
         commands: ["system.run"],
       }),
@@ -597,6 +600,72 @@ describe("gateway/node-registry", () => {
       },
     });
     expect(frames).toEqual([]);
+  });
+
+  it("keeps workspace proof current across capacity withdrawal while fencing launches", async () => {
+    const frames: string[] = [];
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-1", "node-1", frames, {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+        workerRuns: WORKER_RUNS,
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: WORKER_RUNS,
+        },
+      }),
+    ).toEqual({ changed: true });
+    const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+    if (!proof) {
+      throw new Error("expected current supervisor proof");
+    }
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      }),
+    ).toEqual({ changed: true });
+
+    const workspaceInvoke = nodeWorkerSupervisorTransport.invoke({
+      node: proof,
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      isDispatchAuthorized: () => true,
+    });
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    expect(
+      nodeRegistry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+        payloadJSON: "null",
+      }),
+    ).toBe(true);
+    await expect(workspaceInvoke).resolves.toMatchObject({ ok: true, payloadJSON: "null" });
+
+    await expect(
+      nodeWorkerSupervisorTransport.invoke({
+        node: proof,
+        command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PRIVATE_DIALECT_UNAVAILABLE" },
+    });
   });
 
   it("keeps a private proof current across equivalent worker feature ordering", async () => {

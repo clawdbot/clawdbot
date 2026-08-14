@@ -43,6 +43,7 @@ export const en: TranslationMap = {
     delete: "Delete",
     remove: "Remove",
     dismiss: "Dismiss",
+    dismissAndDontShowAgain: "Dismiss and don't show again",
     unselect: "Unselect",
     enabled: "Enabled",
     disabled: "Disabled",
