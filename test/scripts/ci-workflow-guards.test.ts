@@ -211,7 +211,10 @@ function runCiManifestFixture(options: {
           export const createNodeTestShardBundles = (options = {}) => [{
             checkName: "bundled-node-plan",
             configs: ["test/vitest/bundled.config.ts"],
-            env: { OPENCLAW_CI_TEST_COMPACT_MODE: options.compactMode ?? "full" },
+            env: {
+              OPENCLAW_CI_TEST_COMPACT_MODE: options.compactMode ?? "full",
+              OPENCLAW_CI_TEST_RUNNER_BACKEND: options.runnerBackend ?? "",
+            },
             requiresDist: false,
             runner: "ubuntu-24.04",
             shardName: "bundled-node-plan",
@@ -5440,7 +5443,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContainEqual(
       expect.objectContaining({
         check_name: "bundled-node-plan",
-        env: { OPENCLAW_CI_TEST_COMPACT_MODE: "full" },
+        env: {
+          OPENCLAW_CI_TEST_COMPACT_MODE: "full",
+          OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
+        },
         shard_name: "bundled-node-plan",
       }),
     );
@@ -5460,7 +5466,33 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContainEqual(
       expect.objectContaining({
         check_name: "bundled-node-plan",
-        env: { OPENCLAW_CI_TEST_COMPACT_MODE: "push" },
+        env: {
+          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
+          OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
+        },
+      }),
+    );
+
+    const githubPush = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "push",
+      runnerBackend: "github",
+    });
+    expect(githubPush.status, githubPush.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          githubPush.outputs.checks_node_core_nondist_matrix,
+          "GitHub-hosted push node core nondist matrix output",
+        ),
+      ).include,
+    ).toContainEqual(
+      expect.objectContaining({
+        check_name: "bundled-node-plan",
+        env: {
+          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
+          OPENCLAW_CI_TEST_RUNNER_BACKEND: "github",
+        },
       }),
     );
 
@@ -5517,7 +5549,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect.arrayContaining([
         expect.objectContaining({
           check_name: "bundled-node-plan",
-          env: { OPENCLAW_CI_TEST_COMPACT_MODE: "pull-request" },
+          env: {
+            OPENCLAW_CI_TEST_COMPACT_MODE: "pull-request",
+            OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
+          },
         }),
         expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
       ]),

@@ -1,9 +1,9 @@
 import path from "node:path";
-import { resolveSharedAuthStoreDir } from "../agents/auth-profiles/path-resolve.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveUserPath } from "../utils.js";
 
 function resolveLegacyAuthAgentDir(agentDir?: string): string {
-  return agentDir ? resolveUserPath(agentDir) : resolveSharedAuthStoreDir();
+  return agentDir ? resolveUserPath(agentDir) : resolveSharedMainAuthAgentDir();
 }
 
 export function resolveLegacyAuthProfilesPath(agentDir?: string): string {

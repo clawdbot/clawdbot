@@ -17,13 +17,16 @@ import {
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
@@ -257,15 +260,17 @@ export async function agentsAddCommand(
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
       const sourceAuthPath = resolveAuthProfileDatabasePath(sourceAgentDir);
       const destAuthPath = resolveAuthProfileDatabasePath(agentDir);
-      const mainAuthPath = resolveSharedAuthStorePath();
+      const sharedMainAgentPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir());
       const sameAuthPath =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));
       const sourceIsInheritedMain =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
-        normalizeLowercaseStringOrEmpty(path.resolve(mainAuthPath));
+        normalizeLowercaseStringOrEmpty(path.resolve(sharedMainAgentPath));
       if (!sameAuthPath) {
-        const sourceStore = loadReadablePersistedAuthProfileStore(sourceAgentDir);
+        const sourceStore = sourceIsInheritedMain
+          ? loadAuthProfileStoreWithoutExternalProfiles(sourceAgentDir)
+          : loadReadablePersistedAuthProfileStore(sourceAgentDir);
         const destStore = loadReadablePersistedAuthProfileStore(agentDir);
         const portable = sourceStore
           ? buildPortableAuthProfileStoreForAgentCopy(sourceStore)

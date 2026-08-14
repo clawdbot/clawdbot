@@ -8,7 +8,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { coerceSecretRef } from "../../config/types.secrets.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
@@ -23,7 +22,12 @@ import {
   getRuntimeExternalCliProfileIds,
   setRuntimeExternalCliProfileIds,
 } from "./runtime-external-profile-references.js";
-import { readPersistedAuthProfileStoreRaw } from "./sqlite.js";
+import {
+  readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStateRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+  type AuthProfileDatabase,
+} from "./sqlite.js";
 import {
   coerceAuthProfileState,
   loadPersistedAuthProfileState,
@@ -42,7 +46,7 @@ type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
 type LoadPersistedAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
-  database?: OpenClawAgentDatabase;
+  database?: AuthProfileDatabase;
 };
 
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
@@ -804,6 +808,24 @@ export function loadPersistedAuthProfileStore(
     ),
   };
   return merged;
+}
+
+/** Load the shared auth store from an explicit state root. */
+export function loadPersistedSharedAuthProfileStore(
+  env: NodeJS.ProcessEnv,
+): AuthProfileStore | null {
+  const raw = readPersistedSharedAuthProfileStoreRaw(env);
+  const store = coercePersistedAuthProfileStore(raw);
+  if (!store) {
+    return null;
+  }
+  return {
+    ...store,
+    ...mergeAuthProfileState(
+      coerceAuthProfileState(raw),
+      coerceAuthProfileState(readPersistedSharedAuthProfileStateRaw(env)),
+    ),
+  };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
