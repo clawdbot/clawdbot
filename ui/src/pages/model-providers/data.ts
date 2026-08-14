@@ -64,7 +64,6 @@ export type ModelProviderCard = {
 type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
-  catalogModels?: ModelCatalogEntry[] | null;
   providerOutcomes?: ModelCatalogProviderOutcome[];
   configProviderIds?: string[] | null;
   configApiKeyProviderIds?: string[] | null;
@@ -194,12 +193,12 @@ function addLogoutTarget(
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
   const apiKeyCapabilities = new Map<string, boolean>();
-  for (const entry of input.catalogModels ?? []) {
-    const id = canonicalProviderId(entry.provider);
-    if (!id || entry.apiKeySupported === undefined) {
+  for (const capability of input.authStatus?.providerCapabilities ?? []) {
+    const id = canonicalProviderId(capability.provider);
+    if (!id) {
       continue;
     }
-    apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || entry.apiKeySupported);
+    apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || capability.apiKeySupported);
   }
 
   for (const provider of input.configProviderIds ?? []) {
@@ -462,15 +461,17 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
 
 export type ProviderOption = { id: string; displayName: string };
 
+type ModelProviderCapability = NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number];
+
 export function buildUnconfiguredProviderOptions(
-  models: ModelCatalogEntry[] | null,
+  capabilities: ModelProviderCapability[] | undefined,
   configuredProviderIds: Iterable<string>,
 ): ProviderOption[] {
   const configured = new Set(Array.from(configuredProviderIds, canonicalProviderId));
   const options = new Map<string, ProviderOption>();
-  for (const model of models ?? []) {
-    const id = canonicalProviderId(model.provider);
-    if (model.apiKeySupported === true && id && !configured.has(id) && !options.has(id)) {
+  for (const capability of capabilities ?? []) {
+    const id = canonicalProviderId(capability.provider);
+    if (capability.quickApiKeySetup && id && !configured.has(id) && !options.has(id)) {
       options.set(id, { id, displayName: providerDisplayLabel(id) });
     }
   }

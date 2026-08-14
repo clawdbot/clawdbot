@@ -7,7 +7,9 @@ import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -305,14 +307,15 @@ describe("agents add command", () => {
     );
   });
 
-  it("reports only auth profiles persisted to the new agent store", async () => {
-    await withAgentsAddStateRoot("openclaw-agents-add-auth-copy-", async (root) => {
-      const sourceAgentDir = path.join(root, "agents", "main", "agent");
-      const destAgentDir = path.join(root, "agents", "work", "agent");
-      const workspaceDir = path.join(root, "workspace-work");
-      await fs.mkdir(sourceAgentDir, { recursive: true });
-      saveAuthProfileStore(
-        {
+  it.each(["legacy-main", "state-db"] as const)(
+    "reports only auth profiles persisted to the new agent store with %s shared auth",
+    async (location) => {
+      await withAgentsAddStateRoot("openclaw-agents-add-auth-copy-", async (root) => {
+        const sourceAgentDir = path.join(root, "agents", "main", "agent");
+        const destAgentDir = path.join(root, "agents", "work", "agent");
+        const workspaceDir = path.join(root, "workspace-work");
+        await fs.mkdir(sourceAgentDir, { recursive: true });
+        const sourceStore: AuthProfileStore = {
           version: AUTH_STORE_VERSION,
           profiles: {
             "openai:api-key": {
@@ -329,34 +332,39 @@ describe("agents add command", () => {
               copyToAgents: true,
             },
           },
-        },
-        sourceAgentDir,
-      );
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { list: [{ id: "main", default: true }] } },
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
+        };
+        if (location === "state-db") {
+          writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+          saveAuthProfileStore(sourceStore);
+        } else {
+          saveAuthProfileStore(sourceStore, sourceAgentDir);
+        }
+        readConfigFileSnapshotMock.mockResolvedValue({
+          ...baseConfigSnapshot,
+          config: { agents: { list: [{ id: "main", default: true }] } },
+          sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
+        });
+        const prompter = {
+          intro: vi.fn(),
+          text: vi.fn().mockResolvedValueOnce("work").mockResolvedValueOnce(workspaceDir),
+          confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
+          note: vi.fn(),
+          outro: vi.fn(),
+        };
+        wizardMocks.createClackPrompter.mockReturnValue(prompter);
+
+        await agentsAddCommand({}, runtime);
+
+        expect(Object.keys(loadPersistedAuthProfileStore(destAgentDir)?.profiles ?? {})).toEqual([
+          "openai:api-key",
+        ]);
+        expect(prompter.note).toHaveBeenCalledWith(
+          'Copied 1 portable auth profile from "main". OAuth profiles stay shared from "main" unless this agent signs in separately.',
+          "Auth profiles",
+        );
       });
-      const prompter = {
-        intro: vi.fn(),
-        text: vi.fn().mockResolvedValueOnce("work").mockResolvedValueOnce(workspaceDir),
-        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
-        note: vi.fn(),
-        outro: vi.fn(),
-      };
-      wizardMocks.createClackPrompter.mockReturnValue(prompter);
-
-      await agentsAddCommand({}, runtime);
-
-      expect(Object.keys(loadPersistedAuthProfileStore(destAgentDir)?.profiles ?? {})).toEqual([
-        "openai:api-key",
-      ]);
-      expect(prompter.note).toHaveBeenCalledWith(
-        'Copied 1 portable auth profile from "main". OAuth profiles stay shared from "main" unless this agent signs in separately.',
-        "Auth profiles",
-      );
-    });
-  });
+    },
+  );
 
   it("fails before config mutation when the source auth store is unreadable", async () => {
     await withAgentsAddStateRoot("openclaw-agents-add-auth-unreadable-", async (root) => {

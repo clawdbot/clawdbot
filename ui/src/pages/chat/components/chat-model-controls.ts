@@ -47,6 +47,7 @@ type ChatModelControlsProps = {
   thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onModelSetup?: () => void;
+  onModelPickerOpen?: () => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
@@ -336,6 +337,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerStatusLabel: catalogTriggerStatus,
         onModelSetup: props.onModelSetup,
+        onOpen: props.onModelPickerOpen,
         onModelSelect: async (next, targetSessionKey) =>
           props.onModelSelect?.(next, targetSessionKey),
         onTargetSelect: props.onModelPickerTargetSelect,

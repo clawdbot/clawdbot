@@ -42,6 +42,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     fastMode: false,
     fastModeOverridden: true,
     configBusy: false,
+    quickAddSupported: true,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
     mutationBlockedReason: null,
@@ -119,6 +120,19 @@ function selectSegment(group: SegmentedGroup, value: string) {
 describe("renderModelProviders", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
+  });
+
+  it("hides quick API-key setup when provider capabilities are unavailable", () => {
+    const container = mount(
+      props({
+        configuredModels: [],
+        quickAddSupported: false,
+        unconfiguredProviders: [],
+      }),
+    );
+
+    expect(text(container)).not.toContain("Add provider");
+    expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
   });
 
   afterEach(() => {
@@ -528,12 +542,14 @@ describe("renderModelProviders", () => {
 
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
     expect(text(readiness)).toContain("Connect a verified AI model");
-    expect(text(readiness)).toContain("No models available");
-    expect(text(readiness)).toContain("Choose another provider");
+    expect(text(readiness)).toContain("Model required");
+    expect(text(readiness)).toContain("Connect a verified AI model");
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
-    expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain("Signed in");
+    expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain(
+      "Credentials configured",
+    );
 
-    button(readiness!, "Choose another provider")?.click();
+    button(readiness!, "Connect a verified AI model")?.click();
     expect(onOpenModelSetup).toHaveBeenCalledOnce();
   });
 
@@ -571,7 +587,7 @@ describe("renderModelProviders", () => {
     );
 
     const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(text(provider)).toContain("API key");
+    expect(text(provider)).toContain("Credentials configured");
     expect(text(provider)).not.toContain("Ready");
   });
 
@@ -762,7 +778,7 @@ describe("renderModelProviders", () => {
     );
 
     const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(text(provider)).toContain("Signed in");
+    expect(text(provider)).toContain("Credentials configured");
     expect(text(provider)).toContain("No models available");
     expect(text(provider)).not.toContain("Connection failed");
   });

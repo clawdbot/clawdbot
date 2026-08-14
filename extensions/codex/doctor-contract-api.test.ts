@@ -64,13 +64,17 @@ async function createBindingMigrationFixture(options: {
   legacySharedRoot?: boolean;
   name: string;
   sessionIndex?: Record<string, unknown>;
+  storeRoot?: "agent" | "fixed";
   threadId: string;
 }) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const sessionsDir = options.legacySharedRoot
-    ? path.join(stateDir, "sessions")
-    : path.join(stateDir, "agents", "main", "sessions");
+  const sessionsDir =
+    options.storeRoot === "fixed"
+      ? path.join(stateDir, "fixed-sessions")
+      : options.legacySharedRoot
+        ? path.join(stateDir, "sessions")
+        : path.join(stateDir, "agents", "main", "sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   const transcriptPath = path.join(sessionsDir, `${options.name}.jsonl`);
   const sidecarPath = `${transcriptPath}.codex-app-server.json`;
@@ -210,6 +214,66 @@ describe("codex doctor contract", () => {
       appServer: { mode: "guardian" },
     });
     expect(original.plugins.entries.codex.config).toHaveProperty("codexDynamicToolsProfile");
+  });
+
+  it("preserves the fixed-store owner when it differs from the system owner", async () => {
+    const sessionKey = "legacy-fixed-store";
+    const fixture = await createBindingMigrationFixture({
+      name: "fixed-store-owner",
+      sessionIndex: {
+        [sessionKey]: {
+          sessionId: "fixed-store-owner",
+          sessionFile: "fixed-store-owner.jsonl",
+          updatedAt: 1,
+        },
+      },
+      storeRoot: "fixed",
+      threadId: "thread-fixed-store-owner",
+    });
+    const params = {
+      ...fixture.params,
+      config: {
+        session: { store: fixture.storePath },
+        agents: {
+          ownership: "explicit" as const,
+          defaults: {
+            systemAgent: { agentId: "main" },
+            sessionStore: { agentId: "ops" },
+          },
+          entries: { main: {}, ops: {} },
+        },
+      },
+    };
+
+    try {
+      await expect(fixture.migration.migrateLegacyState(params)).resolves.toMatchObject({
+        changes: [expect.stringContaining("Migrated 1")],
+        warnings: [],
+      });
+      await expect(
+        openBindingStore(fixture.env).lookup(
+          bindingStoreKey({
+            kind: "session",
+            agentId: "ops",
+            sessionId: "fixed-store-owner",
+            sessionKey,
+          }),
+        ),
+      ).resolves.toMatchObject({
+        state: "active",
+        sessionId: "fixed-store-owner",
+      });
+      expect(
+        getSessionEntry({
+          agentId: "ops",
+          env: fixture.env,
+          sessionKey,
+          storePath: fixture.storePath,
+        }),
+      ).toMatchObject({ agentHarnessId: "codex" });
+    } finally {
+      await fs.rm(fixture.stateDir, { recursive: true, force: true });
+    }
   });
 
   it("imports and archives shipped binding sidecars", async () => {

@@ -140,10 +140,10 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.isFullscreen() || this.options.reserveViewport === false) {
+    if (this.options.reserveViewport === false) {
       return;
     }
-    const visible = this.options.isAvailable() && this.open;
+    const visible = !this.isFullscreen() && this.options.isAvailable() && this.open;
     const root = document.documentElement.style;
     root.setProperty(
       `--oc-${this.options.reservationPrefix}-reserve-bottom`,
