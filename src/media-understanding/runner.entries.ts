@@ -453,12 +453,7 @@ function resolveAudioProviderPrompt(params: {
   language?: string;
 }): string | undefined {
   const language = params.language?.trim().toLowerCase();
-  // Autodetect (no language hint) must not be treated as English: without an
-  // explicit prompt, omit OpenClaw's English default so the provider performs
-  // real language autodetection and the internal STT hint cannot be echoed
-  // back into the transcript (where it would be indistinguishable from a user
-  // instruction). See #123305. Explicit English hints still keep the default
-  // prompt (language-matched), and explicit prompts always win.
+  // Autodetect must not inject the English default prompt (#123305).
   const isEnglish =
     Boolean(language) &&
     (language === "en" ||
