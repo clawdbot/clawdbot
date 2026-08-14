@@ -3,7 +3,16 @@ import type {
   EmbeddingProviderStartupInspectionResult,
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { DEFAULT_LLAMA_CPP_MODEL_ID, LLAMA_CPP_PROVIDER_ID } from "./defaults.js";
+import {
+  DEFAULT_LLAMA_CPP_MODEL_ID,
+  LLAMA_CPP_PROVIDER_ID,
+  resolveLlamaCppModelCacheDir,
+  resolveLlamaCppModelSource,
+} from "./defaults.js";
+import {
+  inspectLlamaCppModelFile,
+  resolveLlamaCppModelCacheInspectionTarget,
+} from "./model-cache.js";
 
 const LLAMA_CPP_SETUP_REMEDIATION = [
   "Run `openclaw configure` and choose llama.cpp once.",
@@ -75,13 +84,39 @@ export function resolveLlamaCppChatModel(
   return chatModel;
 }
 
-export function inspectLlamaCppEmbeddingStartupPrerequisites(
+export async function inspectLlamaCppEmbeddingStartupPrerequisites(
   options: EmbeddingProviderCreateOptions,
-): EmbeddingProviderStartupInspectionResult {
+): Promise<EmbeddingProviderStartupInspectionResult> {
   try {
     const provider = resolveConfiguredLlamaCppProvider(options);
     resolveLlamaCppProviderPort(provider);
-    resolveLlamaCppChatModel(options, provider);
+    const chatModel = resolveLlamaCppChatModel(options, provider);
+    const target = resolveLlamaCppModelCacheInspectionTarget({
+      source: resolveLlamaCppModelSource(chatModel),
+      cacheDir: resolveLlamaCppModelCacheDir(provider),
+    });
+    if (target.status === "indeterminate") {
+      return { status: "indeterminate", reason: target.reason };
+    }
+    if (target.status === "invalid") {
+      throw new LlamaCppStartupPrerequisiteError("chat-model-source-invalid", target.reason);
+    }
+    const inspection = await inspectLlamaCppModelFile({
+      filePath: target.filePath,
+      ...(target.expectedSha256 ? { expectedSha256: target.expectedSha256 } : {}),
+    });
+    if (inspection.status === "missing") {
+      throw new LlamaCppStartupPrerequisiteError(
+        "chat-model-cache-missing",
+        `Managed llama.cpp chat model is not cached at ${target.filePath}.`,
+      );
+    }
+    if (inspection.status === "invalid") {
+      throw new LlamaCppStartupPrerequisiteError(
+        "chat-model-cache-invalid",
+        `Managed llama.cpp chat model cache is invalid at ${target.filePath}.`,
+      );
+    }
     return { status: "ready" };
   } catch (error) {
     if (error instanceof LlamaCppStartupPrerequisiteError) {

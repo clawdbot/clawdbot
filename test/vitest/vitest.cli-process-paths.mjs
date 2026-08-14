@@ -3,6 +3,8 @@
 export const cliProcessTestFiles = [
   "src/cli/acp-cli-exit.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
+  "src/cli/gateway-preflight-memory.process.test.ts",
+  "src/cli/gateway-preflight-provider.process.test.ts",
   "src/cli/gateway-preflight.process.test.ts",
   "src/cli/help-exit.process.test.ts",
   "src/cli/hooks-cli.process.test.ts",

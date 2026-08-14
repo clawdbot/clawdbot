@@ -89,6 +89,51 @@ export type GatewayStartupAuthInspection = {
   knownWeakCredentialError?: string;
 };
 
+const GATEWAY_AUTH_SHELL_ENV_KEYS = [
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
+] as const;
+
+/**
+ * Return only absent login-shell bindings that could change effective startup
+ * auth. The full shell plan also contains provider and channel credentials
+ * that are outside this owner's deterministic pre-serve decision.
+ */
+export function resolveGatewayStartupAuthShellEnvMissingKeys(params: {
+  inspection: GatewayStartupAuthInspection;
+  missingKeys: readonly string[];
+}): string[] {
+  if (params.inspection.activeSecretRefPaths.length > 0) {
+    return [];
+  }
+  const missing = new Set(params.missingKeys);
+  const selected = (...keys: (typeof GATEWAY_AUTH_SHELL_ENV_KEYS)[number][]) =>
+    keys.filter((key) => missing.has(key));
+  const { auth, hasSharedSecret } = params.inspection;
+  if (auth.modeSource === "default") {
+    return selected(...GATEWAY_AUTH_SHELL_ENV_KEYS);
+  }
+  if (auth.modeSource === "token") {
+    return selected("OPENCLAW_GATEWAY_PASSWORD");
+  }
+  if (auth.modeSource === "password") {
+    return [];
+  }
+  if (auth.modeSource === "config" || auth.modeSource === "override") {
+    if (auth.mode === "token") {
+      return hasSharedSecret ? [] : selected("OPENCLAW_GATEWAY_TOKEN");
+    }
+    if (auth.mode === "password") {
+      return hasSharedSecret ? [] : selected("OPENCLAW_GATEWAY_PASSWORD");
+    }
+    if (auth.mode === "trusted-proxy") {
+      return auth.token ? [] : selected("OPENCLAW_GATEWAY_TOKEN");
+    }
+    return [];
+  }
+  return selected(...GATEWAY_AUTH_SHELL_ENV_KEYS);
+}
+
 export function shouldBlockGatewayBindWithoutExplicitAuth(params: {
   bindHost: string;
   hasSharedSecret: boolean;

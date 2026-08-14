@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensureModel: vi.fn(),
+  inspectModelFile: vi.fn(),
   prepareServer: vi.fn(),
   inspectRuntime: vi.fn(),
   genericCreate: vi.fn(),
@@ -36,6 +37,11 @@ vi.mock("./src/managed-server.js", async (importOriginal) => ({
   inspectLlamaServerRuntime: mocks.inspectRuntime,
 }));
 
+vi.mock("./src/model-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/model-cache.js")>()),
+  inspectLlamaCppModelFile: mocks.inspectModelFile,
+}));
+
 import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
@@ -51,6 +57,7 @@ let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 beforeEach(() => {
   previousPluginRegistry = getActivePluginRegistry();
   mocks.ensureModel.mockResolvedValue("/models/model.gguf");
+  mocks.inspectModelFile.mockResolvedValue({ status: "ready" });
   mocks.prepareServer.mockResolvedValue({});
   mocks.inspectRuntime.mockResolvedValue({
     engine: "llama.cpp",
@@ -192,10 +199,36 @@ describe("llama.cpp provider plugin", () => {
     expect(mocks.genericCreate).not.toHaveBeenCalled();
   });
 
-  it("accepts configured managed setup without touching models or services", async () => {
+  it("accepts configured managed setup with a valid cached chat model", async () => {
     expect(
       await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(configuredOptions()),
     ).toEqual({ status: "ready" });
+    expect(mocks.inspectModelFile).toHaveBeenCalledWith({
+      filePath: "/models/chat.gguf",
+    });
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+    expect(mocks.genericCreate).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing cached chat model without downloading or starting services", async () => {
+    mocks.inspectModelFile.mockResolvedValueOnce({ status: "missing" });
+
+    expect(
+      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(configuredOptions()),
+    ).toEqual({
+      status: "blocked",
+      issues: [
+        {
+          code: "chat-model-cache-missing",
+          message: "Managed llama.cpp chat model is not cached at /models/chat.gguf.",
+          remediation: [
+            "Run `openclaw configure` and choose llama.cpp once.",
+            "Retry `openclaw memory status --deep` after setup completes.",
+          ],
+        },
+      ],
+    });
     expect(mocks.ensureModel).not.toHaveBeenCalled();
     expect(mocks.prepareServer).not.toHaveBeenCalled();
     expect(mocks.genericCreate).not.toHaveBeenCalled();

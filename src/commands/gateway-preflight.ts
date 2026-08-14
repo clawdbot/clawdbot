@@ -11,6 +11,7 @@ import {
 import {
   inspectGatewayStartupBindAuth,
   inspectGatewayStartupAuth,
+  resolveGatewayStartupAuthShellEnvMissingKeys,
   type GatewayStartupBindAuthInspection,
   type GatewayStartupAuthInspection,
 } from "../gateway/startup-auth.js";
@@ -275,8 +276,18 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
     });
   }
 
+  const authResult = inspectGatewayStartupAuth({
+    cfg: snapshot.config,
+    env: process.env,
+  });
   const shellEnvPlan = resolveGatewayShellEnvFallbackPlan(snapshot.config, process.env);
-  if (shellEnvPlan.enabled && shellEnvPlan.missingKeys.length > 0) {
+  const authShellEnvMissingKeys = shellEnvPlan.enabled
+    ? resolveGatewayStartupAuthShellEnvMissingKeys({
+        inspection: authResult,
+        missingKeys: shellEnvPlan.missingKeys,
+      })
+    : [];
+  if (authShellEnvMissingKeys.length > 0) {
     return createResult({
       checksRun: 2,
       errors: [
@@ -287,16 +298,12 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
           code: "gateway-shell-env-inspection-required",
           message:
             "Gateway startup may import missing values from a login shell, which passive " +
-            `preflight does not execute: ${shellEnvPlan.missingKeys.join(", ")}.`,
+            `preflight does not execute: ${authShellEnvMissingKeys.join(", ")}.`,
         },
       ],
     });
   }
 
-  const authResult = inspectGatewayStartupAuth({
-    cfg: snapshot.config,
-    env: process.env,
-  });
   try {
     const tailscaleMode = snapshot.config.gateway?.tailscale?.mode ?? "off";
     const bindMode = snapshot.config.gateway?.bind ?? defaultGatewayBindMode(tailscaleMode);

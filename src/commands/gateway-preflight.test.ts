@@ -235,6 +235,56 @@ describe("gateway startup preflight command", () => {
     expect(mocks.inspectStartupSessionMigrationPrerequisites).not.toHaveBeenCalled();
   });
 
+  it("ignores unrelated shell gaps when explicit Gateway auth is already inspectable", async () => {
+    const config = {
+      gateway: {
+        mode: "local" as const,
+        auth: { mode: "token" as const, token: "configured-token" },
+      },
+      env: { shellEnv: { enabled: true } },
+      memory: { search: { provider: "none" as const } },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config,
+      sourceConfig: structuredClone(config),
+    });
+    mocks.shellEnvPlan = {
+      enabled: true,
+      expectedKeys: [
+        "OPENAI_API_KEY",
+        "DISCORD_BOT_TOKEN",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_PASSWORD",
+      ],
+      missingKeys: [
+        "OPENAI_API_KEY",
+        "DISCORD_BOT_TOKEN",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_PASSWORD",
+      ],
+      timeoutMs: 15_000,
+    };
+    mocks.collectGatewayStartupPreflight.mockResolvedValue({
+      checksRun: 0,
+      blockers: [],
+      errors: [],
+    });
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "ready",
+      blockers: [],
+      errors: [],
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(mocks.collectGatewayStartupPreflight).toHaveBeenCalledOnce();
+    expect(mocks.inspectStartupSessionMigrationPrerequisites).toHaveBeenCalledOnce();
+  });
+
   it("blocks a missing target config before running startup inspections", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: false,

@@ -8,6 +8,7 @@ import {
   inspectGatewayStartupBindAuth,
   inspectGatewayStartupAuth,
   mergeGatewayTailscaleConfig,
+  resolveGatewayStartupAuthShellEnvMissingKeys,
 } from "./startup-auth.js";
 
 const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
@@ -213,6 +214,98 @@ describe("inspectGatewayStartupAuth", () => {
       activeSecretRefPaths: [],
       auth: { mode: "none" },
     });
+  });
+});
+
+describe("resolveGatewayStartupAuthShellEnvMissingKeys", () => {
+  const broadMissingKeys = [
+    "OPENAI_API_KEY",
+    "DISCORD_BOT_TOKEN",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
+  ];
+
+  it.each([
+    {
+      name: "explicit configured token",
+      cfg: gatewayAuthConfig({ mode: "token", token: "configured-token" }),
+      env: emptyEnv(),
+      expected: [],
+    },
+    {
+      name: "explicit configured password",
+      cfg: gatewayAuthConfig({
+        mode: "password",
+        password: "configured-password", // pragma: allowlist secret
+      }),
+      env: emptyEnv(),
+      expected: [],
+    },
+    {
+      name: "explicit missing token",
+      cfg: gatewayAuthConfig({ mode: "token" }),
+      env: emptyEnv(),
+      expected: ["OPENCLAW_GATEWAY_TOKEN"],
+    },
+    {
+      name: "explicit missing password",
+      cfg: gatewayAuthConfig({ mode: "password" }),
+      env: emptyEnv(),
+      expected: ["OPENCLAW_GATEWAY_PASSWORD"],
+    },
+    {
+      name: "default generated-token path",
+      cfg: {},
+      env: emptyEnv(),
+      expected: ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"],
+    },
+    {
+      name: "inferred token that a password can supersede",
+      cfg: {},
+      env: { OPENCLAW_GATEWAY_TOKEN: "environment-token" } as NodeJS.ProcessEnv,
+      expected: ["OPENCLAW_GATEWAY_PASSWORD"],
+    },
+    {
+      name: "inferred password",
+      cfg: {},
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: "environment-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+      expected: [],
+    },
+    {
+      name: "trusted proxy token conflict",
+      cfg: gatewayAuthConfig({
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+      }),
+      env: emptyEnv(),
+      expected: ["OPENCLAW_GATEWAY_TOKEN"],
+    },
+    {
+      name: "explicit auth disablement",
+      cfg: gatewayAuthConfig({ mode: "none" }),
+      env: emptyEnv(),
+      expected: [],
+    },
+    {
+      name: "active SecretRef",
+      cfg: gatewayAuthConfigWithDefaultEnvProvider({
+        mode: "token",
+        token: gatewayEnvSecretRef("GW_TOKEN"),
+      }),
+      env: emptyEnv(),
+      expected: [],
+    },
+  ])("classifies only auth-relevant shell bindings for $name", ({ cfg, env, expected }) => {
+    const inspection = inspectGatewayStartupAuth({ cfg, env });
+
+    expect(
+      resolveGatewayStartupAuthShellEnvMissingKeys({
+        inspection,
+        missingKeys: broadMissingKeys,
+      }),
+    ).toEqual(expected);
   });
 });
 
