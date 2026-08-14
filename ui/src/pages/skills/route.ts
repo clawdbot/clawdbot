@@ -1,5 +1,5 @@
 import { definePage } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
+import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -63,6 +63,6 @@ export const page = definePage({
     import("./skills-page.ts").then(() => ({
       header: true,
       render: (data: SkillsRouteData | undefined) =>
-        data ? html`<openclaw-skills-page .routeData=${data}></openclaw-skills-page>` : nothing,
+        html`<openclaw-skills-page .routeData=${data}></openclaw-skills-page>`,
     })),
 });

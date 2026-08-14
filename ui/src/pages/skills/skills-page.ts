@@ -143,6 +143,11 @@ class SkillsPage extends OpenClawLightDomElement {
     }
   }
 
+  override firstUpdated() {
+    // Controllers connect before Lit applies route bindings, so fallback loading starts here.
+    this.ensureInitialData();
+  }
+
   override disconnectedCallback() {
     this.subscriptions.clear();
     if (this.clawhubSearchTimer) {
@@ -219,7 +224,7 @@ class SkillsPage extends OpenClawLightDomElement {
   }
 
   private ensureInitialData() {
-    if (!this.gateway.connected || !this.gateway.client) {
+    if (!this.hasUpdated || !this.gateway.connected || !this.gateway.client) {
       return;
     }
     if (

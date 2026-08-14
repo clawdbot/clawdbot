@@ -455,9 +455,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
       routeData: SkillsRouteData;
       skillsReport: SkillsRouteData["report"];
     };
-    page.routeData = routeData;
-
     document.body.append(page);
+    page.routeData = routeData;
     await page.updateComplete;
 
     expect(page.skillsReport).toBe(report);
