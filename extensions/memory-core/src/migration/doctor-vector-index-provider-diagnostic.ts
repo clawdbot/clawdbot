@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
-  PluginDoctorStateMigration,
+  BundledPluginDoctorStateMigration,
   PluginStartupPreflightParams,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
@@ -157,7 +157,7 @@ function formatFinding(finding: VectorProviderFinding): string {
 export function createVectorIndexProviderDiagnostic(
   inspectProvider: InspectConfiguredProvider,
   inspectProviderStartup?: InspectConfiguredProviderStartup,
-): PluginDoctorStateMigration {
+): BundledPluginDoctorStateMigration {
   return {
     id: "memory-core-vector-index-provider-diagnostic",
     label: "Memory Core vector index provider readiness",

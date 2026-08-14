@@ -52,6 +52,7 @@ export type {
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 export type {
+  BundledPluginDoctorStateMigration,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
   PluginStartupPreflightFinding,

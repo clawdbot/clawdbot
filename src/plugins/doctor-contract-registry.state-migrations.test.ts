@@ -25,6 +25,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorStateMigrationEntries: typeof import("./doctor-contract-registry.js").listPluginDoctorStateMigrationEntries;
+let listPluginStartupPreflightEntries: typeof import("./doctor-contract-registry.js").listPluginStartupPreflightEntries;
 let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
@@ -43,8 +44,11 @@ describe("doctor-contract-registry state migrations", () => {
     resetRegistryJitiMocks();
     doctorContractWarnMock.mockReset();
     vi.resetModules();
-    ({ listPluginDoctorLegacyConfigRules, listPluginDoctorStateMigrationEntries } =
-      await import("./doctor-contract-registry.js"));
+    ({
+      listPluginDoctorLegacyConfigRules,
+      listPluginDoctorStateMigrationEntries,
+      listPluginStartupPreflightEntries,
+    } = await import("./doctor-contract-registry.js"));
     ({
       clearPluginDoctorContractRegistryCache,
       setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
@@ -373,6 +377,79 @@ describe("doctor-contract-registry state migrations", () => {
       listPluginDoctorStateMigrationEntries({ config, env: {} }).map((entry) => entry.migration.id),
     ).toEqual(allowed ? ["alpha-state"] : []);
     expect(mocks.createJiti).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  });
+
+  it("reports an active external startup contract without importing its module", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.ts"),
+      "throw new Error();\n",
+      "utf8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "external-memory",
+          origin: "workspace",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: [],
+          doctorContract: { stateMigrations: true },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      listPluginStartupPreflightEntries({
+        config: { plugins: { entries: { "external-memory": { enabled: true } } } },
+        env: {},
+      }),
+    ).toEqual({
+      entries: [],
+      unsupportedPluginIds: ["external-memory"],
+    });
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("loads startup callbacks only from bundled contracts", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf8");
+    const preflightStartup = vi.fn(() => ({ status: "ready" as const }));
+    mocks.createJiti.mockImplementation(() => () => ({
+      stateMigrations: [
+        {
+          id: "bundled-ready",
+          label: "Bundled ready",
+          preflightStartup,
+          detectLegacyState: () => null,
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        },
+      ],
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "bundled-memory",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: [],
+          doctorContract: { stateMigrations: true },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const result = listPluginStartupPreflightEntries({ config: {}, env: {} });
+
+    expect(result.unsupportedPluginIds).toEqual([]);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      pluginId: "bundled-memory",
+      migration: { id: "bundled-ready", preflightStartup },
+    });
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
   it("preserves an enabled channel alias and the existing restrictive-allowlist bypass", () => {

@@ -71,82 +71,15 @@ module.exports = {
   await fs.writeFile(
     path.join(pluginRoot, "doctor-contract-api.cjs"),
     `const fs = require("node:fs");
-const path = require("node:path");
-const { DatabaseSync } = require("node:sqlite");
+const contractSentinel = process.env.OPENCLAW_PREFLIGHT_CONTRACT_SENTINEL;
+if (contractSentinel) {
+  fs.writeFileSync(contractSentinel, "doctor contract loaded");
+}
 
 const migration = {
-  id: "fixture-vector-provider-readiness",
-  label: "Fixture vector provider readiness",
-  preflightStartup({ config, stateDir }) {
-    const databasePath = path.join(
-      stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    if (!fs.existsSync(databasePath)) {
-      return { status: "ready" };
-    }
-    let database;
-    let model;
-    try {
-      database = new DatabaseSync(databasePath, { readOnly: true });
-      const row = database
-        .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
-        .get("memory_index_meta_v1");
-      const parsed = row && typeof row.value === "string" ? JSON.parse(row.value) : null;
-      model = parsed && typeof parsed.model === "string" ? parsed.model.trim() : "";
-    } catch (error) {
-      return {
-        status: "indeterminate",
-        reason: error instanceof Error ? error.message : String(error),
-      };
-    } finally {
-      database?.close();
-    }
-    if (!model || model === "fts-only") {
-      return { status: "ready" };
-    }
-    const provider = config.memory?.search?.provider ?? "openai";
-    if (provider !== "local") {
-      return {
-        status: "indeterminate",
-        reason:
-          'Embedding provider "' +
-          provider +
-          '" does not expose non-mutating startup inspection.',
-      };
-    }
-    const managed = config.models?.providers?.["llama-cpp"];
-    if (managed?.localService && managed?.baseUrl) {
-      return { status: "ready" };
-    }
-    return {
-      status: "blocked",
-      findings: [
-        {
-          id: "main/local/managed-server-config-missing",
-          code: "managed-server-config-missing",
-          message:
-            "Memory index for agent main uses vector model " +
-            model +
-            ', but embedding provider "local" has a startup prerequisite blocker: ' +
-            "Local embeddings need the managed llama.cpp server config. " +
-            "Run \`openclaw configure\`, choose llama.cpp once, then retry " +
-            "\`openclaw memory status --deep\`.",
-          remediation: [
-            "Run \`openclaw configure\` and choose llama.cpp once.",
-            "Retry \`openclaw memory status --deep\` after setup completes.",
-          ],
-          agentId: "main",
-          provider: "local",
-          model,
-          configPath: "memory.search",
-        },
-      ],
-    };
-  },
+  id: "external-preflight",
+  label: "External preflight",
+  preflightStartup: () => ({ status: "ready" }),
   detectLegacyState: () => null,
   migrateLegacyState: () => ({ changes: [], warnings: [] }),
 };
@@ -170,7 +103,7 @@ async function createFixture(params: {
   const stateDir = path.join(root, "state");
   const configPath = path.join(stateDir, "openclaw.json");
   const pluginRoot = path.join(root, "plugins", PREFLIGHT_FIXTURE_PLUGIN_ID);
-  if (params.includeFixturePlugin !== false) {
+  if (params.includeFixturePlugin === true) {
     await writePreflightFixturePlugin(pluginRoot);
   }
   const configuredPlugins =
@@ -189,18 +122,18 @@ async function createFixture(params: {
     ...params.config,
     plugins: {
       ...configuredPlugins,
-      ...(params.includeFixturePlugin === false ? {} : { load: { paths: [pluginRoot] } }),
+      ...(params.includeFixturePlugin === true ? { load: { paths: [pluginRoot] } } : {}),
       slots:
         params.disableMemorySlot === false
           ? configuredSlots
           : { ...configuredSlots, memory: "none" },
       entries:
-        params.includeFixturePlugin === false
-          ? configuredEntries
-          : {
+        params.includeFixturePlugin === true
+          ? {
               ...configuredEntries,
               [PREFLIGHT_FIXTURE_PLUGIN_ID]: { enabled: true },
-            },
+            }
+          : configuredEntries,
     },
   };
   await fs.mkdir(stateDir, { recursive: true });
@@ -210,7 +143,7 @@ async function createFixture(params: {
     await fs.mkdir(path.dirname(sessionStorePath), { recursive: true });
     await fs.writeFile(sessionStorePath, "{ invalid json\n");
   }
-  if (params.includeSharedStateDatabase !== false) {
+  if (params.includeSharedStateDatabase === true) {
     const sharedStatePath = path.join(stateDir, "state", "openclaw.sqlite");
     await fs.mkdir(path.dirname(sharedStatePath), { recursive: true });
     if (params.canonicalSharedStateDatabase) {
@@ -273,7 +206,7 @@ async function runCli(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   args: string[],
   envOverrides: NodeJS.ProcessEnv = {},
-  timeoutMs = 45_000,
+  timeoutMs = 75_000,
 ) {
   try {
     const result = await execFileAsync(
@@ -584,6 +517,51 @@ describe("gateway preflight CLI process", () => {
     expect(await snapshotTree(fixture.root)).toEqual(before);
   });
 
+  it("does not execute a login shell when fallback could change startup inputs", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: { mode: "local" },
+        env: { shellEnv: { enabled: true } },
+        memory: { search: { provider: "none" } },
+      },
+    });
+    const shellSentinel = path.join(fixture.root, "shell-ran");
+    await fs.writeFile(
+      path.join(fixture.root, ".profile"),
+      [
+        'export OPENCLAW_GATEWAY_TOKEN="change-me-now"',
+        'printf shell-ran > "$OPENCLAW_SHELL_SENTINEL"',
+        "",
+      ].join("\n"),
+    );
+    const before = await snapshotTree(fixture.root);
+    const env = {
+      OPENCLAW_SHELL_SENTINEL: shellSentinel,
+      SHELL: "/bin/sh",
+    };
+
+    const preflight = await runPreflight(fixture, env);
+
+    expect(preflight.code).toBe(2);
+    expect(JSON.parse(preflight.stdout)).toMatchObject({
+      status: "indeterminate",
+      blockers: [],
+      errors: [
+        expect.objectContaining({
+          code: "gateway-shell-env-inspection-required",
+          message: expect.stringContaining("OPENCLAW_GATEWAY_TOKEN"),
+        }),
+      ],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+    await expect(fs.access(shellSentinel)).rejects.toThrow();
+
+    const startup = await runGateway(fixture, env);
+    expect(startup.code).not.toBe(0);
+    expect(startup.stderr).toMatch(/example placeholder/i);
+    await expect(fs.readFile(shellSentinel, "utf8")).resolves.toBe("shell-ran");
+  });
+
   it("keeps token bootstrap, auth disablement, and inactive refs ready", async () => {
     const fixtures = [
       await createFixture({
@@ -796,12 +774,16 @@ describe("gateway preflight CLI process", () => {
   it("reports a stable local llama.cpp blocker without mutating config or state", async () => {
     const fixture = await createFixture({
       config: localMemoryConfig(),
+      disableMemorySlot: false,
+      includeFixturePlugin: false,
+      includeSharedStateDatabase: true,
       vectorModel: "embeddinggemma-300m",
     });
     const before = await snapshotTree(fixture.root);
+    const env = { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0" };
 
-    const first = await runPreflight(fixture);
-    const second = await runPreflight(fixture);
+    const first = await runPreflight(fixture, env);
+    const second = await runPreflight(fixture, env);
 
     expect(first.code).toBe(1);
     expect(first.stdout).toBe(second.stdout);
@@ -844,7 +826,7 @@ describe("gateway preflight CLI process", () => {
       {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       },
-      120_000,
+      150_000,
     );
 
     expect(result.code).toBe(1);
@@ -854,18 +836,25 @@ describe("gateway preflight CLI process", () => {
       errors: [],
     });
     expect(await snapshotTree(fixture.root)).toEqual(before);
-  });
+  }, 180_000);
 
   it("accepts configured local setup and a local provider with no semantic index", async () => {
     const configured = await createFixture({
       config: configuredLlamaCppMemoryConfig(),
+      disableMemorySlot: false,
+      includeFixturePlugin: false,
       vectorModel: "embeddinggemma-300m",
     });
-    const noIndex = await createFixture({ config: localMemoryConfig() });
+    const noIndex = await createFixture({
+      config: localMemoryConfig(),
+      disableMemorySlot: false,
+      includeFixturePlugin: false,
+    });
+    const env = { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0" };
 
     for (const fixture of [configured, noIndex]) {
       const before = await snapshotTree(fixture.root);
-      const result = await runPreflight(fixture);
+      const result = await runPreflight(fixture, env);
       expect(result.code).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
@@ -922,7 +911,7 @@ describe("gateway preflight CLI process", () => {
       blockers: [],
       errors: [],
     });
-  });
+  }, 180_000);
 
   it("returns indeterminate for unsupported selected providers and invalid config", async () => {
     const remote = await createFixture({
@@ -936,13 +925,17 @@ describe("gateway preflight CLI process", () => {
           },
         },
       },
+      disableMemorySlot: false,
+      includeFixturePlugin: false,
       vectorModel: "text-embedding-3-small",
     });
     const invalid = await createFixture({
       config: { gateway: { mode: "not-a-mode" } },
     });
 
-    const remoteResult = await runPreflight(remote);
+    const remoteResult = await runPreflight(remote, {
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+    });
     expect(remoteResult.code).toBe(2);
     expect(JSON.parse(remoteResult.stdout)).toMatchObject({
       status: "indeterminate",
@@ -960,24 +953,33 @@ describe("gateway preflight CLI process", () => {
     });
   });
 
-  it("does not activate a configured external provider runtime", async () => {
+  it("does not execute configured external preflight or provider runtime code", async () => {
     const fixture = await createFixture({
       config: localMemoryConfig(),
       disableMemorySlot: false,
+      includeFixturePlugin: true,
       vectorModel: "embeddinggemma-300m",
     });
-    const sentinelPath = path.join(fixture.root, "provider-runtime-activated");
+    const runtimeSentinelPath = path.join(fixture.root, "provider-runtime-activated");
+    const contractSentinelPath = path.join(fixture.root, "doctor-contract-loaded");
 
     const result = await runPreflight(fixture, {
-      OPENCLAW_PREFLIGHT_ACTIVATION_SENTINEL: sentinelPath,
+      OPENCLAW_PREFLIGHT_ACTIVATION_SENTINEL: runtimeSentinelPath,
+      OPENCLAW_PREFLIGHT_CONTRACT_SENTINEL: contractSentinelPath,
     });
 
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(2);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      status: "blocked",
-      blockers: [expect.objectContaining({ code: "managed-server-config-missing" })],
-      errors: [],
+      status: "indeterminate",
+      blockers: [],
+      errors: [
+        expect.objectContaining({
+          code: "external-plugin-inspection-unsupported",
+          pluginId: PREFLIGHT_FIXTURE_PLUGIN_ID,
+        }),
+      ],
     });
-    await expect(fs.access(sentinelPath)).rejects.toThrow();
+    await expect(fs.access(contractSentinelPath)).rejects.toThrow();
+    await expect(fs.access(runtimeSentinelPath)).rejects.toThrow();
   });
 });

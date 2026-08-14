@@ -65,13 +65,6 @@ export type PluginDoctorStateMigration = {
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
-  /**
-   * Inspect deterministic startup prerequisites without repair context, writes,
-   * credential resolution, network requests, downloads, or service startup.
-   */
-  preflightStartup?: (
-    params: PluginStartupPreflightParams,
-  ) => Promise<PluginStartupPreflightResult> | PluginStartupPreflightResult;
   detectLegacyState: (params: {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -91,6 +84,16 @@ export type PluginDoctorStateMigration = {
   }) =>
     | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
     | { changes: string[]; warnings: string[]; notices?: string[] };
+};
+
+/**
+ * Host-audited startup inspection for bundled OpenClaw plugins only.
+ * Gateway preflight never loads this callback from operator-installed plugins.
+ */
+export type BundledPluginDoctorStateMigration = PluginDoctorStateMigration & {
+  preflightStartup?: (
+    params: PluginStartupPreflightParams,
+  ) => Promise<PluginStartupPreflightResult> | PluginStartupPreflightResult;
 };
 
 export type PluginDoctorContractModule = {
@@ -141,7 +144,7 @@ function coerceSessionStoreAgentIdsResolver(
     : undefined;
 }
 
-function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
+function isPluginDoctorStateMigration(value: unknown): value is BundledPluginDoctorStateMigration {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -162,7 +165,7 @@ function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStat
   );
 }
 
-function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMigration[] {
+function coercePluginDoctorStateMigrations(value: unknown): BundledPluginDoctorStateMigration[] {
   if (!Array.isArray(value)) {
     return [];
   }

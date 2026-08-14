@@ -77,6 +77,7 @@ import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
+import type { GatewayShellEnvFallbackPlan } from "./shell-env-fallback-plan.js";
 import { getGatewayStartGuardErrors } from "./start-guard.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
@@ -281,40 +282,15 @@ async function readGatewayStartupConfig(params: {
   };
 }
 
-type GatewayRunShellEnvFallbackPlan =
-  | { enabled: false }
-  | {
-      enabled: true;
-      expectedKeys: string[];
-      timeoutMs: number;
-    };
-
 async function resolveGatewayRunShellEnvFallbackPlan(
   cfg: OpenClawConfig,
-): Promise<GatewayRunShellEnvFallbackPlan> {
-  const { createConfigRuntimeEnv } = await import("../../config/env-vars.js");
-  const {
-    resolveShellEnvFallbackTimeoutMs,
-    shouldDeferShellEnvFallback,
-    shouldEnableShellEnvFallback,
-  } = await import("../../infra/shell-env.js");
-  const planEnv = createConfigRuntimeEnv(cfg, process.env);
-  const enabled =
-    (shouldEnableShellEnvFallback(planEnv) || cfg.env?.shellEnv?.enabled === true) &&
-    !shouldDeferShellEnvFallback(planEnv);
-  if (!enabled) {
-    return { enabled: false };
-  }
-  const { resolveShellEnvExpectedKeys } = await import("../../config/shell-env-expected-keys.js");
-  return {
-    enabled: true,
-    expectedKeys: resolveShellEnvExpectedKeys(planEnv),
-    timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(planEnv),
-  };
+): Promise<GatewayShellEnvFallbackPlan> {
+  const { resolveGatewayShellEnvFallbackPlan } = await import("./shell-env-fallback-plan.js");
+  return resolveGatewayShellEnvFallbackPlan(cfg);
 }
 
 async function loadGatewayRunShellEnvFallback(
-  plan: Extract<GatewayRunShellEnvFallbackPlan, { enabled: true }>,
+  plan: Extract<GatewayShellEnvFallbackPlan, { enabled: true }>,
 ): Promise<Record<string, string>> {
   const { loadShellEnvFallback } = await import("../../infra/shell-env.js");
   const valuesBeforeLoad = new Map(plan.expectedKeys.map((key) => [key, process.env[key]]));
@@ -349,8 +325,14 @@ async function clearGatewayRunShellEnvFallback(
   clearShellEnvAppliedKeys(keys);
 }
 
-function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayRunShellEnvFallbackPlan): string {
-  return JSON.stringify(plan);
+function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayShellEnvFallbackPlan): string {
+  return plan.enabled
+    ? JSON.stringify({
+        enabled: true,
+        expectedKeys: plan.expectedKeys,
+        timeoutMs: plan.timeoutMs,
+      })
+    : JSON.stringify(plan);
 }
 
 async function readGatewayStartupConfigWithShellEnv(params: {

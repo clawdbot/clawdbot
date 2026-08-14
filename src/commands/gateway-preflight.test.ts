@@ -9,6 +9,14 @@ const mocks = vi.hoisted(() => ({
   withOpenClawStateDatabaseInspectionSnapshots: vi.fn(
     async (run: () => Promise<unknown>) => await run(),
   ),
+  shellEnvPlan: { enabled: false } as
+    | { enabled: false }
+    | {
+        enabled: true;
+        expectedKeys: string[];
+        missingKeys: string[];
+        timeoutMs: number;
+      },
   unresolvedDirectories: [] as string[],
 }));
 
@@ -40,6 +48,10 @@ vi.mock("../state/openclaw-state-db-readonly.js", () => ({
   withOpenClawStateDatabaseInspectionSnapshots: mocks.withOpenClawStateDatabaseInspectionSnapshots,
 }));
 
+vi.mock("../cli/gateway-cli/shell-env-fallback-plan.js", () => ({
+  resolveGatewayShellEnvFallbackPlan: () => mocks.shellEnvPlan,
+}));
+
 import { gatewayPreflightCommand } from "./gateway-preflight.js";
 
 async function runJsonPreflight() {
@@ -60,6 +72,7 @@ async function runJsonPreflight() {
 describe("gateway startup preflight command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.shellEnvPlan = { enabled: false };
     mocks.unresolvedDirectories = [];
     mocks.inspectStartupSessionMigrationPrerequisites.mockResolvedValue({ status: "ready" });
     delete process.env.JITI_FS_CACHE;
@@ -184,6 +197,42 @@ describe("gateway startup preflight command", () => {
     });
     expect(runtime.exit).toHaveBeenCalledWith(2, { resetStream: process.stderr });
     expect(mocks.collectGatewayStartupPreflight).not.toHaveBeenCalled();
+  });
+
+  it("returns indeterminate without running a login shell when fallback could add inputs", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: { gateway: { mode: "local" }, env: { shellEnv: { enabled: true } } },
+      sourceConfig: { gateway: { mode: "local" }, env: { shellEnv: { enabled: true } } },
+    });
+    mocks.shellEnvPlan = {
+      enabled: true,
+      expectedKeys: ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"],
+      missingKeys: ["OPENCLAW_GATEWAY_TOKEN"],
+      timeoutMs: 15_000,
+    };
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "indeterminate",
+      checksRun: 2,
+      blockers: [],
+      errors: [
+        {
+          id: "core/gateway-environment/shell-fallback",
+          pluginId: "core",
+          migrationId: "gateway-environment",
+          code: "gateway-shell-env-inspection-required",
+          message: expect.stringContaining("OPENCLAW_GATEWAY_TOKEN"),
+        },
+      ],
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(2, { resetStream: process.stderr });
+    expect(mocks.collectGatewayStartupPreflight).not.toHaveBeenCalled();
+    expect(mocks.inspectStartupSessionMigrationPrerequisites).not.toHaveBeenCalled();
   });
 
   it("blocks a missing target config before running startup inspections", async () => {

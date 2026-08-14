@@ -69,29 +69,29 @@ describe("embedding provider preflight public artifacts", () => {
     });
   });
 
-  it("loads an inspector from a host-verified official install", () => {
+  it("does not execute a host-verified official external artifact", () => {
     const { pluginRoot, sentinelPath } = writeExternalInspector();
-    const inspector = resolveMemoryEmbeddingProviderStartupInspector({
-      providerId: "local",
-      config: {
-        ...localConfig,
-        plugins: { entries: { "llama-cpp": { enabled: true } } },
-      },
-      manifestRegistry: {
-        plugins: [
-          {
-            id: "llama-cpp",
-            origin: "global",
-            rootDir: pluginRoot,
-            trustedOfficialInstall: true,
-            contracts: { embeddingProviders: ["local"] },
-          } as never,
-        ],
-      },
-    });
-
-    expect(inspector?.id).toBe("local");
-    expect(fs.readFileSync(sentinelPath, "utf8")).toBe("loaded");
+    expect(
+      resolveMemoryEmbeddingProviderStartupInspector({
+        providerId: "local",
+        config: {
+          ...localConfig,
+          plugins: { entries: { "llama-cpp": { enabled: true } } },
+        },
+        manifestRegistry: {
+          plugins: [
+            {
+              id: "llama-cpp",
+              origin: "global",
+              rootDir: pluginRoot,
+              trustedOfficialInstall: true,
+              contracts: { embeddingProviders: ["local"] },
+            } as never,
+          ],
+        },
+      }),
+    ).toBeUndefined();
+    expect(fs.existsSync(sentinelPath)).toBe(false);
   });
 
   it("does not load an inspector from an untrusted external owner", () => {

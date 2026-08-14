@@ -10,10 +10,14 @@ const mocks = vi.hoisted(() => ({
       preflightStartup?: (params: unknown) => unknown;
     };
   }>,
+  unsupportedPluginIds: [] as string[],
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
-  listPluginDoctorStateMigrationEntries: () => mocks.entries,
+  listPluginStartupPreflightEntries: () => ({
+    entries: mocks.entries,
+    unsupportedPluginIds: mocks.unsupportedPluginIds,
+  }),
 }));
 
 import { collectGatewayStartupPreflight } from "./startup-preflight.js";
@@ -21,6 +25,30 @@ import { collectGatewayStartupPreflight } from "./startup-preflight.js";
 describe("gateway startup preflight collection", () => {
   beforeEach(() => {
     mocks.entries = [];
+    mocks.unsupportedPluginIds = [];
+  });
+
+  it("fails closed for declared external startup contracts without executing them", async () => {
+    mocks.unsupportedPluginIds = ["external-memory"];
+
+    await expect(
+      collectGatewayStartupPreflight({
+        config: {},
+        env: { HOME: "/tmp/preflight-home", OPENCLAW_STATE_DIR: "/tmp/preflight-state" },
+        resolveSqliteReadOnlyLocation: (pathname) => pathname,
+      }),
+    ).resolves.toEqual({
+      checksRun: 1,
+      blockers: [],
+      errors: [
+        {
+          id: "external-memory/startup-preflight",
+          pluginId: "external-memory",
+          code: "external-plugin-inspection-unsupported",
+          message: expect.stringContaining("does not execute operator-installed plugin code"),
+        },
+      ],
+    });
   });
 
   it("keeps blockers visible while reporting indeterminate checks and stable ordering", async () => {
@@ -67,17 +95,6 @@ describe("gateway startup preflight collection", () => {
               },
             ],
           }),
-        },
-      },
-      {
-        pluginId: "skipped",
-        migration: {
-          id: "doctor-only",
-          label: "Doctor only",
-          doctorOnly: true,
-          preflightStartup: () => {
-            throw new Error("must not run");
-          },
         },
       },
     ];

@@ -1,3 +1,4 @@
+import { resolveGatewayShellEnvFallbackPlan } from "../cli/gateway-cli/shell-env-fallback-plan.js";
 import { getGatewayStartGuardErrors } from "../cli/gateway-cli/start-guard.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../config/io.audit.js";
@@ -49,6 +50,7 @@ const CORE_PREFLIGHT_PLUGIN_ID = "core";
 const CORE_SESSION_PREFLIGHT_MIGRATION_ID = "session-sqlite";
 const CORE_AUTH_PREFLIGHT_MIGRATION_ID = "gateway-auth";
 const CORE_CONFIG_PREFLIGHT_MIGRATION_ID = "gateway-config";
+const CORE_ENVIRONMENT_PREFLIGHT_MIGRATION_ID = "gateway-environment";
 
 function createResult(params: {
   checksRun?: number;
@@ -268,6 +270,24 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
           message: message ?? "Gateway startup configuration is blocked.",
           ...(remediation.length > 0 ? { remediation } : {}),
           configPath: "gateway.mode",
+        },
+      ],
+    });
+  }
+
+  const shellEnvPlan = resolveGatewayShellEnvFallbackPlan(snapshot.config, process.env);
+  if (shellEnvPlan.enabled && shellEnvPlan.missingKeys.length > 0) {
+    return createResult({
+      checksRun: 2,
+      errors: [
+        {
+          id: `${CORE_PREFLIGHT_PLUGIN_ID}/${CORE_ENVIRONMENT_PREFLIGHT_MIGRATION_ID}/shell-fallback`,
+          pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+          migrationId: CORE_ENVIRONMENT_PREFLIGHT_MIGRATION_ID,
+          code: "gateway-shell-env-inspection-required",
+          message:
+            "Gateway startup may import missing values from a login shell, which passive " +
+            `preflight does not execute: ${shellEnvPlan.missingKeys.join(", ")}.`,
         },
       ],
     });

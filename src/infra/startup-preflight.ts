@@ -1,6 +1,6 @@
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
+import { listPluginStartupPreflightEntries } from "../plugins/doctor-contract-registry.js";
 import { resolveMemoryEmbeddingProviderStartupInspector } from "../plugins/embedding-provider-preflight-public-artifacts.js";
 import { formatErrorMessage } from "./errors.js";
 
@@ -70,18 +70,27 @@ export async function collectGatewayStartupPreflight(params: {
   const errors: GatewayStartupPreflightError[] = [];
   let checksRun = 0;
 
-  for (const entry of listPluginDoctorStateMigrationEntries({
+  const registry = listPluginStartupPreflightEntries({
     config: params.config,
     env,
-  })) {
-    const inspect = entry.migration.preflightStartup;
-    if (!inspect || entry.migration.doctorOnly === true) {
-      continue;
-    }
+  });
+  for (const pluginId of registry.unsupportedPluginIds) {
+    checksRun += 1;
+    errors.push({
+      id: `${pluginId}/startup-preflight`,
+      pluginId,
+      code: "external-plugin-inspection-unsupported",
+      message:
+        `Plugin "${pluginId}" declares state migrations, but passive Gateway preflight ` +
+        "does not execute operator-installed plugin code.",
+    });
+  }
+
+  for (const entry of registry.entries) {
     checksRun += 1;
     const inspectionId = `${entry.pluginId}/${entry.migration.id}`;
     try {
-      const result = await inspect({
+      const result = await entry.migration.preflightStartup({
         config: params.config,
         env,
         stateDir,
