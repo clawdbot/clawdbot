@@ -177,6 +177,18 @@ describe("fetchKimiUsage window parsing", () => {
       { label: "7d", usedPercent: 100 },
     ]);
   });
+
+  it.each([{ unexpected: "object" }, "unexpected"])(
+    "retains seven-day usage when limits is non-array: %j",
+    async (limits) => {
+      await expect(
+        expectParsedWindows({
+          usage: { limit: 100, used: 20 },
+          limits,
+        }),
+      ).resolves.toEqual([{ label: "7d", usedPercent: 20 }]);
+    },
+  );
 });
 
 describe("normalizeKimiUsageBaseUrl", () => {

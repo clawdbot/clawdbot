@@ -114,7 +114,7 @@ function parseKimiUsageWindows(payload: unknown): UsageWindow[] {
     windows.push({ label: "7d", usedPercent: sevenDay });
   }
 
-  for (const item of data.limits ?? []) {
+  for (const item of Array.isArray(data.limits) ? data.limits : []) {
     if (!isRecord(item) || !isFiveHourLimit(item)) {
       continue;
     }
