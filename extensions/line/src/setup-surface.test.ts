@@ -18,14 +18,19 @@ import { setLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
-const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
+const { getBotInfoMock, MessagingApiClientMock, previousLocale } = vi.hoisted(() => {
   const getBotInfoMockLocal = vi.fn();
   const MessagingApiClientMockLocal = vi.fn(function () {
     return { getBotInfo: getBotInfoMockLocal };
   });
+  // Wizard copy is localized at module evaluation time; pin English before
+  // imports so prompt assertions do not depend on the developer machine's locale.
+  const previousLocaleLocal = process.env.OPENCLAW_LOCALE;
+  process.env.OPENCLAW_LOCALE = "en";
   return {
     getBotInfoMock: getBotInfoMockLocal,
     MessagingApiClientMock: MessagingApiClientMockLocal,
+    previousLocale: previousLocaleLocal,
   };
 });
 
@@ -36,6 +41,11 @@ vi.mock("@line/bot-sdk", () => ({
 afterAll(() => {
   vi.doUnmock("@line/bot-sdk");
   vi.resetModules();
+  if (previousLocale === undefined) {
+    delete process.env.OPENCLAW_LOCALE;
+  } else {
+    process.env.OPENCLAW_LOCALE = previousLocale;
+  }
 });
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
