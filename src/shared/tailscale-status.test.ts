@@ -133,6 +133,56 @@ describe("shared/tailscale-status", () => {
     await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
   });
 
+  it("accepts a bare port number within the valid range", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "18789" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([
+      "wss://mac.tail.ts.net:443",
+    ]);
+  });
+
+  it("rejects a bare port number outside the valid range", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "99999" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(99999, run)).resolves.toEqual([]);
+  });
+
+  it("rejects a bare port number of zero", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "0" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(0, run)).resolves.toEqual([]);
+  });
+
   it("ignores load-balanced Tailscale Services and public Funnel routes", async () => {
     const run = vi.fn().mockResolvedValue({
       code: 0,
