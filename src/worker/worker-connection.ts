@@ -285,6 +285,9 @@ export class WorkerConnection {
         this.reportConnectionFailure(undefined);
         return hello;
       } catch (error) {
+        if (this.isTerminal()) {
+          throw this.terminalError();
+        }
         this.reportConnectionFailure(toWorkerConnectionError(error));
         if (error instanceof WorkerAdmissionError) {
           if (error.retryable) {
@@ -297,9 +300,6 @@ export class WorkerConnection {
         if (error instanceof WorkerConnectionEndpointError) {
           this.finishFailed(error);
           throw error;
-        }
-        if (this.isTerminal()) {
-          throw this.terminalError();
         }
         attempt += 1;
       }

@@ -19,6 +19,7 @@ import {
   formatWorkerConnectionFailure,
   toWorkerConnectionError,
   WorkerAdmissionDeadlineExceededError,
+  WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
 import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
@@ -198,6 +199,58 @@ describe("worker connection endpoint failures", () => {
       );
     } finally {
       await connection.stop();
+    }
+  });
+
+  it("does not report local cancellation as a gateway connection failure", async () => {
+    let acceptConnection!: (socket: net.Socket) => void;
+    const accepted = new Promise<net.Socket>((resolve) => {
+      acceptConnection = resolve;
+    });
+    const server = net.createServer(acceptConnection);
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("test server did not allocate a TCP port"));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+    const failures: Error[] = [];
+    const connection = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: `ws://127.0.0.1:${port}${WORKER_PUBLIC_INGRESS_PATH}`,
+      },
+      connectParams: FRAME_CONNECT_PARAMS,
+      onConnectionFailure: (error) => {
+        if (error) {
+          failures.push(error);
+        }
+      },
+    });
+    const starting = connection.start();
+    const peer = await accepted;
+
+    try {
+      await connection.stop();
+      await expect(starting).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
+      expect(failures).toEqual([]);
+    } finally {
+      peer.destroy();
+      await connection.stop();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
     }
   });
 });
