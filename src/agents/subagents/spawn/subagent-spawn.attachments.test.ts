@@ -156,6 +156,35 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
+  it("lists staged attachment file paths in the child launch prompt", async () => {
+    // Minimal JPEG bytes are enough: staging validates encoding, not decode.
+    const receiptJpegBase64 =
+      "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EFBABAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z";
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "inspect the receipt",
+        attachments: [{ name: "receipt.jpg", content: receiptJpegBase64, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.attachments?.files[0]?.name).toBe("receipt.jpg");
+    const relDir = result.attachments?.relDir ?? "";
+    expect(relDir).toMatch(/^\.openclaw\/attachments\/[0-9a-f-]{36}$/);
+    const stagedFile = path.join(workspaceDirOverride, relDir, "receipt.jpg");
+    expect(fs.statSync(stagedFile).isFile()).toBe(true);
+
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    )?.[0] as { params?: { extraSystemPrompt?: string } } | undefined;
+    const childSystemPrompt = agentCall?.params?.extraSystemPrompt ?? "";
+    const relFile = path.posix.join(relDir, "receipt.jpg");
+    expect(childSystemPrompt).toContain(relDir);
+    expect(childSystemPrompt).toContain(relFile);
+  });
+
   it("materializes attachments under explicit cwd when native subagent cwd is provided", async () => {
     const explicitWorkspaceDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-cwd-attachments-${process.pid}-${Date.now()}-`),
