@@ -223,12 +223,9 @@ function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform
 }
 
 function resolveDefaultCodexPluginRoot(moduleDir: string): string {
-  if (isDistExtensionRoot(moduleDir, process.platform)) {
-    return moduleDir;
-  }
   const moduleBaseName = path.basename(moduleDir);
   if (moduleBaseName === "dist" || moduleBaseName === "dist-runtime") {
-    return path.join(moduleDir, "extensions", "codex");
+    return path.dirname(moduleDir);
   }
   return path.resolve(moduleDir, "..", "..");
 }

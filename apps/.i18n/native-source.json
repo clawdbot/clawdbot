@@ -14339,7 +14339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1185,
+      "line": 1186,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Speech recognizer unavailable",
       "surface": "android",
@@ -14347,7 +14347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1217,
+      "line": 1218,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Off",
       "surface": "android",
@@ -14355,7 +14355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1220,
+      "line": 1221,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "surface": "android",
@@ -14363,7 +14363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1225,
+      "line": 1226,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed: $reason",
       "surface": "android",
@@ -14371,7 +14371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2350,
+      "line": 2351,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Thinking…",
       "surface": "android",
@@ -14379,7 +14379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2367,
+      "line": 2368,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Gateway not connected",
       "surface": "android",
@@ -14387,7 +14387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2380,
+      "line": 2381,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -14395,7 +14395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2380,
+      "line": 2381,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",
@@ -14403,7 +14403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2397,
+      "line": 2398,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "No reply",
       "surface": "android",
@@ -14411,7 +14411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2413,
+      "line": 2414,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: $message",
       "surface": "android",
@@ -14419,7 +14419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2523,
+      "line": 2524,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Ready",
       "surface": "android",
@@ -14427,7 +14427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2722,
+      "line": 2723,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Generating voice…",
       "surface": "android",
@@ -14435,7 +14435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2750,
+      "line": 2751,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Speak failed: $message",
       "surface": "android",
@@ -14443,7 +14443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2899,
+      "line": 2900,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Speaking…",
       "surface": "android",
@@ -14451,7 +14451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3237,
+      "line": 3238,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Microphone permission required",
       "surface": "android",
@@ -14459,7 +14459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3243,
+      "line": 3244,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Audio error",
       "surface": "android",
@@ -14467,7 +14467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3244,
+      "line": 3245,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Client error",
       "surface": "android",
@@ -14475,7 +14475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3245,
+      "line": 3246,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Network error",
       "surface": "android",
@@ -14483,7 +14483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3246,
+      "line": 3247,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Network timeout",
       "surface": "android",
@@ -14491,7 +14491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3249,
+      "line": 3250,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Listening",
       "surface": "android",
@@ -14499,7 +14499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3249,
+      "line": 3250,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Listening (PTT)",
       "surface": "android",
@@ -14507,7 +14507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3250,
+      "line": 3251,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Recognizer busy",
       "surface": "android",
@@ -14515,7 +14515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3251,
+      "line": 3252,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Server error",
       "surface": "android",
@@ -14523,7 +14523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3252,
+      "line": 3253,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Speech error ($error)",
       "surface": "android",

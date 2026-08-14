@@ -20,6 +20,7 @@ function createRequest(): RealtimeVoiceBridgeCreateRequest {
     onError: vi.fn(),
     onClose: vi.fn(),
     onEvent: vi.fn(),
+    onTranscript: vi.fn(),
   };
 }
 
@@ -158,5 +159,61 @@ describe("Codex app-server realtime voice transport", () => {
     });
     await vi.waitFor(() => expect(request.onClose).toHaveBeenCalledWith("error"));
     expect(request.onError).toHaveBeenCalledWith(new Error("authentication failed"));
+  });
+
+  it("replays a user transcript that was interrupted before its assistant response", async () => {
+    const request = createRequest();
+    const firstPeer = createPeer();
+    const secondPeer = createPeer();
+    const peers = [firstPeer, secondPeer];
+    const clientRequest = vi.fn(async (_method: string, _params?: unknown) => undefined);
+    const bridge = createCodexAppServerRealtimeVoiceBridge(
+      { request: clientRequest } as unknown as CodexAppServerClient,
+      "thread-1",
+      request,
+      new AbortController().signal,
+      async () => peers.shift()!,
+    );
+    const initialConnect = bridge.connect();
+    await vi.waitFor(() => expect(clientRequest).toHaveBeenCalledOnce());
+    bridge.handleNotification({
+      method: "thread/realtime/sdp",
+      params: { threadId: "thread-1", sdp: "answer-1" },
+    });
+    await initialConnect;
+    bridge.handleNotification({
+      method: "thread/realtime/transcript/done",
+      params: { threadId: "thread-1", role: "user", text: "Finish this request." },
+    });
+
+    bridge.handleNotification({
+      method: "thread/realtime/error",
+      params: { threadId: "thread-1", message: RESET_ERROR },
+    });
+    bridge.handleNotification({
+      method: "thread/realtime/closed",
+      params: { threadId: "thread-1", reason: "error" },
+    });
+    await vi.waitFor(() => expect(clientRequest).toHaveBeenCalledTimes(2));
+    expect(clientRequest.mock.calls[1]?.[1]).toMatchObject({
+      initialItems: [{ role: "developer", text: "Use the bound OpenClaw agent." }],
+    });
+    bridge.handleNotification({
+      method: "thread/realtime/sdp",
+      params: { threadId: "thread-1", sdp: "answer-2" },
+    });
+    await vi.waitFor(() => expect(clientRequest).toHaveBeenCalledTimes(3));
+    expect(clientRequest.mock.calls[2]).toEqual([
+      "thread/realtime/appendText",
+      { threadId: "thread-1", role: "user", text: "Finish this request." },
+      { signal: expect.any(AbortSignal) },
+    ]);
+    await vi.waitFor(() => expect(request.onReady).toHaveBeenCalledTimes(2));
+
+    bridge.handleNotification({
+      method: "thread/realtime/transcript/done",
+      params: { threadId: "thread-1", role: "user", text: "Finish this request." },
+    });
+    expect(request.onTranscript).toHaveBeenCalledTimes(1);
   });
 });

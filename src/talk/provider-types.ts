@@ -69,6 +69,13 @@ export type RealtimeVoiceBridgeEvent = {
   responseId?: string;
 };
 
+/** Agent progress emitted by providers whose realtime session owns the bound agent run. */
+export type RealtimeVoiceAgentEvent = {
+  stream: string;
+  data: Record<string, unknown>;
+  sessionKey?: string;
+};
+
 export type RealtimeVoiceResponseError = {
   code?: string;
   message?: string;
@@ -151,6 +158,7 @@ export type RealtimeVoiceBridgeCallbacks = {
   onClearAudio: (reason?: RealtimeVoiceAudioClearReason) => void;
   onMark?: (markName: string) => void;
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  onAgentEvent?: (event: RealtimeVoiceAgentEvent) => void | Promise<void>;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;

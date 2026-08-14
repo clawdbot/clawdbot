@@ -90,13 +90,13 @@ async function createInboundAudioHarness(params?: { onRtpPacket?: () => void }) 
   const decodeOrder: Array<number | "plc"> = [];
   const decode = vi.spyOn(testPeer.state.decoder, "decode").mockImplementation((packet) => {
     decodeOrder.push(packet?.[0] ?? -1);
-    return new Int16Array(960 * 2);
+    return new Int16Array(960 * 2).fill(packet?.[0] || 1);
   });
   const decodePacketLoss = vi
     .spyOn(testPeer.state.decoder, "decodePacketLoss")
     .mockImplementation(() => {
       decodeOrder.push("plc");
-      return new Int16Array(960 * 2);
+      return new Int16Array(960 * 2).fill(1);
     });
   const packet = (sequenceNumber: number, ssrc = 1) =>
     new RtpPacket(
@@ -211,6 +211,19 @@ describe("GPT-Live werift audio peer", () => {
 
       expect(decodeOrder).toEqual([10, 11, 12]);
       expect(onAudio).toHaveBeenCalledTimes(3);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("drops exact-zero WebRTC comfort frames before provider audio activity", async () => {
+    const { decode, onAudio, onError, packet, peer, testPeer } = await createInboundAudioHarness();
+    try {
+      decode.mockReturnValueOnce(new Int16Array(960 * 2));
+      testPeer.handleInboundRtp(packet(10));
+
+      expect(onAudio).not.toHaveBeenCalled();
       expect(onError).not.toHaveBeenCalled();
     } finally {
       peer.close();

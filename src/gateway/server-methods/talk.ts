@@ -258,6 +258,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
       resolveConfiguredRealtimeVoiceProvider({
         cfg: config,
         configuredProviderId: realtimeConfig.provider,
+        brain: realtimeConfig.brain,
         providerConfigs: realtimeConfig.providers,
         ...realtimeModelOverride,
         agentId: realtimeAgentId,

@@ -58,6 +58,11 @@ export type TestRealtimeBridgeParams = {
     session: unknown,
   ) => Promise<void> | void;
   onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+  onAgentEvent?: (event: {
+    stream: string;
+    data: Record<string, unknown>;
+    sessionKey?: string;
+  }) => Promise<void> | void;
   senderIsOwner?: boolean;
   sessionKey?: string;
   tools?: Array<{ name: string }>;

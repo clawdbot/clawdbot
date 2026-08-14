@@ -14,6 +14,7 @@ defineDiscordVoiceTests(
     agentCommandMock,
     resolveRealtimeBootstrapContextInstructionsMock,
     realtimeSessionMock,
+    sendMessageDiscordMock,
     createClient,
     getSessionEntry,
     beginSpeakerTurn,
@@ -631,6 +632,16 @@ defineDiscordVoiceTests(
       });
       bridgeParams.onEvent?.({ direction: "server", type: "session.created" });
       bridgeParams.onTranscript?.("user", "Run this in Codex", true);
+      bridgeParams.onTranscript?.("assistant", "Done from ", false);
+      bridgeParams.onTranscript?.("assistant", "Codex.", false);
+      bridgeParams.onTranscript?.("assistant", "Done from Codex.", true);
+      await vi.waitFor(() =>
+        expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+          "channel:1001",
+          "Done from Codex.",
+          expect.objectContaining({ accountId: "default" }),
+        ),
+      );
       expect(agentCommandMock).not.toHaveBeenCalled();
     });
 

@@ -291,6 +291,7 @@ internal class WearRealtimeTalkController(
     put("sessionKey", JsonPrimitive(sessionKey))
     put("mode", JsonPrimitive("realtime"))
     put("transport", JsonPrimitive("gateway-relay"))
+    put("brain", JsonPrimitive("agent-consult"))
     if (language != null) {
       put("language", JsonPrimitive(language))
     }

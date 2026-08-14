@@ -186,7 +186,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.providers.*.apiKey": "Provider API key for Talk mode.", // pragma: allowlist secret
   "talk.realtime":
     "Realtime Talk provider, model, voice, mode, transport, and brain strategy. Keep speech/TTS provider config in talk.provider and talk.providers.",
-  "talk.realtime.provider": "Active realtime voice provider id, such as openai or google.",
+  "talk.realtime.provider": "Active realtime voice provider id, such as openai, google, or codex.",
   "talk.realtime.providers": "Provider-specific realtime voice settings keyed by provider id.",
   "talk.realtime.providers.*": "Provider-owned realtime voice config for the matching provider id.",
   "talk.realtime.providers.*.apiKey": "Provider API key for realtime Talk.", // pragma: allowlist secret

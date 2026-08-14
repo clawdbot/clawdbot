@@ -353,6 +353,7 @@ final class RealtimeTalkRelaySession {
             "sessionKey": self.options.sessionKey,
             "mode": "realtime",
             "transport": "gateway-relay",
+            "brain": "agent-consult",
         ]
         if let provider = self.nonEmpty(self.options.provider) {
             payload["provider"] = provider

@@ -308,7 +308,7 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
         ? talkRealtime.prefixPaddingMs
         : undefined,
     reasoningEffort: normalizeOptionalString(talkRealtime?.reasoningEffort),
-    brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
+    brain: normalizeOptionalLowercaseString(talkRealtime?.brain) as TalkRealtimeConfig["brain"],
     consultRouting: normalizeOptionalLowercaseString(talkRealtime?.consultRouting),
   };
 }

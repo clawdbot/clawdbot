@@ -635,8 +635,10 @@ export class DiscordVoiceSessions {
     }
     const { DiscordRealtimeVoiceSession } = await import("./realtime-session.runtime.js");
     const realtime = new DiscordRealtimeVoiceSession({
+      accountId: this.params.accountId,
       bootstrapContextInstructions,
       cfg: this.params.cfg,
+      deliveryRest: this.params.client.rest,
       discordConfig: this.params.discordConfig,
       entry,
       getHumanParticipantCount: () =>

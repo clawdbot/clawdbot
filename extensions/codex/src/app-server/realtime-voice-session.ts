@@ -71,6 +71,9 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private readonly pendingAudio = createRealtimeVoiceAudioQueue("reject-newest");
   private readonly transcriptHistory: CodexRealtimeInitialItem[] = [];
   private transcriptHistoryBytes = 0;
+  private pendingUserTranscript?: string;
+  private recoveryUserReplay?: string;
+  private replayedUserTranscriptEcho?: string;
 
   constructor(
     private readonly client: CodexAppServerClient,
@@ -146,6 +149,16 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
         throw new Error("Codex realtime session closed during startup");
       }
       this.connected = true;
+      const replay = this.recoveryUserReplay;
+      if (replay) {
+        await this.client.request(
+          "thread/realtime/appendText",
+          { threadId: this.threadId, role: "user", text: replay },
+          { signal: this.signal },
+        );
+        this.recoveryUserReplay = undefined;
+        this.replayedUserTranscriptEcho = replay;
+      }
       for (const audio of this.pendingAudio.drain()) {
         peer.sendAudio(audio);
       }
@@ -252,13 +265,18 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (!role) {
           return;
         }
-        if (text) {
+        const replayedUserEcho = role === "user" && text === this.replayedUserTranscriptEcho;
+        if (text && !replayedUserEcho) {
           this.recordTranscriptHistory(role, text);
           this.request.onTranscript?.(role, text, true);
         }
         if (role === "user") {
+          this.pendingUserTranscript = text;
+          this.replayedUserTranscriptEcho = undefined;
           this.responseTerminalEmitted = false;
         } else {
+          this.pendingUserTranscript = undefined;
+          this.replayedUserTranscriptEcho = undefined;
           this.emitResponseDone();
         }
         return;
@@ -272,6 +290,9 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (type) {
           this.request.onEvent?.({ direction: "server", type });
           if (type === "response.cancelled") {
+            this.pendingUserTranscript = undefined;
+            this.recoveryUserReplay = undefined;
+            this.replayedUserTranscriptEcho = undefined;
             this.responseTerminalEmitted = true;
           }
         }
@@ -317,6 +338,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.recoveryPending = true;
     this.connected = false;
     this.pendingAudio.clear();
+    this.recoveryUserReplay = this.pendingUserTranscript;
     this.retirePeer();
     this.request.onEvent?.({
       direction: "client",
@@ -361,6 +383,13 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
       index -= 1
     ) {
       const item = this.transcriptHistory[index]!;
+      if (
+        index === this.transcriptHistory.length - 1 &&
+        item.role === "user" &&
+        item.text === this.recoveryUserReplay
+      ) {
+        continue;
+      }
       const bytes = Buffer.byteLength(item.text);
       if (bytes <= remainingBytes) {
         items.splice(instructions ? 1 : 0, 0, item);

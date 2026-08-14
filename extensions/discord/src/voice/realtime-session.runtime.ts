@@ -1,4 +1,5 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildRealtimeVoiceSessionInstructions,
   buildRealtimeVoiceSpeakExactMessage,
@@ -14,14 +15,24 @@ import {
   resolveRealtimeVoiceMinBargeInAudioEndMs,
   resolveRealtimeVoiceSessionPolicy,
   type RealtimeVoiceAgentConsultToolPolicy,
+  type RealtimeVoiceAgentEvent,
   type RealtimeVoiceBridgeEvent,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceSessionHarness,
   type RealtimeVoiceWakeNamePolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  stripInlineDirectiveTagsForDelivery,
+  stripReasoningTagsFromText,
+} from "openclaw/plugin-sdk/text-chunking";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import type { RequestClient } from "../internal/discord.js";
+import { createDiscordDraftPreviewController } from "../monitor/message-handler.draft-preview.js";
+import { sendMessageDiscord } from "../send.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
@@ -105,12 +116,167 @@ function isDiscordAgentProxyVoiceMode(mode: DiscordVoiceMode): boolean {
   return mode === "agent-proxy";
 }
 
+function readAgentEventString(data: Record<string, unknown>, key: string): string | undefined {
+  const value = data[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+class DiscordRealtimeOutputPresenter {
+  private assistantText = "";
+  private closed = false;
+  private pending = Promise.resolve();
+  private readonly draft;
+  private readonly textLimit: number;
+  private readonly tableMode;
+  private readonly maxLinesPerMessage;
+  private readonly chunkMode;
+  private readonly toolProgressDetail;
+
+  constructor(
+    private readonly params: {
+      accountId: string;
+      cfg: OpenClawConfig;
+      deliveryRest: RequestClient;
+      discordConfig: DiscordAccountConfig;
+      entry: VoiceSessionEntry;
+    },
+  ) {
+    this.textLimit = params.discordConfig.textChunkLimit ?? 2_000;
+    this.tableMode = resolveMarkdownTableMode({
+      cfg: params.cfg,
+      channel: "discord",
+      accountId: params.accountId,
+    });
+    this.maxLinesPerMessage = resolveDiscordMaxLinesPerMessage(params);
+    this.chunkMode = resolveChunkMode(params.cfg, "discord", params.accountId);
+    this.toolProgressDetail = params.cfg.agents?.defaults?.toolProgressDetail;
+    this.draft = createDiscordDraftPreviewController({
+      cfg: params.cfg,
+      discordConfig: params.discordConfig,
+      accountId: params.accountId,
+      sourceRepliesAreToolOnly: false,
+      textLimit: this.textLimit,
+      deliveryRest: params.deliveryRest,
+      deliverChannelId: params.entry.channelId,
+      replyReference: { peek: () => undefined },
+      tableMode: this.tableMode,
+      maxLinesPerMessage: this.maxLinesPerMessage,
+      chunkMode: this.chunkMode,
+      log: logVoiceVerbose,
+    });
+  }
+
+  onTranscript(role: "user" | "assistant", text: string, isFinal: boolean): void {
+    if (this.closed || role !== "assistant") {
+      return;
+    }
+    if (!isFinal) {
+      this.assistantText = text.startsWith(this.assistantText)
+        ? text
+        : `${this.assistantText}${text}`;
+      const snapshot = this.assistantText;
+      void this.enqueue(() => this.draft.updateFromPartial(snapshot));
+      return;
+    }
+    const finalText = text.trim() ? text : this.assistantText;
+    this.assistantText = "";
+    if (!finalText.trim()) {
+      return;
+    }
+    void this.enqueue(async () => {
+      const cleaned = stripInlineDirectiveTagsForDelivery(
+        stripReasoningTagsFromText(finalText, { mode: "strict", trim: "both" }),
+      ).text.trim();
+      if (!cleaned) {
+        return;
+      }
+      this.draft.markFinalReplyStarted();
+      await this.draft.flush();
+      await sendMessageDiscord(`channel:${this.params.entry.channelId}`, cleaned, {
+        cfg: this.params.cfg,
+        accountId: this.params.accountId,
+        rest: this.params.deliveryRest,
+        textLimit: this.textLimit,
+        tableMode: this.tableMode,
+        maxLinesPerMessage: this.maxLinesPerMessage,
+        chunkMode: this.chunkMode,
+        suppressEmbeds: this.params.discordConfig.suppressEmbeds,
+      });
+      this.draft.markFinalReplyDelivered();
+      await this.draft.draftStream?.clear();
+      this.draft.handleAssistantMessageBoundary();
+    });
+  }
+
+  onAgentEvent(event: RealtimeVoiceAgentEvent): Promise<void> | void {
+    if (this.closed || event.stream !== "tool" || event.data.hideFromChannelProgress === true) {
+      return;
+    }
+    const phase = readAgentEventString(event.data, "phase");
+    const name = readAgentEventString(event.data, "name");
+    const toolCallId = readAgentEventString(event.data, "toolCallId");
+    if (phase === "start" || phase === "update") {
+      const args =
+        event.data.args && typeof event.data.args === "object"
+          ? (event.data.args as Record<string, unknown>)
+          : undefined;
+      return this.enqueue(() =>
+        this.draft.pushToolEvent({
+          toolCallId,
+          name,
+          phase,
+          args,
+          detailMode: this.toolProgressDetail,
+        }),
+      );
+    }
+    if (phase === "result") {
+      return this.enqueue(() =>
+        this.draft.pushItemEvent({
+          toolCallId,
+          kind: "tool",
+          name,
+          phase: "end",
+          status: event.data.isError === true ? "failed" : "completed",
+          meta: readAgentEventString(event.data, "meta"),
+        }),
+      );
+    }
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.assistantText = "";
+    this.pending = this.pending
+      .then(() => this.draft.cleanup())
+      .catch((error: unknown) => {
+        logVoiceVerbose(`realtime output cleanup failed: ${formatErrorMessage(error)}`);
+      });
+  }
+
+  private enqueue(task: () => void | Promise<unknown>): Promise<void> {
+    const next = this.pending.then(async () => {
+      if (!this.closed) {
+        await task();
+      }
+    });
+    this.pending = next.catch((error: unknown) => {
+      logger.warn(`discord voice: realtime output delivery failed: ${formatErrorMessage(error)}`);
+    });
+    return next;
+  }
+}
+
 export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private bridge: RealtimeVoiceBridgeSession | null = null;
   private readonly harness: RealtimeVoiceSessionHarness<AgentProxyConsultState>;
   private readonly playback: DiscordRealtimePlayback<AgentProxyConsultState>;
   private readonly turns: DiscordRealtimeTurns;
   private readonly consults: DiscordRealtimeConsults;
+  private outputPresenter: DiscordRealtimeOutputPresenter | undefined;
   private lifecycle: DiscordRealtimeLifecycle = { status: "inactive", generation: 0 };
   private nextLifecycleGeneration = 0;
   private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
@@ -128,6 +294,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   constructor(
     private readonly params: {
       cfg: OpenClawConfig;
+      accountId: string;
+      deliveryRest: RequestClient;
       discordConfig: DiscordAccountConfig;
       entry: VoiceSessionEntry;
       mode: Exclude<DiscordVoiceMode, "stt-tts">;
@@ -233,6 +401,15 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.realtimeProviderId = resolved.provider.id;
     const providerBrain = resolved.provider.capabilities?.brains?.[0] ?? "agent-consult";
     const providerHandlesAgentTurns = providerBrain === "codex-realtime";
+    if (providerHandlesAgentTurns) {
+      this.outputPresenter ??= new DiscordRealtimeOutputPresenter({
+        accountId: this.params.accountId,
+        cfg: this.params.cfg,
+        deliveryRest: this.params.deliveryRest,
+        discordConfig: this.params.discordConfig,
+        entry: this.params.entry,
+      });
+    }
     this.harness.talk.context.brain = providerBrain;
     const isAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
     const sessionPolicy = resolveRealtimeVoiceSessionPolicy({
@@ -312,6 +489,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       },
       onTranscript: (role, text, isFinal) => {
         this.markProviderGenerationObserved();
+        this.outputPresenter?.onTranscript(role, text, isFinal);
         if (isFinal && text.trim()) {
           logger.info(
             `discord voice: realtime ${role} transcript (${text.length} chars): ${formatVoiceLogPreview(text)}`,
@@ -332,6 +510,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         }
         void this.turns.handleFinalUserTranscript(text);
       },
+      onAgentEvent: (event) => this.outputPresenter?.onAgentEvent(event),
       onToolCall: (event, session) => {
         this.markProviderGenerationObserved();
         return this.consults.handleToolCall(event, session);
@@ -388,6 +567,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.harness.close();
     this.turns.clear();
     this.playback.close();
+    this.outputPresenter?.close();
+    this.outputPresenter = undefined;
     this.bridge?.close();
     this.bridge = null;
     this.realtimeProviderId = undefined;

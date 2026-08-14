@@ -96,6 +96,34 @@ describe("realtime voice bridge session runtime", () => {
     expect(sendMark).toHaveBeenCalledWith("mark-1");
   });
 
+  it("forwards provider-owned agent progress while the session is active", async () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const onAgentEvent = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      onAgentEvent,
+    });
+    const event = { stream: "tool", data: { phase: "start", name: "read" } };
+
+    await callbacks?.onAgentEvent?.(event);
+    expect(onAgentEvent).toHaveBeenCalledWith(event);
+
+    session.close();
+    await callbacks?.onAgentEvent?.(event);
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("passes the requested audio format to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const provider: RealtimeVoiceProviderPlugin = {

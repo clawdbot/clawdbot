@@ -613,6 +613,7 @@ describe("talk.catalog handler", () => {
               realtime: {
                 provider: "relay",
                 transport: "gateway-relay",
+                brain: "agent-consult",
               },
             },
           }) as OpenClawConfig,
@@ -620,7 +621,7 @@ describe("talk.catalog handler", () => {
     });
 
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ surface: "gateway-relay" }),
+      expect.objectContaining({ brain: "agent-consult", surface: "gateway-relay" }),
     );
     expect(mocks.resolveRealtimeVoiceProviderCapabilities).toHaveBeenCalledWith(
       expect.objectContaining({ surface: "gateway-relay" }),
@@ -1618,7 +1619,7 @@ describe("talk.session unified handlers", () => {
     });
   });
 
-  it("creates and drives a realtime gateway-relay session through the unified API", async () => {
+  it("keeps omitted-brain relay clients on agent-consult under direct-tools config", async () => {
     const provider = {
       id: "openai",
       label: "OpenAI Realtime",
@@ -1700,6 +1701,7 @@ describe("talk.session unified handlers", () => {
       unknown
     >;
     expectRecordFields(relayCreateInput, {
+      brain: "agent-consult",
       connId: "conn-1",
       provider,
       language: "de",
@@ -1921,7 +1923,7 @@ describe("talk.session unified handlers", () => {
     expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
   });
 
-  it("creates a Codex-native relay without consult proxy instructions or tools", async () => {
+  it("routes legacy agent-consult clients to a configured Codex-native relay", async () => {
     const provider = {
       id: "codex",
       label: "Codex Realtime",
@@ -1952,6 +1954,8 @@ describe("talk.session unified handlers", () => {
         sessionKey: "agent:main:main",
         mode: "realtime",
         transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "codex",
       },
       respond,
       client: {

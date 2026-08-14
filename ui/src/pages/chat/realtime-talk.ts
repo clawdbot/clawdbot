@@ -416,6 +416,7 @@ export class RealtimeTalkSession {
             ...gatewayOptions,
             mode: "realtime",
             transport: transport ?? "gateway-relay",
+            brain: "agent-consult",
           }),
           { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
         );

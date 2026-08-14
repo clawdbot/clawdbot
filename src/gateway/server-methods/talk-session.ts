@@ -238,7 +238,14 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           realtimeConfig.brain === "agent-consult" || realtimeConfig.brain === "codex-realtime"
             ? realtimeConfig.brain
             : undefined;
-        const brain = normalizeBrain({ mode, brain: params.brain ?? configuredRelayBrain });
+        const explicitProvider = normalizeOptionalLowercaseString(params.provider);
+        const requestedBrain =
+          params.brain === "agent-consult" &&
+          configuredRelayBrain === "codex-realtime" &&
+          (!explicitProvider || explicitProvider === "codex")
+            ? configuredRelayBrain
+            : params.brain;
+        const brain = normalizeBrain({ mode, brain: requestedBrain ?? configuredRelayBrain });
         const configuredRealtimeProviders = runtimeConfig.talk?.realtime?.providers
           ? Object.keys(runtimeConfig.talk.realtime.providers)
           : [];

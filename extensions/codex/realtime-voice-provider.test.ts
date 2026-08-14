@@ -38,6 +38,7 @@ describe("Codex realtime voice provider", () => {
     const sendInnerAudio = vi.fn();
     const closeInner = vi.fn();
     let runSignal: AbortSignal | undefined;
+    const onAgentEvent = vi.fn();
     let sessionEntry: { sessionId: string; updatedAt: number; [key: string]: unknown } | undefined;
     const inner = {
       connect: connectInner,
@@ -78,6 +79,7 @@ describe("Codex realtime voice provider", () => {
       senderId: "voice-user",
       senderIsOwner: false,
       toolsAllow: ["read"],
+      onAgentEvent,
       providerConfig: {},
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       onAudio: vi.fn(),
@@ -102,6 +104,7 @@ describe("Codex realtime voice provider", () => {
         senderId: "voice-user",
         senderIsOwner: false,
         toolsAllow: ["read"],
+        onAgentEvent,
         suppressNextUserMessagePersistence: true,
         suppressTranscriptOnlyAssistantPersistence: true,
         workspaceDir: "/tmp/session-worktree",

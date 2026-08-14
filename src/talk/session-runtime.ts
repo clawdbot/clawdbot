@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceAgentEvent,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
@@ -74,6 +75,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  onAgentEvent?: (event: RealtimeVoiceAgentEvent) => void | Promise<void>;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (
@@ -207,6 +209,19 @@ export function createRealtimeVoiceBridgeSession(
       }
     },
     onTranscript: params.onTranscript,
+    onAgentEvent: (event) => {
+      if (!isAdmitting()) {
+        return;
+      }
+      try {
+        const pending = params.onAgentEvent?.(event);
+        if (pending) {
+          void pending.catch(reportCallbackError);
+        }
+      } catch (error) {
+        reportCallbackError(error);
+      }
+    },
     onEvent: params.onEvent,
     onResponseDone: params.onResponseDone,
     onToolCall: (event) => {

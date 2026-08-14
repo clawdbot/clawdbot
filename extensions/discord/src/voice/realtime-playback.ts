@@ -518,7 +518,7 @@ export class DiscordRealtimePlayback<TState> {
     });
     opusStream.once("close", () => this.handleOutputStreamClosed(stream, "stream-close"));
     pipeline(stream, opusStream, (err) => {
-      if (!err) {
+      if (!err || this.outputStream !== stream) {
         return;
       }
       logger.warn(

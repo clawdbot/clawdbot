@@ -1121,6 +1121,7 @@ class TalkModeManager internal constructor(
             put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
             put("mode", JsonPrimitive("realtime"))
             put("transport", JsonPrimitive("gateway-relay"))
+            put("brain", JsonPrimitive("agent-consult"))
             requestedLanguage?.let { put("language", JsonPrimitive(it)) }
           }
         requestGateway("talk.session.create", params.toString(), timeoutMs = 15_000)

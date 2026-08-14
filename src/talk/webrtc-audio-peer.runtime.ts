@@ -407,7 +407,9 @@ export class RealtimeWebRtcAudioPeer implements RealtimeWebRtcAudioPeerContract 
 
   private emitInboundPcm(decoded: Int16Array): void {
     const relayPcm = convertWebRtcPcmToRelayPcm(decoded);
-    if (relayPcm.length > 0) {
+    // WebRTC can emit continuous all-zero comfort frames while the model is idle.
+    // Keep those transport keepalives off activity-driven voice sinks.
+    if (relayPcm.some((byte) => byte !== 0)) {
       this.state.callbacks.onAudio(relayPcm);
     }
   }

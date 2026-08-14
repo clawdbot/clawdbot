@@ -24,6 +24,7 @@ const {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  sendMessageDiscordMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -190,6 +191,7 @@ const {
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
+    sendMessageDiscordMock: vi.fn(async () => ({ messageId: "voice-text-1" })),
   };
 });
 
@@ -217,7 +219,12 @@ export const voiceTestMocks = {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  sendMessageDiscordMock,
 };
+
+vi.mock("../send.js", () => ({
+  sendMessageDiscord: sendMessageDiscordMock,
+}));
 
 vi.mock("./sdk-runtime.js", () => ({
   loadDiscordVoiceSdk: () => ({

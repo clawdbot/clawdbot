@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { parseModelRef, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  parseModelRef,
+  resolveAgentConfig,
+  resolveDefaultModelForAgent,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -85,6 +89,7 @@ async function runBoundCodexRealtimeSession(params: {
   const workspaceDir =
     normalizeOptionalString(sessionEntry.spawnedCwd) ??
     params.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
+  const agentConfig = resolveAgentConfig(cfg, agentId);
   return params.runtime.agent.runEmbeddedAgent({
     sessionId: sessionEntry.sessionId,
     sessionKey,
@@ -95,6 +100,12 @@ async function runBoundCodexRealtimeSession(params: {
     senderId: params.request.senderId,
     senderIsOwner: params.request.senderIsOwner === true,
     toolsAllow: params.request.toolsAllow,
+    verboseLevel: (sessionEntry.verboseLevel ?? agentConfig?.verboseDefault) as
+      | "off"
+      | "on"
+      | "full"
+      | undefined,
+    toolProgressDetail: cfg.agents?.defaults?.toolProgressDetail,
     workspaceDir,
     cwd: workspaceDir,
     agentDir: params.runtime.agent.resolveAgentDir(cfg, agentId),
@@ -109,6 +120,7 @@ async function runBoundCodexRealtimeSession(params: {
     timeoutMs: params.runtime.agent.resolveAgentTimeoutMs({ cfg }),
     runId: `codex-realtime:${randomUUID()}`,
     abortSignal: params.abortSignal,
+    onAgentEvent: params.request.onAgentEvent,
     realtimeVoice: {
       request: params.request,
       onBridgeReady: params.onBridgeReady,
