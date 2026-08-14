@@ -209,7 +209,7 @@ export class NodeWorkerWorkspaceRuntime {
 
   async pruneSupersededGenerations(
     listNonterminal: () => readonly NodeWorkerWorkspaceLaunchReference[],
-  ): Promise<number> {
+  ): Promise<{ deleted: number; hasMore: boolean }> {
     const generations: WorkspaceGeneration[] = [];
     const latestBySession = new Map<string, number>();
     for (const gatewayNamespace of await listOwnedDirectories(this.root)) {
@@ -250,7 +250,7 @@ export class NodeWorkerWorkspaceRuntime {
       }
     }
     const initiallyProtected = new Set(listNonterminal().map(launchGenerationKey));
-    const candidates = generations
+    const staleGenerations = generations
       .filter(
         (generation) =>
           !initiallyProtected.has(generationKey(generation)) &&
@@ -262,8 +262,8 @@ export class NodeWorkerWorkspaceRuntime {
         (left, right) =>
           left.generation - right.generation ||
           left.generationPath.localeCompare(right.generationPath),
-      )
-      .slice(0, WORKSPACE_GENERATION_PRUNE_LIMIT);
+      );
+    const candidates = staleGenerations.slice(0, WORKSPACE_GENERATION_PRUNE_LIMIT);
     let deleted = 0;
     for (const candidate of candidates) {
       await serializeNodeWorkerWorkspace(candidate.generationPath, async () => {
@@ -306,7 +306,7 @@ export class NodeWorkerWorkspaceRuntime {
         deleted += 1;
       });
     }
-    return deleted;
+    return { deleted, hasMore: staleGenerations.length > candidates.length };
   }
 
   async exec(

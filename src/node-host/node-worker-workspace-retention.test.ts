@@ -78,6 +78,21 @@ describe("node worker workspace retention", () => {
     await supervisor.close();
   });
 
+  it("drains a workspace backlog across bounded startup passes", async () => {
+    const root = tempDirs.make("node-worker-workspace-retention-backlog-");
+    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
+    const input = testWorkerLaunchInput(workspaceDir, "startup-backlog-retention");
+    for (let generation = 0; generation <= 260; generation += 1) {
+      seedGeneration(bundleRoot, input, generation);
+    }
+    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
+
+    await supervisor.initialize();
+
+    expect(generationNames(bundleRoot, input)).toEqual(["260"]);
+    await supervisor.close();
+  });
+
   it("keeps an active launch generation until its terminal transition", async () => {
     const root = tempDirs.make("node-worker-workspace-retention-active-");
     const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);

@@ -24,16 +24,19 @@ export class NodeWorkerRetention {
       while (this.pending) {
         this.pending = false;
         try {
-          const deleted = await this.workspace.pruneSupersededGenerations(() =>
+          const result = await this.workspace.pruneSupersededGenerations(() =>
             this.store.listNonterminal(),
           );
-          if (deleted > 0) {
+          if (result.deleted > 0) {
             retentionLog.info("pruned node worker workspace generations", {
-              count: deleted,
+              count: result.deleted,
               reason: "superseded-workspace-generation",
               trigger,
             });
           }
+          // Keep each filesystem pass bounded while draining an inherited backlog.
+          // Every continuation rebuilds latest/active ownership before deleting again.
+          this.pending ||= result.hasMore;
         } catch (error) {
           retentionLog.warn("node worker workspace generation pruning failed", {
             error: formatErrorMessage(error),
