@@ -572,13 +572,17 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("latches audio only after the active reply operation accepts the steer", async () => {
+    const followupRun = {
+      ...createMockFollowupRun({ prompt: "summarize the audio" }),
+      currentInboundAudio: true,
+    } as unknown as FollowupRun;
     const operation = createRegisteredReplyOperation({
       sessionKey: "agent:main:whatsapp:direct:chat-1",
       sessionId: "session",
       resetTriggered: false,
     });
     operation.setPhase("running");
-    operation.bindToolAuthorityFingerprint(TEST_TOOL_AUTHORITY_FINGERPRINT);
+    operation.bindToolAuthorityFingerprint(resolveFollowupRunToolAuthorityFingerprint(followupRun));
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
@@ -589,16 +593,13 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
+        followupRun,
         replyOperation: operation,
         sessionKey: "agent:main:whatsapp:direct:chat-1",
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
         isActive: true,
-        followupRun: {
-          ...createMockFollowupRun({ prompt: "summarize the audio" }),
-          currentInboundAudio: true,
-        } as unknown as FollowupRun,
       }),
     );
 

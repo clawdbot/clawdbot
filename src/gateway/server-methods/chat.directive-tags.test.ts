@@ -1057,14 +1057,6 @@ function createChatContext(): Pick<
   };
 }
 
-function beginChatReplyOperation(
-  params: Parameters<typeof replyRunRegistry.begin>[0],
-): ReturnType<typeof replyRunRegistry.begin> {
-  const operation = replyRunRegistry.begin(params);
-  operation.bindToolAuthorityFingerprint("chat-test-authority");
-  return operation;
-}
-
 type ChatContext = ReturnType<typeof createChatContext>;
 
 function useChatTestModel(model: "vision-model" | "text-only") {
@@ -1482,7 +1474,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-no-leaf-");
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1524,7 +1516,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1568,7 +1560,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1634,7 +1626,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1678,7 +1670,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond } = createChatRequestFixture();
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
-    const original = beginChatReplyOperation({
+    const original = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1720,7 +1712,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
         async () => {
           original.complete();
-          successor = beginChatReplyOperation({
+          successor = replyRunRegistry.begin({
             sessionKey: "agent:main:main",
             sessionId: mockState.sessionId,
             resetTriggered: false,
@@ -1760,7 +1752,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       parentId: null,
     });
     const { context, respond, send } = createChatRequestFixture();
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1811,7 +1803,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-before-ack-");
     const { context, respond, send } = createChatRequestFixture();
     const delivery = createDeferred();
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1867,7 +1859,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const disposeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     const { context, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1954,7 +1946,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       reportAcceptance = options?.onQueueAccepted;
       return delivery.promise;
     });
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2041,7 +2033,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
     const successorCancel = vi.fn();
-    const original = beginChatReplyOperation({
+    const original = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2070,7 +2062,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(respond).not.toHaveBeenCalled();
       expect(originalQueue).not.toHaveBeenCalled();
       original.complete();
-      successor = beginChatReplyOperation({
+      successor = replyRunRegistry.begin({
         sessionKey: "agent:main:main",
         sessionId: mockState.sessionId,
         resetTriggered: false,
@@ -2166,7 +2158,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const delivery = createDeferred();
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2216,7 +2208,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       transcriptCommit: "unconfirmed";
       errorMessage: string;
     }>();
-    const first = beginChatReplyOperation({
+    const first = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2241,7 +2233,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     first.complete();
     const successorCancel = vi.fn();
-    const successor = beginChatReplyOperation({
+    const successor = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2275,7 +2267,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-sync-reject-");
     const { respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2316,7 +2308,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-run-changed-");
     const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2380,7 +2372,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     vi.useFakeTimers({ toFake: ["Date"] });
-    const operation = beginChatReplyOperation({
+    const operation = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,

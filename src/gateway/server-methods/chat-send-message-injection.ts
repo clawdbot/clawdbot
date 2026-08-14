@@ -42,7 +42,7 @@ export function createChatSendMessageInjectionStarter(params: {
   const { cfg, entry } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
   return (): ReplyMessageInjectionAttempt | undefined => {
-    if (!params.target || isInternalTextSlashCommandTurn) {
+    if (!params.target || isInternalTextSlashCommandTurn || toolBindings !== undefined) {
       return undefined;
     }
     const { debounceMs } = resolveQueueSettings({
