@@ -255,22 +255,34 @@ const STAGED_MEDIA_DIR_PATTERN =
   /^openclaw-staged-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 async function pruneEmptyStagedMediaDirs(inboundMediaDir: string): Promise<void> {
-  const entries = await fs.readdir(inboundMediaDir, { withFileTypes: true }).catch(() => []);
   const cutoffMs = Date.now() - STAGED_MEDIA_PRUNE_MIN_AGE_MS;
   const candidates: Array<{ dirPath: string; mtimeMs: number }> = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !STAGED_MEDIA_DIR_PATTERN.test(entry.name)) {
-      continue;
+  // Enumerate lazily instead of materializing the whole directory: stop
+  // reading as soon as the per-pass candidate budget is filled, so a large
+  // media/inbound backlog is never fully enumerated before staging the
+  // current attachment.
+  const dir = await fs.opendir(inboundMediaDir).catch(() => null);
+  if (!dir) {
+    return;
+  }
+  try {
+    while (candidates.length < STAGED_MEDIA_PRUNE_MAX_CANDIDATES_PER_PASS) {
+      const entry = await dir.read();
+      if (!entry) {
+        break;
+      }
+      if (!entry.isDirectory() || !STAGED_MEDIA_DIR_PATTERN.test(entry.name)) {
+        continue;
+      }
+      const dirPath = path.join(inboundMediaDir, entry.name);
+      const stat = await fs.lstat(dirPath).catch(() => null);
+      if (!stat?.isDirectory() || stat.mtimeMs > cutoffMs) {
+        continue;
+      }
+      candidates.push({ dirPath, mtimeMs: stat.mtimeMs });
     }
-    if (candidates.length >= STAGED_MEDIA_PRUNE_MAX_CANDIDATES_PER_PASS) {
-      break;
-    }
-    const dirPath = path.join(inboundMediaDir, entry.name);
-    const stat = await fs.lstat(dirPath).catch(() => null);
-    if (!stat?.isDirectory() || stat.mtimeMs > cutoffMs) {
-      continue;
-    }
-    candidates.push({ dirPath, mtimeMs: stat.mtimeMs });
+  } finally {
+    await dir.close().catch(() => {});
   }
   // Reclaim the oldest leftovers first, up to the per-pass removal budget.
   candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
