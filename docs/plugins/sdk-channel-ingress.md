@@ -126,6 +126,51 @@ The audit states are distinct:
   explicitly passes `channelIngress: "unsupported"`. Unsupported never means
   allowed and is not a shortcut for incomplete wiring.
 
+## Identifier authentication
+
+`IdentifierAuthentication` grades an identifier claim as `verified`,
+`asserted`, `unverified`, or `mutable`, strongest to weakest. It is an input to
+channel authorization only. It is not a principal, grant, relationship, or
+execution-identity assurance strength. In particular, an identifier claim of
+`verified` never becomes execution assurance `boundary-verified` or
+`cryptographic`.
+
+The meanings are normative:
+
+- `verified`: the owning trusted transport or session boundary bound this exact
+  identifier to this sender.
+- `asserted`: a trusted boundary vouched for the sender without binding this
+  exact identifier.
+- `unverified`: the identifier is exact and stable, but claimed ownership was
+  not proved.
+- `mutable`: the identifier is a changeable or shared alias, such as a display
+  name.
+
+Declare `verified` only from transport or session metadata controlled by the
+owning boundary. Sender-controlled content, model input, ordinary message
+context, routing metadata, and the integrity of the host admission carrier do
+not establish it.
+
+The kernel preserves the exact redacted allowlist-entry to subject-identifier
+pair that matched. It combines the entry and subject claims by taking the
+weaker claim for that exact pair, then compares it with
+`minIdentifierAuthentication`. Identifiers of the same kind remain distinct,
+so a weak secondary email does not weaken a separately matched verified email.
+
+Existing plugins remain source-compatible during the deprecation window:
+
+| Deprecated field                                   | Exact mapping                        |
+| -------------------------------------------------- | ------------------------------------ |
+| `dangerous: true`                                  | `authentication: "mutable"`          |
+| `dangerous: false` or omitted                      | default `authentication: "asserted"` |
+| `mutableIdentifierMatching: "enabled"`             | minimum `mutable`                    |
+| `mutableIdentifierMatching: "disabled"` or omitted | default minimum `asserted`           |
+
+An explicit `authentication` or `minIdentifierAuthentication` takes
+precedence. The deprecated fields remain through the current Plugin SDK major
+and are planned for removal in the next major after bundled and known external
+plugins migrate.
+
 ## Access groups
 
 `accessGroup:<name>` entries stay redacted. Core resolves static

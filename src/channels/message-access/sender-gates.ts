@@ -38,6 +38,14 @@ function senderGate(params: {
     match: params.match,
     sender: { policy: params.policy },
     allowlist: redactedAllowlistDiagnostics(params.allowlistSource, params.reasonCode),
+    ...(params.allowlistSource.authentication
+      ? {
+          identifierAuthentication: {
+            evaluated: params.allowlistSource.authentication.evaluated,
+            affectedMatch: params.allowlistSource.authentication.affectedMatch,
+          },
+        }
+      : {}),
   };
 }
 

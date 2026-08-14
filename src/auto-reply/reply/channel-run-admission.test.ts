@@ -73,6 +73,12 @@ describe("channel run admission", () => {
       expect(identityWork).toHaveLength(1);
       expect(decisions).toHaveLength(1);
       expect(admittedContexts).toEqual([first]);
+      expect(decisions).toMatchObject([
+        {
+          decision: { reasonCode: "channel_ingress_attribution_only" },
+          enforcement: { policyRefs: [], contextFieldsUsed: [] },
+        },
+      ]);
       expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({
         ingressState: "unknown",
       });
@@ -81,6 +87,50 @@ describe("channel run admission", () => {
       await expect(prepared.admit("embedded")).rejects.toThrow(
         "prepared execution context is already closed",
       );
+    } finally {
+      clearDecisionSink();
+      clearIdentitySink();
+      clearCollection();
+    }
+  });
+
+  it("explains identifier-authentication effects in the existing redacted receipt", async () => {
+    const decisions: unknown[] = [];
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const clearIdentitySink = configureExecutionIdentityAdmissionSink(() => true);
+    const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
+      decisions.push(receipt);
+      return true;
+    });
+    try {
+      const prepared = prepareChannelRunAdmission({
+        cfg: identityConfig,
+        runId: "run-auth",
+        agentId: "main",
+        ingressKind: "channel",
+        boundary: "test.channel",
+        evidence: createChannelParticipantAdmissionEvidence({
+          channelId: "test",
+          participantId: "private-person-value",
+          identifierAuthentication: "affected",
+        }),
+      });
+
+      await prepared.admit("embedded");
+
+      expect(decisions).toEqual([
+        expect.objectContaining({
+          receiptId: expect.stringContaining(":channel-admission"),
+          decision: expect.objectContaining({
+            reasonCode: "channel_ingress_identifier_authentication_applied",
+          }),
+          enforcement: expect.objectContaining({
+            policyRefs: ["channel.identifier-authentication"],
+            contextFieldsUsed: ["channel.identifier-authentication"],
+          }),
+        }),
+      ]);
+      expect(JSON.stringify(decisions)).not.toContain("private-person-value");
     } finally {
       clearDecisionSink();
       clearIdentitySink();

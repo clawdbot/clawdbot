@@ -4,6 +4,12 @@
  * Merges allowlists, applies mutable identifier policy, and redacts access-graph facts.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  identifierAuthenticationFrom,
+  meetsIdentifierAuthentication,
+  minimumIdentifierAuthenticationFrom,
+  weakestIdentifierAuthentication,
+} from "./identifier-authentication.js";
 import type {
   ChannelIngressPolicyInput,
   ChannelIngressState,
@@ -84,45 +90,84 @@ function mergeResolvedAllowlists(
 }
 
 /**
- * Applies mutable identifier matching policy to an already-resolved allowlist.
+ * Applies identifier authentication to exact matched entry/subject pairs.
  */
-export function applyMutableIdentifierPolicy(
+function applyIdentifierAuthenticationPolicy(
   allowlist: ResolvedIngressAllowlist,
   policy: ChannelIngressPolicyInput,
 ): ResolvedIngressAllowlist {
-  if (policy.mutableIdentifierMatching === "enabled") {
-    return allowlist;
+  const minimum = minimumIdentifierAuthenticationFrom(policy);
+  const pairsByEntry = new Map<string, NonNullable<typeof allowlist.match.matchedPairs>>();
+  for (const pair of allowlist.match.matchedPairs ?? []) {
+    const pairs = pairsByEntry.get(pair.opaqueEntryId) ?? [];
+    pairs.push(pair);
+    pairsByEntry.set(pair.opaqueEntryId, pairs);
   }
-  const dangerousEntryIds = new Set(
-    allowlist.normalizedEntries
-      .filter((entry) => entry.dangerous)
-      .map((entry) => entry.opaqueEntryId),
+  const rejectedEntryIds = new Set<string>();
+  for (const entry of allowlist.normalizedEntries) {
+    const entryAuthentication = identifierAuthenticationFrom(entry);
+    const pairs = pairsByEntry.get(entry.opaqueEntryId);
+    const pairStrengths = pairs?.map((pair) =>
+      pair.subjectAuthentication
+        ? weakestIdentifierAuthentication(entryAuthentication, pair.subjectAuthentication)
+        : entryAuthentication,
+    );
+    const accepted =
+      pairStrengths && pairStrengths.length > 0
+        ? pairStrengths.some((strength) => meetsIdentifierAuthentication(strength, minimum))
+        : meetsIdentifierAuthentication(entryAuthentication, minimum);
+    if (!accepted) {
+      rejectedEntryIds.add(entry.opaqueEntryId);
+    }
+  }
+  const matchedEntryIds = allowlist.matchedEntryIds.filter((id) => !rejectedEntryIds.has(id));
+  const matchedPairs = allowlist.match.matchedPairs?.filter(
+    (pair) => !rejectedEntryIds.has(pair.opaqueEntryId),
   );
-  if (dangerousEntryIds.size === 0) {
-    return allowlist;
-  }
-  // Username-like mutable identifiers can be present for diagnostics, but when the policy
-  // disables them they must not authorize a sender.
-  const matchedEntryIds = allowlist.matchedEntryIds.filter((id) => !dangerousEntryIds.has(id));
   const disabledEntries: RedactedIngressEntryDiagnostic[] = [
     ...allowlist.disabledEntries,
     ...allowlist.normalizedEntries
-      .filter((entry) => entry.dangerous)
+      .filter((entry) => rejectedEntryIds.has(entry.opaqueEntryId))
       .map((entry) => ({
         opaqueEntryId: entry.opaqueEntryId,
-        reasonCode: "mutable_identifier_disabled" as const,
+        reasonCode:
+          identifierAuthenticationFrom(entry) === "mutable"
+            ? ("mutable_identifier_disabled" as const)
+            : ("identifier_authentication_too_weak" as const),
       })),
   ];
+  const affectedMatch = matchedEntryIds.length !== allowlist.matchedEntryIds.length;
   return {
     ...allowlist,
     disabledEntries,
     matchedEntryIds,
-    hasMatchableEntries: allowlist.normalizedEntries.some((entry) => !entry.dangerous),
+    hasMatchableEntries: allowlist.normalizedEntries.some(
+      (entry) => !rejectedEntryIds.has(entry.opaqueEntryId),
+    ),
     match: {
       matched: matchedEntryIds.length > 0,
       matchedEntryIds,
+      ...(matchedPairs ? { matchedPairs } : {}),
+    },
+    authentication: {
+      evaluated:
+        policy.minIdentifierAuthentication !== undefined ||
+        policy.mutableIdentifierMatching !== undefined ||
+        (allowlist.match.matchedPairs?.some((pair) => pair.subjectAuthentication !== undefined) ??
+          false),
+      threshold: minimum,
+      affectedMatch,
+      rejectedEntryIds: [...rejectedEntryIds],
     },
   };
+}
+
+/** @deprecated Use `applyIdentifierAuthenticationPolicy`. */
+export function applyMutableIdentifierPolicy(
+  allowlist: ResolvedIngressAllowlist,
+  policy: ChannelIngressPolicyInput,
+): ResolvedIngressAllowlist {
+  return applyIdentifierAuthenticationPolicy(allowlist, policy);
 }
 
 /**
@@ -148,5 +193,5 @@ export function effectiveGroupSenderAllowlist(params: {
     // Route sender policies other than inherit replace the channel-level sender allowlist.
     effective = route.senderAllowlist;
   }
-  return applyMutableIdentifierPolicy(effective, params.policy);
+  return applyIdentifierAuthenticationPolicy(effective, params.policy);
 }

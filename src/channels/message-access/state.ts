@@ -8,6 +8,11 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
+import {
+  identifierAuthenticationFrom,
+  weakestIdentifierAuthentication,
+  type IdentifierAuthentication,
+} from "./identifier-authentication.js";
 import type {
   AccessGroupMembershipFact,
   ChannelIngressState,
@@ -31,9 +36,24 @@ function emptyMatch(): RedactedIngressMatch {
 
 function mergeMatches(matches: readonly RedactedIngressMatch[]): RedactedIngressMatch {
   const matchedEntryIds = uniqueStrings(matches.flatMap((match) => match.matchedEntryIds));
+  const matchedPairs = matches.flatMap((match) => match.matchedPairs ?? []);
+  const seenPairs = new Set<string>();
+  const uniquePairs = matchedPairs.filter((pair) => {
+    const key = JSON.stringify([
+      pair.opaqueEntryId,
+      pair.opaqueSubjectId,
+      pair.subjectAuthentication ?? null,
+    ]);
+    if (seenPairs.has(key)) {
+      return false;
+    }
+    seenPairs.add(key);
+    return true;
+  });
   return {
     matched: matches.some((match) => match.matched) || matchedEntryIds.length > 0,
     matchedEntryIds,
+    ...(uniquePairs.length > 0 ? { matchedPairs: uniquePairs } : {}),
   };
 }
 
@@ -150,6 +170,7 @@ async function normalizeSubjectIdentifiersForMatch(params: {
             opaqueEntryId: `${params.opaquePrefix}-${identifierIndex + 1}:${entryIndex + 1}`,
             kind: entry.kind,
             value: entry.value,
+            authentication: identifier.authentication,
             dangerous: entry.dangerous,
             sensitivity: entry.sensitivity,
           }))
@@ -159,19 +180,67 @@ async function normalizeSubjectIdentifiersForMatch(params: {
   return normalized.flat();
 }
 
-async function originSubjectMatched(input: ChannelIngressStateInput): Promise<boolean> {
+function strongerAuthentication(
+  left: IdentifierAuthentication | undefined,
+  right: IdentifierAuthentication,
+): IdentifierAuthentication {
+  if (!left) {
+    return right;
+  }
+  return weakestIdentifierAuthentication(left, right) === left ? right : left;
+}
+
+function matchedAuthentication(params: {
+  entries: readonly InternalNormalizedEntry[];
+  match: RedactedIngressMatch;
+}): IdentifierAuthentication | undefined {
+  const entries = new Map(params.entries.map((entry) => [entry.opaqueEntryId, entry] as const));
+  let strongest: IdentifierAuthentication | undefined;
+  for (const pair of params.match.matchedPairs ?? []) {
+    const entry = entries.get(pair.opaqueEntryId);
+    if (!entry) {
+      continue;
+    }
+    const entryStrength = identifierAuthenticationFrom(entry);
+    const strength = pair.subjectAuthentication
+      ? weakestIdentifierAuthentication(entryStrength, pair.subjectAuthentication)
+      : entryStrength;
+    strongest = strongerAuthentication(strongest, strength);
+  }
+  if (!strongest) {
+    // Legacy adapters return only matched entry ids. Preserve their asserted/static behavior,
+    // but do not assign a per-message claim without an exact subject edge.
+    for (const entryId of params.match.matchedEntryIds) {
+      const entry = entries.get(entryId);
+      if (entry) {
+        strongest = strongerAuthentication(strongest, identifierAuthenticationFrom(entry));
+      }
+    }
+  }
+  return strongest;
+}
+
+async function originSubjectAuthentication(
+  input: ChannelIngressStateInput,
+): Promise<IdentifierAuthentication | undefined> {
   const origin = input.event.originSubject;
   if (!origin) {
-    return false;
+    return undefined;
   }
-  if (
-    origin.identifiers.some((identifier) =>
-      input.subject.identifiers.some(
-        (current) => current.kind === identifier.kind && current.value === identifier.value,
-      ),
-    )
-  ) {
-    return true;
+  let strongest: IdentifierAuthentication | undefined;
+  for (const originIdentifier of origin.identifiers) {
+    for (const current of input.subject.identifiers) {
+      if (current.kind !== originIdentifier.kind || current.value !== originIdentifier.value) {
+        continue;
+      }
+      strongest = strongerAuthentication(
+        strongest,
+        weakestIdentifierAuthentication(
+          identifierAuthenticationFrom(originIdentifier),
+          identifierAuthenticationFrom(current),
+        ),
+      );
+    }
   }
 
   const context = eventSubjectMatchContext(input);
@@ -188,7 +257,10 @@ async function originSubjectMatched(input: ChannelIngressStateInput): Promise<bo
       context,
     });
     if (currentMatch.matched) {
-      return true;
+      const authentication = matchedAuthentication({ entries: originEntries, match: currentMatch });
+      if (authentication) {
+        strongest = strongerAuthentication(strongest, authentication);
+      }
     }
   }
 
@@ -198,15 +270,18 @@ async function originSubjectMatched(input: ChannelIngressStateInput): Promise<bo
     context,
     opaquePrefix: "current",
   });
-  if (currentEntries.length === 0) {
-    return false;
+  if (currentEntries.length > 0) {
+    const originMatch = await input.adapter.matchSubject({
+      subject: origin,
+      entries: currentEntries,
+      context,
+    });
+    const authentication = matchedAuthentication({ entries: currentEntries, match: originMatch });
+    if (authentication) {
+      strongest = strongerAuthentication(strongest, authentication);
+    }
   }
-  const originMatch = await input.adapter.matchSubject({
-    subject: origin,
-    entries: currentEntries,
-    context,
-  });
-  return originMatch.matched;
+  return strongest;
 }
 
 async function resolveAccessGroupEntries(params: {
@@ -378,7 +453,7 @@ export async function resolveChannelIngressState(
         context: "command",
       }),
       resolveRouteFacts(input),
-      originSubjectMatched(input),
+      originSubjectAuthentication(input),
     ]);
   return {
     channelId: input.channelId,
@@ -389,7 +464,8 @@ export async function resolveChannelIngressState(
       authMode: input.event.authMode,
       mayPair: input.event.mayPair,
       hasOriginSubject: input.event.originSubject != null,
-      originSubjectMatched: eventOriginMatched,
+      originSubjectMatched: eventOriginMatched !== undefined,
+      ...(eventOriginMatched ? { originSubjectAuthentication: eventOriginMatched } : {}),
     },
     mentionFacts: input.mentionFacts,
     routeFacts,

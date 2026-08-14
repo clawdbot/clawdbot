@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { IdentifierAuthentication } from "./identifier-authentication.js";
 /**
  * Channel ingress identity adapter helpers.
  *
@@ -56,6 +57,15 @@ function fieldDangerous(field: ResolvedIdentityField, value: string): boolean | 
   return typeof field.dangerous === "function" ? field.dangerous(value) : field.dangerous;
 }
 
+function fieldAuthentication(
+  field: ResolvedIdentityField,
+  value: string,
+): IdentifierAuthentication | undefined {
+  return typeof field.authentication === "function"
+    ? field.authentication(value)
+    : field.authentication;
+}
+
 function identityFields(identity: ChannelIngressIdentityDescriptor): ResolvedIdentityField[] {
   const fields: ResolvedIdentityField[] = [
     {
@@ -85,6 +95,7 @@ function adapterEntry(params: {
   entryIndex: number;
   value: string;
   fallbackSuffix?: string;
+  wildcard?: boolean;
 }): ChannelIngressAdapterEntry {
   return {
     opaqueEntryId:
@@ -96,6 +107,8 @@ function adapterEntry(params: {
       }) ?? `entry-${params.entryIndex + 1}:${params.fallbackSuffix ?? params.field.key}`,
     kind: params.field.kind,
     value: params.value,
+    ...(params.wildcard ? { wildcard: true } : {}),
+    authentication: fieldAuthentication(params.field, params.entry),
     dangerous: fieldDangerous(params.field, params.entry),
     sensitivity: params.field.sensitivity,
   };
@@ -119,6 +132,7 @@ export function createIdentityAdapter(
               entryIndex,
               value: "*",
               fallbackSuffix: "wildcard",
+              wildcard: true,
             }),
           ];
         }
@@ -137,25 +151,61 @@ export function createIdentityAdapter(
       };
     },
     matchSubject({ subject, entries, context }) {
-      const subjectKeys = new Set(
-        subject.identifiers.flatMap((identifier) => {
-          const field = fields.find((candidate) => candidate.kind === identifier.kind);
-          if (!field) {
-            return [];
-          }
-          const value = normalizeFieldValue(field, identifier.value, "subject");
-          return value ? [identityMatchKey({ kind: identifier.kind, value })] : [];
-        }),
-      );
-      const matchedEntryIds = entries
-        .filter((entry) => {
-          const fallback = entry.value === "*" || subjectKeys.has(identityMatchKey(entry));
-          return identity.matchEntry?.({ subject, entry, context }) ?? fallback;
-        })
-        .map((entry) => entry.opaqueEntryId);
+      const normalizedSubjects = subject.identifiers.flatMap((identifier) => {
+        const field = fields.find((candidate) => candidate.kind === identifier.kind);
+        if (!field) {
+          return [];
+        }
+        const value = normalizeFieldValue(field, identifier.value, "subject");
+        return value ? [{ identifier, value }] : [];
+      });
+      const matchedPairs = entries.flatMap((entry) => {
+        const legacyMatch = identity.matchEntry?.({ subject, entry, context });
+        if (legacyMatch === false) {
+          return [];
+        }
+        const candidates = entry.wildcard
+          ? normalizedSubjects.filter(({ identifier }) => identifier.kind === fields[0]?.kind)
+          : normalizedSubjects.filter(
+              ({ identifier, value }) =>
+                identifier.kind === entry.kind &&
+                identityMatchKey({ kind: identifier.kind, value }) === identityMatchKey(entry),
+            );
+        if (candidates.length === 0) {
+          // A legacy positive whole-subject matcher has no exact subject provenance. Preserve
+          // its shipped asserted behavior, but never reinterpret it as a stronger claim.
+          return legacyMatch === true
+            ? [
+                {
+                  opaqueEntryId: entry.opaqueEntryId,
+                  opaqueSubjectId: "legacy-subject-match",
+                  subjectAuthentication: "asserted" as const,
+                },
+              ]
+            : entry.wildcard
+              ? [
+                  {
+                    opaqueEntryId: entry.opaqueEntryId,
+                    opaqueSubjectId: "wildcard-subject",
+                    subjectAuthentication: "asserted" as const,
+                  },
+                ]
+              : [];
+        }
+        return candidates.map(({ identifier }) => {
+          const pair = {
+            opaqueEntryId: entry.opaqueEntryId,
+            opaqueSubjectId: identifier.opaqueId,
+            subjectAuthentication: identifier.authentication,
+          };
+          return pair;
+        });
+      });
+      const matchedEntryIds = [...new Set(matchedPairs.map((pair) => pair.opaqueEntryId))];
       return {
         matched: matchedEntryIds.length > 0,
         matchedEntryIds,
+        matchedPairs,
       };
     },
   };
@@ -177,6 +227,7 @@ export function createIdentitySubject(
         opaqueId: field.key,
         kind: field.kind,
         value,
+        authentication: input.authentication?.[field.key],
         dangerous: fieldDangerous(field, value),
         sensitivity: field.sensitivity,
       },

@@ -11,6 +11,11 @@ import {
 } from "../mention-gating.js";
 import { applyMutableIdentifierPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
 import {
+  DEFAULT_IDENTIFIER_AUTHENTICATION,
+  meetsIdentifierAuthentication,
+  minimumIdentifierAuthenticationFrom,
+} from "./identifier-authentication.js";
+import {
   applyEventAuthModeToSenderGate,
   senderGateForDirect,
   senderGateForGroup,
@@ -116,6 +121,12 @@ function commandGate(params: {
     allowed: authorized,
     reasonCode: shouldBlock ? "control_command_unauthorized" : "command_authorized",
     match: mergeCommandMatch(owner.match, group.match),
+    identifierAuthentication: {
+      evaluated: Boolean(owner.authentication?.evaluated || group.authentication?.evaluated),
+      affectedMatch: Boolean(
+        owner.authentication?.affectedMatch || group.authentication?.affectedMatch,
+      ),
+    },
     command: {
       useAccessGroups,
       allowTextCommands: command.allowTextCommands,
@@ -138,6 +149,7 @@ function mergeCommandMatch(
 
 function eventGate(params: {
   state: ChannelIngressState;
+  policy: ChannelIngressPolicyInput;
   senderGate: AccessGraphGate;
   commandGate: AccessGraphGate;
 }): AccessGraphGate {
@@ -171,8 +183,22 @@ function eventGate(params: {
     if (!params.state.event.hasOriginSubject) {
       return eventResult(false, "origin_subject_missing");
     }
-    const matched = params.state.event.originSubjectMatched;
-    return eventResult(matched, matched ? "event_authorized" : "origin_subject_not_matched");
+    const matched =
+      params.state.event.originSubjectMatched &&
+      meetsIdentifierAuthentication(
+        params.state.event.originSubjectAuthentication ?? DEFAULT_IDENTIFIER_AUTHENTICATION,
+        minimumIdentifierAuthenticationFrom(params.policy),
+      );
+    return {
+      ...eventResult(matched, matched ? "event_authorized" : "origin_subject_not_matched"),
+      identifierAuthentication: {
+        evaluated:
+          params.policy.minIdentifierAuthentication !== undefined ||
+          params.policy.mutableIdentifierMatching !== undefined ||
+          params.state.event.originSubjectAuthentication !== undefined,
+        affectedMatch: params.state.event.originSubjectMatched && !matched,
+      },
+    };
   }
   return eventResult(
     params.senderGate.allowed,
@@ -337,7 +363,7 @@ export function decideChannelIngress(
     return decisiveDecision({ admission: "drop", decision: "block", gate: command, gates });
   }
 
-  const event = eventGate({ state, senderGate: eventModeSender, commandGate: command });
+  const event = eventGate({ state, policy, senderGate: eventModeSender, commandGate: command });
   gates.push(event);
   if (!event.allowed) {
     return decisiveDecision({ admission: "drop", decision: "block", gate: event, gates });
