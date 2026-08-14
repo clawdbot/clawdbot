@@ -166,6 +166,9 @@ verify_universal_machos() {
   done < <(find "$app" -type f -perm -111 -print0)
 }
 
+# Canonical elevation identity check: a strict superset of verify_elevation_signature in
+# codesign-mac-app.sh, and the only one that runs post-notarization and on the target Mac at install
+# time. Dropping it lets the portable installer accept an archive nobody re-verified after signing.
 verify_elevation_app() {
   local app="$1"
   [[ -d "$app" && ! -L "$app" ]] || fail "elevation app not found or symlinked: $app"

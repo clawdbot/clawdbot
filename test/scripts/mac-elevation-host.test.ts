@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/mac-elevation-host.sh";
+const codesignScriptPath = "scripts/codesign-mac-app.sh";
 
 function writeExecutable(filePath: string, contents: string): void {
   writeFileSync(filePath, contents, "utf8");
@@ -227,6 +228,24 @@ describe("mac elevation host command contract", () => {
     expect(script).toContain("elevation archive root must contain exactly OpenClaw.app");
     expect(script).toContain("codesign --verify --strict --test-requirement='=notarized'");
     expect(script).toContain('spctl --assess --type execute "$app"');
+  });
+
+  it("keeps portable signing identity aligned with the signer", () => {
+    const portableScript = readFileSync(scriptPath, "utf8");
+    const codesignScript = readFileSync(codesignScriptPath, "utf8");
+    const constant = (source: string, name: string) =>
+      source.match(new RegExp(`^${name}="([^"]+)"$`, "m"))?.[1];
+
+    expect(
+      [
+        constant(portableScript, "EXPECTED_TEAM_ID"),
+        constant(portableScript, "EXPECTED_AUTHORITY"),
+      ],
+      "mac-elevation-host.sh is a self-contained portable installer, so its duplicated signing constants must match codesign-mac-app.sh",
+    ).toEqual([
+      constant(codesignScript, "ELEVATION_TEAM_ID"),
+      constant(codesignScript, "ELEVATION_IDENTITY"),
+    ]);
   });
 
   it.skipIf(process.platform !== "darwin")(

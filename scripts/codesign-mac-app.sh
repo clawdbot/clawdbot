@@ -320,6 +320,9 @@ verify_team_ids() {
   fi
 }
 
+# Sign-time twin of verify_elevation_app in mac-elevation-host.sh, which asserts the same identity
+# invariants but requires an already notarized and stapled bundle. Dropping this check defers every
+# elevation identity failure until after an Apple notarization submission has been spent.
 verify_elevation_signature() {
   [[ "$SIGNING_VARIANT" == "elevation-host" ]] || return 0
 
