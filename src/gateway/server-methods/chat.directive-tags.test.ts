@@ -29,6 +29,7 @@ import {
   replyRunRegistry as baseReplyRunRegistry,
   type ReplyBackendQueueMessageOptions,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   appendTranscriptMessage,
@@ -1056,6 +1057,14 @@ function createChatContext(): Pick<
   };
 }
 
+function beginChatReplyOperation(
+  params: Parameters<typeof replyRunRegistry.begin>[0],
+): ReturnType<typeof replyRunRegistry.begin> {
+  const operation = replyRunRegistry.begin(params);
+  operation.bindToolAuthorityFingerprint("chat-test-authority");
+  return operation;
+}
+
 type ChatContext = ReturnType<typeof createChatContext>;
 
 function useChatTestModel(model: "vision-model" | "text-only") {
@@ -1306,6 +1315,7 @@ afterAll(async () => {
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
+    replyRunRegistryTesting.resetReplyRunRegistry();
     mockState.config = {};
     mockState.finalText = "[[reply_to_current]]";
     mockState.finalPayload = null;
@@ -1472,7 +1482,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-no-leaf-");
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1514,7 +1524,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1548,6 +1558,72 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledOnce();
   });
 
+  it("dispatches tool-bound input instead of injecting it into the active run", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-tool-bound-dispatch-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = beginChatReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+    const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target-1" } };
+
+    try {
+      await send({
+        idempotencyKey: "idem-tool-bound-dispatch",
+        requestParams: {
+          expectedLeafEntryId: "current-leaf",
+          queueMode: "steer",
+          toolBindings,
+        },
+        client: {
+          connId: "copilot",
+          pairedClientId: "openclaw-browser-copilot",
+          connect: {
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
+            caps: ["run-tool-bindings"],
+            client: {
+              id: "openclaw-browser-copilot",
+              version: "test",
+              platform: "chrome",
+              mode: "ui",
+            },
+          },
+        },
+        waitFor: "none",
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(context.addChatRun).toHaveBeenCalledOnce();
+      operation.complete();
+      await waitForAssertion(() =>
+        expect(mockState.lastDispatchCtx?.GatewayRunToolBindings).toEqual(toolBindings),
+      );
+    } finally {
+      operation.complete();
+    }
+  });
+
   it("rejects targetless steer when the owner immutable leaf differs", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-leaf-mismatch-");
     await appendTranscriptMessage(transcriptScope(), {
@@ -1558,7 +1634,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1602,7 +1678,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond } = createChatRequestFixture();
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
-    const original = replyRunRegistry.begin({
+    const original = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1644,7 +1720,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
         async () => {
           original.complete();
-          successor = replyRunRegistry.begin({
+          successor = beginChatReplyOperation({
             sessionKey: "agent:main:main",
             sessionId: mockState.sessionId,
             resetTriggered: false,
@@ -1684,7 +1760,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       parentId: null,
     });
     const { context, respond, send } = createChatRequestFixture();
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1735,7 +1811,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-before-ack-");
     const { context, respond, send } = createChatRequestFixture();
     const delivery = createDeferred();
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1791,7 +1867,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const disposeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     const { context, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1878,7 +1954,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       reportAcceptance = options?.onQueueAccepted;
       return delivery.promise;
     });
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1965,7 +2041,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
     const successorCancel = vi.fn();
-    const original = replyRunRegistry.begin({
+    const original = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -1994,7 +2070,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(respond).not.toHaveBeenCalled();
       expect(originalQueue).not.toHaveBeenCalled();
       original.complete();
-      successor = replyRunRegistry.begin({
+      successor = beginChatReplyOperation({
         sessionKey: "agent:main:main",
         sessionId: mockState.sessionId,
         resetTriggered: false,
@@ -2090,7 +2166,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const delivery = createDeferred();
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2140,7 +2216,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       transcriptCommit: "unconfirmed";
       errorMessage: string;
     }>();
-    const first = replyRunRegistry.begin({
+    const first = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2165,7 +2241,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     first.complete();
     const successorCancel = vi.fn();
-    const successor = replyRunRegistry.begin({
+    const successor = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2199,7 +2275,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-sync-reject-");
     const { respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2240,7 +2316,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-run-changed-");
     const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
@@ -2304,7 +2380,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     vi.useFakeTimers({ toFake: ["Date"] });
-    const operation = replyRunRegistry.begin({
+    const operation = beginChatReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,

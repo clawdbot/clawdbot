@@ -24,6 +24,7 @@ type RunEntryDelegate = (params: RunEntryParams) => Promise<RunEntryResult>;
 type RunCliAgent = typeof import("../../agents/cli-runner.js").runCliAgent;
 
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+export { createMockReplyOperation } from "./test-helpers.js";
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
 export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
@@ -487,61 +488,6 @@ export function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
     target: createTestUserTurnTranscriptTarget(),
     updateMode: "none",
   });
-}
-
-export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }): {
-  replyOperation: ReplyOperation;
-  failMock: ReturnType<typeof vi.fn>;
-  freezeAbortMock: ReturnType<typeof vi.fn>;
-  retainFailureUntilCompleteMock: ReturnType<typeof vi.fn>;
-  updateSessionIdMock: ReturnType<typeof vi.fn>;
-} {
-  const failMock = vi.fn();
-  const freezeAbortMock = vi.fn();
-  const retainFailureUntilCompleteMock = vi.fn();
-  const updateSessionIdMock = vi.fn();
-  return {
-    failMock,
-    freezeAbortMock,
-    retainFailureUntilCompleteMock,
-    updateSessionIdMock,
-    replyOperation: {
-      key: "main",
-      sessionId: "session",
-      abortSignal: options?.abortSignal ?? new AbortController().signal,
-      staleExpiryReason: undefined,
-      resetTriggered: false,
-      terminalRecovery: false,
-      acceptedSteeredInboundAudio: false,
-      phase: "running",
-      result: null,
-      startedAtMs: Date.now(),
-      lastActivityAtMs: Date.now(),
-      hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
-      recordActivity: vi.fn(),
-      setPhase: vi.fn(),
-      markWaitingForDeferredMaintenance: vi.fn(),
-      markDeferredMaintenanceWaitEnded: vi.fn(),
-      markWaitingForGlobalLane: vi.fn(),
-      markGlobalLaneWaitEnded: vi.fn(),
-      updateSessionId: updateSessionIdMock,
-      updateSessionKey: vi.fn(),
-      bindToolAuthorityFingerprint: vi.fn(),
-      bindToolAuthorityRoute: vi.fn(),
-      attachBackend: vi.fn(),
-      detachBackend: vi.fn(),
-      freezeAbort: freezeAbortMock,
-      retainFailureUntilComplete: retainFailureUntilCompleteMock,
-      complete: vi.fn(),
-      completeThen: vi.fn((afterClear: () => void) => afterClear()),
-      completeWithAfterClearBarrier: vi.fn(),
-      fail: failMock,
-      abortByUser: vi.fn(() => true),
-      abortForRestart: vi.fn(() => true),
-      markTerminalRecovery: vi.fn(),
-      markAcceptedSteeredInboundAudio: vi.fn(),
-    },
-  };
 }
 
 export function requireRecord(value: unknown, label: string): Record<string, unknown> {

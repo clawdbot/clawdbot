@@ -1,7 +1,79 @@
 /** Shared test fixtures for reply queue and typing-controller tests. */
 import { vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingController } from "./typing.js";
+
+/** Creates a stateful reply-operation double without registering global run state. */
+export function createMockReplyOperation(
+  overrides: {
+    abortSignal?: AbortSignal;
+    key?: string;
+    sessionId?: string;
+    toolAuthorityFingerprint?: string;
+  } = {},
+) {
+  const failMock = vi.fn();
+  const freezeAbortMock = vi.fn();
+  const retainFailureUntilCompleteMock = vi.fn();
+  const updateSessionIdMock = vi.fn();
+  const sessionId = overrides.sessionId ?? "session";
+  let toolAuthorityFingerprint = overrides.toolAuthorityFingerprint;
+  let toolAuthorityRoute: ReplyOperation["toolAuthorityRoute"];
+  const replyOperation: ReplyOperation = {
+    key: overrides.key ?? "main",
+    sessionId,
+    abortSignal: overrides.abortSignal ?? new AbortController().signal,
+    resetTriggered: false,
+    terminalRecovery: false,
+    acceptedSteeredInboundAudio: false,
+    get toolAuthorityFingerprint() {
+      return toolAuthorityFingerprint;
+    },
+    get toolAuthorityRoute() {
+      return toolAuthorityRoute;
+    },
+    phase: "running",
+    result: null,
+    staleExpiryReason: undefined,
+    startedAtMs: Date.now(),
+    lastActivityAtMs: Date.now(),
+    hasOwnedSessionId: vi.fn((candidate: string) => candidate === sessionId),
+    recordActivity: vi.fn(),
+    setPhase: vi.fn(),
+    markWaitingForDeferredMaintenance: vi.fn(),
+    markDeferredMaintenanceWaitEnded: vi.fn(),
+    markWaitingForGlobalLane: vi.fn(),
+    markGlobalLaneWaitEnded: vi.fn(),
+    markTerminalRecovery: vi.fn(),
+    markAcceptedSteeredInboundAudio: vi.fn(),
+    bindToolAuthorityFingerprint: vi.fn((fingerprint) => {
+      toolAuthorityFingerprint = fingerprint;
+    }),
+    bindToolAuthorityRoute: vi.fn((route) => {
+      toolAuthorityRoute = route;
+    }),
+    updateSessionId: updateSessionIdMock,
+    updateSessionKey: vi.fn(),
+    attachBackend: vi.fn(),
+    detachBackend: vi.fn(),
+    freezeAbort: freezeAbortMock,
+    retainFailureUntilComplete: retainFailureUntilCompleteMock,
+    complete: vi.fn(),
+    completeThen: vi.fn((afterClear) => afterClear()),
+    completeWithAfterClearBarrier: vi.fn(),
+    fail: failMock,
+    abortByUser: vi.fn(() => true),
+    abortForRestart: vi.fn(() => true),
+  };
+  return {
+    replyOperation,
+    failMock,
+    freezeAbortMock,
+    retainFailureUntilCompleteMock,
+    updateSessionIdMock,
+  };
+}
 
 /** Creates a typed mock typing controller with optional method overrides. */
 export function createMockTypingController(
@@ -31,7 +103,7 @@ export function createMockFollowupRun(
     enqueuedAt: Date.now(),
     originatingTo: "channel:C1",
     run: {
-      agentId: "agent",
+      agentId: "main",
       agentDir: "/tmp/agent",
       sessionId: "session",
       sessionKey: "main",
