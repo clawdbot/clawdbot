@@ -914,24 +914,26 @@ describe("SystemAgentChatEngine approval", () => {
     "config set gateway.auth.token.abcDEF123 please",
     'config set channels.synology-chat.accounts["prod.guild"].webhookUrl.abcDEF123 please',
   ])(
-    "redacts sensitive dynamic or unknown-owner path %s from approvals and history",
+    "keeps sensitive dynamic or unknown-owner path %s out of model paths, responses, and history",
     async (command) => {
       const planner = vi.fn(
         async (_params: { history?: Array<{ role: string; text: string }> }) => ({
           reply: "noted",
         }),
       );
+      const runAgentTurn = vi.fn(async () => null);
       const engine = new SystemAgentChatEngine({
-        runAgentTurn: async () => null,
+        runAgentTurn,
         planWithAssistant: planner as never,
         classifyApproval: async () => "other",
         deps: { loadOverview: fakeOverviewLoader() },
       });
 
       const proposed = await engine.handle(command);
-      expect(proposed.text).toContain("<redacted path>");
       expect(proposed.text).not.toContain("abcDEF123");
       expect(proposed.text).not.toContain("Bearer-abc");
+      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(planner).not.toHaveBeenCalled();
 
       await engine.handle("no");
       await engine.handle("did that work?");
