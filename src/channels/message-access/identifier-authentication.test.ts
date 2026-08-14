@@ -318,7 +318,7 @@ describe("identifier authentication", () => {
           stableId: "sender-1",
           authentication: { stableId: "unverified" },
         },
-        allowFrom: ["access-group:operators"],
+        allowFrom: ["accessGroup:operators"],
         accessGroups: {
           operators: { type: "message.senders", members: { test: ["sender-1"] } },
         },
@@ -355,6 +355,51 @@ describe("identifier authentication", () => {
     expect(origin.ingress).toMatchObject({
       admission: "drop",
       reasonCode: "origin_subject_not_matched",
+    });
+  });
+
+  it.each([
+    {
+      name: "runtime resolver",
+      patch: {
+        resolveAccessGroupMembership: async () => true,
+      },
+    },
+    {
+      name: "precomputed membership",
+      patch: {
+        accessGroupMembership: [
+          {
+            kind: "matched" as const,
+            groupName: "audience",
+            source: "dynamic" as const,
+            matchedEntryIds: ["access-group:audience"],
+          },
+        ],
+      },
+    },
+  ])("fails $name access-group matches closed at a verified minimum", async ({ patch }) => {
+    const result = await resolveStableChannelMessageIngress(
+      base({
+        ...patch,
+        allowFrom: ["accessGroup:audience"],
+        accessGroups: {
+          audience: {
+            type: "discord.channelAudience",
+            guildId: "guild-1",
+            channelId: "channel-1",
+          },
+        },
+        policy: { minIdentifierAuthentication: "verified" },
+      }),
+    );
+
+    expect(result.senderAccess).toMatchObject({
+      allowed: false,
+      reasonCode: "dm_policy_not_allowlisted",
+      gate: {
+        identifierAuthentication: { evaluated: true, affectedMatch: true },
+      },
     });
   });
 });

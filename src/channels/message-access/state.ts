@@ -323,6 +323,15 @@ async function resolveAccessGroupEntries(params: {
     const fact = factByName.get(groupName);
     if (fact?.kind === "matched") {
       accessGroups.matched.push(groupName);
+      for (const opaqueEntryId of fact.matchedEntryIds) {
+        // Dynamic membership proves the group predicate, not a stronger sender identifier.
+        // Model it as asserted so raised authentication thresholds fail closed.
+        normalizedEntries.push({
+          opaqueEntryId,
+          kind: "plugin:access-group-membership",
+          authentication: "asserted",
+        });
+      }
       matches.push({ matched: true, matchedEntryIds: fact.matchedEntryIds });
       continue;
     }
