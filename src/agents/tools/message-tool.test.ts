@@ -2874,6 +2874,20 @@ describe("message tool explicit target guard", () => {
       ).rejects.toThrow("resolved to a user target");
 
       mocks.runMessageAction.mockImplementationOnce(actualRunMessageAction as never);
+      const invalidBroadcastTargetTool = createMessageTool({
+        config: workspaceConfig,
+        runMessageAction: mocks.runMessageAction as never,
+      });
+      await withGatewayToolCallerIdentity(identity, () =>
+        invalidBroadcastTargetTool.execute("invalid-broadcast-target", {
+          action: "broadcast",
+          channel: "workspace",
+          targets: ["not-a-target"],
+          message: "hi",
+        }),
+      );
+
+      mocks.runMessageAction.mockImplementationOnce(actualRunMessageAction as never);
       const disabledBroadcastTool = createMessageTool({
         config: { tools: { message: { broadcast: { enabled: false } } } } as never,
         runMessageAction: mocks.runMessageAction as never,
@@ -2974,6 +2988,17 @@ describe("message tool explicit target guard", () => {
         contextId: "context-message-decisions",
         executionId: "execution-message-decisions",
         runId: "run-message-decisions",
+        actionId: "invalid-broadcast-target",
+        decision: { outcome: "denied", reasonCode: "message_target_unknown" },
+        enforcement: expect.objectContaining({
+          coverageState: "enforced",
+          policyRefs: ["message-target:known"],
+        }),
+      }),
+      expect.objectContaining({
+        contextId: "context-message-decisions",
+        executionId: "execution-message-decisions",
+        runId: "run-message-decisions",
         actionId: "disabled-broadcast",
         decision: { outcome: "denied", reasonCode: "message_broadcast_disabled" },
         enforcement: expect.objectContaining({
@@ -2985,6 +3010,7 @@ describe("message tool explicit target guard", () => {
     expect(JSON.stringify(receipts)).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
     expect(JSON.stringify(receipts)).not.toContain("/tmp/x");
     expect(JSON.stringify(receipts)).not.toContain("missing-account");
+    expect(JSON.stringify(receipts)).not.toContain("not-a-target");
     expect(JSON.stringify(receipts)).not.toContain("secret-token-in-channel");
   });
 

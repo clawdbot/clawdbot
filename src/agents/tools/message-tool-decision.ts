@@ -24,23 +24,26 @@ export function createMessageToolDecisionRecorder(params: {
       ...decision,
     });
   const record = (decision: Decision) => recordWithChannel(decision, sourceChannel);
-  const recordTypedDenial = (error: unknown): void => {
+  const recordTypedDenial = (error: unknown, channel = sourceChannel): void => {
     if (!(error instanceof MessageActionDeniedError)) {
       return;
     }
-    record({
-      outcome: "denied",
-      reasonCode: error.reasonCode,
-      coverageState: "enforced",
-      policyRefs: [error.policyRef],
-      summary: "Message action was denied before platform delivery.",
-      remediation: [
-        {
-          code: "correct_message_action_request",
-          text: "Correct the target or policy violation described by the tool error, then retry.",
-        },
-      ],
-    });
+    recordWithChannel(
+      {
+        outcome: "denied",
+        reasonCode: error.reasonCode,
+        coverageState: "enforced",
+        policyRefs: [error.policyRef],
+        summary: "Message action was denied before platform delivery.",
+        remediation: [
+          {
+            code: "correct_message_action_request",
+            text: "Correct the target or policy violation described by the tool error, then retry.",
+          },
+        ],
+      },
+      channel,
+    );
   };
   return {
     recordTypedDenial,

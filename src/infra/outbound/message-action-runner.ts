@@ -191,6 +191,11 @@ async function handleBroadcastAction(
         if (isAbortError(err)) {
           throw err;
         }
+        if (err instanceof MessageActionDeniedError) {
+          // Preserve the owner fact before broadcast converts the failure to result text;
+          // otherwise admitted-run audit would have to infer policy from presentation.
+          input.onActionDenied?.(err, targetChannel);
+        }
         results.push({
           channel: targetChannel,
           to: target,
