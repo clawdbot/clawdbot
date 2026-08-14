@@ -307,7 +307,7 @@ describe("config form scalar integrity", () => {
       "partial numeric input",
     );
     Object.defineProperty(input, "validity", {
-      value: { ...input.validity, badInput: true },
+      value: { badInput: true },
       configurable: true,
     });
     Object.defineProperty(input, "value", {
@@ -322,7 +322,7 @@ describe("config form scalar integrity", () => {
 
     // A genuine clear (no badInput) still removes the optional override.
     Object.defineProperty(input, "validity", {
-      value: { ...input.validity, badInput: false },
+      value: { badInput: false },
       configurable: true,
     });
     input.dispatchEvent(new Event("input", { bubbles: true }));
