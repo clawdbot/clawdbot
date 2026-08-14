@@ -25,7 +25,9 @@ import {
   type SidebarAttentionDismissals,
 } from "./sidebar-attention-dismissals.ts";
 import {
+  buildSidebarAutomationAttention,
   buildSidebarAttentionItems,
+  type SidebarAutomationAttention,
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
 import "./tooltip.ts";
@@ -36,6 +38,12 @@ const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // Always-visible windows (the macOS app) never fire visibilitychange, so a
 // slow lifecycle-owned interval keeps the chips from going permanently stale.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
+
+const SIDEBAR_AUTOMATION_ATTENTION_CHANGE_EVENT = "sidebar-automation-attention-change";
+
+export type SidebarAutomationAttentionChangeDetail = {
+  automationAttention: SidebarAutomationAttention;
+};
 
 class SidebarAttention extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -57,6 +65,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+  private lastAutomationSummary = "";
 
   private readonly loadTask = new Task(this, {
     autoRun: false,
@@ -267,6 +276,28 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return;
     }
     this.onNavigate?.(item.action.routeId);
+  }
+
+  protected override updated() {
+    const automationAttention = buildSidebarAutomationAttention({
+      cronJobs: this.cronJobs,
+      now: Date.now(),
+    });
+    const summary = `${automationAttention.count}:${automationAttention.severity ?? ""}`;
+    if (summary === this.lastAutomationSummary) {
+      return;
+    }
+    this.lastAutomationSummary = summary;
+    this.dispatchEvent(
+      new CustomEvent<SidebarAutomationAttentionChangeDetail>(
+        SIDEBAR_AUTOMATION_ATTENTION_CHANGE_EVENT,
+        {
+          bubbles: true,
+          composed: true,
+          detail: { automationAttention },
+        },
+      ),
+    );
   }
 
   override render() {

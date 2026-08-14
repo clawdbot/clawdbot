@@ -205,7 +205,13 @@ suite.define(() => {
         const homeRow = sidebar.locator(".nav-item--home");
         const pageRow = sidebar.getByRole("link", { name: "Automations" });
         const pageText = homeRow.locator(".nav-item__text");
-        const pageControl = sidebar.locator(".sidebar-nav__head-action");
+        // Section heads sample the trailing axis: the head's last action carries
+        // the symmetric margins that center it on the shared rail, so a category
+        // head — which has exactly one — is the stable anchor. The Sessions head
+        // ends in New session, one slot further in, and cannot stand in for it.
+        const headControl = sidebar.locator(
+          '[data-session-section="category:Research"] .sidebar-session-group-actions',
+        );
         const pinnedRow = sidebar.locator(`[data-session-key="${pinnedKey}"]`);
         const parentRow = sidebar.locator(`[data-session-key="${parentKey}"]`);
         const draftRow = sidebar.locator(`[data-session-key="${draftKey}"]`);
@@ -224,7 +230,6 @@ suite.define(() => {
 
         const textAnchors = [
           pageText,
-          sidebar.locator(".sidebar-nav__head .sidebar-recent-sessions__label-text"),
           pinnedRow.locator(".sidebar-recent-session__name"),
           parentRow.locator(".sidebar-recent-session__name"),
           draftRow.locator(".sidebar-recent-session__name"),
@@ -238,12 +243,12 @@ suite.define(() => {
         expect(await left(childRow.locator(".sidebar-recent-session__name"))).toBe(textAxis + 16);
 
         const trailingAnchors = [
-          pageControl,
+          headControl,
           pinnedRow.locator("[data-session-menu]"),
           draftRow.locator("[data-session-menu]"),
           sidebar.locator(".sidebar-identity-card__chevron"),
         ];
-        const trailingAxis = await center(pageControl);
+        const trailingAxis = await center(headControl);
         expect(await Promise.all(trailingAnchors.map(center))).toEqual(
           Array(trailingAnchors.length).fill(trailingAxis),
         );
@@ -258,7 +263,7 @@ suite.define(() => {
 
         const sessionSelected = await background(parentRow);
         expect(sessionSelected).not.toBe("rgba(0, 0, 0, 0)");
-        await installGridGuides(page, sidebarRoot, pageText, pageControl);
+        await installGridGuides(page, sidebarRoot, pageText, headControl);
         await capture(page, sidebarSurface, `grid-${colorScheme}-current-selected.png`);
 
         await homeRow.click();
@@ -376,7 +381,7 @@ suite.define(() => {
         expect(await body.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
           true,
         );
-        await installGridGuides(page, sidebarRoot, pageText, pageControl);
+        await installGridGuides(page, sidebarRoot, pageText, headControl);
         await capture(page, sidebarSurface, `grid-${colorScheme}-width-400.png`);
 
         await page.locator("html").evaluate((element) => {

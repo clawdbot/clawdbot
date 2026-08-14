@@ -1742,8 +1742,7 @@ body.update-dialog-open .sidebar-update-card__status {
 /* Header action surfaces may overflow the 20px rail; symmetric margins keep
    their centers on the shared trailing axis. */
 .sidebar-session-sort,
-.sidebar-session-group-actions,
-.sidebar-nav__head-action {
+.sidebar-session-group-actions {
   width: var(--sidebar-header-action-size);
   margin-inline: calc((var(--sidebar-trailing-slot) - var(--sidebar-header-action-size)) / 2);
 }
@@ -2672,11 +2671,11 @@ wa-dropdown-item.sidebar-customize-menu__item {
 /* More-menu row for the route the app is currently on. */
 .sidebar-customize-menu__item--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+  background: color-mix(in srgb, var(--bg-hover) 88%, var(--bg-elevated) 12%);
 }
 
 .sidebar-customize-menu__item--active .nav-item__icon {
-  color: var(--accent);
+  color: var(--text-strong);
 }
 
 .session-menu:not(wa-dropdown) {
@@ -3186,7 +3185,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   height: 6px;
 }
 
-.sidebar-agent-approval-count {
+.sidebar-agent-approval-count,
+.sidebar-nav-health-badge {
   display: inline-flex;
   min-width: 18px;
   height: 18px;
@@ -3206,41 +3206,16 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   margin-left: auto;
 }
 
-/* "Pages" section head: zone-style label plus the pin-editor affordance. */
-.sidebar-nav__head {
-  display: flex;
-  align-items: center;
-  padding-block: 2px;
-  padding-inline-start: var(--sidebar-text-start);
+.sidebar-nav__more {
+  width: 100%;
+  font: inherit;
+  text-align: left;
 }
 
-.sidebar-nav__head .sidebar-recent-sessions__label-text {
-  flex: 1 1 auto;
+.sidebar-nav-health-badge {
+  margin-left: auto;
 }
 
-.sidebar-nav__head-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 22px;
-  flex: none;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-nav__head-action:hover,
-.sidebar-nav__head-action:focus-visible {
-  color: var(--text);
-  background: var(--sidebar-row-surface-hover);
-}
-
-.sidebar-nav__head-action:focus-visible,
 .sidebar-session-sort:focus-visible,
 .sidebar-session-group-actions:focus-visible,
 .sidebar-child-session-toggle:focus-visible {
@@ -3248,14 +3223,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   box-shadow: inset 0 0 0 1px var(--sidebar-focus-visible);
 }
 
-.sidebar-nav__head-action svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.sidebar-nav-health-badge--danger {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
 }
 
 /* Home keeps run state plus outbox/draft counts together at the row edge. */

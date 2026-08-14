@@ -9,11 +9,10 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
-import "./sidebar-attention.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { createIdleImport } from "../lib/idle-import.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
@@ -25,7 +24,7 @@ import {
   renderAppSidebarBrand,
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
-  renderAppSidebarPagesHead,
+  renderAppSidebarMoreRow,
   renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
 } from "./app-sidebar-render.ts";
@@ -58,6 +57,7 @@ import {
   resolveLobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
+import { type SidebarAutomationAttentionChangeDetail } from "./sidebar-attention.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
@@ -72,9 +72,26 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
   @state() private sidebarScrolling = false;
+  @state() automationAttention = {
+    count: 0,
+    severity: null as "danger" | "warning" | null,
+  };
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
+
+  private readonly handleAutomationAttentionChange = (
+    event: CustomEvent<SidebarAutomationAttentionChangeDetail>,
+  ) => {
+    event.stopPropagation();
+    const next = event.detail.automationAttention;
+    if (
+      next.count !== this.automationAttention.count ||
+      next.severity !== this.automationAttention.severity
+    ) {
+      this.automationAttention = next;
+    }
+  };
 
   // Lazy: the controller pulls core token-suppression modules that must stay
   // out of the startup chunk (QA smoke startup-JS budget). It loads on the
@@ -477,6 +494,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       <aside
         class="sidebar"
         ?data-hover-suppressed=${this.sidebarMenus.sessionMenu !== null}
+        @sidebar-automation-attention-change=${this.handleAutomationAttentionChange}
         @contextmenu=${(event: MouseEvent) => {
           // Editable controls keep the platform editing menu; all other sidebar chrome is owned here.
           if (!(event.target as Element).closest("input, textarea, [contenteditable]")) {
@@ -495,7 +513,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               this.handleSidebarScroll(event.currentTarget as HTMLElement)}
           >
             <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
-              ${renderAppSidebarPagesHead(this)}
               <div
                 class="nav-section__items"
                 @dragover=${(event: DragEvent) =>
@@ -516,6 +533,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                 ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
                   (tab) => renderAppSidebarPluginTabEntry(this, tab),
                 )}
+                ${renderAppSidebarMoreRow(this)}
               </div>
             </nav>
             ${this.renderSessions()}

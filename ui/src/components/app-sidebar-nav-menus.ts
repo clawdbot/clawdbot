@@ -20,9 +20,30 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { pluginTabSearch } from "../pages/plugin/route.ts";
 import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import { icons, type IconName } from "./icons.ts";
+import type { SidebarAutomationAttention } from "./sidebar-attention-items.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
+
+function renderAutomationAttentionBadge(attention: SidebarAutomationAttention | undefined) {
+  if (!attention || attention.count <= 0) {
+    return nothing;
+  }
+  const label = t(
+    attention.count === 1
+      ? "attention.automationNeedsAttention"
+      : "attention.automationsNeedAttention",
+    { count: String(attention.count) },
+  );
+  return html`<openclaw-tooltip .content=${label}>
+    <span
+      class="sidebar-nav-health-badge sidebar-nav-health-badge--${attention.severity ?? "warning"}"
+      role="status"
+      aria-label=${label}
+      >${attention.count > 9 ? "9+" : attention.count}</span
+    >
+  </openclaw-tooltip>`;
+}
 
 /** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
@@ -61,6 +82,7 @@ type SidebarNavRouteParams = {
   onNavigate: () => void;
   onPreload: (event: Event, immediate?: boolean) => void;
   onCancelPreload: (event: Event) => void;
+  attention?: SidebarAutomationAttention;
 };
 
 export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
@@ -85,6 +107,7 @@ export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
         >${icons[navigationIconForRoute(params.routeId)]}</span
       >
       <span class="nav-item__text">${titleForRoute(params.routeId)}</span>
+      ${renderAutomationAttentionBadge(params.attention)}
     </a>
   `;
 }
@@ -130,6 +153,7 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   activeRouteId: NavigationRouteId | undefined;
   activeWorkboardBoardId: string;
   sidebarEntries: readonly string[];
+  automationAttention: SidebarAutomationAttention;
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
   onTabAway: () => void;
@@ -161,6 +185,7 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
           >${icons[navigationIconForRoute(routeId)]}</span
         >
         <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+        ${routeId === "cron" ? renderAutomationAttentionBadge(params.automationAttention) : nothing}
       </a>
     </wa-dropdown-item>
   `;
@@ -179,8 +204,8 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
       <wa-dropdown
         class="sidebar-customize-menu sidebar-more-menu"
         .open=${true}
-        placement="bottom-start"
-        .distance=${0}
+        placement="right-start"
+        .distance=${5}
         aria-label=${t("nav.more")}
         @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
           event.preventDefault();
@@ -208,7 +233,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
           tabindex="-1"
           aria-hidden="true"
           aria-label=${t("nav.more")}
-          style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+          style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; min-width: 0; height: 1px; min-height: 0; padding: 0; border: 0; opacity: 0; pointer-events: none;"
         ></button>
         ${moreRoutes.map((routeId) => renderMoreMenuRoute(params, routeId))}
         <div class="sidebar-customize-menu__separator" role="separator"></div>

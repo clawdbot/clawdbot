@@ -113,10 +113,10 @@ suite.define(() => {
       });
 
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.locator(".sidebar-nav__more").click();
       await sidebar
         .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
+        .getByRole("menuitem", { name: "Customize sidebar" })
         .click();
       const customize = sidebar.locator(
         "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu)",
@@ -276,11 +276,11 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.locator(".sidebar-nav__more").click();
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await moreMenu.waitFor();
       expect(await moreMenu.getByText("Workboard", { exact: true }).count()).toBe(0);
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
+      await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
       const customize = sidebar.locator(
         "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu)",
       );

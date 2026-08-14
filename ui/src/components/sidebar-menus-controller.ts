@@ -36,6 +36,7 @@ import type {
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
 import type { SessionCreatorOption } from "./session-owner-chip.ts";
+import type { SidebarAutomationAttention } from "./sidebar-attention-items.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -70,6 +71,7 @@ type SidebarMenusRenderer = {
 export interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
+  readonly automationAttention: SidebarAutomationAttention;
   readonly activeWorkboardBoardId: string;
   readonly basePath: string;
   readonly canPairDevice: boolean;
@@ -292,8 +294,8 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.dismissTransientMenus();
     this.moreMenuTrigger = trigger;
     this.updateState("moreMenuPosition", {
-      x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
-      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
+      x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(rect.top, window.innerHeight - menuMaxHeight - 8)),
     });
   }
 
@@ -581,6 +583,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       },
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,
+      attention: routeId === "cron" ? this.host.automationAttention : undefined,
     });
   }
 

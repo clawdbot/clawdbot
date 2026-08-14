@@ -270,7 +270,7 @@ suite.define(() => {
         );
         await page.keyboard.press("Escape");
 
-        await sidebar.locator(".sidebar-nav__head-action").click();
+        await sidebar.locator(".sidebar-nav__more").click();
         const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
         const moreMenuSurface = moreMenu.locator('[part="menu"]');
         await moreMenuSurface.waitFor();

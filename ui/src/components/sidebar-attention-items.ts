@@ -41,6 +41,34 @@ export type SidebarAttentionItem = {
   signature: string;
 };
 
+export type SidebarAutomationAttention = {
+  count: number;
+  severity: "danger" | "warning" | null;
+};
+
+function automationAttentionJobs(params: { cronJobs: readonly CronJob[]; now: number }) {
+  const failed = params.cronJobs.filter(isCronJobActiveFailure);
+  const overdue = params.cronJobs.filter(
+    (job) =>
+      job.enabled &&
+      !isCronJobRunning(job) &&
+      job.state?.nextRunAtMs != null &&
+      params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
+  );
+  return { failed, overdue };
+}
+
+export function buildSidebarAutomationAttention(params: {
+  cronJobs: readonly CronJob[];
+  now: number;
+}): SidebarAutomationAttention {
+  const { failed, overdue } = automationAttentionJobs(params);
+  return {
+    count: new Set([...failed, ...overdue].map((job) => job.id)).size,
+    severity: failed.length > 0 ? "danger" : overdue.length > 0 ? "warning" : null,
+  };
+}
+
 export function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
@@ -66,7 +94,7 @@ export function buildSidebarAttentionItems(params: {
     });
   }
 
-  const failedCron = params.cronJobs.filter(isCronJobActiveFailure);
+  const { failed: failedCron, overdue: overdueCron } = automationAttentionJobs(params);
   if (failedCron.length > 0) {
     items.push({
       kind: "cronFailed",
@@ -86,13 +114,6 @@ export function buildSidebarAttentionItems(params: {
       signature: signatureOf(failedCron.map((job) => job.id)),
     });
   }
-  const overdueCron = params.cronJobs.filter(
-    (job) =>
-      job.enabled &&
-      !isCronJobRunning(job) &&
-      job.state?.nextRunAtMs != null &&
-      params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
-  );
   if (overdueCron.length > 0) {
     items.push({
       kind: "cronOverdue",

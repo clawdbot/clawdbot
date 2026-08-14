@@ -14,7 +14,10 @@ import {
   pruneDismissals,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
-import { buildSidebarAttentionItems } from "./sidebar-attention-items.ts";
+import {
+  buildSidebarAttentionItems,
+  buildSidebarAutomationAttention,
+} from "./sidebar-attention-items.ts";
 import "./sidebar-attention.ts";
 
 function deferred<T>() {
@@ -108,6 +111,20 @@ function authItems(agentId: string) {
 }
 
 describe("cron attention details", () => {
+  it("keeps one automation count when a failed job is also overdue", () => {
+    const failedAndOverdue = cronJob("nightly");
+    failedAndOverdue.state = { lastRunStatus: "error", nextRunAtMs: 1 };
+    const overdue = cronJob("weekly");
+    overdue.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
+
+    expect(
+      buildSidebarAutomationAttention({
+        cronJobs: [failedAndOverdue, overdue],
+        now: 300_003,
+      }),
+    ).toEqual({ count: 2, severity: "danger" });
+  });
+
   it("lists each failed job with its preferred error", () => {
     const primary = cronJob("primary");
     primary.name = "Nightly backup";

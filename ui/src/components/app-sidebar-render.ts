@@ -224,22 +224,19 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   `;
 }
 
-export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
+export function renderAppSidebarMoreRow(host: AppSidebarRenderHost) {
   return html`
-    <div class="sidebar-nav__head">
-      <span class="sidebar-recent-sessions__label-text">${t("nav.pages")}</span>
-      <button
-        type="button"
-        class="sidebar-nav__head-action"
-        aria-haspopup="menu"
-        aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
-        aria-label=${t("nav.customize")}
-        @click=${(event: MouseEvent) =>
-          host.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
-      >
-        ${icons.penLine}
-      </button>
-    </div>
+    <button
+      type="button"
+      class="nav-item sidebar-nav__more"
+      aria-haspopup="menu"
+      aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
+      @click=${(event: MouseEvent) =>
+        host.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
+    >
+      <span class="nav-item__icon" aria-hidden="true">${icons.moreHorizontal}</span>
+      <span class="nav-item__text">${t("nav.more")}</span>
+    </button>
   `;
 }
 

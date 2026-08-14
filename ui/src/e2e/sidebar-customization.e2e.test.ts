@@ -499,7 +499,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await captureUiProof(page, "01-default-pinned.png");
 
-      const moreButton = sidebar.locator(".sidebar-nav__head-action");
+      const moreButton = sidebar.locator(".sidebar-nav__more");
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
@@ -518,7 +518,7 @@ suite.define(() => {
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .not.toContain("Workboard");
 
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
+      await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
       const menu = sidebar.locator(
         "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
       );
@@ -549,7 +549,7 @@ suite.define(() => {
       await moreButton.click();
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
-        name: "Edit pinned items",
+        name: "Customize sidebar",
       });
       await expect.poll(() => editPersistedPinnedItems.isVisible()).toBe(true);
       await expect
@@ -687,7 +687,7 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator(".sidebar-nav__head-action").click();
+        await sidebar.locator(".sidebar-nav__more").click();
         await expect
           .poll(() =>
             trimmedTextContents(

@@ -1940,7 +1940,7 @@ export const en: TranslationMap = {
     home: "Home",
     pages: "Pages",
     pinned: "Pinned",
-    customize: "Edit pinned items",
+    customize: "Customize sidebar",
     customizeReset: "Reset pinned items",
     workboardGroup: "WorkBoard",
   },
@@ -3756,6 +3756,8 @@ export const en: TranslationMap = {
     },
   },
   attention: {
+    automationNeedsAttention: "{count} automation needs attention",
+    automationsNeedAttention: "{count} automations need attention",
     cronErrorUnknown: "Unknown error",
     cronFailed: "{count} automation(s) failed",
     cronOverdue: "{count} automation(s) overdue",

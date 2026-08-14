@@ -548,10 +548,10 @@ suite.define(() => {
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.locator(".sidebar-nav__more").click();
       await sidebar
         .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
+        .getByRole("menuitem", { name: "Customize sidebar" })
         .click();
       const customizeMenu = sidebar.locator(
         "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
@@ -579,10 +579,10 @@ suite.define(() => {
         )
         .toBe("false");
 
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.locator(".sidebar-nav__more").click();
       await sidebar
         .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
+        .getByRole("menuitem", { name: "Customize sidebar" })
         .click();
       await expect
         .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())

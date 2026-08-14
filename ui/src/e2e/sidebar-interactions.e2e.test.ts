@@ -90,17 +90,43 @@ suite.define(() => {
     }
   });
 
-  it("restores focus to the Pages edit button after closing the pin editor with Escape", async () => {
+  it("opens More beside its row and preserves menu keyboard focus", async () => {
     const { context, page } = await openSidebarCustomizationPage(suite);
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      const moreButton = sidebar.locator(".sidebar-nav__head-action");
+      const moreButton = sidebar.locator(".sidebar-nav__more");
+      await expect.poll(() => sidebar.getByText("PAGES", { exact: true }).count()).toBe(0);
       await moreButton.click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
+      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
+      await expect
+        .poll(() =>
+          moreMenu
+            .getByRole("menuitem")
+            .evaluateAll((items) => items.map((item) => item.textContent?.trim() ?? "")),
+        )
+        .toEqual([
+          "Dashboards",
+          "Usage",
+          "Tasks",
+          "Sessions",
+          "Activity",
+          "Apps",
+          "Portals",
+          "Customize sidebar",
+        ]);
+      const [triggerBox, menuBox] = await Promise.all([
+        moreButton.boundingBox(),
+        moreMenu.locator('[role="menu"]').boundingBox(),
+      ]);
+      expect(triggerBox).not.toBeNull();
+      expect(menuBox).not.toBeNull();
+      const menuGap = Math.round(
+        (menuBox?.x ?? 0) - ((triggerBox?.x ?? 0) + (triggerBox?.width ?? 0)),
+      );
+      expect(menuGap).toBeGreaterThanOrEqual(4);
+      expect(menuGap).toBeLessThanOrEqual(7);
+      await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
       const pinItems = sidebar
         .locator(
           "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
@@ -134,12 +160,84 @@ suite.define(() => {
     }
   });
 
+  it("moves Automations attention from the direct row into More when unpinned", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": {
+          jobs: [
+            {
+              id: "nightly-digest",
+              name: "Nightly digest",
+              enabled: true,
+              createdAtMs: 1,
+              updatedAtMs: 2,
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: { kind: "agentTurn", message: "Summarize overnight activity" },
+              state: { lastRunStatus: "error", lastError: "Delivery failed" },
+            },
+          ],
+          snapshotRevision: "sidebar-automation-attention-fixture",
+          total: 1,
+          offset: 0,
+          limit: 50,
+          hasMore: false,
+          nextOffset: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const directAutomation = sidebar.locator(
+        '.sidebar-zone-entry[data-sidebar-entry="route:cron"]',
+      );
+      await expect
+        .poll(() => directAutomation.locator(".sidebar-nav-health-badge").textContent())
+        .toBe("1");
+      await captureSidebarUiProof(page, "automation-attention-direct.png");
+
+      const moreButton = sidebar.locator(".sidebar-nav__more");
+      await moreButton.click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-more-menu")
+        .getByRole("menuitem", { name: "Customize sidebar" })
+        .click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-pin-editor-menu")
+        .getByRole("menuitemcheckbox", { name: "Automations" })
+        .click();
+      await page.keyboard.press("Escape");
+
+      await expect.poll(() => directAutomation.count()).toBe(0);
+      await moreButton.click();
+      const menuAutomation = sidebar
+        .locator("wa-dropdown.sidebar-more-menu")
+        .locator('wa-dropdown-item[value="cron"]');
+      await expect
+        .poll(() => menuAutomation.locator(".sidebar-nav-health-badge").textContent())
+        .toBe("1");
+      await expect.poll(() => sidebar.locator(".sidebar-nav-health-badge").count()).toBe(1);
+      await captureSidebarUiProof(page, "automation-attention-more.png");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("moves focus through the sidebar pin editor with menu keys", async () => {
     const { context, page } = await openSidebarCustomizationPage(suite);
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.locator(".sidebar-nav__more").click();
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect
         .poll(() =>
@@ -149,7 +247,7 @@ suite.define(() => {
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
+      await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
       const menu = sidebar.locator(
         "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
       );
@@ -177,9 +275,13 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Tab");
       await expect.poll(() => menu.count()).toBe(0);
-      const homeLink = sidebar.locator(".nav-item--home");
       await expect
-        .poll(() => homeLink.evaluate((element) => element === document.activeElement))
+        .poll(() =>
+          page.evaluate(() => {
+            const active = document.activeElement;
+            return active !== document.body && active?.closest(".sidebar-customize-menu") === null;
+          }),
+        )
         .toBe(true);
     } finally {
       await suite.closeBrowserContext(context);

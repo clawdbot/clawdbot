@@ -191,9 +191,9 @@ suite.define(() => {
           .getByRole("link", { name: "Automations" })
           .locator(".nav-item__text");
         const navMetrics = await typeMetrics(navLabel);
-        await sidebar.locator(".sidebar-nav__head-action").click();
+        await sidebar.locator(".sidebar-nav__more").click();
         const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
-        await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
+        await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
         const customizeMenu = sidebar.locator(
           "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
         );
