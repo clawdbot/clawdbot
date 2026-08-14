@@ -1387,6 +1387,8 @@ export function buildGatewayCronService(params: {
   const automationEpoch = claimSessionAutomationEpoch();
   let unregisterDetachedMediaCronFailureRecorder: (() => void) | undefined;
   const registerDetachedMediaFailureRecorder = () => {
+    // Keep the previous receipt-valid writer through reload startup, then
+    // replace it only after the successor scheduler has started successfully.
     unregisterDetachedMediaCronFailureRecorder?.();
     unregisterDetachedMediaCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
       async (request) => {
@@ -1394,14 +1396,9 @@ export function buildGatewayCronService(params: {
       },
     );
   };
-  const unregisterDetachedMediaFailureRecorder = () => {
-    unregisterDetachedMediaCronFailureRecorder?.();
-    unregisterDetachedMediaCronFailureRecorder = undefined;
-  };
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
     try {
-      unregisterDetachedMediaFailureRecorder();
       stopCron();
       stopExitWatchers();
       stopHeartbeatReconcileRetry();

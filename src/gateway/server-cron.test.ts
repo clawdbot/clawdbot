@@ -590,27 +590,59 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("restores detached-media failure recording after cron stop and start", async () => {
+  it("keeps detached-media failure recording active between cron owners", async () => {
     const cfg = createCronConfig("server-cron-restart-detached-media-recorder");
     loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
+    const initial = buildGatewayCronService({
       cfg,
       deps: {} as CliDeps,
       broadcast: () => {},
     });
+    let replacement: ReturnType<typeof buildGatewayCronService> | undefined;
 
     try {
       expect(getDetachedMediaCronFailureRecorder()).toBeUndefined();
-      await state.cron.start();
-      expect(getDetachedMediaCronFailureRecorder()).toBeTypeOf("function");
+      await initial.cron.start();
+      const recorderBeforeStop = getDetachedMediaCronFailureRecorder();
+      expect(recorderBeforeStop).toBeTypeOf("function");
 
-      state.cron.stop();
-      expect(getDetachedMediaCronFailureRecorder()).toBeUndefined();
+      initial.cron.stop();
+      replacement = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+      });
+      const recorderBetweenOwners = getDetachedMediaCronFailureRecorder();
+      expect(recorderBetweenOwners).toBe(recorderBeforeStop);
+      if (!recorderBetweenOwners) {
+        throw new Error("expected detached-media recorder between cron owners");
+      }
+      await expect(
+        recorderBetweenOwners({
+          cronRunReceipt: {
+            receiptId: "receipt-during-restart",
+            storeKey: "store-during-restart",
+            jobId: "job-during-restart",
+            configRevision: "revision-during-restart",
+            agentId: "main",
+            ownerPid: process.pid,
+            ownerStartTime: null,
+            startedAtMs: 1,
+          },
+          requesterSessionKey: "agent:main:cron:job-during-restart:run:1",
+          taskId: "media-task-during-restart",
+          runId: "tool:music_generate:during-restart",
+          toolName: "music_generate",
+          error: "Detached music_generate failed during restart",
+        }),
+      ).resolves.toBeUndefined();
 
-      await state.cron.start();
-      expect(getDetachedMediaCronFailureRecorder()).toBeTypeOf("function");
+      await replacement.cron.start();
+      expect(getDetachedMediaCronFailureRecorder()).not.toBe(recorderBeforeStop);
     } finally {
-      state.cron.stop();
+      initial.cron.stop();
+      replacement?.cron.stop();
+      registerDetachedMediaCronFailureRecorder(() => {})();
       expect(getDetachedMediaCronFailureRecorder()).toBeUndefined();
     }
   });
