@@ -314,6 +314,34 @@ describe("session dispatch protocol schemas", () => {
         ...basePlacement,
       }),
     ).toBe(false);
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        ...failed,
+        terminalRecovery: {
+          action: "force-destroy-environment",
+          dataLoss: "unreconciled-workspace-result",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        ...failed,
+        terminalRecovery: {
+          action: "retry",
+          dataLoss: "unreconciled-workspace-result",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        state: "reclaimed",
+        ...basePlacement,
+        terminalRecovery: {
+          action: "force-destroy-environment",
+          dataLoss: "unreconciled-workspace-result",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("rejects unknown placement fields", () => {

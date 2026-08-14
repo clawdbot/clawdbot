@@ -47,7 +47,7 @@ export function dropLegacyStateTables(db: DatabaseSync): void {
   db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
 }
 
-/** Add v8's semantic marker and promote the shipped v7 error-prefix owner. */
+/** Add v8's semantic marker and promote supported pre-v8 error-prefix owners. */
 export function migrateWorkerWorkspaceRetentionV8(db: DatabaseSync, previousVersion: number): void {
   if (previousVersion >= 8 || !tableExists(db, "worker_workspace_reconciliations")) {
     return;
@@ -57,7 +57,7 @@ export function migrateWorkerWorkspaceRetentionV8(db: DatabaseSync, previousVers
       "ALTER TABLE worker_workspace_reconciliations ADD COLUMN forced_abandonment_retained INTEGER;",
     );
   }
-  if (previousVersion !== 7) {
+  if (previousVersion < 5 || previousVersion > 7) {
     return;
   }
   db.prepare(

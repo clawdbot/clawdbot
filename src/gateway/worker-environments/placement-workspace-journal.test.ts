@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -120,6 +121,48 @@ describe("worker placement workspace journal", () => {
     store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
     expect(store.isWorkspaceReconciliationRetainedForForcedAbandonment(owner)).toBe(true);
     expect(prune()).toEqual([]);
+    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+  });
+
+  it("retains a migrated v6 forced-abandonment journal during startup pruning", () => {
+    const { active, owner } = seedJournal();
+    const draining = store.startDrain({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    if (draining.state !== "draining") {
+      throw new Error("expected draining placement");
+    }
+    const reconciling = store.startReconcile({
+      sessionId: draining.sessionId,
+      environmentId: draining.environmentId,
+      ownerEpoch: draining.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    store.fail({
+      sessionId: reconciling.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      ALTER TABLE worker_workspace_reconciliations
+        DROP COLUMN forced_abandonment_retained;
+      PRAGMA user_version = 6;
+      UPDATE schema_meta SET schema_version = 6 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    database = openOpenClawStateDatabase({ path: databasePath });
+    store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    expect(prune()).toEqual([]);
+    expect(store.isWorkspaceReconciliationRetainedForForcedAbandonment(owner)).toBe(true);
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
   });
 

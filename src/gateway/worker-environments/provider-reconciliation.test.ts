@@ -247,13 +247,47 @@ describe("worker environment service", () => {
       .createService(support.createProvider({ destroy }), { placementStore })
       .reconcileOnce();
 
-    expect(placementStore.isEnvironmentTeardownFenced).toHaveBeenCalledTimes(2);
+    expect(placementStore.isEnvironmentTeardownFenced).toHaveBeenCalledOnce();
     expect(destroy).not.toHaveBeenCalled();
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "attached",
       attachedSessionIds: ["session-1"],
     });
   });
+
+  it.each([
+    { status: "destroyed" as const, expectedState: "failed" },
+    { status: "unknown" as const, expectedState: "orphaned" },
+  ])(
+    "projects provider-reported $status loss while placement teardown is fenced",
+    async ({ status, expectedState }) => {
+      const environmentId = `worker-fenced-${status}`;
+      const ready = support.seedReady(environmentId);
+      support.testState.store.transition({
+        environmentId,
+        from: ready.state,
+        to: "attached",
+        patch: support.attachedPatch(environmentId, "session-1"),
+      });
+      const placementStore = {
+        hasWorkerTurn: vi.fn(() => false),
+        isEnvironmentTeardownFenced: vi.fn(() => true),
+        validateWorkerTurn: vi.fn(() => false),
+        isWorkerTurnToolAuthorized: vi.fn(() => false),
+        updateAckCursors: vi.fn(),
+      };
+      const inspect = vi.fn(async () => ({ status }));
+      const destroy = vi.fn(async () => {});
+
+      await support
+        .createService(support.createProvider({ inspect, destroy }), { placementStore })
+        .reconcileOnce();
+
+      expect(inspect).toHaveBeenCalledOnce();
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environmentId)?.state).toBe(expectedState);
+    },
+  );
 
   it("lets the exact accepted placement owner destroy through the real service fence", async () => {
     const environmentId = "worker-attached-owned-result";

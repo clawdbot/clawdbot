@@ -4565,9 +4565,16 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
   });
 
-  it.each(["runtime open", "doctor repair"] as const)(
-    "backfills retained forced-abandonment journals only while migrating shipped v7 state through %s",
-    (migrationPath) => {
+  it.each([
+    { migrationPath: "runtime open", previousVersion: 5 },
+    { migrationPath: "runtime open", previousVersion: 6 },
+    { migrationPath: "runtime open", previousVersion: 7 },
+    { migrationPath: "doctor repair", previousVersion: 5 },
+    { migrationPath: "doctor repair", previousVersion: 6 },
+    { migrationPath: "doctor repair", previousVersion: 7 },
+  ] as const)(
+    "backfills retained forced-abandonment journals while migrating v$previousVersion state through $migrationPath",
+    ({ migrationPath, previousVersion }) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
       const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -4623,7 +4630,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         150
       );
     `);
-      markStateDatabaseVersion(legacyDb, 7);
+      markStateDatabaseVersion(legacyDb, previousVersion);
       legacyDb.close();
 
       if (migrationPath === "doctor repair") {

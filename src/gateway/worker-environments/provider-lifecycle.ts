@@ -423,9 +423,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
     let record = initialRecord;
-    if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
-      return;
-    }
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
       return void cancelRequested(record);
     }
@@ -472,11 +469,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (!inspection) {
       return;
     }
-    // Provider inspection and bundle preparation are awaited above. Re-read the
-    // placement-owned fence before any cleanup can destroy the only remote result.
-    if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
-      return;
-    }
+    // Provider inspection is authoritative observation, not teardown authority. Project
+    // provider-proven loss even while a workspace result fences the mutation paths below.
     const { status } = inspection;
     const teardownExpected = record.destroyRequestedAtMs !== null || record.state === "destroying";
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
@@ -504,9 +498,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           ? record
           : move(record, "draining", { lastError: ORPHANED_LEASE_ERROR });
       await tunnels?.stop(record.environmentId);
-      if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
-        return;
-      }
       move(draining, "orphaned", { lastError: ORPHANED_LEASE_ERROR });
       return;
     }
@@ -566,9 +557,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (record.state === "draining" && record.destroyRequestedAtMs === null) {
       // Draining without destroy intent is durable provider-loss cleanup.
       await tunnels?.stop(record.environmentId);
-      if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
-        return;
-      }
       move(record, "orphaned", { lastError: record.lastError ?? ORPHANED_LEASE_ERROR });
       return;
     }
