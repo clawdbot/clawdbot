@@ -2081,7 +2081,7 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-empty-hint {
   display: block;
-  padding: 4px 10px 10px var(--sidebar-lead);
+  padding: 4px 10px 10px var(--sidebar-text-start);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }

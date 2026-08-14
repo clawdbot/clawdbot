@@ -225,7 +225,7 @@ suite.define(() => {
       const groupGap = await page.evaluate(() => {
         const sidebar = document.querySelector(".sidebar");
         return sidebar
-          ? Number.parseInt(getComputedStyle(sidebar).getPropertyValue("--sidebar-group-gap"), 10)
+          ? Number.parseInt(getComputedStyle(sidebar).getPropertyValue("--sidebar-section-gap"), 10)
           : Number.NaN;
       });
       expect(groupGap).toBeGreaterThan(0);
@@ -497,29 +497,29 @@ suite.define(() => {
       );
       expect(threadRowMetrics).toEqual([
         {
-          height: 30,
-          minHeight: "30px",
+          height: 32,
+          minHeight: "32px",
           nameFontSize: "13px",
           paddingBottom: "3px",
           paddingTop: "3px",
         },
         {
-          height: 30,
-          minHeight: "30px",
+          height: 32,
+          minHeight: "32px",
           nameFontSize: "13px",
           paddingBottom: "3px",
           paddingTop: "3px",
         },
         {
-          height: 30,
-          minHeight: "30px",
+          height: 32,
+          minHeight: "32px",
           nameFontSize: "13px",
           paddingBottom: "3px",
           paddingTop: "3px",
         },
         {
-          height: 30,
-          minHeight: "30px",
+          height: 32,
+          minHeight: "32px",
           nameFontSize: "13px",
           paddingBottom: "3px",
           paddingTop: "3px",

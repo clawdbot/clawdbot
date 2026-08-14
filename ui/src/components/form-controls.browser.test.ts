@@ -598,7 +598,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
         chromeSelection: "none",
         contentScrollbar: "12px",
         inputSelection: "text",
-        regularSidebarScrollbar: "6px",
+        regularSidebarScrollbar: "10px",
         regularSidebarSelection: "none",
         settingsSidebarScrollbar: "6px",
         settingsSidebarSelection: "none",

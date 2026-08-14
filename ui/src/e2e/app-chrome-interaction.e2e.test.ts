@@ -110,7 +110,7 @@ suite.define(() => {
           chatSelection: "text",
           chatScrollbar: "12px",
           sidebarSelection: "none",
-          sidebarScrollbar: "6px",
+          sidebarScrollbar: "10px",
         });
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
         const thread = page.locator(".chat-thread");
