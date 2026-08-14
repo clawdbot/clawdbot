@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateCronAddParams } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { installClawCronJobs, readClawCronRefs } from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
@@ -221,5 +221,22 @@ describe("installClawCronJobs", () => {
     expect(jobs.size).toBe(1);
     expect(first[0]).toMatchObject({ schedulerJobId: "scheduler-converged", status: "complete" });
     expect(second[0]).toMatchObject({ schedulerJobId: "scheduler-converged", status: "complete" });
+  });
+
+  it("throws a descriptive error when job_json is corrupted", async () => {
+    const current = await fixture();
+    const add = vi.fn(async () => ({ created: true, job: { id: "scheduler-1" } }));
+    await installClawCronJobs(current.plan, { env: current.env, gateway: { add } });
+    closeOpenClawStateDatabaseForTest();
+
+    const database = openOpenClawStateDatabase({ env: current.env });
+    database.db
+      .prepare("UPDATE claw_cron_refs SET job_json = ? WHERE agent_id = ?")
+      .run("not-valid-json", "worker-two");
+    closeOpenClawStateDatabaseForTest();
+
+    expect(() => readClawCronRefs("worker-two", { env: current.env })).toThrow(
+      /Failed to parse cron job JSON/i,
+    );
   });
 });
