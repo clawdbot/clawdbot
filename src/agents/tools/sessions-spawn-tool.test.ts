@@ -1919,6 +1919,50 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
+  it("forwards ACP image attachments when the filename contains a format character", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        tools: {
+          sessions_spawn: {
+            attachments: {
+              enabled: true,
+              maxFiles: 1,
+              maxFileBytes: 32,
+              maxTotalBytes: 32,
+            },
+          },
+        },
+      } as never,
+    });
+
+    const imageBase64 = Buffer.from("png-bytes").toString("base64");
+    const result = await tool.execute("call-acp-format-name", {
+      runtime: "acp",
+      task: "describe the image",
+      attachments: [
+        {
+          name: "photo\u202E.png",
+          content: imageBase64,
+          encoding: "base64",
+          mimeType: "image/png",
+        },
+      ],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+    });
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [{ mediaType: "image/png", data: imageBase64 }],
+      }),
+      expect.anything(),
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
   it("rejects non-image ACP attachments", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({

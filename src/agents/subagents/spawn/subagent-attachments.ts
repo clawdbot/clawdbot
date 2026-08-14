@@ -10,7 +10,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { privateFileStore } from "../../../infra/private-file-store.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
-import { hasPromptUnsafeControlCharacter } from "../../sanitize-for-prompt.js";
+import {
+  hasPromptUnsafeControlCharacter,
+  wrapUntrustedPromptDataBlock,
+} from "../../sanitize-for-prompt.js";
 
 /** Hard cap for the child-visible staged path list. ~1K tokens. */
 export const SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS = 4096;
@@ -164,17 +167,24 @@ function renderStagedAttachmentPathBlock(relDir: string, names: readonly string[
       `attachments_prompt_paths_exceeded (chars=${block.length} maxChars=${SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS})`,
     );
   }
-  return block;
+  // Filenames are attacker-influenced. Mark the list as untrusted data so
+  // instruction-shaped names cannot become extra system-prompt instructions.
+  return wrapUntrustedPromptDataBlock({
+    label: "Staged attachment file paths",
+    text: block,
+  });
 }
 
-function validateAttachmentName(name: string): void {
+function validateAttachmentName(name: string, opts?: { promptSafe?: boolean }): void {
   if (!name) {
     failAttachment("attachments_invalid_name (empty)");
   }
   if (name.includes("/") || name.includes("\\")) {
     failAttachment(`attachments_invalid_name (${name})`);
   }
-  if (hasPromptUnsafeControlCharacter(name)) {
+  // Prompt-safe Cc/Cf rejection is native-only. ACP forwards {mediaType,data}
+  // and never stages or renders `name`; a format character must not fail ACP.
+  if (opts?.promptSafe && hasPromptUnsafeControlCharacter(name)) {
     failAttachment(`attachments_invalid_name (${name})`);
   }
   if (name === "." || name === ".." || name === ".manifest.json") {
@@ -209,6 +219,7 @@ function prepareSubagentAttachments(params: {
   attachments: SubagentInlineAttachment[];
   limits: AttachmentLimits;
   requireImageMime?: boolean;
+  promptSafeNames?: boolean;
 }): { attachments: PreparedSubagentAttachment[]; totalBytes: number } {
   const seen = new Set<string>();
   const attachments: PreparedSubagentAttachment[] = [];
@@ -221,7 +232,7 @@ function prepareSubagentAttachments(params: {
     const encoding = encodingRaw === "base64" ? "base64" : "utf8";
     const mimeType = normalizeOptionalString(raw?.mimeType) ?? "";
 
-    validateAttachmentName(name);
+    validateAttachmentName(name, { promptSafe: params.promptSafeNames === true });
     if (seen.has(name)) {
       failAttachment(`attachments_duplicate_name (${name})`);
     }
@@ -323,6 +334,7 @@ export async function materializeSubagentAttachments(params: {
     const prepared = prepareSubagentAttachments({
       attachments: request.attachments,
       limits: request.limits,
+      promptSafeNames: true,
     });
     const pathBlock = renderStagedAttachmentPathBlock(
       relDir,
