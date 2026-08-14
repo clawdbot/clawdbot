@@ -1,6 +1,31 @@
+import { normalizeUiArtifact } from "@openclaw/gateway-protocol";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
+
+const MAX_PROJECTED_UI_ARTIFACTS = 100;
+
+function projectUiArtifact(value: unknown) {
+  const normalized = normalizeUiArtifact(value);
+  if (normalized.ok) {
+    return normalized.value;
+  }
+  const artifact = readRecord(value);
+  const source = readRecord(artifact?.source);
+  const failure = normalizeUiArtifact({
+    version: 1,
+    id: normalized.error.artifactId,
+    revision: normalized.error.revision,
+    views: [],
+    state: "failed",
+    source,
+    error: {
+      code: normalized.error.code,
+      message: normalized.error.message,
+    },
+  });
+  return failure.ok ? failure.value : undefined;
+}
 
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
 export function isToolHistoryBlockType(type: unknown): boolean {
@@ -42,6 +67,15 @@ export function projectToolResultDetails(
   }
   if (typeof record.diff === "string" && record.diff.trim()) {
     projected.diff = truncateChatHistoryText(record.diff, maxChars).text;
+  }
+  if (Array.isArray(record.uiArtifacts)) {
+    const uiArtifacts = record.uiArtifacts
+      .slice(0, MAX_PROJECTED_UI_ARTIFACTS)
+      .map(projectUiArtifact)
+      .filter((value) => value !== undefined);
+    if (uiArtifacts.length > 0) {
+      projected.uiArtifacts = uiArtifacts;
+    }
   }
   const preview = extractCanvasFromDetails(record);
   if (preview?.mcpApp && preview.viewId) {

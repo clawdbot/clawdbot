@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { collectMessageUiArtifacts } from "./artifact-projection.js";
 import {
   ControlModelCommandError,
   createControlModel,
@@ -38,6 +39,35 @@ function message(sequence: number, content = `message-${sequence}`) {
   };
 }
 
+function uiArtifact(
+  revision = 1,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    version: 1,
+    id: "artifact-calendar",
+    revision,
+    structuredContent: { title: "Team calendar" },
+    views: [
+      {
+        id: "calendar",
+        templateUri: "clawpilot://widgets/calendar",
+        dataVersion: 1,
+        availability: "inline",
+        data: { events: [] },
+      },
+    ],
+    state: "ready",
+    source: {
+      sessionKey: "agent:main:one",
+      messageId: "message-2",
+      toolCallId: "tool-calendar",
+      toolName: "calendar",
+    },
+    ...overrides,
+  };
+}
+
 function messageIds(
   snapshot: ReturnType<ReturnType<typeof createControlModel>["conversation"]>["getSnapshot"],
 ) {
@@ -52,6 +82,7 @@ function createHarness(
     questions?: unknown[];
     approvalReplay?: unknown;
     history?: unknown;
+    materialize?: boolean;
   } = {},
 ) {
   let connection = initial;
@@ -99,6 +130,22 @@ function createHarness(
       return {};
     },
   );
+  const materializeArtifactView = vi.fn(
+    async (
+      input: {
+        sessionKey: string;
+        artifactId: string;
+        artifactRevision: number;
+        viewId: string;
+      },
+      requestOptions?: ControlModelRequestOptions,
+    ) => {
+      calls.push({ method: "artifact.materialize", params: input, options: requestOptions });
+      const queued = take("artifact.materialize");
+      if (queued instanceof Error) throw queued;
+      return await queued;
+    },
+  );
   const gateway: ControlModelGatewayBinding = {
     getConnectionSnapshot: () => connection,
     subscribeConnection(listener) {
@@ -113,12 +160,14 @@ function createHarness(
       return () => eventListeners.delete(listener);
     },
     request,
+    ...(options.materialize === false ? {} : { materializeArtifactView }),
   };
 
   return {
     gateway,
     calls,
     request,
+    materializeArtifactView,
     queue(method: string, value: unknown) {
       const queue = responses.get(method) ?? [];
       queue.push(value);
@@ -878,6 +927,530 @@ describe("Control Model conversations", () => {
     await vi.waitFor(() => expect(conversation.getSnapshot().approvals).toEqual([]));
     expect(conversation.getSnapshot().questions).toEqual([]);
     model.dispose();
+  });
+
+  it("projects canonical artifacts from history and associates them with messages and tools", async () => {
+    const artifact = uiArtifact(1, {
+      views: [
+        {
+          id: "calendar",
+          templateUri: "clawpilot://widgets/calendar",
+          dataVersion: 1,
+          availability: "inline",
+          data: { events: [] },
+        },
+        {
+          id: "unknown",
+          templateUri: "custom-view://vendor/unknown",
+          dataVersion: 1,
+          availability: "deferred",
+          module: "https://attacker.invalid/component.js",
+        },
+      ],
+      module: "https://attacker.invalid/component.js",
+      registerComponent: "calendar",
+    });
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        history: {
+          messages: [
+            {
+              ...message(2),
+              role: "toolResult",
+              toolCallId: "tool-calendar",
+              toolName: "calendar",
+              details: { uiArtifacts: [artifact] },
+            },
+          ],
+          completeSnapshot: true,
+        },
+      },
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    await vi.waitFor(() => expect(conversation.getSnapshot().artifacts).toHaveLength(1));
+    expect(conversation.getSnapshot().artifacts[0]).toMatchObject({
+      id: "artifact-calendar",
+      revision: 1,
+      state: "ready",
+      source: { messageId: "message-2", toolCallId: "tool-calendar" },
+      views: [
+        { templateUri: "clawpilot://widgets/calendar" },
+        { templateUri: "custom-view://vendor/unknown" },
+      ],
+    });
+    expect(conversation.getSnapshot().artifacts[0]).not.toHaveProperty("module");
+    expect(conversation.getSnapshot().messages[0]?.artifactIds).toEqual(["artifact-calendar"]);
+    model.dispose();
+  });
+
+  it("reconciles live artifacts into persisted provenance and rejects forged source claims", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    const artifact = uiArtifact(1, {
+      source: {
+        sessionKey: "agent:main:one",
+        messageId: "forged-message",
+        toolCallId: "forged-tool",
+        toolName: "forged-name",
+      },
+    });
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "run-artifact",
+        stream: "tool",
+        data: {
+          phase: "result",
+          toolName: "calendar",
+          uiArtifacts: [artifact],
+        },
+      },
+    });
+    expect(conversation.getSnapshot().artifacts[0]).toMatchObject({
+      id: "artifact-calendar",
+      state: "ready",
+      source: {
+        sessionKey: "agent:main:one",
+        toolName: "calendar",
+      },
+    });
+    expect(conversation.getSnapshot().artifacts[0]?.source).not.toHaveProperty("messageId");
+    expect(conversation.getSnapshot().artifacts[0]?.source).not.toHaveProperty("toolCallId");
+
+    harness.emit({
+      event: "session.message",
+      payload: {
+        sessionKey: "agent:main:one",
+        message: {
+          ...message(2),
+          role: "toolResult",
+          toolCallId: "tool-calendar",
+          toolName: "calendar",
+          details: { uiArtifacts: [artifact] },
+        },
+      },
+    });
+    expect(conversation.getSnapshot().artifacts[0]).toMatchObject({
+      id: "artifact-calendar",
+      state: "ready",
+      source: {
+        sessionKey: "agent:main:one",
+        messageId: "message-2",
+        toolCallId: "tool-calendar",
+        toolName: "calendar",
+      },
+    });
+    expect(conversation.getSnapshot().artifacts[0]?.error).toBeUndefined();
+    expect(conversation.getSnapshot().messages.at(-1)?.artifactIds).toEqual(["artifact-calendar"]);
+    model.dispose();
+  });
+
+  it("materializes only the selected deferred view and rejects stale revisions", async () => {
+    const artifact = uiArtifact(4, {
+      views: [
+        {
+          id: "calendar",
+          templateUri: "clawpilot://widgets/calendar",
+          dataVersion: 1,
+          availability: "deferred",
+        },
+        {
+          id: "list",
+          templateUri: "clawpilot://widgets/list",
+          dataVersion: 1,
+          availability: "deferred",
+        },
+      ],
+    });
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        history: {
+          messages: [
+            {
+              ...message(2),
+              role: "toolResult",
+              details: { uiArtifacts: [artifact] },
+            },
+          ],
+          completeSnapshot: true,
+        },
+      },
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    harness.queue("artifact.materialize", {
+      artifactId: "artifact-calendar",
+      artifactRevision: 4,
+      view: {
+        id: "list",
+        templateUri: "clawpilot://widgets/list",
+        dataVersion: 1,
+        availability: "inline",
+        data: { rows: [{ id: "one" }] },
+      },
+    });
+    await expect(
+      conversation.materializeView({
+        artifactId: "artifact-calendar",
+        artifactRevision: 4,
+        viewId: "list",
+      }),
+    ).resolves.toMatchObject({ id: "list", availability: "inline" });
+    expect(harness.callsFor("artifact.materialize")).toEqual([
+      expect.objectContaining({
+        params: {
+          sessionKey: "agent:main:one",
+          artifactId: "artifact-calendar",
+          artifactRevision: 4,
+          viewId: "list",
+        },
+      }),
+    ]);
+    expect(conversation.getSnapshot().artifacts[0]?.views).toMatchObject([
+      { id: "calendar", availability: "deferred" },
+      { id: "list", availability: "inline", data: { rows: [{ id: "one" }] } },
+    ]);
+    await expect(
+      conversation.materializeView({
+        artifactId: "artifact-calendar",
+        artifactRevision: 3,
+        viewId: "calendar",
+      }),
+    ).rejects.toMatchObject({ code: "STALE_ARTIFACT_REVISION" });
+    expect(harness.callsFor("artifact.materialize")).toHaveLength(1);
+
+    harness.setHistory(0, {
+      messages: [
+        {
+          ...message(2),
+          role: "toolResult",
+          details: { uiArtifacts: [artifact] },
+        },
+      ],
+      completeSnapshot: true,
+    });
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(conversation.getSnapshot().artifacts[0]?.views[1]).toMatchObject({
+        id: "list",
+        availability: "inline",
+      }),
+    );
+    expect(harness.callsFor("artifact.materialize")).toHaveLength(1);
+    model.dispose();
+  });
+
+  it("rejects materialization when the selected same-revision view is invalidated", async () => {
+    const artifact = uiArtifact(4, {
+      views: [
+        {
+          id: "calendar",
+          templateUri: "clawpilot://widgets/calendar",
+          dataVersion: 1,
+          availability: "deferred",
+        },
+      ],
+    });
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        history: {
+          messages: [
+            {
+              ...message(2),
+              role: "toolResult",
+              toolCallId: "tool-calendar",
+              details: { uiArtifacts: [artifact] },
+            },
+          ],
+          completeSnapshot: true,
+        },
+      },
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    const response = harness.defer("artifact.materialize");
+    const materializing = conversation.materializeView({
+      artifactId: "artifact-calendar",
+      artifactRevision: 4,
+      viewId: "calendar",
+    });
+    await flush();
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "run-conflict",
+        stream: "tool",
+        data: {
+          phase: "result",
+          toolCallId: "tool-calendar",
+          uiArtifacts: [uiArtifact(4, { structuredContent: { title: "conflict" } })],
+        },
+      },
+    });
+    expect(conversation.getSnapshot().artifacts[0]).toMatchObject({
+      state: "failed",
+      error: { code: "ARTIFACT_REVISION_CONFLICT" },
+    });
+    response.resolve({
+      artifactId: "artifact-calendar",
+      artifactRevision: 4,
+      view: {
+        id: "calendar",
+        templateUri: "clawpilot://widgets/calendar",
+        dataVersion: 1,
+        availability: "inline",
+        data: { events: [] },
+      },
+    });
+    await expect(materializing).rejects.toMatchObject({ code: "STALE_ARTIFACT_VIEW" });
+    expect(conversation.getSnapshot().artifacts[0]?.state).toBe("failed");
+    model.dispose();
+  });
+
+  it("does not associate source-less artifacts with unrelated identity-less messages", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    harness.emit({
+      event: "session.message",
+      payload: {
+        sessionKey: "agent:main:one",
+        message: { role: "assistant", content: "identity-less" },
+      },
+    });
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "run-artifact",
+        stream: "tool",
+        data: {
+          phase: "result",
+          toolCallId: "tool-calendar",
+          uiArtifacts: [
+            uiArtifact(1, {
+              source: { sessionKey: "agent:main:one" },
+            }),
+          ],
+        },
+      },
+    });
+    expect(conversation.getSnapshot().artifacts).toHaveLength(1);
+    expect(conversation.getSnapshot().messages.at(-1)?.artifactIds).toEqual([]);
+    model.dispose();
+  });
+
+  it("reconciles artifact revisions, conflicts, bounds, and reconnect history", async () => {
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        history: {
+          messages: [
+            {
+              ...message(2),
+              role: "toolResult",
+              details: { uiArtifacts: [uiArtifact(2)] },
+            },
+          ],
+          completeSnapshot: true,
+        },
+      },
+    );
+    const { model, conversation } = await activatedConversation(harness, {
+      maxConversationArtifacts: 2,
+    });
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "run-artifacts",
+        stream: "tool",
+        data: {
+          phase: "result",
+          toolCallId: "tool-calendar",
+          uiArtifacts: [uiArtifact(1), uiArtifact(2, { structuredContent: { title: "conflict" } })],
+        },
+      },
+    });
+    expect(conversation.getSnapshot().artifacts[0]).toMatchObject({
+      revision: 2,
+      state: "failed",
+      error: { code: "ARTIFACT_REVISION_CONFLICT" },
+    });
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "run-artifacts",
+        stream: "tool",
+        data: {
+          phase: "result",
+          toolCallId: "tool-calendar",
+          uiArtifacts: [
+            uiArtifact(3),
+            uiArtifact(1, { id: "artifact-two" }),
+            uiArtifact(1, { id: "artifact-three" }),
+          ],
+        },
+      },
+    });
+    expect(conversation.getSnapshot().artifacts).toHaveLength(2);
+    expect(conversation.getSnapshot().artifacts.map((artifact) => artifact.id)).toContain(
+      "artifact-calendar",
+    );
+    expect(conversation.getSnapshot().bounds.artifactsTruncated).toBe(true);
+    harness.emit({
+      event: "session.message",
+      payload: {
+        sessionKey: "agent:main:one",
+        message: {
+          ...message(4),
+          role: "toolResult",
+          details: { uiArtifacts: [uiArtifact(4, { id: "artifact-retired-live" })] },
+        },
+      },
+    });
+    expect(conversation.getSnapshot().artifacts.map((artifact) => artifact.id)).toContain(
+      "artifact-retired-live",
+    );
+
+    harness.setHistory(0, {
+      messages: [
+        {
+          ...message(2),
+          role: "toolResult",
+          details: { uiArtifacts: [uiArtifact(3)] },
+        },
+      ],
+      completeSnapshot: true,
+    });
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(conversation.getSnapshot().artifacts).toEqual([
+        expect.objectContaining({ id: "artifact-calendar", revision: 3, state: "ready" }),
+      ]),
+    );
+    model.dispose();
+  });
+
+  it("adapts MCP App metadata and contains malformed artifact failure", async () => {
+    const malformed = uiArtifact(1, {
+      id: "artifact-malformed",
+      structuredContent: { invalid: () => undefined },
+    });
+    const oversized = uiArtifact(1, {
+      id: "artifact-oversized",
+      structuredContent: {
+        values: Array.from({ length: 100 }, () => "x".repeat(1_000)),
+      },
+    });
+    const expired = uiArtifact(2, {
+      id: "artifact-expired",
+      state: "expired",
+      error: { code: "ARTIFACT_EXPIRED", message: "The interactive view expired" },
+    });
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        history: {
+          messages: [
+            {
+              ...message(2),
+              role: "toolResult",
+              toolCallId: "call-1",
+              toolName: "show",
+              details: {
+                structuredContent: { title: "MCP result" },
+                mcpAppPreview: {
+                  kind: "canvas",
+                  view: { id: "mcp-app-view" },
+                  mcpApp: {
+                    viewId: "mcp-app-view",
+                    serverName: "demo",
+                    toolName: "show",
+                    uiResourceUri: "ui://demo/calendar",
+                    toolCallId: "call-1",
+                  },
+                },
+                uiArtifacts: [malformed, oversized, expired],
+              },
+            },
+          ],
+          completeSnapshot: true,
+        },
+      },
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    await vi.waitFor(() => expect(conversation.getSnapshot().artifacts).toHaveLength(4));
+    expect(conversation.getSnapshot().artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "artifact-malformed",
+          state: "failed",
+          error: expect.objectContaining({ code: "ARTIFACT_MALFORMED" }),
+        }),
+        expect.objectContaining({
+          id: "artifact-oversized",
+          state: "failed",
+          error: expect.objectContaining({ code: "ARTIFACT_OVERSIZED" }),
+        }),
+        expect.objectContaining({
+          id: "artifact-expired",
+          state: "expired",
+          error: { code: "ARTIFACT_EXPIRED", message: "The interactive view expired" },
+        }),
+        expect.objectContaining({
+          id: "mcp-app:call-1",
+          structuredContent: { title: "MCP result" },
+          views: [
+            expect.objectContaining({
+              templateUri: "ui://demo/calendar",
+              availability: "inline",
+              fallback: {
+                kind: "mcp-app",
+                viewId: "mcp-app-view",
+                uiResourceUri: "ui://demo/calendar",
+              },
+            }),
+          ],
+        }),
+      ]),
+    );
+    model.dispose();
+  });
+
+  it("bounds artifact candidate collection before normalization", () => {
+    const artifacts = collectMessageUiArtifacts(
+      {
+        role: "toolResult",
+        details: {
+          uiArtifacts: Array.from({ length: 20 }, (_, index) =>
+            uiArtifact(index + 1, { id: `artifact-${index + 1}` }),
+          ),
+        },
+      },
+      {
+        sessionKey: "agent:main:one",
+        messageId: "message-bounded",
+        toolCallId: "tool-bounded",
+      },
+      {
+        maxArtifacts: 2,
+        maxBytes: 64_000,
+        maxDepth: 12,
+        maxCollectionItems: 256,
+        maxStringBytes: 16_000,
+        maxViews: 16,
+      },
+      3,
+    );
+    expect(artifacts.map((artifact) => artifact.id)).toEqual([
+      "artifact-1",
+      "artifact-2",
+      "artifact-3",
+    ]);
   });
 
   it("deep-freezes snapshots and stops copied subscriber delivery after disposal", async () => {

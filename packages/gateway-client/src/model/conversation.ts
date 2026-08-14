@@ -1,4 +1,9 @@
 import {
+  normalizeUiArtifact,
+  type UiArtifact,
+  type UiArtifactViewOffer,
+} from "@openclaw/gateway-protocol";
+import {
   createSessionProjection,
   isLocallyOptimisticSessionMessage,
   readSessionMessageSequence,
@@ -10,6 +15,14 @@ import {
   type SessionProjectionGatewayRunEvent,
   type SessionProjectionState,
 } from "../browser.js";
+import {
+  applyMaterializedUiArtifactViews,
+  collectMessageUiArtifacts,
+  collectToolEventUiArtifacts,
+  materializedViewKey,
+  reconcileUiArtifacts,
+  type ControlModelArtifactProjectionBounds,
+} from "./artifact-projection.js";
 import type {
   ControlModelConnectionSnapshot,
   ControlModelError,
@@ -72,6 +85,7 @@ export type ControlModelConversationMessage = Readonly<{
   pending: boolean;
   live: boolean;
   provisional: boolean;
+  artifactIds: readonly string[];
   raw: DeepReadonly<unknown>;
 }>;
 export type ControlModelConversationRun = Readonly<{
@@ -93,6 +107,7 @@ export type ControlModelConversationTool = Readonly<{
   input: DeepReadonly<unknown> | null;
   output: DeepReadonly<unknown> | null;
   truncated: boolean;
+  artifactIds: readonly string[];
   progress: Readonly<{ updates: number; bytes: number; truncated: boolean }>;
 }>;
 export type ControlModelConversationApproval = DeepReadonly<Record<string, unknown>> &
@@ -112,6 +127,12 @@ export type ControlModelConversationBounds = Readonly<{
   maxQuestions: number;
   maxProgressUpdates: number;
   maxProgressBytes: number;
+  maxArtifacts: number;
+  maxArtifactBytes: number;
+  maxArtifactDepth: number;
+  maxArtifactCollectionItems: number;
+  maxArtifactStringBytes: number;
+  maxArtifactViews: number;
 }>;
 export type ControlModelConversationHistory = Readonly<{
   status: "idle" | "loading" | "ready" | "error";
@@ -137,6 +158,7 @@ export type ControlModelConversationSnapshot = Readonly<{
   runs: readonly ControlModelConversationRun[];
   activeRun: ControlModelConversationRun | null;
   tools: readonly ControlModelConversationTool[];
+  artifacts: readonly DeepReadonly<UiArtifact>[];
   approvals: readonly ControlModelConversationApproval[];
   questions: readonly ControlModelConversationQuestion[];
   partialReasons: readonly string[];
@@ -148,6 +170,7 @@ export type ControlModelConversationSnapshot = Readonly<{
     resolveApproval: boolean;
     answerQuestion: boolean;
     cancelQuestion: boolean;
+    materializeView: boolean;
   }>;
   bounds: Readonly<{
     messagesTruncated: boolean;
@@ -155,6 +178,7 @@ export type ControlModelConversationSnapshot = Readonly<{
     toolsTruncated: boolean;
     approvalsTruncated: boolean;
     questionsTruncated: boolean;
+    artifactsTruncated: boolean;
   }>;
 }>;
 
@@ -202,6 +226,12 @@ export type ControlModelConversationHost = Readonly<{
   reportSubscriberError(error: unknown): void;
   reportBackgroundError(error: unknown): void;
   bounds: ControlModelConversationBounds;
+}>;
+
+export type ControlModelMaterializeViewInput = Readonly<{
+  artifactId: string;
+  artifactRevision: number;
+  viewId: string;
 }>;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -397,6 +427,9 @@ export class ControlModelConversation {
   >();
   readonly #approvals = new Map<string, Record<string, unknown>>();
   readonly #questions = new Map<string, Record<string, unknown>>();
+  readonly #liveArtifacts = new Map<string, UiArtifact>();
+  readonly #materializedViews = new Map<string, UiArtifactViewOffer>();
+  readonly #retiredArtifactMessages = new WeakSet<object>();
   #projection: SessionProjectionState;
   #snapshot: ControlModelConversationSnapshot;
   #connection: ControlModelConnectionSnapshot;
@@ -436,6 +469,7 @@ export class ControlModelConversation {
     tools: false,
     approvals: false,
     questions: false,
+    artifacts: false,
   };
 
   constructor(host: ControlModelConversationHost, sessionKey: string) {
@@ -508,8 +542,12 @@ export class ControlModelConversation {
     this.#activationGeneration += 1;
     const generation = this.#activationGeneration;
     this.#activationEpoch = connection.epoch;
+    for (const entry of this.#projection.entries)
+      if (entry.live && entry.message !== null && typeof entry.message === "object")
+        this.#retiredArtifactMessages.add(entry.message);
     this.#projection = { ...this.#projection, runs: {} };
     this.#tools.clear();
+    this.#liveArtifacts.clear();
     this.#status = this.#projection.entries.length > 0 ? "stale" : "loading";
     this.#partialReasons.add("reconnect-awaiting-authoritative-history");
     this.#publish();
@@ -857,6 +895,149 @@ export class ControlModelConversation {
     options?: ControlModelRequestOptions,
   ): Promise<Readonly<Record<string, unknown>>> {
     return this.#resolveQuestion(id, { cancel: true }, options);
+  }
+
+  async materializeView(
+    input: ControlModelMaterializeViewInput,
+    options?: ControlModelRequestOptions,
+  ): Promise<DeepReadonly<UiArtifactViewOffer>> {
+    this.#assertCommandReady("artifact.materialize");
+    const artifactId = text(input.artifactId);
+    const artifactRevision = safeInteger(input.artifactRevision);
+    const viewId = text(input.viewId);
+    if (!artifactId || artifactRevision === null || artifactRevision < 0 || !viewId)
+      throw localError(
+        "invalid-input",
+        "artifact.materialize",
+        "Artifact id, revision, and view id are required",
+        "INVALID_ARTIFACT_VIEW_INPUT",
+      );
+    const artifact = this.#snapshot.artifacts.find((candidate) => candidate.id === artifactId);
+    if (!artifact)
+      throw localError(
+        "not-found",
+        "artifact.materialize",
+        "UI artifact was not found",
+        "ARTIFACT_NOT_FOUND",
+      );
+    if (artifact.revision !== artifactRevision)
+      throw localError(
+        "stale",
+        "artifact.materialize",
+        "UI artifact revision is stale",
+        "STALE_ARTIFACT_REVISION",
+      );
+    if (artifact.state === "failed" || artifact.state === "expired")
+      throw localError(
+        "conflict",
+        "artifact.materialize",
+        "UI artifact is not materializable",
+        "ARTIFACT_NOT_MATERIALIZABLE",
+      );
+    const view = artifact.views.find((candidate) => candidate.id === viewId);
+    if (!view)
+      throw localError(
+        "not-found",
+        "artifact.materialize",
+        "UI artifact view was not found",
+        "ARTIFACT_VIEW_NOT_FOUND",
+      );
+    if (view.availability === "inline") return view;
+    const materialize = this.#host.gateway.materializeArtifactView;
+    if (!materialize)
+      throw localError(
+        "unsupported",
+        "artifact.materialize",
+        "Deferred UI artifact materialization is unsupported",
+        "ARTIFACT_MATERIALIZATION_UNSUPPORTED",
+      );
+    this.#activeOperations += 1;
+    let epoch: number | null = null;
+    try {
+      epoch = this.#captureEpoch("artifact.materialize");
+      const result = record(
+        await materialize(
+          {
+            sessionKey: this.#sessionKey,
+            ...(this.#host.agentId ? { agentId: this.#host.agentId } : {}),
+            artifactId,
+            artifactRevision,
+            viewId,
+          },
+          options,
+        ),
+      );
+      this.#assertEpoch(epoch, "artifact.materialize");
+      const current = this.#snapshot.artifacts.find((candidate) => candidate.id === artifactId);
+      const currentView = current?.views.find((candidate) => candidate.id === viewId);
+      if (
+        !current ||
+        current.revision !== artifactRevision ||
+        current.state !== artifact.state ||
+        current.state === "failed" ||
+        current.state === "expired" ||
+        !currentView ||
+        currentView.availability !== "deferred" ||
+        stableStringify(currentView) !== stableStringify(view)
+      )
+        throw localError(
+          "stale",
+          "artifact.materialize",
+          "UI artifact or selected view changed while materializing",
+          "STALE_ARTIFACT_VIEW",
+        );
+      if (
+        text(result?.artifactId) !== artifactId ||
+        safeInteger(result?.artifactRevision) !== artifactRevision
+      )
+        throw localError(
+          "malformed",
+          "artifact.materialize",
+          "Materialized UI artifact identity does not match the request",
+          "MALFORMED_ARTIFACT_MATERIALIZATION",
+        );
+      const normalized = normalizeUiArtifact(
+        {
+          version: 1,
+          id: artifactId,
+          revision: artifactRevision,
+          views: [result?.view],
+          state: "ready",
+          source: current.source,
+        },
+        this.#artifactBounds(),
+      );
+      const normalizedView = normalized.ok ? normalized.value.views[0] : undefined;
+      if (
+        !normalizedView ||
+        normalizedView.id !== viewId ||
+        normalizedView.templateUri !== view.templateUri ||
+        normalizedView.dataVersion !== view.dataVersion ||
+        normalizedView.availability !== "inline"
+      )
+        throw localError(
+          "malformed",
+          "artifact.materialize",
+          "Materialized UI artifact view is malformed or incompatible",
+          "MALFORMED_ARTIFACT_MATERIALIZATION",
+        );
+      const materializedView = {
+        ...normalizedView,
+        ...(view.recommended === true ? { recommended: true } : {}),
+        ...(view.fallback && !normalizedView.fallback ? { fallback: view.fallback } : {}),
+      };
+      this.#materializedViews.set(
+        materializedViewKey(artifactId, artifactRevision, viewId),
+        materializedView,
+      );
+      this.#publish();
+      return cloneAndFreeze(materializedView);
+    } catch (error) {
+      if (error instanceof ControlModelCommandError) throw error;
+      throw this.#asCommandErrorForEpoch(error, "artifact.materialize", epoch);
+    } finally {
+      this.#activeOperations -= 1;
+    }
   }
 
   async release(): Promise<void> {
@@ -1371,6 +1552,18 @@ export class ControlModelConversation {
       else break;
       this.#boundsTruncated.tools = true;
     }
+    this.#ingestLiveArtifacts(
+      collectToolEventUiArtifacts(
+        data,
+        {
+          sessionKey: this.#sessionKey,
+          toolCallId,
+          ...(next.name ? { toolName: next.name } : {}),
+          live: true,
+        },
+        this.#artifactBounds(),
+      ),
+    );
     this.#publish();
   }
 
@@ -1503,7 +1696,85 @@ export class ControlModelConversation {
     else this.#historyTruncatedBefore = true;
   }
 
+  #artifactBounds(): ControlModelArtifactProjectionBounds {
+    return {
+      maxArtifacts: this.#host.bounds.maxArtifacts,
+      maxBytes: this.#host.bounds.maxArtifactBytes,
+      maxDepth: this.#host.bounds.maxArtifactDepth,
+      maxCollectionItems: this.#host.bounds.maxArtifactCollectionItems,
+      maxStringBytes: this.#host.bounds.maxArtifactStringBytes,
+      maxViews: this.#host.bounds.maxArtifactViews,
+    };
+  }
+
+  #ingestLiveArtifacts(incoming: readonly UiArtifact[]): void {
+    if (incoming.length === 0) return;
+    if (
+      new Set([...this.#liveArtifacts.values(), ...incoming].map((artifact) => artifact.id)).size >
+      this.#host.bounds.maxArtifacts
+    )
+      this.#boundsTruncated.artifacts = true;
+    const retained = reconcileUiArtifacts(
+      [...this.#liveArtifacts.values(), ...incoming],
+      this.#artifactBounds(),
+    );
+    this.#liveArtifacts.clear();
+    for (const artifact of retained) this.#liveArtifacts.set(artifact.id, artifact);
+  }
+
+  #projectArtifacts(): UiArtifact[] {
+    const bounds = this.#artifactBounds();
+    const historyCandidates: UiArtifact[] = [];
+    const historyCandidateLimit = bounds.maxArtifacts + 1;
+    for (
+      let index = this.#projection.entries.length - 1;
+      index >= 0 && historyCandidates.length < historyCandidateLimit;
+      index -= 1
+    ) {
+      const entry = this.#projection.entries[index];
+      if (!entry) continue;
+      if (
+        entry.message !== null &&
+        typeof entry.message === "object" &&
+        this.#retiredArtifactMessages.has(entry.message)
+      )
+        continue;
+      historyCandidates.push(
+        ...collectMessageUiArtifacts(
+          entry.message,
+          {
+            sessionKey: this.#sessionKey,
+            ...(entry.identity?.id ? { messageId: entry.identity.id } : {}),
+            ...(entry.identity?.sequence !== null && entry.identity?.sequence !== undefined
+              ? { messageSequence: entry.identity.sequence }
+              : {}),
+            live: entry.live,
+          },
+          bounds,
+          historyCandidateLimit - historyCandidates.length,
+        ),
+      );
+    }
+    const candidates = [...this.#liveArtifacts.values(), ...historyCandidates];
+    if (historyCandidates.length > bounds.maxArtifacts) this.#boundsTruncated.artifacts = true;
+    if (new Set(candidates.map((artifact) => artifact.id)).size > bounds.maxArtifacts)
+      this.#boundsTruncated.artifacts = true;
+    const artifacts = applyMaterializedUiArtifactViews(
+      reconcileUiArtifacts(candidates, bounds),
+      this.#materializedViews,
+    );
+    const retainedKeys = new Set(
+      artifacts.flatMap((artifact) =>
+        artifact.views.map((view) => materializedViewKey(artifact.id, artifact.revision, view.id)),
+      ),
+    );
+    for (const key of this.#materializedViews.keys())
+      if (!retainedKeys.has(key)) this.#materializedViews.delete(key);
+    return artifacts;
+  }
+
   #buildSnapshot(): ControlModelConversationSnapshot {
+    const artifacts = this.#projectArtifacts();
     const occurrence = new Map<string, number>();
     const messages = this.#projection.entries.map((entry) => {
       const identity = entry.identity;
@@ -1526,6 +1797,11 @@ export class ControlModelConversation {
         pending: entry.pending,
         live: entry.live,
         provisional: entry.pending || isLocallyOptimisticSessionMessage(entry.message),
+        artifactIds: identity?.id
+          ? artifacts
+              .filter((artifact) => artifact.source.messageId === identity.id)
+              .map((artifact) => artifact.id)
+          : [],
         raw: cloneAndFreeze(entry.message),
       };
     });
@@ -1557,6 +1833,12 @@ export class ControlModelConversation {
       input: tool.input === null ? null : cloneAndFreeze(tool.input),
       output: tool.output === null ? null : cloneAndFreeze(tool.output),
       truncated: tool.truncated,
+      artifactIds:
+        tool.toolCallId === "unknown"
+          ? []
+          : artifacts
+              .filter((artifact) => artifact.source.toolCallId === tool.toolCallId)
+              .map((artifact) => artifact.id),
       progress: { updates: tool.updates, bytes: tool.bytes, truncated: tool.progressTruncated },
     }));
     const approvals = [...this.#approvals.values()].map(
@@ -1589,6 +1871,7 @@ export class ControlModelConversation {
       runs: visibleRuns,
       activeRun,
       tools,
+      artifacts,
       approvals,
       questions,
       partialReasons: [...this.#partialReasons],
@@ -1600,6 +1883,12 @@ export class ControlModelConversation {
         resolveApproval: !stale && approvals.some((approval) => approval.status === "pending"),
         answerQuestion: !stale && questions.some((question) => question.status === "pending"),
         cancelQuestion: !stale && questions.some((question) => question.status === "pending"),
+        materializeView:
+          !stale &&
+          this.#host.gateway.materializeArtifactView !== undefined &&
+          artifacts.some((artifact) =>
+            artifact.views.some((view) => view.availability === "deferred"),
+          ),
       },
       bounds: {
         messagesTruncated: this.#boundsTruncated.messages,
@@ -1607,6 +1896,7 @@ export class ControlModelConversation {
         toolsTruncated: this.#boundsTruncated.tools,
         approvalsTruncated: this.#boundsTruncated.approvals,
         questionsTruncated: this.#boundsTruncated.questions,
+        artifactsTruncated: this.#boundsTruncated.artifacts,
       },
     });
   }
