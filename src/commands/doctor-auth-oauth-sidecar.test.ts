@@ -347,6 +347,25 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(fs.existsSync(sidecarPath)).toBe(true);
   });
 
+  it("does not prompt when only unreferenced sidecars remain (guaranteed no-op)", async () => {
+    const state = await makeTestState();
+    await state.writeJson(
+      path.join("credentials", "auth-profiles", "cccccccccccccccccccccccccccccccc.json"),
+      {
+        version: 1,
+        profileId: "openai-codex:orphan",
+        provider: "openai-codex",
+        access: "orphaned-access-token",
+        refresh: "orphaned-refresh-token",
+      },
+    );
+
+    const prompter = makePrompter(true);
+    await maybeRepairLegacyOAuthSidecarProfiles({ cfg: {}, prompter });
+
+    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")(
     "scans symlinked state agents before treating sidecars as unreferenced",
     async () => {

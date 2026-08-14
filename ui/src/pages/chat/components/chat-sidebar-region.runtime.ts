@@ -165,43 +165,61 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       return nothing;
     }
     const openUrl = this.panelOpenUrls[active.slot];
+    const singlePanel = column.panels.length === 1 ? active : null;
+    const singlePanelDraggable =
+      singlePanel != null && !narrow && this.canMutatePanel(singlePanel.slot);
     return html`
       <div
-        class="sidebar-column__header"
+        class="rail-header sidebar-column__header"
         @dragover=${(event: DragEvent) => (narrow ? undefined : this.allowPanelDrop(event))}
         @drop=${(event: DragEvent) => (narrow ? undefined : this.dropOnHeader(event, column))}
       >
-        <wa-tab-group
-          class="sidebar-column__tabs"
-          .active=${active.id}
-          activation="auto"
-          without-scroll-controls
-          @wa-tab-show=${(event: CustomEvent<{ name: string }>) => this.activate(event.detail.name)}
-        >
-          ${column.panels.map((panel) => {
-            const draggable = !narrow && this.canMutatePanel(panel.slot);
-            return html`
-              <wa-tab
-                class="sidebar-column__tab"
-                panel=${panel.id}
-                data-panel-id=${panel.id}
-                .draggable=${draggable}
-                title=${draggable
-                  ? t("chat.sidebarColumns.drag", { panel: panelTitle(panel.slot) })
-                  : nothing}
-                @dragstart=${(event: DragEvent) =>
-                  draggable ? this.startDrag(event, panel.id) : undefined}
-                @dragend=${() => this.endDrag()}
-              >
-                ${panelTitle(panel.slot)}
-              </wa-tab>
-            `;
-          })}
-        </wa-tab-group>
-        <div class="sidebar-column__actions">
+        ${singlePanel
+          ? html`<div
+              class="rail-header__copy sidebar-column__single-panel sidebar-column__tab"
+              data-panel-id=${singlePanel.id}
+              .draggable=${singlePanelDraggable}
+              title=${singlePanelDraggable
+                ? t("chat.sidebarColumns.drag", { panel: panelTitle(singlePanel.slot) })
+                : nothing}
+              @dragstart=${(event: DragEvent) =>
+                singlePanelDraggable ? this.startDrag(event, singlePanel.id) : undefined}
+              @dragend=${() => this.endDrag()}
+            >
+              <strong class="rail-header__title">${panelTitle(singlePanel.slot)}</strong>
+            </div>`
+          : html`<wa-tab-group
+              class="sidebar-column__tabs"
+              .active=${active.id}
+              activation="auto"
+              without-scroll-controls
+              @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
+                this.activate(event.detail.name)}
+            >
+              ${column.panels.map((panel) => {
+                const draggable = !narrow && this.canMutatePanel(panel.slot);
+                return html`
+                  <wa-tab
+                    class="sidebar-column__tab"
+                    panel=${panel.id}
+                    data-panel-id=${panel.id}
+                    .draggable=${draggable}
+                    title=${draggable
+                      ? t("chat.sidebarColumns.drag", { panel: panelTitle(panel.slot) })
+                      : nothing}
+                    @dragstart=${(event: DragEvent) =>
+                      draggable ? this.startDrag(event, panel.id) : undefined}
+                    @dragend=${() => this.endDrag()}
+                  >
+                    ${panelTitle(panel.slot)}
+                  </wa-tab>
+                `;
+              })}
+            </wa-tab-group>`}
+        <div class="rail-header__actions sidebar-column__actions">
           ${openUrl
             ? html`<a
-                class="btn btn--ghost btn--icon"
+                class="rail-header__action"
                 href=${openUrl}
                 target="_blank"
                 rel="noopener"
@@ -212,7 +230,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             : nothing}
           ${this.canMutatePanel(active.slot)
             ? html`<button
-                class="btn btn--ghost btn--icon"
+                class="rail-header__action"
                 type="button"
                 aria-label=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}
                 title=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}

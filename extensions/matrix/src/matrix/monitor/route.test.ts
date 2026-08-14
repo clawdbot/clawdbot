@@ -37,6 +37,8 @@ function matrixBinding(
   } as RouteBinding;
 }
 
+const threadCfg = { ...baseCfg, bindings: [matrixBinding("main")] } satisfies OpenClawConfig;
+
 function senderPeer(id = "@alice:example.org"): RoutePeer {
   return { kind: "direct", id };
 }
@@ -213,7 +215,7 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
 
   it("scopes session key to thread when a thread id is provided", () => {
     const { route } = resolveMatrixInboundRoute({
-      cfg: baseCfg as never,
+      cfg: threadCfg as never,
       accountId: "ops",
       roomId: "!room:example.org",
       senderId: "@alice:example.org",
@@ -229,7 +231,7 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
 
   it("preserves mixed-case matrix thread ids in session keys", () => {
     const { route } = resolveMatrixInboundRoute({
-      cfg: baseCfg as never,
+      cfg: threadCfg as never,
       accountId: "ops",
       roomId: "!room:example.org",
       senderId: "@alice:example.org",
@@ -243,7 +245,7 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
 
   it("does not scope session key when thread id is absent", () => {
     const { route } = resolveMatrixInboundRoute({
-      cfg: baseCfg as never,
+      cfg: threadCfg as never,
       accountId: "ops",
       roomId: "!room:example.org",
       senderId: "@alice:example.org",

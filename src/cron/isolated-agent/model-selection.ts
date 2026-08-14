@@ -97,6 +97,7 @@ export async function resolveCronModelSelectionOwner(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    readOnly: true,
     allowGatewaySubagentBinding: true,
   });
   if (

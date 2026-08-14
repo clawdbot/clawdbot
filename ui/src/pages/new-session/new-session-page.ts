@@ -359,6 +359,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private renderPlaceChips() {
     const execNodes = this.place.execNodes();
+    const executionNodes = this.place.executionNodes();
     const cloudProfiles = catalog.isTarget(this.data) ? [] : this.gateway.cloudProfiles;
     const branches = this.place.repository.kind === "git" ? this.place.repository : null;
     const projects = catalog.isTarget(this.data) ? [] : this.browser.projects;
@@ -372,7 +373,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           isAdmin: this.place.isAdmin(),
         });
     const whereState = resolveWhereChip({
-      execNodes: this.place.isAdmin() ? execNodes : [],
+      execNodes: this.place.isAdmin() ? executionNodes : [],
       environments: this.place.isAdmin() ? this.gateway.environments : [],
       cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
       cloudProfileId: this.place.cloudProfileId,

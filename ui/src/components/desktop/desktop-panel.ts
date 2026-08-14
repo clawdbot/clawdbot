@@ -3,7 +3,6 @@ import type {
   DesktopSource,
   EnvironmentSummary,
   EnvironmentsListResult,
-  WorkerDesktopAppId,
   WorkerDesktopLaunchResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
@@ -21,7 +20,14 @@ import {
 import { DesktopClient, type DesktopConnectionHandle } from "./desktop-client.ts";
 import { desktopDocumentStyles } from "./desktop-document-styles.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
+import type {
+  DesktopAppId,
+  DesktopCredentials,
+  ObservedDesktopConnection,
+  PendingDesktopConnection,
+} from "./desktop-panel-connection.ts";
 import { desktopCredentialRequirement } from "./desktop-panel-credentials.ts";
+import { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { desktopPanelLauncherStyles } from "./desktop-panel-launcher-styles.ts";
 import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-panel-state.ts";
 import { desktopPanelStyles } from "./desktop-panel-styles.ts";
@@ -43,17 +49,7 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 560,
 });
-type DesktopAppId = WorkerDesktopAppId;
-type DesktopCredentials = { username?: string; password?: string };
-type PendingDesktopConnection = {
-  environmentId: string;
-  control: boolean;
-  observed?: DesktopObserveResult;
-  operationId: number;
-};
-type ObservedDesktopConnection = PendingDesktopConnection & { observed: DesktopObserveResult };
 const MOBILE_KEYBOARD_SENTINEL = "________________";
-
 /** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
 class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
@@ -94,6 +90,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     layout: panelLayout,
     reservationPrefix: "desktop",
     isAvailable: () => this.available,
+    isFullscreen: () => this.fullscreenMode.active,
+  });
+  private readonly fullscreenMode = new DesktopPanelFullscreenController(this, {
+    section: () => this.renderRoot.querySelector<HTMLElement>("section.bp"),
+    onChange: () => this.dockLayout.syncReservation(),
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
 
@@ -602,7 +603,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (!this.available) {
       return nothing;
     }
-    const notice = renderDesktopNotice(this.launchErrorText ?? this.errorText, this.noticeText);
+    const notice = renderDesktopNotice(
+      this.fullscreenMode.errorText ?? this.launchErrorText ?? this.errorText,
+      this.noticeText,
+    );
     const picker = renderDesktopPicker({
       environments: this.environments,
       loading: this.loading,
@@ -673,13 +677,17 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       return nothing;
     }
     const dock = this.dockLayout.dock;
-    const style =
-      dock === "bottom" ? `height:${this.dockLayout.height}px` : `width:${this.dockLayout.width}px`;
+    const style = this.fullscreenMode.active
+      ? ""
+      : dock === "bottom"
+        ? `height:${this.dockLayout.height}px`
+        : `width:${this.dockLayout.width}px`;
     return html`
       <section class="bp bp--${dock}" style=${style} aria-label=${t("desktop.title")}>
         ${this.dockLayout.renderResizer("bp", t("desktop.resize"))}
         ${renderDesktopPanelHeader({
           dock,
+          fullscreenControl: this.fullscreenMode.renderButton(),
           onDock: (nextDock) => this.dockLayout.setDock(nextDock),
           onClose: () => this.closePanel(),
         })}

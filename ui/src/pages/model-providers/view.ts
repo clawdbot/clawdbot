@@ -30,7 +30,7 @@ import type {
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
-import { hasValidProviderSignIn, renderProviderStatus } from "./view-status.ts";
+import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
 
 export type ModelProviderRowMessage = {
   kind: "success" | "error";
@@ -55,6 +55,7 @@ type ModelProvidersViewProps = {
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   configBusy: boolean;
+  quickAddSupported: boolean;
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -249,7 +250,7 @@ function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
   if (tokenCount > 0) {
     parts.push(t("modelProviders.credentials.tokenProfiles", { count: String(tokenCount) }));
   }
-  if (card.apiKey?.source === "config" || (!card.apiKey && card.hasConfigApiKey)) {
+  if (card.apiKey?.source === "config") {
     parts.push(t("modelProviders.credentials.configKey"));
   } else if (card.apiKey?.source === "env") {
     parts.push(
@@ -274,15 +275,17 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
   if (!result) {
     return nothing;
   }
+  const hasWarnings =
+    result.status === "ok" && result.results.some((target) => target.status !== "ok");
+  const presentation = hasWarnings ? "warning" : result.status === "ok" ? "success" : "error";
   return html`
-    <div
-      class="model-providers__probe model-providers__probe--${result.status === "ok"
-        ? "success"
-        : "error"}"
-      role="status"
-    >
+    <div class="model-providers__probe model-providers__probe--${presentation}" role="status">
       <div class="model-providers__probe-summary">
-        <strong>${t(`modelProviders.probe.status.${result.status}`)}</strong>
+        <strong
+          >${hasWarnings
+            ? t("modelProviders.probe.status.partial")
+            : t(`modelProviders.probe.status.${result.status}`)}</strong
+        >
         ${result.latencyMs !== undefined
           ? html`<span
               >${t("modelProviders.probe.latency", { ms: String(result.latencyMs) })}</span
@@ -552,7 +555,7 @@ function renderAddProvider(props: ModelProvidersViewProps) {
 }
 
 function renderModelReadiness(props: ModelProvidersViewProps) {
-  const signedIn = props.cards.some(hasValidProviderSignIn);
+  const signedIn = props.cards.some(hasVerifiedProvider);
   return html`
     <div class="model-providers__setup" data-model-readiness="model-required">
       ${renderSettingsSection(
@@ -648,7 +651,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       },
       providerRows,
     )}
-    ${renderAddProvider(props)}
+    ${props.quickAddSupported ? renderAddProvider(props) : nothing}
     ${props.mutationBlockedReason
       ? html`<div class="callout warning">${props.mutationBlockedReason}</div>`
       : nothing}

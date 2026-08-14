@@ -475,12 +475,17 @@ export async function buildTestPlan(params: {
             if (!guidedSetup) {
               return { error: "That provider setup is not available on this Gateway." };
             }
-            const candidate = await guidedSetup.detect({
-              config: preparedConfig,
-              env: process.env,
-              workspaceDir: params.pluginWorkspaceDir,
-              ...(params.signal ? { signal: params.signal } : {}),
-            });
+            const selectedModelRef = result.defaultModel
+              ? normalizeAgentModelRefForConfig(result.defaultModel)
+              : "";
+            const candidate = selectedModelRef
+              ? { modelRef: selectedModelRef }
+              : await guidedSetup.detect({
+                  config: preparedConfig,
+                  env: process.env,
+                  workspaceDir: params.pluginWorkspaceDir,
+                  ...(params.signal ? { signal: params.signal } : {}),
+                });
             if (!candidate) {
               return {
                 error: `${resolved.provider.label} setup completed, but no compatible model was found. Add a compatible model and try again.`,
@@ -554,7 +559,7 @@ export async function buildTestPlan(params: {
       const modelRef = result.defaultModel
         ? normalizeAgentModelRefForConfig(result.defaultModel)
         : "";
-      if (!modelRef || result.profiles.length === 0) {
+      if (!modelRef) {
         return {
           error: `${resolved.provider.label} does not expose a starter model for app-guided setup.`,
         };
@@ -569,20 +574,32 @@ export async function buildTestPlan(params: {
         (profile) =>
           normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
       );
-      if (!matchingProfile) {
+      if (result.profiles.length > 0 && !matchingProfile) {
         return {
           error: `${resolved.provider.label} did not return credentials for its starter model.`,
         };
       }
-      const preparedAuth = prepareManualAuthForActivation({
-        baseConfig: enableResult.config,
-        preparedConfig,
-        profiles: result.profiles,
-        selectedProfileId: matchingProfile.profileId,
-        modelRef,
-        providerId: ref.provider,
-        ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-      });
+      const preparedAuth = matchingProfile
+        ? prepareManualAuthForActivation({
+            baseConfig: enableResult.config,
+            preparedConfig,
+            profiles: result.profiles,
+            selectedProfileId: matchingProfile.profileId,
+            modelRef,
+            providerId: ref.provider,
+            ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
+          })
+        : {
+            config: projectManualInferenceConfig({
+              baseConfig: enableResult.config,
+              preparedConfig,
+              modelRef,
+              providerId: ref.provider,
+              ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
+            }),
+            profiles: [] as ProviderAuthResult["profiles"],
+            selectedProfileId: undefined,
+          };
       return {
         runner: "embedded",
         ...ref,
@@ -591,7 +608,9 @@ export async function buildTestPlan(params: {
         config: preparedAuth.config,
         agentId: "openclaw",
         routeAgentId: resolveDefaultAgentId(preparedAuth.config),
-        authProfileId: preparedAuth.selectedProfileId,
+        ...(preparedAuth.selectedProfileId
+          ? { authProfileId: preparedAuth.selectedProfileId }
+          : {}),
         persistModelRef: modelRef,
         manualAuth: {
           profiles: preparedAuth.profiles,
