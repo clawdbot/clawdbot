@@ -1890,7 +1890,7 @@ jobs:
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
-                node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --split-core --threads=1
+                node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --threads=1
               fi
               ;;
             bun-launcher)
@@ -2501,15 +2501,16 @@ jobs:
               # i18n-tooling diff must run it. oxlint always runs.
               lint_args=(--threads=8)
               if [ "$RUNNER_BACKEND" = "github" ]; then
-                # Three dedicated hosted jobs own the split core stripes. Keep
+                # Five dedicated hosted jobs own the aggregated core Programs. Keep
                 # extension preparation, optional UI checks, and formatting in
-                # this fourth lane so each 4-core runner stays below ~6m.
+                # this sixth lane so each 4-core runner stays below ~6m.
                 lint_args=(--only=extensions --only=scripts --threads=1)
+                export GOMAXPROCS=2
               elif [ "$(nproc)" -lt 8 ]; then
-                # Fork PRs run on 4-core hosted runners with 16GB. Bound both
-                # the core process size and its threads so type-aware oxlint
-                # does not intermittently lose the runner under memory pressure.
-                lint_args=(--split-core --threads=1)
+                # Fork PRs build each semantic Program once. Bound both oxlint
+                # and its Go helper within the 4-core/16GB hosted runner.
+                lint_args=(--threads=1)
+                export GOMAXPROCS=2
               fi
               if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
                 pnpm lint "${lint_args[@]}"
@@ -2613,8 +2614,8 @@ jobs:
               ;;
           esac
 
-  # The github/hybrid planner profile splits the serial core oxlint path across
-  # five deterministic hosted jobs. All-Blacksmith mode keeps one lint job.
+  # The github/hybrid planner profile aggregates core targets into five Programs
+  # across five hosted jobs. All-Blacksmith mode keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
       contents: read
@@ -2639,6 +2640,7 @@ jobs:
 
       - name: Run hosted core lint stripe
         env:
+          GOMAXPROCS: "2"
           OPENCLAW_LOCAL_CHECK: "0"
         run: >-
           node --import tsx scripts/run-oxlint-shards.mts

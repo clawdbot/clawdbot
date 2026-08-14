@@ -49,13 +49,43 @@ still runs in process as usual. App relocation, Sparkle updates, and post-update
 service repair are disabled in profile mode; update the installed app through
 the normal default-profile workflow.
 
-## Packaging flow
+## Packaging flows
+
+Development bundle (signed but not notarized):
 
 ```bash
 scripts/package-mac-app.sh
 ```
 
-Creates `dist/OpenClaw.app` and signs it via `scripts/codesign-mac-app.sh`.
+This creates `dist/OpenClaw.app` and signs it via `scripts/codesign-mac-app.sh`.
+It is not a distribution artifact. For a notarized app ZIP and DMG, use:
+
+```bash
+scripts/package-mac-dist.sh
+```
+
+For an unattended Peekaboo elevation host, use the closed Foundation signing
+profile and source-addressed ZIP workflow. `package` is an internal release
+operator command: it requires the OpenClaw Foundation signing identity and
+notarization credentials, and its archive is not a general-download artifact.
+
+```bash
+scripts/mac-elevation-host.sh package
+scripts/mac-elevation-host.sh install \
+  --archive "dist/elevation-host/OpenClaw-<full-source-sha>-stable.zip"
+scripts/mac-elevation-host.sh status
+```
+
+The elevation package is ZIP-only, notarized and stapled, contains exactly
+`OpenClaw.app`, omits Apple Events entitlements, records an immutable receipt,
+and verifies a freshly extracted copy. Installation owns the separate
+`ai.openclaw.mac.elevation-host` launchd job with `RunAtLoad` and `KeepAlive`.
+It refuses to replace or race the ordinary `ai.openclaw.mac` Launch at login
+job. `recover` restores the recorded prior bundle after a failed cutover;
+`uninstall` removes only the elevation job and preserves the app, state,
+Keychain, TCC, and recovery receipt. Installation exits successfully once the
+launchd-owned process is Bridge-ready; missing TCC remains a degraded `status`
+result until the required grants are present.
 
 ## Signing behavior
 

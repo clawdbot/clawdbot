@@ -91,7 +91,7 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
 };
 export const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
 export const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
-export const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 5;
+export const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
 const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
   // The non-isolated Matrix suite intentionally shares module state within a process.
   // Bound its lifetime so Vite's transformed module graph cannot grow across the whole suite.
@@ -105,8 +105,10 @@ const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
   ],
 ]);
 const EXTENSION_TEST_JOB_FILE_LIMITS = new Map<string, number>([
-  // Keep Telegram CI jobs at five files so isolate recycling stays inside one
-  // job instead of minting one runner per test file.
+  // Bound Telegram CI jobs so isolate recycling stays inside one job instead
+  // of minting one runner per test file. Ten files keeps the worst job near
+  // 3 minutes (observed 2026-08: ~45s runner setup + ~7-24s per file) while
+  // halving the ~42-job fanout a Telegram-touching diff produced at five.
   ["test/vitest/vitest.extension-telegram.config.ts", TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT],
 ]);
 const EXTENSION_TEST_CONFIG_ROUTES: Array<[(root: string) => boolean, string]> = [

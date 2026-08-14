@@ -3,6 +3,9 @@ set -euo pipefail
 
 APP_BUNDLE="dist/OpenClaw.app"
 IDENTITY="${SIGN_IDENTITY:-}"
+SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"
+ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"
+ELEVATION_TEAM_ID="FWJYW4S8P8"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 CODESIGN_TIMESTAMP_RETRY_ATTEMPTS="${CODESIGN_TIMESTAMP_RETRY_ATTEMPTS:-8}"
 CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS="${CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS:-5}"
@@ -22,6 +25,7 @@ Usage: scripts/codesign-mac-app.sh [app-bundle]
 
 Env:
   SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"
+  OPENCLAW_MAC_SIGNING_VARIANT=standard|elevation-host
   ALLOW_ADHOC_SIGNING=1
   CODESIGN_TIMESTAMP=auto|on|off
   CODESIGN_TIMESTAMP_RETRY_ATTEMPTS=8
@@ -30,6 +34,26 @@ Env:
   SKIP_TEAM_ID_CHECK=1              # bypass Team ID audit
 HELP
   exit 0
+fi
+
+case "$SIGNING_VARIANT" in
+  standard|elevation-host) ;;
+  *)
+    echo "ERROR: Unknown OPENCLAW_MAC_SIGNING_VARIANT value: $SIGNING_VARIANT (use standard|elevation-host)" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$SIGNING_VARIANT" == "elevation-host" && -z "$IDENTITY" ]]; then
+  IDENTITY="$ELEVATION_IDENTITY"
+fi
+if [[ "$SIGNING_VARIANT" == "elevation-host" && "$DISABLE_LIBRARY_VALIDATION" == "1" ]]; then
+  echo "ERROR: Elevation host signing forbids DISABLE_LIBRARY_VALIDATION=1." >&2
+  exit 1
+fi
+if [[ "$SIGNING_VARIANT" == "elevation-host" && "$SKIP_TEAM_ID_CHECK" == "1" ]]; then
+  echo "ERROR: Elevation host signing forbids SKIP_TEAM_ID_CHECK=1." >&2
+  exit 1
 fi
 
 if [[ "${1:-}" == "--" ]]; then
@@ -171,7 +195,16 @@ if [[ "$IDENTITY" != "-" ]]; then
 fi
 timestamp_args=("$timestamp_arg")
 
-cat > "$ENT_TMP_APP" <<'PLIST'
+if [[ "$SIGNING_VARIANT" == "elevation-host" ]]; then
+  cat > "$ENT_TMP_APP" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict/>
+</plist>
+PLIST
+else
+  cat > "$ENT_TMP_APP" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -187,6 +220,7 @@ cat > "$ENT_TMP_APP" <<'PLIST'
 </dict>
 </plist>
 PLIST
+fi
 
 if [[ "$DISABLE_LIBRARY_VALIDATION" == "1" ]]; then
   /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$ENT_TMP_APP" >/dev/null 2>&1 || \
@@ -286,10 +320,45 @@ verify_team_ids() {
   fi
 }
 
+verify_elevation_signature() {
+  [[ "$SIGNING_VARIANT" == "elevation-host" ]] || return 0
+
+  local actual_team
+  actual_team="$(team_id_for "$APP_BUNDLE" || true)"
+  if [[ "$actual_team" != "$ELEVATION_TEAM_ID" ]]; then
+    echo "ERROR: Elevation host requires TeamIdentifier=$ELEVATION_TEAM_ID, got '${actual_team:-not set}'." >&2
+    exit 1
+  fi
+
+  local authority
+  authority="$(codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1 | awk -F= '/^Authority=/{print $2; exit}')"
+  if [[ "$authority" != "$ELEVATION_IDENTITY" ]]; then
+    echo "ERROR: Elevation host requires '$ELEVATION_IDENTITY', got '${authority:-not set}'." >&2
+    exit 1
+  fi
+
+  assert_no_apple_events_entitlement() {
+    local signed_path="$1"
+    local entitlements
+    entitlements="$(codesign -d --entitlements :- "$signed_path" 2>/dev/null || true)"
+    if /usr/bin/grep -q "com.apple.security.automation.apple-events" <<<"$entitlements"; then
+      echo "ERROR: Elevation host code retains Apple Events entitlement: $signed_path" >&2
+      exit 1
+    fi
+  }
+
+  assert_no_apple_events_entitlement "$APP_BUNDLE"
+  while IFS= read -r -d '' signed_path; do
+    if /usr/bin/file "$signed_path" | /usr/bin/grep -q "Mach-O"; then
+      assert_no_apple_events_entitlement "$signed_path"
+    fi
+  done < <(find "$APP_BUNDLE" -type f -print0)
+}
+
 # Sign bundled helper binaries before signing the app bundle.
 MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
 if [ -f "$MLX_TTS_HELPER" ]; then
-  echo "Signing MLX TTS helper"; sign_item "$MLX_TTS_HELPER" "$APP_ENTITLEMENTS"
+  echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"
 fi
 
 # Sign main binary
@@ -329,5 +398,6 @@ fi
 sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
 
 verify_team_ids
+verify_elevation_signature
 
 echo "Codesign complete for $APP_BUNDLE"
