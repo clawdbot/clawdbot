@@ -503,6 +503,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       // restart-scoped availability, not a capability upgrade requiring re-pairing.
       caps: preparedRuntime.manifest.caps,
       commands: preparedRuntime.manifest.commands,
+      computerUse: preparedRuntime.manifest.computerUse,
       workerRuns: preparedRuntime.manifest.workerRuns,
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,

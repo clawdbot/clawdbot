@@ -1,6 +1,7 @@
 // Keep the runtime class on the public package specifier so OpenClaw and
 // external consumers share one constructor identity.
 import { EventStream as LlmEventStream } from "@openclaw/ai/event-stream";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -114,7 +115,9 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
     return message;
   }
   const content = message.content.filter((item) => item.type !== "toolCall");
-  return content.length === message.content.length ? message : { ...message, content };
+  return content.length === message.content.length
+    ? message
+    : replaceCompactionReplayOwnerContent(message, content);
 }
 
 function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {

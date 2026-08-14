@@ -4,13 +4,81 @@ import { resolveConversationCapabilityProfile } from "../../agents/conversation-
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import type { FollowupRun } from "./queue.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityProjector,
+  ReplyToolAuthorityRoute,
+} from "./reply-run-registry.contracts.js";
 
-/** Fingerprints the complete model-facing tool authority owned by one queued turn. */
-export function resolveFollowupRunToolAuthorityFingerprint(
-  run: FollowupRun,
-  route?: { provider: string; model: string },
+type ReplyToolAuthoritySnapshot = {
+  originatingChannel: FollowupRun["originatingChannel"];
+  toolsAllow: FollowupRun["toolsAllow"];
+  toolsAllowIntersection: readonly string[][] | undefined;
+  disableTools: boolean;
+  run: FollowupRun["run"];
+};
+
+function snapshotFollowupRunToolAuthority(run: FollowupRun): ReplyToolAuthoritySnapshot {
+  return {
+    originatingChannel: run.originatingChannel,
+    toolsAllow: run.toolsAllow,
+    toolsAllowIntersection: run.toolsAllow
+      ? readToolAllowlistIntersection(run.toolsAllow)
+      : undefined,
+    disableTools: run.disableTools === true,
+    run: {
+      ...run.run,
+      clientCaps: run.run.clientCaps ? [...run.run.clientCaps] : undefined,
+      memberRoleIds: run.run.memberRoleIds ? [...run.run.memberRoleIds] : undefined,
+    },
+  };
+}
+
+function applyReplyToolAuthorityOverlay(
+  snapshot: ReplyToolAuthoritySnapshot,
+  overlay: ReplyToolAuthorityOverlay,
+): ReplyToolAuthoritySnapshot {
+  return {
+    ...snapshot,
+    originatingChannel: overlay.originatingChannel,
+    toolsAllow: overlay.toolsAllow,
+    toolsAllowIntersection: overlay.toolsAllow
+      ? readToolAllowlistIntersection(overlay.toolsAllow)
+      : undefined,
+    disableTools: overlay.disableTools,
+    run: {
+      ...snapshot.run,
+      messageProvider: overlay.messageProvider,
+      chatType: overlay.chatType,
+      agentAccountId: overlay.agentAccountId,
+      conversationToolPolicy: overlay.conversationToolPolicy,
+      groupId: overlay.groupId,
+      groupChannel: overlay.groupChannel,
+      groupSpace: overlay.groupSpace,
+      memberRoleIds: overlay.memberRoleIds,
+      spawnedBy: overlay.spawnedBy,
+      senderId: overlay.senderId,
+      senderName: overlay.senderName,
+      senderUsername: overlay.senderUsername,
+      senderE164: overlay.senderE164,
+      senderIsOwner: overlay.senderIsOwner,
+      inputProvenance: overlay.inputProvenance,
+      trustedInternalHandoff: overlay.trustedInternalHandoff,
+      scheduledToolPolicy: overlay.scheduledToolPolicy,
+      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
+      traceAuthorized: overlay.traceAuthorized,
+      approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
+      clientCaps: overlay.clientCaps,
+      toolBindings: overlay.toolBindings,
+    },
+  };
+}
+
+function resolveReplyToolAuthoritySnapshotFingerprint(
+  snapshot: ReplyToolAuthoritySnapshot,
+  route?: ReplyToolAuthorityRoute,
 ): string {
-  const execution = run.run;
+  const execution = snapshot.run;
   const provider = route?.provider ?? execution.provider;
   const model = route?.model ?? execution.model;
   const policySessionKey = execution.runtimePolicySessionKey ?? execution.sessionKey;
@@ -30,7 +98,7 @@ export function resolveFollowupRunToolAuthorityFingerprint(
     modelProvider: provider,
     modelId: model,
     messageProvider: execution.messageProvider,
-    messageChannel: run.originatingChannel,
+    messageChannel: snapshot.originatingChannel,
     chatType: execution.chatType,
     conversationToolPolicy: execution.conversationToolPolicy,
     groupId: execution.groupId,
@@ -57,11 +125,9 @@ export function resolveFollowupRunToolAuthorityFingerprint(
         provider,
         model,
         policy: capabilityProfile.policy,
-        toolsAllow: run.toolsAllow,
-        toolsAllowIntersection: run.toolsAllow
-          ? readToolAllowlistIntersection(run.toolsAllow)
-          : undefined,
-        disableTools: run.disableTools === true,
+        toolsAllow: snapshot.toolsAllow,
+        toolsAllowIntersection: snapshot.toolsAllowIntersection,
+        disableTools: snapshot.disableTools,
         sessionFile: execution.sessionFile,
         agentDir: execution.agentDir,
         workspaceDir: execution.workspaceDir,
@@ -78,4 +144,24 @@ export function resolveFollowupRunToolAuthorityFingerprint(
       }),
     )
     .digest("hex");
+}
+
+/** Fingerprints the complete model-facing tool authority owned by one queued turn. */
+export function resolveFollowupRunToolAuthorityFingerprint(
+  run: FollowupRun,
+  route?: ReplyToolAuthorityRoute,
+): string {
+  return resolveReplyToolAuthoritySnapshotFingerprint(snapshotFollowupRunToolAuthority(run), route);
+}
+
+/** Projects a new inbound turn against one active run's frozen owner authority. */
+export function createFollowupRunToolAuthorityProjector(
+  run: FollowupRun,
+): ReplyToolAuthorityProjector {
+  const snapshot = snapshotFollowupRunToolAuthority(run);
+  return (overlay, route) =>
+    resolveReplyToolAuthoritySnapshotFingerprint(
+      applyReplyToolAuthorityOverlay(snapshot, overlay),
+      route,
+    );
 }

@@ -263,6 +263,7 @@ async function run(
     timeoutMs?: number;
     headers?: Record<string, string>;
     observations?: ResponsesPromptObservation[];
+    onCompactionRejected?: () => void;
   } = {},
 ): Promise<AssistantMessage> {
   const options = {
@@ -272,6 +273,7 @@ async function run(
     reasoningEffort: "low",
     timeoutMs: overrides.timeoutMs,
     headers: overrides.headers,
+    onCompactionRejected: overrides.onCompactionRejected,
   };
   if (overrides.observations) {
     responsesPromptObserver.set(options, (observation) =>
@@ -585,6 +587,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   });
 
   it("recovers a rejected WebSocket compaction replay over full-history SSE", async () => {
+    const onCompactionRejected = vi.fn();
     transportState.responseBatches.push(
       [
         message(
@@ -621,7 +624,11 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       tools: [],
     } satisfies Context;
 
-    const result = await run(context, { observations, transport: "websocket" });
+    const result = await run(context, {
+      observations,
+      transport: "websocket",
+      onCompactionRejected,
+    });
     const next = await run(
       {
         ...context,
@@ -638,6 +645,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       },
     });
     expect(next.stopReason).toBe("stop");
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
     expect(transportState.websocketRequests).toHaveLength(2);
     expect(JSON.stringify(transportState.websocketRequests[0]?.input)).toContain(
       '"type":"compaction"',

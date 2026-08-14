@@ -6,7 +6,13 @@ import { resetLogger } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
+import {
+  runGuidedOnboarding as runGuidedOnboardingImpl,
+  type GuidedOnboardingDeps,
+} from "./onboard-guided.js";
+
+const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
+  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 
@@ -44,6 +50,7 @@ vi.mock("../state/local-onboarding-state.js", () => ({
 }));
 vi.mock("./onboard-agent.js", () => ({
   ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
+  validateFirstOnboardingAgentName: () => undefined,
 }));
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",

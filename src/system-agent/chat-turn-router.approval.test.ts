@@ -539,6 +539,53 @@ describe("SystemAgentChatEngine approval", () => {
     );
   });
 
+  it("preserves the pending first-agent name when a planner adds the verified model", async () => {
+    useTempStateDir();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "before",
+      configHashAfter: "after",
+      bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
+      lines: [],
+    }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => ({
+        reply: "I'll keep the verified model.",
+        command: "setup workspace /tmp/new-work model openai/gpt-5.5",
+        modelLabel: "planner",
+      }),
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        applySetup,
+        verifyInferenceConfig: vi.fn(async () => ({
+          ok: true as const,
+          modelRef: "openai/gpt-5.5",
+          latencyMs: 100,
+        })),
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+    engine.propose({
+      kind: "setup",
+      workspace: "/tmp/old-work",
+      agentName: "robby",
+    });
+
+    await engine.handle("keep the model and change the workspace");
+    await engine.handle("yes");
+
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/new-work",
+        firstAgent: { name: "robby" },
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("tells the agent loop when a preserved proposal was resolved", async () => {
     const observedInputs: string[] = [];
     const router = createRouterHarness({

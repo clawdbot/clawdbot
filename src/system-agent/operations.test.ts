@@ -449,6 +449,28 @@ describe("parseSystemAgentOperation", () => {
     await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
   });
 
+  it("delegates literal main to the canonical creation gate", async () => {
+    const tempDir = opTempDirs.make("openclaw-agent-main-gate-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime } = createSystemAgentTestRuntime();
+    const createAgent = vi.fn(async () => ({
+      status: "error" as const,
+      reason: "legacy-session-migration-required" as const,
+      agentId: "main",
+      message: "Run openclaw doctor --fix before creating main.",
+    }));
+
+    await expect(
+      executeSystemAgentOperation(
+        { kind: "create-agent", agentId: "main", workspace: "/tmp/main" },
+        runtime,
+        { approved: true, deps: { createAgent } },
+      ),
+    ).rejects.toThrow("Run openclaw doctor --fix before creating main.");
+
+    expect(createAgent).toHaveBeenCalledWith({ name: "main", workspace: "/tmp/main" });
+  });
+
   it("keeps the retired agent identity reserved", async () => {
     const { runtime } = createSystemAgentTestRuntime();
     const createAgent = vi.fn();

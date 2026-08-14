@@ -38,6 +38,7 @@ describe("executeAgentTurn: CLI session routing", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
