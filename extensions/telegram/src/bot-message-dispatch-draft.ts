@@ -326,7 +326,8 @@ export function splitTextIntoLaneSegments(
         ...(update.isReasoningSnapshot ? { isReasoningSnapshot: true } : {}),
       },
     })),
-    suppressedReasoningOnly: Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
+    suppressedReasoningOnly:
+      isReasoning === true && !split.answerText && (suppressReasoning || !split.reasoningText),
   };
 }
 

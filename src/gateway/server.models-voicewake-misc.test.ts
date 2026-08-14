@@ -174,6 +174,27 @@ const minimaxProviderConfig = () => ({
   models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
 });
 
+const fullCatalogProviderConfig = () => ({
+  models: {
+    providers: Object.fromEntries(
+      ["anthropic", "openai"].map((provider) => [
+        provider,
+        {
+          baseUrl: `https://${provider}.example.com/v1`,
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "MODEL_CATALOG_TEST_MISSING_KEY",
+          },
+          models: buildAgentCatalogFixture()
+            .filter((entry) => entry.provider === provider)
+            .map(({ provider: _provider, ...model }) => model),
+        },
+      ]),
+    ),
+  },
+});
+
 type ConfiguredProviderModelFixture = {
   provider: string;
   modelId: string;
@@ -222,7 +243,10 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
 });
 
 describe("gateway server models + voicewake", () => {
-  const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
+  const listModels = async (params?: {
+    view?: "default" | "configured" | "all";
+    preparedOnly?: boolean;
+  }) =>
     withEnvAsync(
       {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -305,6 +329,7 @@ describe("gateway server models + voicewake", () => {
   }): Promise<void> => {
     await withModelsConfig(
       {
+        ...fullCatalogProviderConfig(),
         agents: {
           defaults: {
             model: { primary: options.primary },
@@ -461,18 +486,20 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list all view returns model catalog", async () => {
-    await seedAgentModelCatalog();
+    await withModelsConfig(fullCatalogProviderConfig(), async () => {
+      await seedAgentModelCatalog();
 
-    const res1 = await listModels({ view: "all" });
-    const res2 = await listModels({ view: "all" });
+      const res1 = await listModels({ view: "all", preparedOnly: true });
+      const res2 = await listModels({ view: "all", preparedOnly: true });
 
-    expect(res1.ok).toBe(true);
-    expect(res2.ok).toBe(true);
+      expect(res1.ok).toBe(true);
+      expect(res2.ok).toBe(true);
 
-    const models = res1.payload?.models ?? [];
-    expect(models).toEqual(expectedSortedCatalog());
+      const models = res1.payload?.models ?? [];
+      expect(models).toEqual(expectedSortedCatalog());
 
-    expect(agentDiscoveryMock.discoverCalls).toBe(1);
+      expect(agentDiscoveryMock.discoverCalls).toBe(1);
+    });
   });
 
   test("models.list default view uses configured providers instead of the full catalog", async () => {
@@ -585,6 +612,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list all view bypasses the explicit model policy", async () => {
     await withModelsConfig(
       {
+        ...fullCatalogProviderConfig(),
         agents: {
           defaults: {
             model: { primary: "openai/gpt-test-z" },
@@ -597,7 +625,7 @@ describe("gateway server models + voicewake", () => {
       },
       async () => {
         await seedAgentModelCatalog();
-        const res = await listModels({ view: "all" });
+        const res = await listModels({ view: "all", preparedOnly: true });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(expectedSortedCatalog());
       },

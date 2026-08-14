@@ -13,7 +13,6 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import pLimit from "p-limit";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -39,7 +38,7 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -66,6 +65,7 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
   loadGatewaySessionEntryReadOnly,
@@ -688,9 +688,11 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   const nowMs = params?.nowMs ?? Date.now();
   const transientMaxAgeMs = params?.transientMaxAgeMs ?? DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS;
   const sessionKeyFilter = params?.sessionKey ?? null;
-  const agentIdFilter = params?.agentId?.trim() || undefined;
-  const defaultAgentId =
-    sessionKeyFilter === "global" ? resolveDefaultAgentId(getRuntimeConfig()) : undefined;
+  const agentIdFilter = params?.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const globalCompatibilityOwnerAgentId =
+    sessionKeyFilter === "global" && agentIdFilter
+      ? tryResolveSessionCompatibilityOwnerAgentId(getRuntimeConfig(), "global")
+      : undefined;
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
   const entries = listManagedImageRecordEntries({ stateDir });
 
@@ -712,9 +714,12 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     if (
       sessionKeyFilter === "global" &&
       record.sessionKey === "global" &&
-      ((agentIdFilter &&
-        resolveManagedImageRecordAgentId(record, defaultAgentId) !== agentIdFilter) ||
-        (!agentIdFilter && typeof record.agentId === "string" && record.agentId.trim()))
+      (!agentIdFilter ||
+        resolveManagedSessionOwnerAgentId(
+          record.sessionKey,
+          record.agentId,
+          globalCompatibilityOwnerAgentId,
+        ) !== agentIdFilter)
     ) {
       retainedCount += 1;
       continue;
@@ -772,12 +777,16 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
-function resolveManagedImageRecordAgentId(
-  record: ManagedImageRecord,
-  defaultAgentId: string | undefined,
+function resolveManagedSessionOwnerAgentId(
+  sessionKey: string,
+  explicitAgentId?: string,
+  compatibilityAgentId?: string,
 ): string | undefined {
-  const explicitAgentId = record.agentId?.trim();
-  return explicitAgentId || defaultAgentId;
+  const ownerAgentId =
+    explicitAgentId?.trim() ||
+    parseAgentSessionKey(sessionKey)?.agentId ||
+    compatibilityAgentId?.trim();
+  return ownerAgentId ? normalizeAgentId(ownerAgentId) : undefined;
 }
 
 function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind | null {
@@ -961,7 +970,11 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
   const cfg = getRuntimeConfig();
   const ownerAgentId =
-    agentId ?? resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
+    resolveManagedSessionOwnerAgentId(sessionKey, agentId) ??
+    tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
+  if (!ownerAgentId) {
+    return { kind: "unavailable", reason: "read-failed" };
+  }
   const discovery =
     storeAvailabilityCache?.get(ownerAgentId) ??
     resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId, {
@@ -1214,11 +1227,11 @@ export async function resolveManagedOutgoingMediaArtifactDownload(params: {
     return null;
   }
   const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-  const recordAgentId = record.agentId
-    ? normalizeAgentId(record.agentId)
-    : params.defaultAgentId
-      ? normalizeAgentId(params.defaultAgentId)
-      : undefined;
+  const recordAgentId = resolveManagedSessionOwnerAgentId(
+    record.sessionKey,
+    record.agentId,
+    params.defaultAgentId,
+  );
   if (requestedAgentId && recordAgentId !== requestedAgentId) {
     return null;
   }

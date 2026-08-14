@@ -549,6 +549,7 @@ export function createExecTool(
           notifyOnExitEmptySuccess,
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
+          agentId,
           mainKey: defaults?.mainKey,
           sessionScope: defaults?.sessionScope,
           eventRouting: defaults?.eventRouting,

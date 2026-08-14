@@ -645,7 +645,7 @@ export function applyOutcomeToStoredJob(
       scheduleOwnership: "stale",
       deferredNotifications: opts?.deferredNotifications,
     });
-    emitJobFinished(state, result.job, result, result.startedAt);
+    emitCronOutcomeForJob(state, result.job, result);
     state.deps.log.info(
       { jobId: result.jobId, status: result.status },
       "cron: finalized run after job was removed during execution",
@@ -653,6 +653,20 @@ export function applyOutcomeToStoredJob(
     return undefined;
   }
 
+  if (applyOutcomeToAuthoritativeJob(state, job, result, opts)) {
+    store.jobs = jobs.filter((entry) => entry.id !== job.id);
+    return job;
+  }
+  return undefined;
+}
+
+/** Applies one outcome to a row already re-read under the runtime write transaction. */
+export function applyOutcomeToAuthoritativeJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+  opts?: { deferredNotifications?: DeferredCronNotifications; emit?: boolean },
+): boolean {
   const scheduleOwnership = resolveCronRunScheduleOwnership({
     admittedJob: result.job,
     currentJob: job,
@@ -687,7 +701,7 @@ export function applyOutcomeToStoredJob(
       // edit owns a replacement override that must survive finalization.
       job.state.pacedNextRunAtMs = undefined;
     }
-    return undefined;
+    return false;
   }
 
   const shouldDelete = applyJobResult(state, job, result, {
@@ -698,22 +712,28 @@ export function applyOutcomeToStoredJob(
   applyScriptRunResult(job, result, { triggerOwnership });
   job.state.startupCatchupAtMs = undefined;
 
-  emitJobFinished(state, job, result, result.startedAt);
-
-  if (shouldDelete) {
-    store.jobs = jobs.filter((entry) => entry.id !== job.id);
-    return job;
+  if (opts?.emit !== false) {
+    emitCronOutcomeForJob(state, job, result);
   }
-  return undefined;
+
+  return shouldDelete;
 }
 
-function emitJobFinished(
+/** Records a terminal task/event fact before the fallible runtime-row commit. */
+function emitCronOutcomeForJob(
   state: CronServiceState,
   job: CronJob,
   result: TimedCronRunOutcome,
-  runAtMs: number,
-) {
-  const event = {
+): void {
+  if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
+    return;
+  }
+  recordCronOutcomeForJob(state, job, result);
+  emitCronOutcomeEventForJob(state, job, result);
+}
+
+function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: number) {
+  return {
     jobId: job.id,
     action: "finished",
     job,
@@ -736,6 +756,14 @@ function emitJobFinished(
     provider: result.provider,
     usage: result.usage,
   } as const;
+}
+
+export function recordCronOutcomeForJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+): void {
+  const event = cronOutcomeEvent(job, result, result.startedAt);
   tryFinishCronTaskRun(state, {
     taskRunId: result.taskRunId,
     job,
@@ -744,5 +772,12 @@ function emitJobFinished(
     ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
     ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
   });
-  emit(state, event);
+}
+
+export function emitCronOutcomeEventForJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+): void {
+  emit(state, cronOutcomeEvent(job, result, result.startedAt));
 }

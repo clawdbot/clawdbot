@@ -87,6 +87,7 @@ async function requireAutomationAllowed() {
 }
 
 function closeRelaySocket() {
+  clearRelayOpeningDeadline();
   const socket = relayWs;
   if (!socket) {
     return;
@@ -113,7 +114,6 @@ async function reconcilePairingInvalidation() {
     return;
   }
   reconciledPairingInvalidationRevision = pairingConfigStore.invalidationRevision;
-  clearRelayOpeningDeadline();
   await syncTabsToRelay();
   closeRelaySocket();
   setBadge("off");
@@ -440,7 +440,6 @@ async function connectRelay(isConnectionAllowed = () => true) {
   await tabAccessReady;
   if (retiredCopilotCustodyBlocked) {
     tabAccessPolicy.setEnabled(false);
-    clearRelayOpeningDeadline();
     closeRelaySocket();
     setBadge("off");
     return;
@@ -521,13 +520,6 @@ async function connectRelay(isConnectionAllowed = () => true) {
 }
 
 function handleRelayOpeningDeadline() {
-  // Unit-test module isolation can outlive the mocked Chrome global. The real
-  // MV3 worker always has chrome; a detached test timer has no owner to mutate.
-  if (typeof chrome === "undefined") {
-    relayOpeningDeadlineAt = 0;
-    relayOpeningDeadlineTimer = null;
-    return;
-  }
   const ws = relayWs;
   if (!ws) {
     clearRelayOpeningDeadline();
@@ -621,7 +613,6 @@ const handlePopupMessage = createPopupMessageHandler({
   runAccessMutation,
   detachAllDebuggerSessions,
   syncTabsToRelay,
-  clearRelayOpeningDeadline,
   closeRelaySocket,
   connectRelay,
   setBadge,

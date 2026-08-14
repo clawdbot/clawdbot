@@ -143,6 +143,7 @@ export function renderWhereChip(params: {
                     sub: nodeSuffixes[index],
                     facts: params.state.deviceFacts.get(node.nodeId),
                     checked: params.execNode === node.nodeId,
+                    disabled: !node.connected,
                     title: nodeTooltip(node),
                     onSelect: () => params.onSelectExecNode(node.nodeId),
                   },

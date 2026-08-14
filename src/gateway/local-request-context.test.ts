@@ -6,12 +6,21 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
+import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
+import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import { dispatchGatewayMethodInProcessRaw } from "./server-plugins.js";
+
+type PublishedOwnerSnapshot = Awaited<
+  ReturnType<typeof preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot>
+>;
+
+const asPublishedOwner = (value: PublishedModelCatalogOwnerCandidate): PublishedOwnerSnapshot =>
+  value as unknown as PublishedOwnerSnapshot;
 
 describe("local gateway request context", () => {
   let response: Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>>;
@@ -54,14 +63,19 @@ describe("local gateway request context", () => {
       },
     } as OpenClawConfig;
     const loadOwner = vi
-      .spyOn(preparedModelCatalog, "loadResolvedPublishedModelCatalogOwner")
-      .mockResolvedValue({
-        agentId: "worker",
-        agentDir: "/tmp/local-model-catalog-agent",
-        workspaceDir: "/tmp/local-model-catalog-workspace",
-        config: cfg,
-        modelCatalog: { entries: [], routeVariants: [] },
-      });
+      .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockResolvedValue(
+        asPublishedOwner({
+          agentId: "worker",
+          agentDir: "/tmp/local-model-catalog-agent",
+          workspaceDir: "/tmp/local-model-catalog-workspace",
+          config: cfg,
+          authModes: {},
+          authStore: { version: 1, profiles: {} },
+          metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+          modelCatalog: { entries: [], routeVariants: [] },
+        }),
+      );
 
     await withLocalGatewayRequestScope(
       {
@@ -83,6 +97,122 @@ describe("local gateway request context", () => {
 
     expect(loadOwner).toHaveBeenCalledWith({ agentId: "worker", config: cfg, readOnly: true });
     loadOwner.mockRestore();
+  });
+
+  it("refreshes local models.list auth after login and logout", async () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            agentDir: "/tmp/local-model-auth-agent",
+            workspace: "/tmp/local-model-auth-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const model = {
+      provider: "local-auth-provider",
+      id: "local-auth-model",
+      name: "Local auth model",
+      api: "openai-completions" as const,
+    };
+    const candidate = {
+      agentId: "main",
+      agentDir: "/tmp/local-model-auth-agent",
+      workspaceDir: "/tmp/local-model-auth-workspace",
+      config: cfg,
+      authModes: {},
+      authStore: { version: 1 as const, profiles: {} },
+      metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+      modelCatalog: { entries: [model], routeVariants: [model] },
+    } satisfies PublishedModelCatalogOwnerCandidate;
+    const refreshAuth = vi
+      .fn()
+      .mockResolvedValueOnce({
+        authModes: { "local-auth-provider": "api_key" },
+        authStore: {
+          version: 1,
+          profiles: {
+            "local-auth-provider:default": {
+              type: "api_key",
+              provider: "local-auth-provider",
+              key: "local-auth-key-not-real",
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ authModes: {}, authStore: { version: 1, profiles: {} } });
+    setPreparedModelRuntimeAuthLoader(candidate, refreshAuth);
+    const loadOwner = vi
+      .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockResolvedValue(asPublishedOwner(candidate));
+
+    const list = () =>
+      withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
+        dispatchGatewayMethodInProcessRaw("models.list", { view: "configured", refresh: true }),
+      );
+    const loggedIn = await list();
+    const loggedOut = await list();
+
+    expect(loggedIn).toMatchObject({
+      ok: true,
+      payload: { models: [expect.objectContaining({ id: "local-auth-model", available: true })] },
+    });
+    expect(loggedOut).toMatchObject({
+      ok: true,
+      payload: { models: [] },
+    });
+    expect(refreshAuth).toHaveBeenNthCalledWith(1, {
+      providerIds: ["local-auth-provider"],
+    });
+    expect(refreshAuth).toHaveBeenNthCalledWith(2, {
+      providerIds: ["local-auth-provider"],
+    });
+    loadOwner.mockRestore();
+  });
+
+  it("uses the prepared local owner when a catalog read times out", async () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            agentDir: "/tmp/local-model-timeout-agent",
+            workspace: "/tmp/local-model-timeout-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const candidate = {
+      agentId: "main",
+      agentDir: "/tmp/local-model-timeout-agent",
+      workspaceDir: "/tmp/local-model-timeout-workspace",
+      config: cfg,
+      authModes: {},
+      authStore: { version: 1 as const, profiles: {} },
+      metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+      modelCatalog: { entries: [], routeVariants: [] },
+    } satisfies PublishedModelCatalogOwnerCandidate;
+    const loadOwner = vi
+      .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockImplementation(() => new Promise(() => {}));
+    const readOwner = vi
+      .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockReturnValue(asPublishedOwner(candidate));
+
+    const result = await withLocalGatewayRequestScope(
+      { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
+      () => dispatchGatewayMethodInProcessRaw("models.list", { view: "default" }),
+    );
+
+    expect(result).toMatchObject({ ok: true, payload: { models: [] } });
+    expect(loadOwner).toHaveBeenCalledOnce();
+    expect(readOwner).toHaveBeenCalledOnce();
+    loadOwner.mockRestore();
+    readOwner.mockRestore();
   });
 
   it("commits agent deletion through the canonical cron store", async () => {

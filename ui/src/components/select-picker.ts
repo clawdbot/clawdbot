@@ -17,6 +17,7 @@ export type PickerParams<Option extends PickerOption> = {
   className?: string;
   title?: string;
   placement?: "top" | "bottom";
+  onOpen?: () => void;
   onChange: (value: string) => void;
   onChangeTarget?: (value: string, select: HTMLElement) => void;
   renderLeading?: (option: Option) => unknown;
@@ -47,6 +48,7 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
       placement=${params.placement ?? nothing}
       .value=${params.value}
       ?disabled=${params.disabled}
+      @wa-show=${() => params.onOpen?.()}
       @change=${(event: Event) => {
         const value = (event.currentTarget as HTMLElement & { value?: unknown }).value;
         const option = typeof value === "string" && options.find((entry) => entry.value === value);
