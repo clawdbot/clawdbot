@@ -142,6 +142,39 @@ function workspaceTransfer(): NodeWorkspaceTransferService {
 }
 
 describe("node worker tunnel manager", () => {
+  it("projects a terminal gateway connection failure into the launch result", async () => {
+    const record = environment();
+    const errorText =
+      "worker could not reach gateway gateway.example: certificate rejected; check TLS pin/publicUrl configuration";
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: transport,
+      launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => ({
+        launchId: request.input.launchId,
+        planHash: "b".repeat(64),
+        environmentId: request.input.descriptor.admission.environmentId,
+        sessionId: request.input.descriptor.admission.sessionId,
+        ownerEpoch: request.input.descriptor.admission.ownerEpoch,
+        placementGeneration: request.input.placementGeneration,
+        runId: request.input.descriptor.assignment.runId,
+        state: "cancelled",
+        errorText,
+      })),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: workspaceTransfer(),
+    });
+    const handle = await manager.start(startRequest());
+
+    await expect(
+      handle.launchTurn({ plan: plan(), placementGeneration: 4 }),
+    ).resolves.toMatchObject({
+      code: 1,
+      killed: true,
+      stderr: errorText,
+    });
+  });
+
   it("reuses only the exact same epoch binding", async () => {
     const record = environment();
     const manager = createNodeWorkerTunnelManager({

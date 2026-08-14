@@ -219,12 +219,11 @@ class SkillsPage extends OpenClawLightDomElement {
   }
 
   private ensureInitialData() {
-    if (!this.gateway.connected || !this.gateway.client) {
-      return;
-    }
     if (
-      this.routeDataEnabled &&
-      (this.routeData?.agentsList || this.routeData?.report || this.routeData?.error)
+      this.routeDataEnabled ||
+      !this.routeDataInitialized ||
+      !this.gateway.connected ||
+      !this.gateway.client
     ) {
       return;
     }

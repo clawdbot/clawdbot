@@ -4156,6 +4156,11 @@ export const en: TranslationMap = {
       subtitle: "Choose the primary, ordered fallbacks, and utility model.",
       primary: "Default model",
       utility: "Utility model",
+      utilityHelpLabel: "About the utility model",
+      utilityHelpPurpose:
+        "Handles short background tasks such as generated titles, progress narration, and session summaries.",
+      utilityHelpAutomatic:
+        "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
       automatic: "Automatic (provider default)",
       disabled: "Disabled",
       savedSelection: "Saved selection",

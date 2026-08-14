@@ -174,8 +174,8 @@ describe("cua-computer provider", () => {
   it("advertises the macOS mapping only with a complete app-provided endpoint", () => {
     const { session } = driver();
     const endpoint = {
-      OPENCLAW_CUA_DRIVER_SOCKET_PATH: "/tmp/openclaw-cua-test/driver.sock",
-      OPENCLAW_CUA_DRIVER_BINARY_PATH: process.execPath,
+      CUA_DRIVER_SOCKET_PATH: "/tmp/openclaw-cua-test/driver.sock",
+      CUA_DRIVER_BINARY_PATH: process.execPath,
     };
     const provider = createCuaComputerProvider({
       platform: "darwin",
@@ -204,10 +204,10 @@ describe("cua-computer provider", () => {
 
     for (const env of [
       {},
-      { OPENCLAW_CUA_DRIVER_SOCKET_PATH: endpoint.OPENCLAW_CUA_DRIVER_SOCKET_PATH },
-      { OPENCLAW_CUA_DRIVER_BINARY_PATH: endpoint.OPENCLAW_CUA_DRIVER_BINARY_PATH },
-      { ...endpoint, OPENCLAW_CUA_DRIVER_SOCKET_PATH: "relative.sock" },
-      { ...endpoint, OPENCLAW_CUA_DRIVER_BINARY_PATH: "/missing/cua-driver" },
+      { CUA_DRIVER_SOCKET_PATH: endpoint.CUA_DRIVER_SOCKET_PATH },
+      { CUA_DRIVER_BINARY_PATH: endpoint.CUA_DRIVER_BINARY_PATH },
+      { ...endpoint, CUA_DRIVER_SOCKET_PATH: "relative.sock" },
+      { ...endpoint, CUA_DRIVER_BINARY_PATH: "/missing/cua-driver" },
     ]) {
       expect(
         createCuaComputerProvider({ platform: "darwin", env, driver: session }).isAvailable(),
@@ -231,8 +231,8 @@ describe("cua-computer provider", () => {
     const computer = await createCuaComputerProvider({
       platform: "darwin",
       env: {
-        OPENCLAW_CUA_DRIVER_SOCKET_PATH: "/tmp/openclaw-cua-test/driver.sock",
-        OPENCLAW_CUA_DRIVER_BINARY_PATH: process.execPath,
+        CUA_DRIVER_SOCKET_PATH: "/tmp/openclaw-cua-test/driver.sock",
+        CUA_DRIVER_BINARY_PATH: process.execPath,
       },
       driver: retina.session,
       imageProcessor: {

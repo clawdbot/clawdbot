@@ -162,6 +162,10 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
     return value.active?.state === "activated";
   });
   if (!registration.controlled) {
+    // The production preview serves static assets directly. Canonicalize the
+    // first controlled reload so Vite's portable relative asset URLs do not
+    // resolve beneath a client-side deep link such as /chat/research.
+    await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));
     await page.reload();
   }
   await page.waitForFunction(() => navigator.serviceWorker?.controller?.state === "activated");
@@ -275,6 +279,8 @@ describe("Control UI service-worker production update E2E", () => {
     const gateway = await installMockGateway(page, {
       assistantAgentId: "research",
       defaultAgentId: "research",
+      serverBuildId: buildA,
+      serverVersion: "2026.7.10",
       featureMethods: ["terminal.open"],
       methodResponses: {
         "terminal.open": {
@@ -293,6 +299,34 @@ describe("Control UI service-worker production update E2E", () => {
       expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
       await ensureControlledPage(page, pageErrors, buildA);
       await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildA);
+      await expect
+        .poll(async () =>
+          page.evaluate(() => {
+            const panel = document.querySelector("openclaw-terminal-panel") as
+              | (HTMLElement & { available: boolean })
+              | null;
+            const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
+              runtime?: {
+                context?: {
+                  config: { current: { terminalEnabled: boolean } };
+                  gateway: { snapshot: { phase: string; hello: unknown } };
+                };
+              };
+            };
+            return {
+              available: panel?.available ?? null,
+              phase: shell?.runtime?.context?.gateway.snapshot.phase ?? null,
+              terminalEnabled: shell?.runtime?.context?.config.current.terminalEnabled ?? null,
+              hasHello: shell?.runtime?.context?.gateway.snapshot.hello != null,
+            };
+          }),
+        )
+        .toMatchObject({
+          available: true,
+          phase: "connected",
+          terminalEnabled: true,
+          hasHello: true,
+        });
 
       const assetA = await findBuildAsset(buildA);
       const initialAsset = await fetchControlledAsset(page, assetA.path);
@@ -320,6 +354,12 @@ describe("Control UI service-worker production update E2E", () => {
         );
       });
       await gateway.setOnline(false);
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean })
+          | null;
+        return panel?.available === false;
+      });
       await rename(outDir, previousOutDir);
       await rename(nextOutDir, outDir);
       await rm(previousOutDir, { force: true, recursive: true });
@@ -358,6 +398,7 @@ describe("Control UI service-worker production update E2E", () => {
         .toContain("thread-during-worker-refresh");
       await page.waitForTimeout(300);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      await gateway.setServerBuildId(buildB);
       installGate.release();
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);

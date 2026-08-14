@@ -458,7 +458,12 @@ describe("worker turn launcher failure recovery", () => {
     expect(message).not.toContain(secret);
     expect(hasLoneSurrogate(message)).toBe(false);
     const placement = placements.get(SESSION_ID);
-    expect(placement).toMatchObject({ state: "failed", recoveryError: message, turnClaim: null });
+    expect(placement).toMatchObject({
+      state: "failed",
+      recoveryError: message,
+      terminalReason: message,
+      turnClaim: null,
+    });
     expect(hasLoneSurrogate(placement?.recoveryError ?? "")).toBe(false);
     expect(stopTunnel).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
     expect(destroy).toHaveBeenCalledWith(ENVIRONMENT_ID);

@@ -3,9 +3,32 @@ import { describe, expect, it } from "vitest";
 import {
   findTsgoCoreTestShardViolations,
   selectTsgoCoreTestShards,
+  selectTsgoCoreTestStripe,
+  TSGO_CORE_TEST_SHARDS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 
 describe("tsgo core test shards", () => {
+  it("stripes partition the full shard list exactly once", () => {
+    for (const stripeCount of [1, 2, 3]) {
+      const striped = Array.from(
+        { length: stripeCount },
+        (_, index) => selectTsgoCoreTestStripe(`${index + 1}/${stripeCount}`) ?? [],
+      );
+      expect(
+        striped
+          .flat()
+          .map((shard) => shard.name)
+          .toSorted(),
+      ).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.name).toSorted());
+      // Round-robin keeps stripe sizes within one shard of each other.
+      const sizes = striped.map((shards) => shards.length);
+      expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
+    }
+    expect(selectTsgoCoreTestStripe("0/2")).toBeUndefined();
+    expect(selectTsgoCoreTestStripe("3/2")).toBeUndefined();
+    expect(selectTsgoCoreTestStripe("src")).toBeUndefined();
+  });
+
   it("accepts an exact once-only partition within the root budget", () => {
     expect(
       findTsgoCoreTestShardViolations({

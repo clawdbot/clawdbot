@@ -48,7 +48,10 @@ async function assertWorkspaceDirectory(workspaceDir: string): Promise<string> {
 
 export async function runWorkerDescriptor(
   descriptor: WorkerLaunchDescriptor,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    onConnectionFailure?: (cause: string | undefined) => void;
+  } = {},
 ): Promise<WorkerRuntimeResult> {
   const workspaceDir = await assertWorkspaceDirectory(descriptor.assignment.workspaceDir);
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
@@ -65,6 +68,7 @@ export async function runWorkerDescriptor(
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    onConnectionFailure: (error) => options.onConnectionFailure?.(error?.message),
   });
   const abortFromCaller = () => {
     abortController.abort(options.signal?.reason);
