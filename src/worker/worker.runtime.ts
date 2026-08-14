@@ -1,6 +1,8 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
@@ -51,6 +53,9 @@ export async function runWorkerDescriptor(
   options: { signal?: AbortSignal } = {},
 ): Promise<WorkerRuntimeResult> {
   const workspaceDir = await assertWorkspaceDirectory(descriptor.assignment.workspaceDir);
+  // Workers replace their state directory below. Resolve the durable P1C posture first so the
+  // isolated runtime cannot reinterpret an enforced agent as legacy because its scratch DB is empty.
+  const memoryIsolationCutover = isMemoryIsolationCutoverAgent(DEFAULT_AGENT_ID);
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -142,6 +147,7 @@ export async function runWorkerDescriptor(
         inferenceOptions: descriptor.assignment.inferenceOptions,
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
+        memoryIsolationCutover,
         inference: { stream },
         transcript: {
           commit: async (messages) => {

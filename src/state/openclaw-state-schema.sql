@@ -242,6 +242,81 @@ CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
   ON execution_decision_facts (context_id, occurred_at, receipt_id);
 CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
   ON execution_decision_facts (run_id, occurred_at, receipt_id);
+-- Memory identity is feature-local and lazily ensured. Sender values are never
+-- retained here: lookup uses a keyed HMAC scoped to channel and account.
+CREATE TABLE IF NOT EXISTS memory_principals (
+  principal_id TEXT NOT NULL PRIMARY KEY,
+  principal_kind TEXT NOT NULL CHECK (principal_kind IN (
+    'user', 'enterprise', 'service', 'agent', 'system', 'conversation'
+  )),
+  user_profile_id TEXT,
+  principal_lookup_hmac TEXT,
+  state TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
+  revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_principals_user_profile
+  ON memory_principals(user_profile_id)
+  WHERE user_profile_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_principals_lookup
+  ON memory_principals(principal_kind, principal_lookup_hmac)
+  WHERE principal_lookup_hmac IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS memory_identity_bindings (
+  binding_id TEXT NOT NULL PRIMARY KEY,
+  channel TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  sender_lookup_hmac TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  adapter_id TEXT NOT NULL,
+  assurance TEXT NOT NULL CHECK (assurance IN ('authenticated', 'adapter-attested')),
+  verification_method TEXT NOT NULL,
+  evidence_revision TEXT NOT NULL,
+  created_by_profile_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  revoked_at INTEGER,
+  revision TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES memory_principals(principal_id)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_identity_bindings_active_sender
+  ON memory_identity_bindings(channel, account_id, sender_lookup_hmac)
+  WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_memory_identity_bindings_principal
+  ON memory_identity_bindings(principal_id, revoked_at);
+
+-- A pairing receipt is short-lived, internal evidence that a trusted adapter
+-- observed the sender which created a particular pending pairing request.
+-- It keeps only the binding lookup HMAC; raw provider sender IDs stay in the
+-- pairing workflow and never enter the memory identity tables.
+CREATE TABLE IF NOT EXISTS memory_pairing_identity_receipts (
+  receipt_id TEXT NOT NULL PRIMARY KEY,
+  channel TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  -- HMAC(channel, account, raw request id, creation timestamp). Pairing
+  -- request ids are intentionally not retained in a memory-authority table.
+  request_identity_hmac TEXT NOT NULL,
+  sender_lookup_hmac TEXT NOT NULL,
+  adapter_id TEXT NOT NULL,
+  assurance TEXT NOT NULL CHECK (assurance IN ('authenticated', 'adapter-attested')),
+  verification_method TEXT NOT NULL,
+  evidence_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER,
+  binding_id TEXT,
+  FOREIGN KEY (binding_id) REFERENCES memory_identity_bindings(binding_id),
+  UNIQUE (channel, account_id, request_identity_hmac)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_pairing_identity_receipts_pending
+  ON memory_pairing_identity_receipts(channel, account_id, request_identity_hmac, expires_at)
+  WHERE consumed_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,

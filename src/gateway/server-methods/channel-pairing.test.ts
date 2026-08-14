@@ -74,6 +74,7 @@ function createContext() {
 async function invoke(
   method: keyof typeof channelPairingHandlers,
   params: Record<string, unknown>,
+  client: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
   const handler = expectDefined(channelPairingHandlers[method], `${method} test invariant`);
@@ -81,6 +82,7 @@ async function invoke(
     params,
     respond,
     context: createContext(),
+    client,
   } as unknown as Parameters<typeof handler>[0]);
   return respond;
 }
@@ -193,6 +195,56 @@ describe("channel DM pairing gateway handlers", () => {
         commandOwnerBootstrap: "configured",
       },
       undefined,
+    );
+  });
+
+  it("links only to the explicit target profile and records the approving profile separately", async () => {
+    mocks.approve.mockResolvedValue({
+      id: "12345",
+      entry: {
+        id: "12345",
+        code: "SECRET12",
+        createdAt: "2026-07-20T10:00:00.000Z",
+        lastSeenAt: "2026-07-20T10:00:00.000Z",
+      },
+    });
+
+    await invoke(
+      "channels.pairing.approve",
+      {
+        channel: "whatsapp",
+        accountId: "personal",
+        requestId: "opaque-request-id",
+        targetProfileId: "profile-alice",
+      },
+      { authenticatedUserProfile: { profileId: "profile-admin" } },
+    );
+
+    expect(mocks.approve).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "opaque-request-id",
+      pairingAdapter: pairingPlugin.pairing,
+      memoryIdentityLink: {
+        targetProfileId: "profile-alice",
+        createdByProfileId: "profile-admin",
+      },
+    });
+  });
+
+  it("rejects target linking without an authenticated Gateway profile before approving", async () => {
+    const respond = await invoke("channels.pairing.approve", {
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "opaque-request-id",
+      targetProfileId: "profile-alice",
+    });
+
+    expect(mocks.approve).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
     );
   });
 

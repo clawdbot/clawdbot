@@ -10,6 +10,7 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { assertLegacyMemoryWikiAccessAvailable } from "./legacy-memory-access.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   createWikiPageFilename,
@@ -259,6 +260,14 @@ export async function syncMemoryWikiBridgeSources(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
 }): Promise<BridgeMemoryWikiResult> {
+  // This direct entrypoint is also used outside source-sync. Gate it before
+  // vault initialization so a cut-over subject exposes neither artifacts nor
+  // filesystem-derived bridge metadata without an operator projection context.
+  assertLegacyMemoryWikiAccessAvailable({
+    config: params.config,
+    appConfig: params.appConfig,
+    agentId: params.config.agentId,
+  });
   resolveMemoryWikiVaultAgentId(params.config);
   await initializeMemoryWikiVault(params.config);
   if (

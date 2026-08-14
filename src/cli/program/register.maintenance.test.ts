@@ -122,6 +122,48 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.repair).toBe(true);
   });
 
+  it("passes the configured P1C isolation mode to doctor", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--memory-isolation",
+      "shadow-read-only",
+      "--memory-isolation-agent",
+      "main",
+      "--json",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options).toMatchObject({
+      memoryIsolation: "shadow-read-only",
+      memoryIsolationAgent: "main",
+      json: true,
+    });
+  });
+
+  it("rejects an isolation agent selector without an isolation mode", async () => {
+    await runMaintenanceCli(["doctor", "--memory-isolation-agent", "main"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor memory isolation agent requires --memory-isolation. Use `openclaw doctor --memory-isolation status --memory-isolation-agent <id>`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects memory isolation combined with an unrelated doctor mode", async () => {
+    await runMaintenanceCli(["doctor", "--memory-isolation", "status", "--lint"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor memory isolation can only be combined with --memory-isolation-agent and --json.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("passes session sqlite options to doctor command", async () => {
     doctorCommand.mockResolvedValue(undefined);
 

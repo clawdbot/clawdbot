@@ -38,4 +38,5 @@ export type UpsertChannelPairingRequestForAccount = (params: {
   meta?: Record<string, string | undefined | null>;
   env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
+  memoryIdentityAdmission?: unknown;
 }) => Promise<{ code: string; created: boolean }>;

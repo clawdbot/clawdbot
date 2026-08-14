@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
@@ -13,6 +13,12 @@ import {
   resolveMemoryWikiStatus,
 } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+const isLegacyMemorySurfaceDisabledMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", () => ({
+  isLegacyMemorySurfaceDisabled: isLegacyMemorySurfaceDisabledMock,
+}));
 
 const { createVault } = createMemoryWikiTestHarness();
 
@@ -41,6 +47,26 @@ async function resolveBridgeMissingArtifactsStatus() {
 }
 
 describe("resolveMemoryWikiStatus", () => {
+  beforeEach(() => {
+    isLegacyMemorySurfaceDisabledMock.mockReset().mockReturnValue(false);
+  });
+
+  it("blocks status before vault or artifact inspection after cut-over", async () => {
+    const pathExists = vi.fn(async () => false);
+    const listPublicArtifacts = vi.fn(async () => []);
+    isLegacyMemorySurfaceDisabledMock.mockReturnValueOnce(true);
+
+    await expect(
+      resolveMemoryWikiStatus(resolveMemoryWikiConfig({ vault: { path: "/tmp/wiki" } }), {
+        pathExists,
+        listPublicArtifacts,
+      }),
+    ).rejects.toThrow("Memory Wiki is unavailable after scoped-memory cutover.");
+
+    expect(pathExists).not.toHaveBeenCalled();
+    expect(listPublicArtifacts).not.toHaveBeenCalled();
+  });
+
   it("reports missing vault and missing requested obsidian cli", async () => {
     const config = resolveMemoryWikiConfig(
       {

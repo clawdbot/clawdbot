@@ -705,6 +705,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],
     },
     channel: {
+      memoryIdentityAdmission: {
+        attachVerifiedDirectSender: vi.fn(),
+        admitVerifiedDirectPairingSender: vi.fn(),
+      } as PluginRuntime["channel"]["memoryIdentityAdmission"],
       text: {
         chunkByNewline: vi.fn((text: string) => (text ? [text] : [])),
         chunkMarkdownText: vi.fn((text: string) => [text]),

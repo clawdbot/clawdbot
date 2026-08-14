@@ -194,6 +194,229 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+export interface MemoryMigrations {
+  classification_json: string;
+  cutover_at: number | null;
+  migration_id: string;
+  phase: string;
+  plan_hash: string;
+  source_hash: string;
+  source_kind: string;
+  updated_at: number;
+  verified_at: number | null;
+}
+
+export interface MemoryPolicies {
+  agent_id: string;
+  created_at: number;
+  current_revision_id: string;
+  lifecycle_state: string;
+  policy_id: string;
+  revocation_epoch: Generated<number>;
+  updated_at: number;
+}
+
+export interface MemoryPolicyEntries {
+  audience_id: string;
+  audience_kind: string;
+  created_at: number;
+  effect: string;
+  entry_id: string;
+  entry_kind: string;
+  expires_at: number | null;
+  grantor_principal_id: string;
+  operation: string;
+  policy_revision_id: string;
+  principal_id: string;
+  reason: string;
+}
+
+export interface MemoryPolicyRevisions {
+  actor_id: string | null;
+  actor_kind: string;
+  created_at: number;
+  lifecycle_state: string;
+  policy_id: string;
+  reason: string;
+  revision_id: string;
+  revision_number: number;
+  revocation_epoch: number;
+}
+
+export interface MemoryPolicySets {
+  agent_id: string;
+  created_at: number;
+  member_policy_set_ids_json: string;
+  memory_policy_revision: string;
+  policy_set_id: string;
+}
+
+export interface MemoryPreoutputExposureLedger {
+  agent_id: string;
+  context_fingerprint: string;
+  created_at: number;
+  delivery_audiences_json: string;
+  delivery_revision: string;
+  egress_receipt_ids_json: string;
+  egress_registry_revision: string;
+  exposed_resource_revisions_json: string;
+  exposure_receipt_ids_json: string;
+  exposure_set_id: string;
+  memory_policy_revision: string;
+  plan_id: string;
+  previous_exposure_set_id: string | null;
+  revision_number: number;
+  run_id: string;
+  session_id: string;
+  session_identity_revision: string;
+  session_key: string;
+  source_policy_set_ids_json: string;
+  subject_revision: string;
+}
+
+export interface MemoryResourceRevisions {
+  activated_at: number | null;
+  actor_id: string | null;
+  actor_kind: string;
+  artifact_locator: string;
+  content_bytes: number;
+  content_hash: string;
+  created_at: number;
+  expires_at: number | null;
+  lifecycle_state: string;
+  policy_revision_id: string;
+  policy_revocation_epoch: number;
+  resource_id: string;
+  retired_at: number | null;
+  revision_id: string;
+  revision_number: number;
+  source_policy_set_id: string;
+}
+
+export interface MemoryResourceSubjects {
+  created_at: number;
+  evidence_revision: string;
+  lifecycle_state: string;
+  revision_id: string;
+  subject_id: string;
+  subject_kind: string;
+}
+
+export interface MemoryResources {
+  agent_id: string;
+  created_at: number;
+  logical_locator: string;
+  resource_id: string;
+  source: Generated<string>;
+  store_id: string;
+}
+
+export interface MemoryRunExposures {
+  agent_id: string;
+  context_fingerprint: string;
+  created_at: number;
+  delivery_audiences_json: string;
+  delivery_revision: string;
+  effective_source_policy_set_id: string;
+  egress_receipt_ids_json: string;
+  egress_registry_revision: string;
+  exposed_resource_revisions_json: string;
+  exposure_receipt_ids_json: string;
+  exposure_set_id: string;
+  plan_id: string;
+  previous_exposure_set_id: string | null;
+  revision_number: number;
+  run_id: string;
+  source_policy_set_ids_json: string;
+}
+
+export interface MemoryScopedChunkVectors {
+  chunk_id: string;
+  dims: number;
+  embedding: string;
+  model: string;
+  updated_at: number;
+}
+
+export interface MemoryScopedChunks {
+  chunk_id: string;
+  chunk_key: Generated<number>;
+  chunk_ordinal: number;
+  content_hash: string;
+  end_line: number;
+  model: string;
+  revision_id: string;
+  start_line: number;
+  text: string;
+  updated_at: number;
+}
+
+export interface MemoryScopedChunksFts {
+  chunk_id: string | null;
+  end_line: string | null;
+  revision_id: string | null;
+  start_line: string | null;
+  text: string | null;
+}
+
+export interface MemoryScopedChunksFtsConfig {
+  k: string;
+  v: string | null;
+}
+
+export interface MemoryScopedChunksFtsContent {
+  c0: string | null;
+  c1: string | null;
+  c2: string | null;
+  c3: string | null;
+  c4: string | null;
+  id: Generated<number>;
+}
+
+export interface MemoryScopedChunksFtsData {
+  block: Uint8Array | null;
+  id: Generated<number>;
+}
+
+export interface MemoryScopedChunksFtsDocsize {
+  id: Generated<number>;
+  sz: Uint8Array | null;
+}
+
+export interface MemoryScopedChunksFtsIdx {
+  pgno: string | null;
+  segid: string;
+  term: string;
+}
+
+export interface MemoryStorageRoots {
+  agent_id: string;
+  authority_kind: string;
+  authority_owner_id: string;
+  backend_kind: string;
+  created_at: number;
+  default_capabilities_json: string;
+  lifecycle_state: string;
+  opaque_locator: string;
+  path_key: string | null;
+  path_key_version: number;
+  storage_root_id: string;
+  updated_at: number;
+}
+
+export interface MemoryStores {
+  agent_id: string;
+  audience_id: string;
+  audience_kind: string;
+  created_at: number;
+  lifecycle_state: string;
+  policy_id: string;
+  scope_kind: string;
+  storage_root_id: string;
+  store_id: string;
+  updated_at: number;
+}
+
 export interface SchemaMeta {
   agent_id: string | null;
   app_version: string | null;
@@ -223,6 +446,23 @@ export interface SessionMembers {
   added_by: string;
   identity_id: string;
   session_key: string;
+}
+
+export interface SessionMemorySubjectSnapshots {
+  created_at: number;
+  session_id: string;
+  session_identity_revision: string;
+  session_key: string;
+  subject_revision: string;
+}
+
+export interface SessionMemorySubjects {
+  binding_id: string | null;
+  created_at: number;
+  principal_id: string | null;
+  session_key: string;
+  subject_kind: string;
+  subject_revision: string;
 }
 
 export interface SessionNodes {
@@ -412,6 +652,21 @@ export interface TranscriptEventIdentities {
   session_id: string;
 }
 
+export interface TranscriptEventMemoryPolicies {
+  authorization_status: string;
+  context_fingerprint: string | null;
+  created_at: number;
+  delivery_audiences_json: string | null;
+  event_seq: number;
+  run_exposure_revision: number | null;
+  run_exposure_set_id: string | null;
+  run_id: string | null;
+  session_id: string;
+  session_identity_revision: string | null;
+  source_policy_set_id: string | null;
+  subject_revision: string | null;
+}
+
 export interface TranscriptEvents {
   created_at: number;
   event_json: string;
@@ -443,10 +698,32 @@ export interface DB {
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  memory_migrations: MemoryMigrations;
+  memory_policies: MemoryPolicies;
+  memory_policy_entries: MemoryPolicyEntries;
+  memory_policy_revisions: MemoryPolicyRevisions;
+  memory_policy_sets: MemoryPolicySets;
+  memory_preoutput_exposure_ledger: MemoryPreoutputExposureLedger;
+  memory_resource_revisions: MemoryResourceRevisions;
+  memory_resource_subjects: MemoryResourceSubjects;
+  memory_resources: MemoryResources;
+  memory_run_exposures: MemoryRunExposures;
+  memory_scoped_chunk_vectors: MemoryScopedChunkVectors;
+  memory_scoped_chunks: MemoryScopedChunks;
+  memory_scoped_chunks_fts: MemoryScopedChunksFts;
+  memory_scoped_chunks_fts_config: MemoryScopedChunksFtsConfig;
+  memory_scoped_chunks_fts_content: MemoryScopedChunksFtsContent;
+  memory_scoped_chunks_fts_data: MemoryScopedChunksFtsData;
+  memory_scoped_chunks_fts_docsize: MemoryScopedChunksFtsDocsize;
+  memory_scoped_chunks_fts_idx: MemoryScopedChunksFtsIdx;
+  memory_storage_roots: MemoryStorageRoots;
+  memory_stores: MemoryStores;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
+  session_memory_subject_snapshots: SessionMemorySubjectSnapshots;
+  session_memory_subjects: SessionMemorySubjects;
   session_nodes: SessionNodes;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
@@ -466,6 +743,7 @@ export interface DB {
   standing_intents_fts_idx: StandingIntentsFtsIdx;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
+  transcript_event_memory_policies: TranscriptEventMemoryPolicies;
   transcript_events: TranscriptEvents;
   transcript_rewrite_watermarks: TranscriptRewriteWatermarks;
 }

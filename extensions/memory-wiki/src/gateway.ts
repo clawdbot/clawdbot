@@ -14,6 +14,7 @@ import {
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
+import { assertLegacyMemoryWikiAccessAvailable } from "./legacy-memory-access.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   probeObsidianCli,
@@ -117,6 +118,7 @@ export function registerMemoryWikiGatewayMethods(params: {
       config.agentId ??
       requestedAgentId ??
       (appConfig ? resolveDefaultAgentId(appConfig) : undefined);
+    assertLegacyMemoryWikiAccessAvailable({ config, appConfig, agentId });
     return { agentId, appConfig, config };
   };
 

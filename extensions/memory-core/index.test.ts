@@ -2,10 +2,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { MemoryPluginCapability } from "openclaw/plugin-sdk/memory-host-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MEMORY_CORE_AUTHORIZATION_CAPABILITIES } from "./src/authorization.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
+import { builtinScopedMemoryConformanceAdapter } from "./src/memory/scoped-memory-policy.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -45,16 +48,30 @@ const hostRuntime = {
   },
 } as unknown as OpenClawPluginApi["runtime"];
 
-function registerMemoryCoreRuntime(): MemoryPluginRuntime {
-  let runtime: MemoryPluginRuntime | undefined;
+// This entrypoint test needs a registered tool, not an embedding-provider lookup. FTS-only
+// configuration keeps the factory on its lazy path without depending on the process registry.
+const ftsOnlyMemoryToolConfig = {
+  memory: { search: { provider: "none" } },
+} as OpenClawConfig;
+
+function registerMemoryCoreCapability(): MemoryPluginCapability {
+  let registered: MemoryPluginCapability | undefined;
   plugin.register(
     createTestPluginApi({
       runtime: hostRuntime,
       registerMemoryCapability(capability) {
-        runtime = capability.runtime;
+        registered = capability;
       },
     }),
   );
+  if (!registered) {
+    throw new Error("expected memory-core to register a memory capability");
+  }
+  return registered;
+}
+
+function registerMemoryCoreRuntime(): MemoryPluginRuntime {
+  const runtime = registerMemoryCoreCapability().runtime;
   if (!runtime) {
     throw new Error("expected memory-core to register a memory runtime");
   }
@@ -62,6 +79,15 @@ function registerMemoryCoreRuntime(): MemoryPluginRuntime {
 }
 
 describe("buildPromptSection", () => {
+  it("hides legacy path guidance for an enforced memory view", () => {
+    expect(
+      buildPromptSection({
+        availableTools: new Set(["memory_search", "memory_get"]),
+        memoryReadEnforced: true,
+      }),
+    ).toEqual([]);
+  });
+
   it("returns empty when no memory tools are available", () => {
     expect(buildPromptSection({ availableTools: new Set() })).toStrictEqual([]);
   });
@@ -192,6 +218,34 @@ describe("memory-core plugin runtime registration", () => {
     expect(intentFactory({ config: {}, senderIsOwner: false })).toBeNull();
     expect(intentFactory({ config: {} })).toBeNull();
     expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
+    expect(intentFactory({ config: {}, senderIsOwner: true, memoryReadEnforced: true })).toBeNull();
+  });
+
+  it("describes only the authorized opaque-handle flow for cut-over memory tools", () => {
+    const factories = new Map<string, (ctx: never) => unknown>();
+    plugin.register(
+      createTestPluginApi({
+        config: {},
+        runtime: hostRuntime,
+        registerTool(factory, options) {
+          for (const name of options?.names ?? []) {
+            factories.set(name, factory as (ctx: never) => unknown);
+          }
+        },
+      }),
+    );
+    const context = {
+      config: ftsOnlyMemoryToolConfig,
+      agentId: "main",
+      memoryReadEnforced: true,
+    } as never;
+    const search = factories.get("memory_search")?.(context) as { description?: string } | null;
+    const get = factories.get("memory_get")?.(context) as { description?: string } | null;
+
+    expect(search?.description).toContain("opaque handleId");
+    expect(search?.description).not.toContain("corpus=wiki");
+    expect(get?.description).toContain("opaque handleId");
+    expect(get?.description).not.toContain("MEMORY.md");
   });
 
   it("keeps memory manager initialization demand-driven", () => {
@@ -212,6 +266,18 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
 
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
+  it("declares the selected scoped-read capability, adapter, and authorized runtime", () => {
+    const capability = registerMemoryCoreCapability();
+
+    expect(capability.authorization).toEqual(MEMORY_CORE_AUTHORIZATION_CAPABILITIES);
+    expect(capability.authorizationConformance).toBe(builtinScopedMemoryConformanceAdapter);
+    expect(capability.runtime).toMatchObject({
+      authorize: expect.any(Function),
+      searchAuthorized: expect.any(Function),
+      readAuthorized: expect.any(Function),
+    });
   });
 
   it("binds the host local-service hook to the registered memory runtime", async () => {

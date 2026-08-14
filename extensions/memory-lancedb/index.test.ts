@@ -37,6 +37,7 @@ import memoryPlugin, {
   testing,
 } from "./index.js";
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.test-support.js";
+import { LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES } from "./src/authorization.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 // Provenance marker OpenClaw appends to every injected inbound-context header.
@@ -428,6 +429,31 @@ describe("memory plugin e2e", () => {
     expectHookRegistered(on, "before_prompt_build");
   });
 
+  test("hides legacy LanceDB tools and skips automatic recall and capture after memory cut-over", async () => {
+    const on = vi.fn();
+    const registerTool = vi.fn();
+    registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { on, registerTool }));
+
+    for (const [factory] of registerTool.mock.calls) {
+      expect(materializeRegisteredTool(factory, { memoryReadEnforced: true })).toBeNull();
+    }
+    await expect(
+      hookHandler(on, "before_prompt_build")?.(
+        { prompt: "recall this private fact", messages: [] },
+        { agentId: "main", memoryReadEnforced: true },
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      hookHandler(on, "agent_end")?.(
+        {
+          success: true,
+          messages: [{ role: "user", content: "store this private fact" }],
+        },
+        { agentId: "main", memoryReadEnforced: true },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   test("registers memory public artifact provider for memory-wiki bridge parity", async () => {
     const workspaceDir = path.join(getTmpDir(), "workspace-public-artifacts");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -443,6 +469,8 @@ describe("memory plugin e2e", () => {
       registerMemoryCapabilityLocal as unknown as MockCallSource,
       "memory capability",
     );
+    expect(capability.authorization).toBe(LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES);
+    expect(capability.runtime).toBeUndefined();
     const publicArtifacts = capability.publicArtifacts as
       | { listArtifacts?: (params: { cfg: unknown }) => Promise<unknown> }
       | undefined;

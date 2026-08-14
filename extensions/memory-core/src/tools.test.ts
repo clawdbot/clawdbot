@@ -1,6 +1,9 @@
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 // Memory Core tests cover tools plugin behavior.
-import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -16,14 +19,21 @@ import {
   setMemoryStatusDirty,
 } from "./memory-tool-manager.test-mocks.js";
 import { applyProjectRanking } from "./memory/project-ranking.js";
-import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
+import {
+  createMemoryGetTool,
+  createMemorySearchTool,
+  testing as memoryToolsTesting,
+} from "./tools.js";
 import {
   buildMemorySearchUnavailableResult,
+  getMemoryCorpusSupplementResult,
   MemoryGetSchema,
   MemorySearchSchema,
+  searchMemoryCorpusSupplements,
 } from "./tools.shared.js";
 import {
   asOpenClawConfig,
+  createDefaultMemoryToolConfig,
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
@@ -706,6 +716,162 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.managerMs).toBe(17);
     expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
     expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("enforced memory tools", () => {
+  beforeEach(() => {
+    resetMemoryToolMockState({ searchImpl: async () => [] });
+  });
+
+  it("uses only the host broker and returns opaque continuations", async () => {
+    const host = {
+      search: vi.fn(async () => ({
+        results: [
+          {
+            handleId: "mhandle1_allowed",
+            path: "memory/MEMORY.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "allowed",
+            source: "memory" as const,
+          },
+        ],
+      })),
+      read: vi.fn(async () => ({ text: "allowed", path: "memory/MEMORY.md" })),
+    };
+    const search = createMemorySearchToolOrThrow({
+      memoryReadEnforced: true,
+      authorizedMemoryRead: host,
+    });
+    const get = createMemoryGetTool({
+      config: createDefaultMemoryToolConfig(),
+      memoryReadEnforced: true,
+      authorizedMemoryRead: host,
+    });
+    if (!get) {
+      throw new Error("memory_get missing");
+    }
+
+    const searchResult = await search.execute("authorized-search", {
+      query: "allowed",
+      corpus: "all",
+    });
+    expect(searchResult.details).toMatchObject({
+      results: [{ handleId: "mhandle1_allowed", path: "memory/MEMORY.md", corpus: "memory" }],
+    });
+    expect(host.search).toHaveBeenCalledWith({
+      query: "allowed",
+      sources: ["memory", "sessions"],
+      limit: undefined,
+      signal: undefined,
+    });
+
+    await expect(
+      get.execute("authorized-read", { handleId: "mhandle1_allowed", path: "forged.md" }),
+    ).resolves.toMatchObject({ details: { text: "allowed", path: "memory/MEMORY.md" } });
+    expect(host.read).toHaveBeenCalledWith({ handleId: "mhandle1_allowed" });
+  });
+
+  it("does not fall back to legacy memory when its host is unavailable", async () => {
+    const search = createMemorySearchToolOrThrow({ memoryReadEnforced: true });
+    const result = await search.execute("missing-authorized-host", { query: "private" });
+
+    expect(result.details).toMatchObject({
+      disabled: true,
+      unavailable: true,
+      error: "memory unavailable",
+      results: [],
+    });
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("blocks the wiki corpus instead of remapping it to authorized memory sources", async () => {
+    const host = {
+      search: vi.fn(async () => ({ results: [] })),
+      read: vi.fn(async () => ({ text: "unused", path: "memory/MEMORY.md" })),
+    };
+    const search = createMemorySearchToolOrThrow({
+      memoryReadEnforced: true,
+      authorizedMemoryRead: host,
+    });
+
+    const result = await search.execute("scoped-wiki", { query: "private wiki", corpus: "wiki" });
+
+    expect(result.details).toMatchObject({
+      disabled: true,
+      unavailable: true,
+      results: [],
+      error: "The wiki corpus is unavailable for scoped memory.",
+    });
+    expect(host.search).not.toHaveBeenCalled();
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("routes enforced conversation recall only through the authorized sessions source", async () => {
+    const host = {
+      search: vi.fn(async () => ({ results: [] })),
+      read: vi.fn(async () => ({ text: "unused", path: "sessions/unused.jsonl" })),
+    };
+    const search = createMemorySearchToolOrThrow({
+      memoryReadEnforced: true,
+      authorizedMemoryRead: host,
+      conversationRecall: {
+        anchorSessionKey: "agent:main:main",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    await search.execute("scoped-conversation-recall", { query: "prior turn", corpus: "memory" });
+
+    expect(host.search).toHaveBeenCalledWith({
+      query: "prior turn",
+      sources: ["sessions"],
+      limit: undefined,
+      signal: undefined,
+    });
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("does not invoke registered corpus supplements after cutover", async () => {
+    const supplement = {
+      search: vi.fn(async () => [
+        { corpus: "wiki", path: "private.md", score: 1, snippet: "private" },
+      ]),
+      get: vi.fn(async () => ({
+        corpus: "wiki",
+        path: "private.md",
+        content: "private",
+        fromLine: 1,
+        lineCount: 1,
+      })),
+    };
+    registerMemoryCorpusSupplement("memory-wiki", supplement);
+    const host = {
+      search: vi.fn(async () => ({ results: [] })),
+      read: vi.fn(async () => ({ text: "", path: "" })),
+    };
+
+    await expect(
+      searchMemoryCorpusSupplements({
+        query: "private",
+        corpus: "all",
+        memoryReadEnforced: true,
+        authorizedMemoryRead: host,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      getMemoryCorpusSupplementResult({
+        lookup: "private.md",
+        corpus: "wiki",
+        memoryReadEnforced: true,
+        authorizedMemoryRead: host,
+      }),
+    ).resolves.toBeNull();
+    expect(supplement.search).not.toHaveBeenCalled();
+    expect(supplement.get).not.toHaveBeenCalled();
   });
 });
 

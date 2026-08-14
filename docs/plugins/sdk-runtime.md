@@ -121,6 +121,41 @@ return {
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
 
+### Direct-message identity evidence
+
+Channel plugins with a transport-authenticated, stable sender identifier can
+attach that fact to the exact finalized inbound context:
+
+```typescript
+api.runtime.channel.memoryIdentityAdmission.attachVerifiedDirectSender({
+  context: ctxPayload,
+  channel: "example",
+  accountId,
+  stableSenderId: providerUserId,
+});
+```
+
+Call this only after the transport has authenticated the envelope and every
+channel admission gate has accepted a direct message. `context` must be the
+same finalized object passed to the shared record-and-dispatch path;
+`channel` must be the channel owned by the plugin. Never use a display name,
+username, route key, model-visible field, or callback payload as the stable
+sender ID.
+
+This does not grant access, create a principal, or make a routing decision.
+Core consumes the process-local proof once, rereads the committed session row,
+and accepts a private subject only for an isolated direct session with a
+current binding. Channels that do not attach this evidence remain explicitly
+ambiguous for private memory.
+
+For a direct message still pending DM pairing, call
+`admitVerifiedDirectPairingSender(...)` after transport authentication, then
+pass its opaque result as `memoryIdentityAdmission` to that request's
+`upsertPairingRequest(...)` call. Core stores only protected receipt material
+and consumes it once only when an authenticated Gateway admin explicitly
+selects the target user profile. Pairing metadata, sender IDs, display names,
+and profile IDs cannot create memory authority.
+
 ## Runtime namespaces
 
 <AccordionGroup>

@@ -25,6 +25,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readAuthorizedTranscriptEventSeqs } from "./session-transcript-memory-policy.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
 export type SqliteTranscriptSnapshotRow = {
@@ -36,14 +37,23 @@ export type SqliteTranscriptStorageRow = SqliteTranscriptSnapshotRow & {
   createdAt: number;
 };
 
-/** Loads raw transcript events from the additive SQLite transcript store. */
+function filterAuthorizedTranscriptRows<Row extends { seq: number }>(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  rows: readonly Row[],
+): Row[] {
+  const authorizedSeqs = readAuthorizedTranscriptEventSeqs(database.db, sessionId);
+  return authorizedSeqs ? rows.filter((row) => authorizedSeqs.has(row.seq)) : [...rows];
+}
+
+/** Loads transcript events visible through the current session's policy companion rows. */
 export async function loadTranscriptEvents(
   scope: SessionTranscriptReadScope,
 ): Promise<TranscriptEvent[]> {
   return loadTranscriptEventsSync(scope);
 }
 
-/** Loads raw transcript events synchronously from the additive SQLite transcript store. */
+/** Loads transcript events visible through the current session's policy companion rows. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
@@ -51,7 +61,12 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
     database.db,
     () => {
       const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-      return loadTranscriptEventsFromDatabase(database, resolved.sessionId, fence?.beforeRawSeq);
+      const rows = readTranscriptEventRows(database, resolved.sessionId).filter(
+        (row) => fence?.beforeRawSeq === undefined || row.seq < fence.beforeRawSeq,
+      );
+      return filterAuthorizedTranscriptRows(database, resolved.sessionId, rows).map(
+        (row) => JSON.parse(row.eventJson) as TranscriptEvent,
+      );
     },
     {
       databaseLabel: database.path,
@@ -64,17 +79,12 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
 export function loadTranscriptHeaderSync(scope: SessionTranscriptReadScope): unknown {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("event_json")
-      .where("session_id", "=", resolved.sessionId)
-      .orderBy("seq", "asc")
-      .limit(1),
-  );
-  return row ? (JSON.parse(row.event_json) as TranscriptEvent) : undefined;
+  const row = filterAuthorizedTranscriptRows(
+    database,
+    resolved.sessionId,
+    readTranscriptEventRows(database, resolved.sessionId),
+  )[0];
+  return row ? (JSON.parse(row.eventJson) as TranscriptEvent) : undefined;
 }
 
 /** Loads a bounded newest tail in storage order for hot-path accounting. */
@@ -88,18 +98,15 @@ export function loadTranscriptTailEventsSync(
   }
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  return executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("event_json")
-      .where("session_id", "=", resolved.sessionId)
-      .orderBy("seq", "desc")
-      .limit(limit),
+  // The policy filter precedes the limit: otherwise a denied newest row could
+  // crowd an older authorized row out of the requested tail.
+  return filterAuthorizedTranscriptRows(
+    database,
+    resolved.sessionId,
+    readTranscriptEventRows(database, resolved.sessionId),
   )
-    .rows.toReversed()
-    .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+    .slice(-limit)
+    .map((row) => JSON.parse(row.eventJson) as TranscriptEvent);
 }
 
 /** Loads additive transcript rows after one durable sequence checkpoint. */
@@ -119,7 +126,11 @@ export function loadTranscriptEventRowsAfterSeqSync(
   if (throughSeq !== undefined) {
     query = query.where("seq", "<=", throughSeq);
   }
-  return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
+  return filterAuthorizedTranscriptRows(
+    database,
+    resolved.sessionId,
+    executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows,
+  ).map((row) => ({
     event: JSON.parse(row.event_json) as TranscriptEvent,
     seq: coerceSqliteNumber(row.seq),
   }));
@@ -141,7 +152,7 @@ export function readTranscriptEventAtSeqSync(
       .where("session_id", "=", resolved.sessionId)
       .where("seq", "=", seq),
   );
-  return row
+  return row && filterAuthorizedTranscriptRows(database, resolved.sessionId, [row]).length > 0
     ? {
         event: JSON.parse(row.event_json) as TranscriptEvent,
         seq: coerceSqliteNumber(row.seq),
@@ -159,19 +170,25 @@ export function loadTranscriptEventsFromDatabase(
     database.db,
     db
       .selectFrom("transcript_events")
-      .select(["event_json"])
+      .select(["event_json", "seq"])
       .where("session_id", "=", sessionId)
       .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
       .orderBy("seq", "asc"),
   ).rows;
-  return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+  return filterAuthorizedTranscriptRows(database, sessionId, rows).map(
+    (row) => JSON.parse(row.event_json) as TranscriptEvent,
+  );
 }
 
 export function readTranscriptSnapshot(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): { events: TranscriptEvent[]; rows: SqliteTranscriptSnapshotRow[] } {
-  const rows = readTranscriptEventRows(database, sessionId);
+  const rows = filterAuthorizedTranscriptRows(
+    database,
+    sessionId,
+    readTranscriptEventRows(database, sessionId),
+  );
   return {
     events: rows.map((row) => JSON.parse(row.eventJson) as TranscriptEvent),
     rows,
@@ -283,6 +300,7 @@ export function loadLatestAssistantText(
     database.db,
     () => {
       const db = getSessionKysely(database.db);
+      const authorizedSeqs = readAuthorizedTranscriptEventSeqs(database.db, resolved.sessionId);
       const beforeEventSeq = resolveSqliteSessionTranscriptReadFence({
         database,
         ...resolved,
@@ -294,13 +312,16 @@ export function loadLatestAssistantText(
           .innerJoin("transcript_event_identities as ti", (join) =>
             join.onRef("ti.session_id", "=", "te.session_id").onRef("ti.seq", "=", "te.seq"),
           )
-          .select("te.event_json as event_json")
+          .select(["te.event_json as event_json", "te.seq as seq"])
           .where("te.session_id", "=", resolved.sessionId)
           .where("ti.event_type", "=", "message")
           .$if(beforeEventSeq !== undefined, (query) => query.where("ti.seq", "<", beforeEventSeq!))
           .orderBy("ti.seq", "desc"),
       );
       for (const row of rows) {
+        if (authorizedSeqs && !authorizedSeqs.has(row.seq)) {
+          continue;
+        }
         const latest = parseLatestAssistantMessageEvent(row.event_json, options);
         if (!latest) {
           continue;
@@ -372,7 +393,30 @@ export async function findTranscriptEvent(
 ): Promise<{ event: TranscriptEvent } | undefined> {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return findTranscriptEventInDatabase(database, resolved.sessionId, match);
+  const authorizedSeqs = readAuthorizedTranscriptEventSeqs(database.db, resolved.sessionId);
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["event_json", "seq"])
+      .where("session_id", "=", resolved.sessionId)
+      .orderBy("seq", "desc"),
+  ).rows;
+  for (const row of rows) {
+    if (authorizedSeqs && !authorizedSeqs.has(row.seq)) {
+      continue;
+    }
+    try {
+      const event = JSON.parse(row.event_json) as TranscriptEvent;
+      if (match(event)) {
+        return { event };
+      }
+    } catch {
+      // Malformed rows are skipped, matching transcript index tolerance.
+    }
+  }
+  return undefined;
 }
 
 export function findTranscriptEventInDatabase(

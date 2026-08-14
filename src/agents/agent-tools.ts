@@ -23,6 +23,7 @@ import type {
   PluginHookChannelContext,
   PluginHookToolRequesterContext,
 } from "../plugins/hook-types.js";
+import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
 import { resolveMemoryFlushPlan } from "../plugins/memory-state.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -112,6 +113,7 @@ import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
+const MEMORY_ISOLATION_READ_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
 function applyModelProviderToolPolicy(
   toolsInput: AnyAgentTool[],
@@ -506,13 +508,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const runtimeRoot = capabilityProfile.workspace.runtimeRoot;
   const codingRoot = sandboxRoot ?? runtimeRoot;
   const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
+  const memoryIsolationCutover = Boolean(agentId && isMemoryIsolationCutoverAgent(agentId));
   // Flush exposes one append-only target; its fallback records inherited taint after success.
   const memoryWriteProvenance = isMemoryFlushRun
     ? undefined
     : createMemoryWriteProvenanceObserver({
         mutationRoot: sandboxRoot ?? workspaceRoot,
         workspaceDir: workspaceRoot,
-        plan: resolveMemoryFlushPlan({ cfg: options?.config }) ?? {},
+        plan: resolveMemoryFlushPlan({ cfg: options?.config, agentId }) ?? {},
         resolveOriginClass: () =>
           options?.senderIsOwner === false || options?.isTurnTainted?.() === true
             ? "untrusted"
@@ -527,7 +530,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     includePluginTools: true,
   };
   const includeBaseCodingTools = includeCoreTools && toolConstructionPlan.includeBaseCodingTools;
-  const includeShellTools = includeCoreTools && toolConstructionPlan.includeShellTools;
+  // P1C's selected-memory pilot is read-only. Hiding both the shell and its process controller
+  // closes the generic durable-write bypass without pretending this is P1D virtual-FS confinement.
+  const includeShellTools =
+    includeCoreTools && toolConstructionPlan.includeShellTools && !memoryIsolationCutover;
   const includeOpenClawTools = includeCoreTools && toolConstructionPlan.includeOpenClawTools;
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
@@ -703,6 +709,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             currentMessageId: options?.currentMessageId,
             modelProvider: options?.modelProvider,
             modelId: options?.modelId,
+            runId: options?.runId,
             modelHasVision: options?.modelHasVision,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
@@ -913,19 +920,26 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       !options?.swarmCollector ||
       (tool.name !== "ask_user" && tool.name !== "sessions_send" && tool.name !== "sessions_yield"),
   );
+  // P1C admits only selected-plugin reads. Generic filesystem reads would let a model bypass the
+  // broker's subject and receipt checks, while every other contributor could reopen an egress or
+  // mutation path if this final surface gate moved earlier.
+  const surfaceTools = memoryIsolationCutover
+    ? authorizedTools.filter((tool) => MEMORY_ISOLATION_READ_TOOL_NAMES.has(tool.name))
+    : authorizedTools;
   if (
     swarmStructuredOutputTool &&
-    !authorizedTools.some((tool) => tool.name === swarmStructuredOutputTool.name)
+    !memoryIsolationCutover &&
+    !surfaceTools.some((tool) => tool.name === swarmStructuredOutputTool.name)
   ) {
     // Collector output is a run contract, not an operator-configurable capability.
-    authorizedTools.push(swarmStructuredOutputTool);
+    surfaceTools.push(swarmStructuredOutputTool);
   }
   if (shouldInheritEffectiveToolAllowlist) {
-    // Snapshot exporter only: this copies authorizedTools for descendants and
+    // Snapshot exporter only: this copies surfaceTools for descendants and
     // never filters the mandatory structured_output tool from this turn.
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, surfaceTools);
   }
-  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, authorizedTools, (tool) =>
+  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, surfaceTools, (tool) =>
     getPluginToolMeta(tool),
   );
   options?.recordToolPrepStage?.("authorization-policy");
@@ -967,7 +981,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   };
   // NOTE: Keep canonical (lowercase) tool names here. Provider transports remap on the wire.
   return finalizeAgentTools({
-    tools: authorizedTools,
+    tools: surfaceTools,
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,
     modelCompat: options?.modelCompat,

@@ -2,7 +2,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isMemoryIsolationCutoverAgent } from "./memory-cutover.js";
 import type {
   MemoryCorpusSupplement,
   MemoryCorpusSupplementRegistration,
@@ -18,9 +20,13 @@ import type {
   MemoryPromptSupplementRegistration,
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { requireActivePluginRegistry, resolveDirectPluginRegistrationOwner } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
+
+export const LEGACY_MEMORY_PUBLIC_ARTIFACTS_UNAVAILABLE =
+  "Memory public artifacts are unavailable after scoped-memory cutover.";
 
 export type {
   MemoryCorpusSearchResult,
@@ -39,6 +45,7 @@ export type {
 
 export function resolveMemoryCapabilityRegistration(
   registrations: readonly MemoryPluginCapabilityRegistration[],
+  selectedPluginId?: string,
 ): MemoryPluginCapabilityRegistration | undefined {
   let effective: MemoryPluginCapabilityRegistration | undefined;
   for (const registration of registrations) {
@@ -50,19 +57,60 @@ export function resolveMemoryCapabilityRegistration(
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
       !registration.capability.runtime;
+    const bridgeCapability = { ...registration.capability };
+    if (preserveExisting) {
+      // An artifacts-only registration augments the effective runtime without replacing it.
+      // Selection provenance below restores authorization from the selected capability only.
+      delete bridgeCapability.authorization;
+    }
     effective = {
       pluginId: registration.pluginId,
       capability: {
         ...(preserveExisting ? existing : {}),
-        ...registration.capability,
+        ...bridgeCapability,
       },
     };
   }
-  return effective;
+  if (!effective || !selectedPluginId) {
+    return effective;
+  }
+
+  let selectedAuthorization: MemoryPluginCapability["authorization"];
+  for (let index = registrations.length - 1; index >= 0; index -= 1) {
+    const registration = registrations[index];
+    if (
+      registration?.pluginId === selectedPluginId &&
+      registration.capability.authorization !== undefined
+    ) {
+      selectedAuthorization = registration.capability.authorization;
+      break;
+    }
+  }
+
+  const capability = { ...effective.capability };
+  delete capability.authorization;
+  return {
+    // The selected backend owns authorization even when its registration borrows a sidecar runtime.
+    pluginId: selectedPluginId,
+    capability: {
+      ...capability,
+      ...(selectedAuthorization !== undefined ? { authorization: selectedAuthorization } : {}),
+    },
+  };
+}
+
+/** Resolves the effective memory capability using loader-recorded slot selection. */
+export function resolveSelectedMemoryCapabilityRegistration(
+  registry: Pick<PluginRegistry, "memoryCapabilities" | "plugins">,
+): MemoryPluginCapabilityRegistration | undefined {
+  const selectedPluginId = registry.plugins.find(
+    (plugin) => plugin.memorySlotSelected === true,
+  )?.id;
+  return resolveMemoryCapabilityRegistration(registry.memoryCapabilities, selectedPluginId);
 }
 
 const getMemoryCapability = () =>
-  resolveMemoryCapabilityRegistration(requireActivePluginRegistry().memoryCapabilities);
+  resolveSelectedMemoryCapabilityRegistration(requireActivePluginRegistry());
 
 const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
 const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();
@@ -126,13 +174,16 @@ function buildSynchronousMemoryPromptSection(params: MemoryPromptSectionParams):
   primary: string[];
   supplements: Array<{ pluginId: string; lines: string[] }>;
 } {
+  if (params.memoryReadEnforced && !params.authorizedMemoryRead) {
+    // Agent/session strings are routing hints, never authority. Do not let an
+    // unbound prompt contributor turn a missing host invocation into content.
+    return { primary: [], supplements: [] };
+  }
   const registry = requireActivePluginRegistry();
   const primary = filterStringEntries(
-    resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.promptBuilder?.(
-      params,
-    ) ?? [],
+    resolveSelectedMemoryCapabilityRegistration(registry)?.capability.promptBuilder?.(params) ?? [],
   );
-  const supplements = registry.memoryPromptSupplements
+  const supplements = (params.memoryReadEnforced ? [] : registry.memoryPromptSupplements)
     // Keep supplement order stable even if plugin registration order changes.
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
     .map((registration) => ({
@@ -151,6 +202,10 @@ function cloneMemoryPromptSectionParams(
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
+    memoryReadEnforced:
+      params.memoryReadEnforced ??
+      (params.agentId && isMemoryIsolationCutoverAgent(params.agentId) ? true : undefined),
+    authorizedMemoryRead: params.authorizedMemoryRead,
   };
 }
 
@@ -163,6 +218,8 @@ function snapshotMemoryPromptContext(
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed === true,
+    memoryReadEnforced: params.memoryReadEnforced === true,
+    ...(params.authorizedMemoryRead ? { authorizedMemoryRead: params.authorizedMemoryRead } : {}),
   });
 }
 
@@ -176,6 +233,8 @@ function preparedMemoryPromptContextMatches(
     prepared.context.agentId === current.agentId &&
     prepared.context.agentSessionKey === current.agentSessionKey &&
     prepared.context.sandboxed === current.sandboxed &&
+    prepared.context.memoryReadEnforced === current.memoryReadEnforced &&
+    prepared.context.authorizedMemoryRead === current.authorizedMemoryRead &&
     prepared.context.availableTools.length === current.availableTools.length &&
     prepared.context.availableTools.every((tool, index) => tool === current.availableTools[index])
   );
@@ -191,8 +250,11 @@ export async function prepareMemoryPromptSection(
     cloneMemoryPromptSectionParams(runParams),
   );
   const preparationRegistrations = [...requireActivePluginRegistry().memoryPromptPreparations];
+  // Registered preparations are supplemental paths. Until a contributor can
+  // project through the selected runtime, it stays unavailable after cutover.
+  const canPrepare = !runParams.memoryReadEnforced;
   const preparedSupplements = await Promise.all(
-    preparationRegistrations.map(async (registration) => ({
+    (canPrepare ? preparationRegistrations : []).map(async (registration) => ({
       pluginId: registration.pluginId,
       lines: filterStringEntries(
         await registration.prepare(cloneMemoryPromptSectionParams(runParams)),
@@ -234,13 +296,13 @@ export function buildMemoryPromptSection(
     // Run-scoped prompt state must never cross agent/session/tool boundaries.
     if (
       !preparedMemoryPromptSections.has(prepared) ||
-      !preparedMemoryPromptContextMatches(prepared, params)
+      !preparedMemoryPromptContextMatches(prepared, cloneMemoryPromptSectionParams(params))
     ) {
       throw new Error("prepared memory prompt section does not match the current run");
     }
     return [...prepared.lines];
   }
-  const synchronous = buildSynchronousMemoryPromptSection(params);
+  const synchronous = buildSynchronousMemoryPromptSection(cloneMemoryPromptSectionParams(params));
   return [...synchronous.primary, ...synchronous.supplements.flatMap((entry) => entry.lines)];
 }
 
@@ -252,8 +314,12 @@ export function listMemoryPromptPreparations(): MemoryPromptPreparationRegistrat
 }
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   nowMs?: number;
 }): MemoryFlushPlan | null {
+  if (params.agentId && isMemoryIsolationCutoverAgent(params.agentId)) {
+    return null;
+  }
   return getMemoryCapability()?.capability.flushPlanResolver?.(params) ?? null;
 }
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
@@ -298,6 +364,12 @@ function isValidMemoryPublicArtifact(
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
+  // Public artifacts expose legacy workspace paths and durable-memory metadata.
+  // Phase 1C has no operator-scoped projection context, so any cut-over owner
+  // makes this shared route unavailable before a provider can inspect files.
+  if (listAgentIds(params.cfg).some(isMemoryIsolationCutoverAgent)) {
+    throw new Error(LEGACY_MEMORY_PUBLIC_ARTIFACTS_UNAVAILABLE);
+  }
   const capability = getMemoryCapability();
   const pluginId = capability?.pluginId;
   const listed = (await capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];

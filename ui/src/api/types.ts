@@ -33,6 +33,9 @@ export type ChannelsPairingListResult =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingListResult;
 export type ChannelsPairingRequest =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
+export type UserProfile = import("../../../packages/gateway-protocol/src/index.js").UserProfile;
+export type UsersListResult =
+  import("../../../packages/gateway-protocol/src/index.js").UsersListResult;
 export type SessionVisibility =
   import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
 export type SessionMembersListResult =

@@ -398,6 +398,7 @@ describe("channels controller DM pairing", () => {
       requestId: "request-1",
       notify: true,
       bootstrapCommandOwner: false,
+      targetProfileId: "alice-profile",
     });
 
     expect(result?.notification).toBe("sent");
@@ -407,6 +408,7 @@ describe("channels controller DM pairing", () => {
       requestId: "request-1",
       notify: true,
       bootstrapCommandOwner: false,
+      targetProfileId: "alice-profile",
     });
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
     expect(channels.state.pairingBusyRequestId).toBeNull();

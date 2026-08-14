@@ -10,7 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetMemoryIsolationCutoverForTest } from "../plugins/memory-cutover.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   createHostWorkspaceEditTool,
@@ -24,6 +29,8 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { createMemoryFileMutationGuard } from "./memory-file-mutation-guard.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import {
@@ -84,6 +91,117 @@ async function expectExecCwdResolvesTo(
 }
 
 describe("workspace path resolution", () => {
+  it("exposes only selected authorized memory tools for an enforced read-only memory agent", async () => {
+    await withTempDir("openclaw-memory-cutover-state-", async (stateDir) => {
+      const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      try {
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        database.db
+          .prepare(
+            `INSERT INTO memory_migrations
+              (migration_id, source_kind, source_hash, phase, classification_json, plan_hash,
+               verified_at, cutover_at, updated_at)
+             VALUES ('memory-cutover-shell-tools', 'test', 'test-source', 'cutover', '{}',
+                     'test-plan', 1, 1, 1)`,
+          )
+          .run();
+        resetMemoryIsolationCutoverForTest();
+
+        vi.mocked(createOpenClawTools).mockImplementationOnce(() =>
+          ["read", "memory_search", "memory_get", "exec"].map((name) => ({ name }) as never),
+        );
+        expect(createOpenClawCodingTools({ agentId: "main" }).map((tool) => tool.name)).toEqual([
+          "memory_search",
+          "memory_get",
+        ]);
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+        resetMemoryIsolationCutoverForTest();
+        if (originalStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = originalStateDir;
+        }
+      }
+    });
+  });
+
+  it("preserves legacy memory-file writes for intentionally unscoped tool construction", async () => {
+    await withTempDir("openclaw-unscoped-ws-", async (workspaceDir) => {
+      const tools = createOpenClawCodingTools({ workspaceDir });
+      const { writeTool } = expectReadWriteEditTools(tools);
+
+      await writeTool.execute("unscoped-memory-write", {
+        path: "MEMORY.md",
+        content: "legacy utility state",
+      });
+
+      await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toBe(
+        "legacy utility state",
+      );
+    });
+  });
+
+  it("keeps controlled memory roots read-only while preserving ordinary host and sandbox writes", async () => {
+    await withTempDir("openclaw-memory-guard-host-", async (workspaceDir) => {
+      const guard = createMemoryFileMutationGuard({ mutationRoot: workspaceDir });
+      const writeTool = createHostWorkspaceWriteTool(workspaceDir, {
+        memoryFileMutationGuard: guard,
+      });
+      const editTool = createHostWorkspaceEditTool(workspaceDir, {
+        memoryFileMutationGuard: guard,
+      });
+      await fs.writeFile(path.join(workspaceDir, "USER.md"), "before", "utf8");
+
+      await expect(
+        writeTool.execute("host-memory-write", { path: "MEMORY.md", content: "blocked" }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await expect(
+        editTool.execute("host-user-edit", {
+          path: "USER.md",
+          edits: [{ oldText: "before", newText: "after" }],
+        }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await writeTool.execute("host-normal-write", { path: "notes.txt", content: "allowed" });
+      await expect(fs.readFile(path.join(workspaceDir, "notes.txt"), "utf8")).resolves.toBe(
+        "allowed",
+      );
+    });
+
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const guard = createMemoryFileMutationGuard({ mutationRoot: sandbox.workspaceDir });
+      const writeTool = createSandboxedWriteTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+        memoryFileMutationGuard: guard,
+      });
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+        memoryFileMutationGuard: guard,
+      });
+      await fs.writeFile(path.join(sandboxRoot, "USER.md"), "before", "utf8");
+
+      await expect(
+        writeTool.execute("sandbox-memory-write", {
+          path: "memory/blocked.md",
+          content: "blocked",
+        }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await expect(
+        editTool.execute("sandbox-user-edit", {
+          path: "USER.md",
+          edits: [{ oldText: "before", newText: "after" }],
+        }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await writeTool.execute("sandbox-normal-write", { path: "notes.txt", content: "allowed" });
+      await expect(fs.readFile(path.join(sandboxRoot, "notes.txt"), "utf8")).resolves.toBe(
+        "allowed",
+      );
+    });
+  });
+
   it("uses cwd for coding filesystem tools while workspaceDir remains the agent workspace", async () => {
     await withTempDir("openclaw-agent-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-task-cwd-", async (cwd) => {

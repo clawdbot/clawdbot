@@ -67,6 +67,51 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
   ON session_nodes(session_key)
   WHERE entry_valid = 0;
 
+-- Write-once memory provenance for one logical session. Current authority is
+-- rechecked in shared state; this row is never rewritten to chase a later
+-- principal, binding, or session-window mapping.
+CREATE TABLE IF NOT EXISTS session_memory_subjects (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  binding_id TEXT,
+  principal_id TEXT,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN (
+    'user', 'conversation', 'service', 'agent', 'system', 'ambiguous', 'quarantined'
+  )),
+  subject_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  CHECK (
+    (subject_kind = 'user' AND binding_id IS NOT NULL AND principal_id IS NOT NULL)
+    OR
+    (subject_kind IN ('conversation', 'service', 'agent', 'system') AND binding_id IS NULL AND principal_id IS NOT NULL)
+    OR
+    (subject_kind IN ('ambiguous', 'quarantined') AND binding_id IS NULL AND principal_id IS NULL)
+  )
+) STRICT;
+
+-- A logical node keeps one immutable subject. Every session-id window gets an
+-- immutable snapshot of that subject so reset/rebind races cannot silently
+-- inherit authority from a different generation.
+CREATE TABLE IF NOT EXISTS session_memory_subject_snapshots (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  subject_revision TEXT NOT NULL,
+  session_identity_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (session_key) REFERENCES session_memory_subjects(session_key)
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS session_memory_subjects_immutable
+BEFORE UPDATE ON session_memory_subjects
+BEGIN
+  SELECT RAISE(ABORT, 'session memory subject is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_memory_subject_snapshots_immutable
+BEFORE UPDATE ON session_memory_subject_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'session memory subject snapshot is immutable');
+END;
+
 CREATE TABLE IF NOT EXISTS session_key_contract (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
   main_key TEXT NOT NULL,
@@ -485,6 +530,425 @@ CREATE TABLE IF NOT EXISTS memory_index_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL
 ) STRICT;
+
+-- Scoped memory is additive and feature-local. Existing agent databases do
+-- not create this group until the scoped backend is selected.
+CREATE TABLE IF NOT EXISTS memory_storage_roots (
+  storage_root_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  backend_kind TEXT NOT NULL CHECK (backend_kind IN ('builtin', 'alternate')),
+  opaque_locator TEXT NOT NULL,
+  path_key_version INTEGER NOT NULL CHECK (path_key_version > 0),
+  path_key TEXT,
+  authority_kind TEXT NOT NULL CHECK (authority_kind IN ('user', 'conversation', 'role', 'agent-shared', 'agent', 'internal')),
+  authority_owner_id TEXT NOT NULL,
+  default_capabilities_json TEXT NOT NULL,
+  lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN ('pending', 'active', 'quarantined', 'tombstoned')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK ((backend_kind = 'builtin' AND path_key IS NOT NULL) OR backend_kind <> 'builtin'),
+  UNIQUE (agent_id, opaque_locator),
+  UNIQUE (agent_id, path_key)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_storage_roots_agent_state
+  ON memory_storage_roots(agent_id, lifecycle_state, storage_root_id);
+
+CREATE TABLE IF NOT EXISTS memory_stores (
+  store_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  storage_root_id TEXT NOT NULL,
+  policy_id TEXT NOT NULL,
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('user', 'conversation', 'role', 'agent-shared', 'agent', 'internal')),
+  audience_kind TEXT NOT NULL CHECK (audience_kind IN ('user', 'conversation', 'role', 'agent-shared', 'agent', 'internal')),
+  audience_id TEXT NOT NULL,
+  lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN ('pending', 'active', 'quarantined', 'tombstoned')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (storage_root_id) REFERENCES memory_storage_roots(storage_root_id) ON DELETE RESTRICT,
+  FOREIGN KEY (policy_id) REFERENCES memory_policies(policy_id) ON DELETE RESTRICT,
+  UNIQUE (agent_id, storage_root_id, scope_kind, audience_kind, audience_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_stores_agent_scope
+  ON memory_stores(agent_id, scope_kind, audience_kind, audience_id, lifecycle_state);
+
+CREATE INDEX IF NOT EXISTS idx_memory_stores_policy
+  ON memory_stores(agent_id, policy_id, lifecycle_state, store_id);
+
+CREATE TABLE IF NOT EXISTS memory_policies (
+  policy_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  current_revision_id TEXT NOT NULL,
+  revocation_epoch INTEGER NOT NULL DEFAULT 0 CHECK (revocation_epoch >= 0),
+  lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN ('active', 'revoked')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_policies_agent_state
+  ON memory_policies(agent_id, lifecycle_state, policy_id);
+
+CREATE TABLE IF NOT EXISTS memory_policy_revisions (
+  revision_id TEXT NOT NULL PRIMARY KEY,
+  policy_id TEXT NOT NULL,
+  revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+  revocation_epoch INTEGER NOT NULL CHECK (revocation_epoch >= 0),
+  lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN ('active', 'superseded', 'revoked')),
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('human', 'agent', 'service', 'system', 'unattributed')),
+  actor_id TEXT,
+  reason TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (policy_id) REFERENCES memory_policies(policy_id) ON DELETE RESTRICT,
+  UNIQUE (policy_id, revision_number)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_policy_revisions_one_active
+  ON memory_policy_revisions(policy_id)
+  WHERE lifecycle_state = 'active';
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_revisions_immutable_fields
+BEFORE UPDATE OF policy_id, revision_number, revocation_epoch, actor_kind, actor_id, reason, created_at
+ON memory_policy_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy revision fields are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_revisions_no_delete
+BEFORE DELETE ON memory_policy_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy revisions cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_revisions_terminal_lifecycle
+BEFORE UPDATE OF lifecycle_state ON memory_policy_revisions
+WHEN old.lifecycle_state <> 'active' AND new.lifecycle_state <> old.lifecycle_state
+BEGIN
+  SELECT RAISE(ABORT, 'retired memory policy revisions cannot be reactivated');
+END;
+
+CREATE TABLE IF NOT EXISTS memory_policy_entries (
+  entry_id TEXT NOT NULL PRIMARY KEY,
+  policy_revision_id TEXT NOT NULL,
+  entry_kind TEXT NOT NULL CHECK (entry_kind IN ('placement', 'exception', 'publish')),
+  effect TEXT NOT NULL CHECK (effect IN ('allow', 'deny')),
+  principal_id TEXT NOT NULL,
+  audience_kind TEXT NOT NULL CHECK (audience_kind IN ('user', 'conversation', 'role', 'agent-shared', 'agent', 'internal', '*')),
+  audience_id TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('retrieve', 'read', 'append', 'replace', 'derive', 'deposit', 'project', 'publish', 'import', 'export', 'delete', 'sync', 'status', 'policy-admin')),
+  grantor_principal_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  expires_at INTEGER,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (policy_revision_id) REFERENCES memory_policy_revisions(revision_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_policy_entries_revision_operation
+  ON memory_policy_entries(policy_revision_id, operation, effect, principal_id);
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_entries_no_update
+BEFORE UPDATE ON memory_policy_entries
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy entries are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_entries_no_delete
+BEFORE DELETE ON memory_policy_entries
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy entries cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS memory_resources (
+  resource_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  store_id TEXT NOT NULL,
+  logical_locator TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'memory' CHECK (source IN ('memory', 'sessions')),
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (store_id) REFERENCES memory_stores(store_id) ON DELETE RESTRICT,
+  UNIQUE (agent_id, store_id, logical_locator)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_resources_agent_store
+  ON memory_resources(agent_id, store_id, resource_id);
+
+CREATE TABLE IF NOT EXISTS memory_resource_revisions (
+  revision_id TEXT NOT NULL PRIMARY KEY,
+  resource_id TEXT NOT NULL,
+  revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+  artifact_locator TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  content_bytes INTEGER NOT NULL CHECK (content_bytes >= 0),
+  policy_revision_id TEXT NOT NULL,
+  policy_revocation_epoch INTEGER NOT NULL CHECK (policy_revocation_epoch >= 0),
+  source_policy_set_id TEXT NOT NULL,
+  lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN ('pending', 'active', 'quarantined', 'tombstoned')),
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('human', 'agent', 'service', 'system', 'unattributed')),
+  actor_id TEXT,
+  expires_at INTEGER,
+  created_at INTEGER NOT NULL,
+  activated_at INTEGER,
+  retired_at INTEGER,
+  FOREIGN KEY (resource_id) REFERENCES memory_resources(resource_id) ON DELETE RESTRICT,
+  FOREIGN KEY (policy_revision_id) REFERENCES memory_policy_revisions(revision_id) ON DELETE RESTRICT,
+  UNIQUE (resource_id, revision_number),
+  UNIQUE (resource_id, artifact_locator)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_resource_revisions_one_active
+  ON memory_resource_revisions(resource_id)
+  WHERE lifecycle_state = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_memory_resource_revisions_policy
+  ON memory_resource_revisions(policy_revision_id, lifecycle_state, revision_id);
+
+CREATE TRIGGER IF NOT EXISTS memory_resource_revisions_immutable_fields
+BEFORE UPDATE OF resource_id, revision_number, artifact_locator, content_hash, content_bytes, policy_revision_id, policy_revocation_epoch, source_policy_set_id, actor_kind, actor_id, expires_at, created_at
+ON memory_resource_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'memory resource revision fields are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_resource_revisions_no_delete
+BEFORE DELETE ON memory_resource_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'memory resource revisions cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_resource_revisions_terminal_lifecycle
+BEFORE UPDATE OF lifecycle_state ON memory_resource_revisions
+WHEN old.lifecycle_state = 'tombstoned' AND new.lifecycle_state <> old.lifecycle_state
+BEGIN
+  SELECT RAISE(ABORT, 'tombstoned memory resource revisions cannot be reactivated');
+END;
+
+CREATE TABLE IF NOT EXISTS memory_resource_subjects (
+  revision_id TEXT NOT NULL,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('person', 'project', 'conversation', 'topic')),
+  subject_id TEXT NOT NULL,
+  evidence_revision TEXT NOT NULL,
+  lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN ('current', 'superseded')),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (revision_id, subject_kind, subject_id),
+  FOREIGN KEY (revision_id) REFERENCES memory_resource_revisions(revision_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_resource_subjects_lookup
+  ON memory_resource_subjects(subject_kind, subject_id, lifecycle_state, revision_id);
+
+CREATE TABLE IF NOT EXISTS memory_scoped_chunks (
+  chunk_key INTEGER PRIMARY KEY,
+  chunk_id TEXT NOT NULL UNIQUE,
+  revision_id TEXT NOT NULL,
+  chunk_ordinal INTEGER NOT NULL CHECK (chunk_ordinal >= 0),
+  start_line INTEGER NOT NULL CHECK (start_line > 0),
+  end_line INTEGER NOT NULL CHECK (end_line >= start_line),
+  text TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  model TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (revision_id) REFERENCES memory_resource_revisions(revision_id) ON DELETE RESTRICT,
+  UNIQUE (revision_id, chunk_ordinal)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_scoped_chunks_revision
+  ON memory_scoped_chunks(revision_id, chunk_ordinal);
+
+CREATE TABLE IF NOT EXISTS memory_scoped_chunk_vectors (
+  chunk_id TEXT NOT NULL PRIMARY KEY,
+  model TEXT NOT NULL,
+  dims INTEGER NOT NULL CHECK (dims > 0),
+  embedding TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (chunk_id) REFERENCES memory_scoped_chunks(chunk_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_scoped_chunks_fts USING fts5(
+  text,
+  chunk_id UNINDEXED,
+  revision_id UNINDEXED,
+  start_line UNINDEXED,
+  end_line UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS memory_scoped_chunks_fts_after_insert
+AFTER INSERT ON memory_scoped_chunks
+BEGIN
+  INSERT INTO memory_scoped_chunks_fts(rowid, text, chunk_id, revision_id, start_line, end_line)
+  VALUES (new.chunk_key, new.text, new.chunk_id, new.revision_id, new.start_line, new.end_line);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_scoped_chunks_fts_after_delete
+AFTER DELETE ON memory_scoped_chunks
+BEGIN
+  DELETE FROM memory_scoped_chunks_fts WHERE rowid = old.chunk_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_scoped_chunks_fts_after_update
+AFTER UPDATE OF text, chunk_id, revision_id, start_line, end_line ON memory_scoped_chunks
+BEGIN
+  DELETE FROM memory_scoped_chunks_fts WHERE rowid = old.chunk_key;
+  INSERT INTO memory_scoped_chunks_fts(rowid, text, chunk_id, revision_id, start_line, end_line)
+  VALUES (new.chunk_key, new.text, new.chunk_id, new.revision_id, new.start_line, new.end_line);
+END;
+
+CREATE TABLE IF NOT EXISTS memory_migrations (
+  migration_id TEXT NOT NULL PRIMARY KEY,
+  source_kind TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK (phase IN ('previewed', 'backed-up', 'copied', 'indexed', 'verified', 'cutover')),
+  classification_json TEXT NOT NULL,
+  plan_hash TEXT NOT NULL,
+  verified_at INTEGER,
+  cutover_at INTEGER,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (source_kind, source_hash)
+) STRICT;
+
+-- Transcript memory policy labels are additive and lazily ensured with the scoped-memory group.
+-- They make a missing authorization receipt a durable deny rather than an unlabeled transcript copy.
+CREATE TABLE IF NOT EXISTS memory_policy_sets (
+  policy_set_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  memory_policy_revision TEXT NOT NULL,
+  member_policy_set_ids_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_sets_no_update
+BEFORE UPDATE ON memory_policy_sets
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy sets are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_sets_no_delete
+BEFORE DELETE ON memory_policy_sets
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy sets cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS memory_run_exposures (
+  exposure_set_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  context_fingerprint TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+  previous_exposure_set_id TEXT,
+  source_policy_set_ids_json TEXT NOT NULL,
+  effective_source_policy_set_id TEXT NOT NULL,
+  exposed_resource_revisions_json TEXT NOT NULL,
+  exposure_receipt_ids_json TEXT NOT NULL,
+  egress_receipt_ids_json TEXT NOT NULL,
+  delivery_audiences_json TEXT NOT NULL,
+  delivery_revision TEXT NOT NULL,
+  egress_registry_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE (run_id, revision_number),
+  FOREIGN KEY (previous_exposure_set_id) REFERENCES memory_run_exposures(exposure_set_id) ON DELETE RESTRICT,
+  FOREIGN KEY (effective_source_policy_set_id) REFERENCES memory_policy_sets(policy_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_run_exposures_run
+  ON memory_run_exposures(run_id, revision_number DESC);
+
+CREATE TRIGGER IF NOT EXISTS memory_run_exposures_no_update
+BEFORE UPDATE ON memory_run_exposures
+BEGIN
+  SELECT RAISE(ABORT, 'memory run exposures are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_run_exposures_no_delete
+BEFORE DELETE ON memory_run_exposures
+BEGIN
+  SELECT RAISE(ABORT, 'memory run exposures cannot be deleted');
+END;
+
+-- Selected-plugin content is never returned until this content-free ledger row commits.
+-- It is lazy/additive so current-version databases remain compatible until first scoped read.
+CREATE TABLE IF NOT EXISTS memory_preoutput_exposure_ledger (
+  agent_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+  exposure_set_id TEXT NOT NULL UNIQUE,
+  previous_exposure_set_id TEXT,
+  session_key TEXT NOT NULL,
+  context_fingerprint TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  memory_policy_revision TEXT NOT NULL,
+  source_policy_set_ids_json TEXT NOT NULL,
+  exposed_resource_revisions_json TEXT NOT NULL,
+  exposure_receipt_ids_json TEXT NOT NULL,
+  egress_receipt_ids_json TEXT NOT NULL,
+  delivery_audiences_json TEXT NOT NULL,
+  delivery_revision TEXT NOT NULL,
+  egress_registry_revision TEXT NOT NULL,
+  session_identity_revision TEXT NOT NULL,
+  subject_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, session_id, run_id, revision_number),
+  FOREIGN KEY (previous_exposure_set_id) REFERENCES memory_preoutput_exposure_ledger(exposure_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_preoutput_exposure_ledger_session_run
+  ON memory_preoutput_exposure_ledger(agent_id, session_id, run_id, revision_number DESC);
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_ledger_no_update
+BEFORE UPDATE ON memory_preoutput_exposure_ledger
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output memory exposure ledger is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_ledger_no_delete
+BEFORE DELETE ON memory_preoutput_exposure_ledger
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output memory exposure ledger cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS transcript_event_memory_policies (
+  session_id TEXT NOT NULL,
+  event_seq INTEGER NOT NULL,
+  authorization_status TEXT NOT NULL CHECK (authorization_status IN ('authorized', 'pending')),
+  source_policy_set_id TEXT,
+  run_exposure_set_id TEXT,
+  run_exposure_revision INTEGER,
+  delivery_audiences_json TEXT,
+  session_identity_revision TEXT,
+  subject_revision TEXT,
+  run_id TEXT,
+  context_fingerprint TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, event_seq),
+  FOREIGN KEY (session_id, event_seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE,
+  FOREIGN KEY (source_policy_set_id) REFERENCES memory_policy_sets(policy_set_id) ON DELETE RESTRICT,
+  FOREIGN KEY (run_exposure_set_id) REFERENCES memory_run_exposures(exposure_set_id) ON DELETE RESTRICT,
+  CHECK (
+    (authorization_status = 'authorized'
+      AND source_policy_set_id IS NOT NULL
+      AND run_exposure_set_id IS NOT NULL
+      AND run_exposure_revision IS NOT NULL
+      AND delivery_audiences_json IS NOT NULL
+      AND session_identity_revision IS NOT NULL
+      AND subject_revision IS NOT NULL
+      AND run_id IS NOT NULL
+      AND context_fingerprint IS NOT NULL)
+    OR
+    (authorization_status = 'pending'
+      AND source_policy_set_id IS NULL
+      AND run_exposure_set_id IS NULL
+      AND run_exposure_revision IS NULL
+      AND delivery_audiences_json IS NULL
+      AND session_identity_revision IS NULL
+      AND subject_revision IS NULL
+      AND run_id IS NULL
+      AND context_fingerprint IS NULL)
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_transcript_event_memory_policies_status
+  ON transcript_event_memory_policies(session_id, authorization_status, event_seq);
 
 CREATE TABLE IF NOT EXISTS standing_intents (
   intent_key INTEGER PRIMARY KEY,

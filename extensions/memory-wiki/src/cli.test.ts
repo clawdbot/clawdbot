@@ -16,6 +16,7 @@ import {
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
+const isLegacyMemorySurfaceDisabledMock = vi.hoisted(() => vi.fn(() => false));
 const afterCompileHook = vi.hoisted(
   () =>
     ({ run: undefined }) as {
@@ -25,6 +26,10 @@ const afterCompileHook = vi.hoisted(
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   callGatewayFromCli: callGatewayFromCliMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", () => ({
+  isLegacyMemorySurfaceDisabled: isLegacyMemorySurfaceDisabledMock,
 }));
 
 vi.mock("./compile.js", async (importOriginal) => {
@@ -63,6 +68,7 @@ describe("memory-wiki cli", () => {
 
   beforeEach(() => {
     callGatewayFromCliMock.mockReset();
+    isLegacyMemorySurfaceDisabledMock.mockReset().mockReturnValue(false);
     stdoutWriteMock = vi.fn(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(
       stdoutWriteMock as unknown as typeof process.stdout.write,
@@ -99,6 +105,23 @@ describe("memory-wiki cli", () => {
     await program.parseAsync(["wiki", ...args], { from: "user" });
     return stdoutWriteMock.mock.calls.map(([chunk]) => String(chunk)).join("");
   }
+
+  it("blocks the CLI before raw vault access after cut-over", async () => {
+    const { config } = await createCliVault({ config: { vault: { scope: "agent" } } });
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, {
+      config,
+      getAppConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    });
+    isLegacyMemorySurfaceDisabledMock.mockReturnValueOnce(true);
+
+    await expect(
+      program.parseAsync(["wiki", "status", "--json"], { from: "user" }),
+    ).rejects.toThrow("Memory Wiki is unavailable after scoped-memory cutover.");
+    expect(callGatewayFromCliMock).not.toHaveBeenCalled();
+    expect(stdoutWriteMock).not.toHaveBeenCalled();
+  });
 
   async function createChatGptExport(rootDir: string) {
     const exportDir = path.join(rootDir, "chatgpt-export");

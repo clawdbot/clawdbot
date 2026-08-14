@@ -194,6 +194,46 @@ describe("CORE_HEALTH_CHECKS", () => {
     ).toBe(false);
   });
 
+  it("reports exact non-mutating private-memory remediation for shared-main DMs", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/memory-shared-main-dm-scope",
+    );
+
+    await expect(check.detect({ mode: "lint", runtime, cfg: {} })).resolves.toEqual([
+      expect.objectContaining({
+        severity: "info",
+        path: "session.dmScope",
+        message:
+          "Private memory is unavailable for direct messages routed through a shared-main session.",
+        fixHint: expect.stringContaining('session.dmScope to "per-channel-peer"'),
+      }),
+    ]);
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: { session: { dmScope: "per-account-channel-peer" } },
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: {
+          session: { dmScope: "per-channel-peer" },
+          bindings: [
+            {
+              agentId: "main",
+              match: { channel: "telegram" },
+              session: { dmScope: "main" },
+            },
+          ],
+        },
+      }),
+    ).resolves.toEqual([expect.objectContaining({ path: "bindings[].session.dmScope" })]);
+  });
+
   it("reports local STT auto-selection diagnostics", async () => {
     const finding: HealthFinding = {
       checkId: "core/doctor/local-audio-acceleration",

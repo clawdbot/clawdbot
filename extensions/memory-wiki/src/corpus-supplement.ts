@@ -14,7 +14,11 @@ export function createWikiCorpusSupplement(params: {
       agentId?: string;
       agentSessionKey?: string;
       sandboxed?: boolean;
+      memoryReadEnforced?: true;
     }) => {
+      if (input.memoryReadEnforced) {
+        return [];
+      }
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
       return await searchMemoryWiki({
@@ -36,7 +40,11 @@ export function createWikiCorpusSupplement(params: {
       agentId?: string;
       agentSessionKey?: string;
       sandboxed?: boolean;
+      memoryReadEnforced?: true;
     }) => {
+      if (input.memoryReadEnforced) {
+        return null;
+      }
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
       return await getMemoryWikiPage({

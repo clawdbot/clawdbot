@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { resetMemoryIsolationCutoverForTest } from "../../plugins/memory-cutover.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -22,6 +23,10 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -256,9 +261,26 @@ function requireCompactEmbeddedAgentSessionCall(index = 0) {
 
 describe("runMemoryFlushIfNeeded", () => {
   let rootDir = "";
+  let originalStateDir: string | undefined;
+
+  function markAgentCutOver(agentId: string): void {
+    const database = openOpenClawAgentDatabase({ agentId });
+    database.db
+      .prepare(
+        `INSERT INTO memory_migrations
+          (migration_id, source_kind, source_hash, phase, classification_json, plan_hash,
+           verified_at, cutover_at, updated_at)
+         VALUES (?, 'test', 'test-source', 'cutover', '{}', 'test-plan', 1, 1, 1)`,
+      )
+      .run(`memory-cutover-${agentId}`);
+    resetMemoryIsolationCutoverForTest();
+  }
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-unit-"));
+    originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(rootDir, "state");
+    resetMemoryIsolationCutoverForTest();
     registerMemoryFlushPlanResolverForTest(createMemoryFlushPlan);
     runWithModelFallbackMock.mockReset().mockImplementation(async ({ provider, model, run }) => ({
       result: await run(provider, model),
@@ -380,7 +402,53 @@ describe("runMemoryFlushIfNeeded", () => {
     cliBackendsTesting.resetDepsForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
+    closeOpenClawAgentDatabasesForTest();
+    resetMemoryIsolationCutoverForTest();
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
     await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  it("does not start or materialize a legacy memory flush for a cut-over agent", async () => {
+    markAgentCutOver("main");
+    const sessionKey = "agent:main:flush-policy";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 1,
+    };
+    const followupRun = createTestFollowupRun();
+    followupRun.run.agentId = "main";
+    followupRun.run.sessionKey = sessionKey;
+    followupRun.run.workspaceDir = rootDir;
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun,
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result.outcome).toBe("skipped");
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(rootDir, "memory", "2023-11-14.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("runs a memory flush turn, rotates after compaction, and persists metadata", async () => {

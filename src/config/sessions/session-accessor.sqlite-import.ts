@@ -103,6 +103,7 @@ export async function importSqliteSessionRows(
       // Doctor imports legacy aliases verbatim; canonical-key repair owns their normalization.
       writeSessionEntry(database, resolved.sessionKey, importedEntry, {
         allowStoredAliases: true,
+        memorySubjectImportQuarantine: true,
         previousEntry: currentEntry ?? null,
       });
       // The legacy-main handoff hashes raw ordered rows. Parsing or deduping here would make the

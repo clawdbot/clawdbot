@@ -179,14 +179,18 @@ function buildWikiToolGuidance(availableTools: Set<string>): string[] {
 }
 
 export function createWikiPromptSectionBuilder(): MemoryPromptSectionBuilder {
-  return ({ availableTools }) => buildWikiToolGuidance(availableTools);
+  return ({ availableTools, memoryReadEnforced }) =>
+    memoryReadEnforced ? [] : buildWikiToolGuidance(availableTools);
 }
 
 export function createWikiPromptSectionPreparer(params: {
   config: ResolvedMemoryWikiConfig;
   resolveConfig: MemoryWikiConfigResolver;
 }) {
-  return async ({ agentId }: Parameters<MemoryPromptSectionBuilder>[0]) => {
+  return async ({ agentId, memoryReadEnforced }: Parameters<MemoryPromptSectionBuilder>[0]) => {
+    if (memoryReadEnforced) {
+      return [];
+    }
     // Context-free preparation must not choose or disclose another agent's vault.
     if (params.config.vault.scope === "agent" && !agentId) {
       return [];

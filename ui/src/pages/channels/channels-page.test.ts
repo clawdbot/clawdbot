@@ -21,6 +21,27 @@ type PairingTestPage = ChannelsPageTestElement & {
   pairingPrompt: object | null;
 };
 
+type PairingProfilePage = PairingTestPage & {
+  pairingProfiles: Array<{ id: string }> | null;
+  openPairingPrompt: (kind: "approve" | "dismiss", request: unknown) => void;
+  patchPairingPrompt: (patch: { targetProfileId?: string | null }) => void;
+  confirmPairingPrompt: () => Promise<void>;
+};
+
+const PAIRING_REQUEST = {
+  requestId: "pairing-request",
+  channel: "telegram",
+  channelLabel: "Telegram",
+  accountId: "default",
+  accountLabel: "Default",
+  senderId: "123",
+  senderLabel: "Telegram user",
+  createdAt: "2026-08-10T00:00:00.000Z",
+  lastSeenAt: "2026-08-10T00:00:00.000Z",
+  expiresAt: "2026-08-10T01:00:00.000Z",
+  notifySupported: false,
+};
+
 type NostrTestPage = ChannelsPageTestElement & {
   nostrProfileFormState: {
     values: NostrProfile;
@@ -182,6 +203,71 @@ describe("ChannelsPage lifecycle", () => {
     expect(page.pairingPrompt).toBeNull();
     expect(page.pairingChannelFilter).toBeNull();
     expect(page.pairingAccountFilter).toBeNull();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("loads explicit profile targets only for admins and forwards the selected target on approval", async () => {
+    const gateway = createGateway();
+    const request = gateway.snapshot.client!.request as ReturnType<typeof vi.fn>;
+    request.mockImplementation(async (method: string) => {
+      if (method === "users.list") {
+        return {
+          profiles: [
+            {
+              id: "alice-profile",
+              displayName: "Alice",
+              avatarMime: null,
+              mergedInto: null,
+              createdAt: 1,
+              updatedAt: 1,
+              emails: [],
+              hasAvatar: false,
+            },
+          ],
+        };
+      }
+      if (method === "channels.pairing.approve") {
+        return {
+          requestId: PAIRING_REQUEST.requestId,
+          senderId: PAIRING_REQUEST.senderId,
+          notification: "not-requested",
+          commandOwnerBootstrap: "not-requested",
+        };
+      }
+      return {
+        accounts: [],
+        requests: [],
+        commandOwnerConfigured: true,
+        limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+      };
+    });
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.pairing", "operator.admin"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    const page = document.createElement("openclaw-channels-page") as PairingProfilePage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+
+    page.openPairingPrompt("approve", PAIRING_REQUEST);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("users.list", {}));
+    expect(page.pairingProfiles).toEqual([expect.objectContaining({ id: "alice-profile" })]);
+
+    page.patchPairingPrompt({ targetProfileId: "alice-profile" });
+    await page.confirmPairingPrompt();
+
+    expect(request).toHaveBeenCalledWith("channels.pairing.approve", {
+      channel: "telegram",
+      accountId: "default",
+      requestId: "pairing-request",
+      notify: false,
+      bootstrapCommandOwner: false,
+      targetProfileId: "alice-profile",
+    });
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });

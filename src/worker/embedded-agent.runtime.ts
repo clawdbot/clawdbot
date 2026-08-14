@@ -92,6 +92,7 @@ type RunWorkerEmbeddedTurnParams = {
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerToolName[];
   browser?: WorkerBrowserLaunchDescriptor;
+  memoryIsolationCutover: boolean;
   signal?: AbortSignal;
 };
 
@@ -145,19 +146,28 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   });
 
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const activeToolNames = WORKER_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
-  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
+  // Workers do not host selected-memory plugin tools. Exposing their generic read tool would
+  // bypass the broker, so the P1C cutover gives them no filesystem or process capability.
+  const availableToolNames = params.memoryIsolationCutover
+    ? ([] as const)
+    : WORKER_TOOL_NAMES;
+  const activeToolNames = availableToolNames.filter((name) => allowedToolNameSet.has(name));
+  const localToolNameSet = new Set<string>(
+    params.memoryIsolationCutover ? availableToolNames : WORKER_LOCAL_TOOL_NAMES,
+  );
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
     includeBaseCodingTools: true,
-    includeShellTools: true,
+    includeShellTools: !params.memoryIsolationCutover,
     workspaceOnly: false,
     modelContextWindowTokens: model.contextWindow,
     imageSanitization: {},
-    applyPatchEnabled: isApplyPatchAllowedForModel({
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-    }),
+    applyPatchEnabled:
+      !params.memoryIsolationCutover &&
+      isApplyPatchAllowedForModel({
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      }),
     applyPatchWorkspaceOnly: true,
     execDefaults: {
       host: "gateway",
@@ -215,7 +225,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         }),
       );
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
-      for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
+      const requiredToolNames = [
+        ...(params.memoryIsolationCutover ? [] : WORKER_REQUIRED_LOCAL_TOOL_NAMES),
+        ...(browserRuntime ? ["browser"] : []),
+      ];
+      for (const toolName of requiredToolNames) {
         if (!discoveredToolNames.has(toolName)) {
           throw new Error(`Worker coding tool unavailable: ${toolName}`);
         }

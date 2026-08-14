@@ -1,9 +1,19 @@
 // Covers plugin-backed memory state registration and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const isMemoryIsolationCutoverAgentMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("./memory-cutover.js", () => ({
+  isMemoryIsolationCutoverAgent: isMemoryIsolationCutoverAgentMock,
+}));
+
+import {
+  COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+  LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+} from "../plugin-sdk/memory-authorization.js";
 import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
-  getMemoryCapabilityRegistration,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptPreparations,
@@ -14,11 +24,16 @@ import {
   registerMemoryPromptPreparation,
   registerMemoryPromptSupplement,
   registerTestMemoryPromptBuilder,
+  resolveMemoryCapabilityRegistration,
   resolveMemoryFlushPlan,
   type MemoryPluginPublicArtifact,
 } from "./memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { withPluginRegistrationContext } from "./runtime.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "./runtime.js";
 
 function createMemoryRuntime() {
   return {
@@ -68,6 +83,8 @@ function registerMemoryState(params: {
 describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
+    resetPluginRuntimeStateForTest();
+    isMemoryIsolationCutoverAgentMock.mockReset().mockReturnValue(false);
   });
 
   it("returns empty defaults when no memory plugin state is registered", () => {
@@ -154,6 +171,37 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("fails closed before a public-artifact provider can inspect cut-over memory", async () => {
+    const listArtifacts = vi.fn(async () => [
+      {
+        kind: "memory-root" as const,
+        workspaceDir: "/private/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/private/workspace/MEMORY.md",
+        agentIds: ["cutover"],
+        contentType: "markdown" as const,
+      },
+    ]);
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: { listArtifacts },
+    });
+    isMemoryIsolationCutoverAgentMock.mockImplementation(
+      (agentId: string) => agentId === "cutover",
+    );
+
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: {
+          agents: {
+            list: [{ id: "legacy", default: true }, { id: "cutover" }],
+          },
+        } as never,
+      }),
+    ).rejects.toThrow("Memory public artifacts are unavailable after scoped-memory cutover.");
+
+    expect(listArtifacts).not.toHaveBeenCalled();
+  });
+
   it("normalizes public memory artifacts without agent ids", async () => {
     const legacyArtifact = {
       kind: "memory-root",
@@ -235,23 +283,52 @@ describe("memory plugin state", () => {
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([]);
   });
 
-  it("preserves sidecar runtime fields when a memory plugin adds public artifacts only", async () => {
+  it("preserves selected core behavior with a LanceDB public-artifact sidecar", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "memory-core", memorySlotSelected: true } as never,
+      { id: "memory-lancedb" } as never,
+    );
+    setActivePluginRegistry(registry);
+
     const runtime = createMemoryRuntime();
-    const flushPlanResolver = () => createMemoryFlushPlan("memory/sidecar.md");
+    const flushPlan = createMemoryFlushPlan("memory/sidecar.md");
+    const coreCorpus = {
+      search: async () => [
+        { corpus: "memory", path: "MEMORY.md", score: 0.8, snippet: "core result" },
+      ],
+      get: async () => null,
+    };
+    const wikiCorpus = {
+      search: async () => [
+        { corpus: "wiki", path: "sources/alpha.md", score: 0.9, snippet: "wiki result" },
+      ],
+      get: async () => null,
+    };
 
     registerMemoryCapability("memory-core", {
-      flushPlanResolver,
+      authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+      flushPlanResolver: () => flushPlan,
       runtime,
     });
     registerMemoryCapability("memory-lancedb", {
+      authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
       publicArtifacts: {
         async listArtifacts() {
           return [
             {
+              kind: "daily-note",
+              workspaceDir: "/tmp/workspace-b",
+              relativePath: "memory/2026-04-06.md",
+              absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+              agentIds: ["beta"],
+              contentType: "markdown" as const,
+            },
+            {
               kind: "memory-root",
-              workspaceDir: "/tmp/workspace",
+              workspaceDir: "/tmp/workspace-a",
               relativePath: "MEMORY.md",
-              absolutePath: "/tmp/workspace/MEMORY.md",
+              absolutePath: "/tmp/workspace-a/MEMORY.md",
               agentIds: ["main"],
               contentType: "markdown" as const,
             },
@@ -259,20 +336,117 @@ describe("memory plugin state", () => {
         },
       },
     });
+    registerMemoryCorpusSupplement("memory-wiki", wikiCorpus);
+    registerMemoryCorpusSupplement("memory-core", coreCorpus);
 
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/sidecar.md");
     expect(getMemoryRuntime()).toBe(runtime);
-    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-lancedb");
+    expect(resolveMemoryFlushPlan({ nowMs: 1_717_171_717_000 })).toEqual(flushPlan);
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
       {
         kind: "memory-root",
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: "/tmp/workspace-a",
         relativePath: "MEMORY.md",
-        absolutePath: "/tmp/workspace/MEMORY.md",
+        absolutePath: "/tmp/workspace-a/MEMORY.md",
         agentIds: ["main"],
         contentType: "markdown",
       },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/workspace-b",
+        relativePath: "memory/2026-04-06.md",
+        absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+        agentIds: ["beta"],
+        contentType: "markdown",
+      },
     ]);
+    await expect(
+      Promise.all(
+        listMemoryCorpusSupplements().map(async ({ pluginId, supplement }) => ({
+          pluginId,
+          results: await supplement.search({ query: "selected runtime" }),
+        })),
+      ),
+    ).resolves.toEqual([
+      {
+        pluginId: "memory-wiki",
+        results: [{ corpus: "wiki", path: "sources/alpha.md", score: 0.9, snippet: "wiki result" }],
+      },
+      {
+        pluginId: "memory-core",
+        results: [{ corpus: "memory", path: "MEMORY.md", score: 0.8, snippet: "core result" }],
+      },
+    ]);
+  });
+
+  it("keeps selected core authorization when an artifact sidecar registers later", () => {
+    const runtime = createMemoryRuntime();
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/sidecar.md");
+    const publicArtifacts = { listArtifacts: async () => [] };
+
+    expect(
+      resolveMemoryCapabilityRegistration(
+        [
+          {
+            pluginId: "memory-core",
+            capability: {
+              authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+              flushPlanResolver,
+              runtime,
+            },
+          },
+          {
+            pluginId: "memory-lancedb",
+            capability: {
+              authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+              publicArtifacts,
+            },
+          },
+        ],
+        "memory-core",
+      ),
+    ).toEqual({
+      pluginId: "memory-core",
+      capability: {
+        authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+        flushPlanResolver,
+        runtime,
+        publicArtifacts,
+      },
+    });
+  });
+
+  it("keeps runtime-less selected LanceDB authorization while inheriting the core sidecar runtime", () => {
+    const runtime = createMemoryRuntime();
+    const publicArtifacts = { listArtifacts: async () => [] };
+
+    expect(
+      resolveMemoryCapabilityRegistration(
+        [
+          {
+            pluginId: "memory-core",
+            capability: {
+              authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+              runtime,
+            },
+          },
+          {
+            pluginId: "memory-lancedb",
+            capability: {
+              authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+              publicArtifacts,
+            },
+          },
+        ],
+        "memory-lancedb",
+      ),
+    ).toEqual({
+      pluginId: "memory-lancedb",
+      capability: {
+        authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+        runtime,
+        publicArtifacts,
+      },
+    });
   });
 
   it("preserves runtime fields when the same plugin adds public artifacts", () => {
@@ -326,6 +500,56 @@ describe("memory plugin state", () => {
     };
     expect(primary).toHaveBeenCalledWith(expectedContext);
     expect(supplemental).toHaveBeenCalledWith(expectedContext);
+  });
+
+  it("fails closed for unbound cut-over prompt contributors", async () => {
+    isMemoryIsolationCutoverAgentMock.mockReturnValue(true);
+    const primary = vi.fn(() => ["selected runtime"]);
+    const supplemental = vi.fn(() => ["legacy supplement"]);
+    const prepare = vi.fn(async () => ["legacy prepared supplement"]);
+    registerTestMemoryPromptBuilder(primary);
+    registerMemoryPromptSupplement("memory-wiki", supplemental);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+
+    const params = {
+      availableTools: new Set<string>(),
+      agentId: "cut-over",
+      agentSessionKey: "agent:cut-over:main",
+    };
+    expect(buildMemoryPromptSection(params)).toEqual([]);
+    await expect(prepareMemoryPromptSection(params)).resolves.toMatchObject({ lines: [] });
+    expect(primary).not.toHaveBeenCalled();
+    expect(supplemental).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("binds selected-runtime prompt state to the host invocation and blocks supplements", async () => {
+    isMemoryIsolationCutoverAgentMock.mockReturnValue(true);
+    const host = {
+      search: vi.fn(async () => ({ results: [] })),
+      read: vi.fn(async () => ({ text: "", path: "" })),
+    };
+    const primary = vi.fn(() => ["selected runtime"]);
+    const supplemental = vi.fn(() => ["legacy supplement"]);
+    const prepare = vi.fn(async () => ["legacy prepared supplement"]);
+    registerTestMemoryPromptBuilder(primary);
+    registerMemoryPromptSupplement("memory-wiki", supplemental);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+
+    const params = {
+      availableTools: new Set<string>(),
+      agentId: "cut-over",
+      agentSessionKey: "agent:cut-over:main",
+      authorizedMemoryRead: host,
+    };
+    const prepared = await prepareMemoryPromptSection(params);
+    expect(buildMemoryPromptSection(params, prepared)).toEqual(["selected runtime"]);
+    expect(primary).toHaveBeenCalledWith(expect.objectContaining({ authorizedMemoryRead: host }));
+    expect(supplemental).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(() =>
+      buildMemoryPromptSection({ ...params, authorizedMemoryRead: { ...host } }, prepared),
+    ).toThrow("prepared memory prompt section does not match the current run");
   });
 
   it("appends prompt supplements in plugin-id order", () => {

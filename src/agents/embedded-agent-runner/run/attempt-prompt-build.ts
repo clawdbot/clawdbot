@@ -20,6 +20,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { isMemoryIsolationCutoverAgent } from "../../../plugins/memory-cutover.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -144,6 +145,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     agentId: input.hookAgentId,
     sessionKey: attempt.sessionKey,
     sessionId: attempt.sessionId,
+    ...(input.hookAgentId && isMemoryIsolationCutoverAgent(input.hookAgentId)
+      ? { memoryReadEnforced: true as const }
+      : {}),
     workspaceDir: attempt.workspaceDir,
     activeProjectKeys: [...(attempt.preparedModelRuntime?.activeProjectKeys ?? [])],
     modelProviderId: attempt.model.provider,

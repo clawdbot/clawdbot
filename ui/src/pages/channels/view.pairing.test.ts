@@ -52,6 +52,9 @@ function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
     pairingAccountFilter: null,
     pairingPrompt: null,
     pairingNotice: null,
+    pairingProfiles: null,
+    pairingProfilesLoading: false,
+    pairingProfilesError: null,
     canManagePairing: true,
     canAdmin: true,
     whatsappMessage: null,
@@ -245,7 +248,8 @@ describe("channel DM access request views", () => {
     expect(actionButtons.every((button) => button.disabled)).toBe(true);
   });
 
-  it("shows explicit notification and first-owner choices for an admin", () => {
+  it("lets an admin explicitly choose the profile that owns a verified sender memory", () => {
+    const onChange = vi.fn();
     const container = renderInto(
       renderChannelPairingPrompt(
         createProps({
@@ -254,14 +258,70 @@ describe("channel DM access request views", () => {
             request,
             notify: false,
             bootstrapCommandOwner: false,
+            targetProfileId: null,
           },
+          pairingProfiles: [
+            {
+              id: "alice-profile",
+              displayName: "Alice",
+              avatarMime: null,
+              mergedInto: null,
+              createdAt: 1,
+              updatedAt: 1,
+              emails: [],
+              hasAvatar: false,
+            },
+          ],
+          onPairingPromptChange: onChange,
         }),
       ),
     );
 
     expect(container.textContent).toContain("Notify the requester after approval");
+    expect(container.textContent).toContain(
+      "The selected profile owns the sender's private memory",
+    );
     expect(container.textContent).toContain("Also make this sender the first command owner");
     expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
+    const selects = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const memoryProfile = selects.find((select) =>
+      Array.from(select.options).some((option) => option.value === "alice-profile"),
+    );
+    memoryProfile!.value = "alice-profile";
+    memoryProfile!.dispatchEvent(new Event("change"));
+    expect(onChange).toHaveBeenCalledWith({ targetProfileId: "alice-profile" });
+  });
+
+  it("never renders a memory profile selector for a pairing-only operator", () => {
+    const container = renderInto(
+      renderChannelPairingPrompt(
+        createProps({
+          canAdmin: false,
+          pairingPrompt: {
+            kind: "approve",
+            request,
+            notify: false,
+            bootstrapCommandOwner: false,
+            targetProfileId: null,
+          },
+          pairingProfiles: [
+            {
+              id: "alice-profile",
+              displayName: "Alice",
+              avatarMime: null,
+              mergedInto: null,
+              createdAt: 1,
+              updatedAt: 1,
+              emails: [],
+              hasAvatar: false,
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(container.textContent).not.toContain("Memory profile");
+    expect(container.textContent).not.toContain("alice-profile");
   });
 
   it("links a channel account detail back to the filtered request queue", () => {

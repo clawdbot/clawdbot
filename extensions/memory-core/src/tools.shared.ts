@@ -9,6 +9,7 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
@@ -22,6 +23,8 @@ type MemoryToolOptions = {
   agentSessionKey?: string;
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
@@ -35,7 +38,10 @@ export const MemorySearchSchema = Type.Object({
 });
 
 export const MemoryGetSchema = Type.Object({
-  path: Type.String(),
+  // Legacy paths stay optional for non-enforced agents. Cut-over agents must
+  // pass the opaque continuation returned by memory_search.
+  path: Type.Optional(Type.String()),
+  handleId: Type.Optional(Type.String()),
   from: Type.Optional(Type.Integer()),
   lines: Type.Optional(Type.Integer()),
   corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
@@ -163,8 +169,15 @@ export async function searchMemoryCorpusSupplements(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }): Promise<MemoryCorpusSearchResult[]> {
+  if (params.memoryReadEnforced) {
+    // Supplemental corpora have no selected-runtime source contract yet. A
+    // host handle is intentionally not reinterpreted as authority for them.
+    return [];
+  }
   if (params.corpus === "memory" || params.corpus === "sessions") {
     return [];
   }
@@ -194,8 +207,14 @@ export async function getMemoryCorpusSupplementResult(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }) {
+  if (params.memoryReadEnforced) {
+    // See search: enforce the same unavailable result before any plugin call.
+    return null;
+  }
   if (params.corpus === "memory" || params.corpus === "sessions") {
     return null;
   }

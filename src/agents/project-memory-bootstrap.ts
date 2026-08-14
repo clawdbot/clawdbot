@@ -6,7 +6,8 @@ import {
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
-import { getMemoryRuntime } from "../plugins/memory-state.js";
+import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
+import { getSelectedMemoryRuntime } from "../plugins/memory-runtime.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 
 const PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS = 2_000;
@@ -123,7 +124,12 @@ export async function prepareProjectMemoryBootstrap(params: {
   if (params.activeProjectKeys.length === 0) {
     return [];
   }
-  const runtime = getMemoryRuntime();
+  if (isMemoryIsolationCutoverAgent(params.agentId)) {
+    // Curated candidates are legacy manager hits without an authorized invocation or egress
+    // receipt. Do not let project bootstrap bypass the selected runtime's enforced read boundary.
+    return [];
+  }
+  const runtime = getSelectedMemoryRuntime();
   if (!runtime) {
     return [];
   }

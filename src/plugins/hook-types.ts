@@ -305,6 +305,8 @@ export type PluginHookAgentContext = {
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
+  /** True when this agent's legacy memory reads and writes are cut over and unavailable. */
+  memoryReadEnforced?: true;
   workspaceDir?: string;
   /** Run-prepared repository identities; empty when the turn is outside a repository. */
   activeProjectKeys?: string[];

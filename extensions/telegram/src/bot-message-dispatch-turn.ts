@@ -96,6 +96,18 @@ export async function runTelegramDispatchTurn(turn: Turn) {
         logVerbose(`telegram reply error callback failed: ${String(callbackError)}`);
       });
     };
+    const stableSenderId = context.msg.from?.id;
+    if (!context.isGroup && stableSenderId != null) {
+      // All Telegram transport and pairing gates have accepted this direct
+      // message. Bind only the loader-issued opaque proof to the final context;
+      // the core session owner consumes it after persisting the current mapping.
+      params.telegramDeps.memoryIdentityAdmission?.attachVerifiedDirectSender({
+        context: context.ctxPayload,
+        channel: "telegram",
+        accountId: context.accountId,
+        stableSenderId: String(stableSenderId),
+      });
+    }
     const turnResult = await runChannelInboundEvent({
       channel: "telegram",
       accountId: context.route.accountId,

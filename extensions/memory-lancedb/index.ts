@@ -47,6 +47,7 @@ import {
   resolveAutoCaptureStartIndex,
   shouldCapture,
 } from "./memory-policy.js";
+import { LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES } from "./src/authorization.js";
 
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-host-core"),
@@ -186,6 +187,7 @@ export default definePluginEntry({
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
     api.registerMemoryCapability?.({
+      authorization: LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES,
       publicArtifacts: {
         async listArtifacts(params) {
           const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();
@@ -196,6 +198,9 @@ export default definePluginEntry({
 
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const agentId = resolveEnabledAgentId(
           ctx.agentId,
           ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config ?? resolveRuntimeConfig(),
@@ -312,6 +317,9 @@ export default definePluginEntry({
 
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const agentId = resolveEnabledAgentId(
           ctx.agentId,
           ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config ?? resolveRuntimeConfig(),
@@ -408,6 +416,9 @@ export default definePluginEntry({
 
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const agentId = resolveEnabledAgentId(
           ctx.agentId,
           ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config ?? resolveRuntimeConfig(),
@@ -500,6 +511,9 @@ export default definePluginEntry({
     registerMemoryCli(api, db, embeddings, resolveCliAgentId, cfg.recallMaxChars);
 
     api.on("before_prompt_build", async (event, ctx) => {
+      if (ctx.memoryReadEnforced) {
+        return undefined;
+      }
       const currentCfg = resolveCurrentHookConfig();
       if (!currentCfg.autoRecall) {
         return undefined;
@@ -597,6 +611,9 @@ export default definePluginEntry({
     });
 
     api.on("agent_end", async (event, ctx) => {
+      if (ctx.memoryReadEnforced) {
+        return;
+      }
       const currentCfg = resolveCurrentHookConfig();
       if (!currentCfg.autoCapture || isIncognitoSessionKey(ctx.sessionKey)) {
         return;

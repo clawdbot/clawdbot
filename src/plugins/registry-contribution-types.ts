@@ -3,6 +3,11 @@ import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-e
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import type { MemoryAuthorizationConformanceAdapter } from "../memory-host-sdk/host/authorization-conformance.js";
+import type {
+  AuthorizedMemoryRuntime,
+  MemoryAuthorizationCapabilities,
+} from "../memory-host-sdk/host/authorization.js";
 import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import type {
   EmbeddingProvider,
@@ -12,6 +17,7 @@ import type {
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import type { AuthorizedMemoryReadHost } from "./tool-types.js";
 
 export type ContextEngineFactoryContext = {
   config?: OpenClawConfig;
@@ -143,6 +149,14 @@ export type MemoryPromptSectionParams = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /** True when supplemental legacy memory reads are unavailable for this agent. */
+  memoryReadEnforced?: true;
+  /**
+   * Host-minted invocation for this run's selected authorized memory runtime.
+   * In enforced mode, prompt contributors must not derive access from agent or
+   * session strings; an absent handle means their content path is unavailable.
+   */
+  authorizedMemoryRead?: AuthorizedMemoryReadHost;
 };
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
@@ -158,6 +172,8 @@ export type PreparedMemoryPromptSection = Readonly<{
     agentId?: string;
     agentSessionKey?: string;
     sandboxed: boolean;
+    memoryReadEnforced: boolean;
+    authorizedMemoryRead?: AuthorizedMemoryReadHost;
   }>;
   lines: readonly string[];
 }>;
@@ -202,6 +218,9 @@ export type MemoryCorpusSupplement = {
     agentId?: string;
     agentSessionKey?: string;
     sandboxed?: boolean;
+    memoryReadEnforced?: true;
+    /** Host-minted invocation for this run; required for enforced content access. */
+    authorizedMemoryRead?: AuthorizedMemoryReadHost;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
@@ -210,6 +229,9 @@ export type MemoryCorpusSupplement = {
     agentId?: string;
     agentSessionKey?: string;
     sandboxed?: boolean;
+    memoryReadEnforced?: true;
+    /** Host-minted invocation for this run; required for enforced content access. */
+    authorizedMemoryRead?: AuthorizedMemoryReadHost;
   }): Promise<MemoryCorpusGetResult | null>;
 };
 
@@ -249,6 +271,7 @@ export type MemoryFlushPlan = {
 
 export type MemoryFlushPlanResolver = (params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   nowMs?: number;
 }) => MemoryFlushPlan | null;
 
@@ -257,6 +280,14 @@ export type RegisteredMemorySearchManager = MemorySearchManager;
 type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
 export type MemoryPluginRuntime = {
+  authorize?: AuthorizedMemoryRuntime["authorize"];
+  searchAuthorized?: AuthorizedMemoryRuntime["searchAuthorized"];
+  readAuthorized?: AuthorizedMemoryRuntime["readAuthorized"];
+  writeAuthorized?: AuthorizedMemoryRuntime["writeAuthorized"];
+  importAuthorized?: AuthorizedMemoryRuntime["importAuthorized"];
+  syncAuthorized?: AuthorizedMemoryRuntime["syncAuthorized"];
+  exportAuthorized?: AuthorizedMemoryRuntime["exportAuthorized"];
+  statusAuthorized?: AuthorizedMemoryRuntime["statusAuthorized"];
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -302,6 +333,10 @@ export type MemoryPluginPublicArtifactsProvider = {
 };
 
 export type MemoryPluginCapability = {
+  /** Declares the selected backend's authorization support even when it has no runtime. */
+  authorization?: MemoryAuthorizationCapabilities;
+  /** Plugin-owned pure evaluator; core verifies it before an enforced read admission. */
+  authorizationConformance?: MemoryAuthorizationConformanceAdapter;
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
   runtime?: MemoryPluginRuntime;

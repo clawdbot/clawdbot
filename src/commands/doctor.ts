@@ -45,6 +45,23 @@ function resolveExplicitSessionSqliteMaintenancePaths(options: DoctorOptions): s
 
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
+  if (options?.memoryIsolation) {
+    const outputRuntime = runtime ?? defaultRuntime;
+    const { runDoctorMemoryIsolation } = await import("./doctor-memory-isolation.js");
+    const report = runDoctorMemoryIsolation({
+      action: options.memoryIsolation,
+      ...(options.memoryIsolationAgent ? { agentId: options.memoryIsolationAgent } : {}),
+    });
+    if (options.json) {
+      writeRuntimeJson(outputRuntime, report);
+    } else {
+      outputRuntime.log(
+        `memory isolation: agent=${report.agentId}, mode=${report.mode}${report.restartRequired ? "; restart the Gateway before this posture takes effect" : ""}`,
+      );
+    }
+    outputRuntime.exit(report.mode === "unavailable" ? 1 : 0);
+    return;
+  }
   if (options?.stateSqlite) {
     const outputRuntime = runtime ?? defaultRuntime;
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
