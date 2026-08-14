@@ -159,9 +159,19 @@ export function registerComputerUseProvider(
   let executionPromise: Promise<ComputerUseExecution> | undefined;
 
   const getExecution = (context?: OpenClawPluginNodeHostCommandContext) => {
-    executionPromise ??= provider.openExecution(
-      context?.sessionKey ? { sessionKey: context.sessionKey } : {},
-    );
+    if (!executionPromise) {
+      const opened = provider.openExecution(
+        context?.sessionKey ? { sessionKey: context.sessionKey } : {},
+      );
+      // A failed open must not wedge the provider behind a cached rejection;
+      // the next command call retries openExecution instead.
+      opened.catch(() => {
+        if (executionPromise === opened) {
+          executionPromise = undefined;
+        }
+      });
+      executionPromise = opened;
+    }
     return executionPromise;
   };
   const closeExecution = async (reason: string) => {
