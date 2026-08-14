@@ -451,6 +451,7 @@ type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
 
 type AgentRunLifecycleTerminalData = Omit<AgentRunTerminalWaitInput, "status"> & {
   aborted?: unknown;
+  fallbackExhaustedFailure?: unknown;
   status?: unknown;
 };
 
@@ -617,6 +618,25 @@ export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
     endedAt: input.endedAt ?? data?.endedAt,
   });
   return stopReason && outcome.stopReason !== stopReason ? { ...outcome, stopReason } : outcome;
+}
+
+/** True for lifecycle events that cannot be followed by a same-run retry. */
+export function isDefinitiveRunLifecycle(input: { phase?: unknown; data?: unknown }) {
+  const data = input.data as AgentRunLifecycleTerminalData | undefined;
+  if (input.phase === "end") {
+    return true;
+  }
+  if (input.phase !== "error") {
+    return false;
+  }
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: "error",
+    data,
+  });
+  return (
+    data?.fallbackExhaustedFailure === true ||
+    classifyAgentRunTerminalOutcome(outcome) !== "failure"
+  );
 }
 
 function hasNestedAbortReason(value: unknown, matches: (candidate: unknown) => boolean): boolean {
