@@ -161,6 +161,8 @@ function listSourceDtsOutputs(sourceDir: string, outputPrefix: string) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  // provider-auth re-exports these signatures into generated SDK declarations.
+  "src/agents/cli-credentials.ts",
   "src/plugins/provider-runtime-model.types.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
