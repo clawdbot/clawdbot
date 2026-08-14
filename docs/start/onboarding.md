@@ -74,9 +74,10 @@ Where does the **Gateway** run?
   A connected current Gateway that already has a configured agent model first
   runs one live model check. A successful check skips this page and opens the
   normal agent UI; a failed check stays here with retry, sign-in, model, and
-  API-key recovery choices. Older Gateways without the live-check method keep
-  the configuration-only handoff until they are upgraded. OpenClaw and provider
-  setup run for a fresh, incomplete, or failed Gateway route.
+  API-key recovery choices. Older Gateways without the current write-scoped
+  live-check method—including releases that expose it only to admin-scoped
+  clients—keep the configuration-only handoff until they are upgraded. OpenClaw
+  and provider setup run for a fresh, incomplete, or failed Gateway route.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
 a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a

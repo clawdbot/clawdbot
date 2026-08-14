@@ -10,6 +10,18 @@ struct GatewayAutostartPolicyTests {
         #expect(!GatewayAutostartPolicy.shouldStartGateway(mode: .unconfigured, paused: false))
     }
 
+    @MainActor
+    @Test func `paused first-run recovery does not activate gateway`() {
+        var activationCount = 0
+        let activated = GatewayAutostartPolicy.activateGatewayForRecovery(
+            mode: .local,
+            paused: true,
+            activate: { activationCount += 1 })
+
+        #expect(!activated)
+        #expect(activationCount == 0)
+    }
+
     @Test func `ensures launch agent when local and not attach only`() {
         #expect(GatewayAutostartPolicy.shouldEnsureLaunchAgent(
             mode: .local,

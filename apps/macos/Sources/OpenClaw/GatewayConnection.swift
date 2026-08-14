@@ -344,7 +344,9 @@ actor GatewayConnection {
             try requireCurrentShutdownGeneration(shutdownGeneration)
             switch mode {
             case .local:
-                await MainActor.run { GatewayProcessManager.shared.setActive(true) }
+                // Pause is an operator-owned stop, not a transport failure to heal.
+                // The shared policy check and activation stay atomic on MainActor.
+                guard await GatewayAutostartPolicy.activateGatewayForRecovery() else { throw error }
                 try requireCurrentShutdownGeneration(shutdownGeneration)
 
                 let lastError: Error
