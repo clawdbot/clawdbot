@@ -570,11 +570,13 @@ async function compactResolvedContextEngine(
         })
       : undefined;
   if (lockedNativeHarness) {
-    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+    return harnessResult
+      ? { ...harnessResult, compactionKind: "native-harness" }
+      : lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
-      return harnessResult;
+      return { ...harnessResult, compactionKind: "native-harness" };
     }
     log.warn(
       `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
@@ -837,6 +839,7 @@ async function compactResolvedContextEngine(
         return {
           ok: result.ok,
           compacted: result.compacted,
+          compactionKind: "context-engine",
           reason: result.reason,
           result: result.result
             ? {

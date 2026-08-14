@@ -646,7 +646,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     return params.sessionEntry;
   }
 
-  let compactionKind: "context-engine" | "native-harness" | undefined;
+  let compactionKind: EmbeddedAgentCompactResult["compactionKind"];
   let contextCompactionOutcome: CliTranscriptCompactionOutcome | undefined;
   let nativeCompactionResult: EmbeddedAgentCompactResult | undefined;
   let useContextEngineCompaction = true;
@@ -774,7 +774,6 @@ export async function runCliTurnCompactionLifecycle(params: {
   return (
     (await cliCompactionDeps.recordCliCompactionInStore({
       compactionKind,
-      provider: params.provider,
       sessionKey: params.sessionKey,
       sessionStore: params.sessionStore,
       storePath: params.storePath,

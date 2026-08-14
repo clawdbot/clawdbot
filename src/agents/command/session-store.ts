@@ -14,12 +14,14 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  clearAllCliSessions,
   clearCliSession,
   getCliSessionBinding,
   setCliSessionBinding,
   setCliSessionId,
 } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
@@ -494,8 +496,7 @@ export async function persistCliSessionForkSuccessorInStore(params: {
 
 /** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
-  compactionKind: "context-engine" | "native-harness";
-  provider: string;
+  compactionKind: NonNullable<EmbeddedAgentCompactResult["compactionKind"]>;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
@@ -503,18 +504,16 @@ export async function recordCliCompactionInStore(params: {
   newSessionId?: string;
   expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { compactionKind, provider, sessionKey, sessionStore, storePath, expectedSessionId } =
-    params;
+  const { compactionKind, sessionKey, sessionStore, storePath, expectedSessionId } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
   }
 
   const next = { ...entry };
-  // Context-engine compaction rewrites history outside the CLI process, invalidating its native
-  // session id. Native harness compaction updates that same session in place, so preserve it.
+  // A shared-history rewrite invalidates every binding; native compaction preserves its session.
   if (compactionKind === "context-engine") {
-    clearCliSession(next, provider);
+    clearAllCliSessions(next);
   }
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();

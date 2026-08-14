@@ -2776,7 +2776,6 @@ describe("recordCliCompactionInStore", () => {
 
       await recordCliCompactionInStore({
         compactionKind: "native-harness",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,
@@ -2845,7 +2844,6 @@ describe("recordCliCompactionInStore", () => {
 
       await recordCliCompactionInStore({
         compactionKind: "native-harness",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,
@@ -2881,7 +2879,6 @@ describe("recordCliCompactionInStore", () => {
 
       await recordCliCompactionInStore({
         compactionKind: "native-harness",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,
@@ -2919,16 +2916,20 @@ describe("recordCliCompactionInStore", () => {
             codex: {
               sessionId: "stale-cli-session",
             },
+            "claude-cli": {
+              sessionId: "stale-claude-session",
+            },
           },
           cliSessionIds: {
             codex: "stale-cli-session",
+            "claude-cli": "stale-claude-session",
           },
+          claudeCliSessionId: "stale-claude-session",
         },
       };
 
       await recordCliCompactionInStore({
         compactionKind: "context-engine",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,
@@ -2942,6 +2943,9 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.totalTokens).toBe(42);
       expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds).toBeUndefined();
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
       expect(persisted?.sessionId).toBe(sessionId);
       expect(persisted?.modelProvider).toBe("openai");
       expect(persisted?.model).toBe("gpt-5.5");
@@ -2968,7 +2972,6 @@ describe("recordCliCompactionInStore", () => {
 
       const result = await recordCliCompactionInStore({
         compactionKind: "context-engine",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,

@@ -1,6 +1,8 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
+import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
@@ -325,6 +327,7 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction when a context engine changed identity. */
   newSessionId?: string;
+  compactionKind?: EmbeddedAgentCompactResult["compactionKind"];
 }): Promise<number | undefined> {
   const {
     agentId,
@@ -337,6 +340,7 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
+    compactionKind,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -347,11 +351,13 @@ export async function incrementCompactionCount(params: {
   }
   const incrementBy = Math.max(0, amount);
   const nextCount = (entry.compactionCount ?? 0) + incrementBy;
-  // Build update payload with compaction count and optionally updated token counts
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
     updatedAt: now,
   };
+  if (compactionKind === "context-engine") {
+    clearAllCliSessions(updates);
+  }
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
   if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
@@ -360,13 +366,11 @@ export async function incrementCompactionCount(params: {
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
   }
-  // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   const tokensAfterCompaction = resolveNonNegativeTokenCount(tokensAfter);
   if (tokensAfterCompaction !== undefined) {
     updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;
     updates.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;
     updates.cacheRead = undefined;
