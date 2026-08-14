@@ -681,6 +681,45 @@ process.stdout.write("not-a-real-value");
   );
 
   it.runIf(process.platform !== "win32")(
+    "keeps literal $ patterns in home when expanding the tilde state dir",
+    async () => {
+      const home = path.join(fixtureWorkspace.dir, "home$&d");
+      const tokenDir = path.join(home, "oc-state", "credentials", "onepassword");
+      const opPath = path.join(fixtureWorkspace.dir, "op");
+      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.writeFileSync(path.join(tokenDir, "service-account-token"), "dollar-token", {
+        mode: 0o600,
+      });
+      fs.writeFileSync(
+        opPath,
+        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
+        { mode: 0o755 },
+      );
+
+      const result = await runResolver({
+        request: {
+          protocolVersion: 1,
+          provider: "onepassword",
+          ids: ["op://Engineering/OpenRouter/apiKey"],
+        },
+        env: {
+          CLAW_1PASSWORD_OP: opPath,
+          HOME: home,
+          OPENCLAW_HOME: "",
+          OPENCLAW_PROFILE: "",
+          OPENCLAW_STATE_DIR: "~/oc-state",
+        },
+        token: null,
+      });
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout).values).toEqual({
+        "op://Engineering/OpenRouter/apiKey": "dollar-token",
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "does not include failed child output in resolver errors",
     async () => {
       const tempDir = fixtureWorkspace.dir;
