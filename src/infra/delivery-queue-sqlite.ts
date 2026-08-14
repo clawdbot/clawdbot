@@ -541,7 +541,7 @@ export function reserveDeliveryQueueEntryAttempt(params: {
 type FailedDeliveryQueueCount = {
   queueName: string;
   count: number;
-  oldestFailedAt: number | null;
+  oldestFailedAt?: number;
 };
 
 /** Count dead-lettered (failed) entries per queue namespace for health reporting. */
@@ -553,23 +553,17 @@ export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDelive
     queueDb
       .selectFrom("delivery_queue_entries")
       .select((eb) => [
-        "queue_name",
-        eb.fn.countAll().as("failed_count"),
-        eb.fn.min("failed_at").as("oldest_failed_at"),
+        "queue_name as queueName",
+        eb.fn.countAll<number>().as("count"),
+        eb.fn.min<number>("failed_at").as("oldestFailedAt"),
       ])
       .where("status", "=", "failed")
       .groupBy("queue_name")
       .orderBy("queue_name", "asc"),
-  ).rows as Array<{
-    queue_name: string;
-    failed_count: number | bigint;
-    oldest_failed_at: number | bigint | null;
-  }>;
-  return rows.map((row) => ({
-    queueName: row.queue_name,
-    count: Number(row.failed_count),
-    oldestFailedAt: row.oldest_failed_at == null ? null : Number(row.oldest_failed_at),
-  }));
+  ).rows;
+  return rows.map(({ oldestFailedAt, ...row }) =>
+    oldestFailedAt == null ? row : Object.assign(row, { oldestFailedAt }),
+  );
 }
 
 /** Mark a pending delivery queue entry as failed for later diagnostics. */

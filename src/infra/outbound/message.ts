@@ -245,6 +245,7 @@ function deriveRequiredMessageSendCapabilities(params: {
 
 async function assertRequiredMessageSendDurability(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   channel: Exclude<string, "none">;
   payloads: ReplyPayload[];
   replyToId?: string | null;
@@ -253,6 +254,7 @@ async function assertRequiredMessageSendDurability(params: {
 }): Promise<void> {
   const support = await resolveOutboundDurableFinalDeliverySupport({
     cfg: params.cfg,
+    agentId: params.agentId,
     channel: params.channel,
     requirements: deriveRequiredMessageSendCapabilities(params),
   });
@@ -384,6 +386,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     if (requireUnknownSendReconciliation) {
       await assertRequiredMessageSendDurability({
         cfg,
+        agentId: params.agentId,
         channel: outboundChannel,
         payloads: normalizedPayloads,
         replyToId: params.replyToId,

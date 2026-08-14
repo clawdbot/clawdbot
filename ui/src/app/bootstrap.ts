@@ -5,6 +5,7 @@ import {
   createApplicationRouter,
   locationForRoute,
   routeIdFromPath,
+  sameRouteLocation,
   startApplicationRouter,
   type ApplicationRouter,
   type RouteId,
@@ -460,18 +461,28 @@ export function bootstrapApplication(
   const cancelPendingGatewayConnection = () => {
     pendingGatewayConnection = null;
   };
-  const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
+  const navigateWithMode = (
+    routeId: RouteId,
+    options: ApplicationNavigationOptions | undefined,
+    requested: "push" | "replace",
+  ) => {
     const location = routeLocation(routeId, options);
     // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
     if (!routerStarted) {
-      pendingRouterStartNavigation = { routeId, location, mode: "push" };
+      pendingRouterStartNavigation = { routeId, location, mode: requested };
     }
-    const navigationPromise = router.navigate(routeId, context, { history: "push" }, location);
+    // Re-clicking the active nav item must not stack identical history
+    // entries: Back would appear dead until every duplicate is popped.
+    const samePage = routerStarted && sameRouteLocation(history.location(), location);
+    const historyMode = samePage ? "replace" : requested;
+    const navigationPromise = router.navigate(routeId, context, { history: historyMode }, location);
     void navigationPromise.catch((error: unknown) => {
       console.error("[openclaw] route navigation failed", error);
     });
     return navigationPromise;
   };
+  const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) =>
+    navigateWithMode(routeId, options, "push");
   const context: ApplicationContext<RouteId> = {
     basePath,
     gateway,
@@ -498,15 +509,7 @@ export function bootstrapApplication(
     },
     navigateAndWait,
     replace: (routeId, options) => {
-      const location = routeLocation(routeId, options);
-      if (!routerStarted) {
-        pendingRouterStartNavigation = { routeId, location, mode: "replace" };
-      }
-      void router
-        .navigate(routeId, context, { history: "replace" }, location)
-        .catch((error: unknown) => {
-          console.error("[openclaw] route replacement failed", error);
-        });
+      void navigateWithMode(routeId, options, "replace");
     },
     revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId, options) => router.preloadLocation(routeLocation(routeId, options), context),

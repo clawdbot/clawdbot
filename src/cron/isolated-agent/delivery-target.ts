@@ -345,6 +345,7 @@ export async function resolveDeliveryTarget(
   const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
     cfg,
     channel,
+    agentId,
     input: toCandidate,
     accountId,
   });
@@ -402,6 +403,7 @@ export async function resolveDeliveryTarget(
   const routeCanCanonicalizeTarget = deliveryTargetRuntime.channelCanResolveOutboundSessionRoute({
     cfg,
     channel,
+    agentId,
   });
   const routeShouldCanonicalizeTarget =
     route && (route.threadId !== undefined || route.to !== routeTargetCandidate);

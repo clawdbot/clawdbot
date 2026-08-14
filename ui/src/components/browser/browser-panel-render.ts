@@ -1,16 +1,14 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { icons } from "../icons.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
-const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 const BACK_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5" /></svg>`;
 const FORWARD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5" /></svg>`;
 const RELOAD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5" /></svg>`;
-const EXTERNAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5H3.5v9h9V9.5M9.5 3h3.5v3.5M12.8 3.2L7.5 8.5" /></svg>`;
 const PENCIL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.7l2 2L5 13H3v-2z" /></svg>`;
 const INSPECT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l5.5 10 1.2-4.3L14 7.5z" /></svg>`;
 
@@ -34,27 +32,27 @@ function renderHeaderActions(
 ) {
   const activeUrl = controller.view?.metrics?.url || controller.view?.url || controller.urlDraft;
   return html`
-    <div class="bp-actions">
+    <div class="rail-header__actions bp-actions">
       <button
-        class="bp-icon ${dock === "bottom" ? "is-active" : ""}"
+        class="rail-header__action bp-icon ${dock === "bottom" ? "is-active" : ""}"
         type="button"
         title=${t("browser.dockBottom")}
         aria-label=${t("browser.dockBottom")}
         @click=${() => onDockChange("bottom")}
       >
-        ${DOCK_BOTTOM_GLYPH}
+        ${icons.panelBottomOpen}
       </button>
       <button
-        class="bp-icon ${dock === "right" ? "is-active" : ""}"
+        class="rail-header__action bp-icon ${dock === "right" ? "is-active" : ""}"
         type="button"
         title=${t("browser.dockRight")}
         aria-label=${t("browser.dockRight")}
         @click=${() => onDockChange("right")}
       >
-        ${DOCK_RIGHT_GLYPH}
+        ${icons.panelRightOpen}
       </button>
       <button
-        class="bp-icon"
+        class="rail-header__action bp-icon"
         type="button"
         title=${t("browser.openExternal")}
         aria-label=${t("browser.openExternal")}
@@ -65,16 +63,16 @@ function renderHeaderActions(
           }
         }}
       >
-        ${EXTERNAL_GLYPH}
+        ${icons.externalLink}
       </button>
       <button
-        class="bp-icon"
+        class="rail-header__action bp-icon"
         type="button"
-        title=${t("browser.hide")}
-        aria-label=${t("browser.hide")}
+        title=${t("browser.close")}
+        aria-label=${t("browser.close")}
         @click=${onClose}
       >
-        ${CLOSE_GLYPH}
+        ${icons.x}
       </button>
     </div>
   `;
@@ -327,7 +325,7 @@ export function renderBrowserPanelChrome(
   return html`
     <section class="bp bp--${dock}" style=${style} aria-label=${t("browser.title")}>
       ${resizer}
-      <header class="bp-header">
+      <header class="rail-header bp-header">
         ${renderTabStrip(controller)}
         ${renderHeaderActions(controller, dock, onDockChange, onClose)}
       </header>

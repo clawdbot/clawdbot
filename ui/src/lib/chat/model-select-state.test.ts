@@ -9,6 +9,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import {
+  isChatModelUnavailable,
   resolveChatFastModeSelectState,
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
@@ -180,7 +181,6 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolved.defaultSelectable).toBe(false);
     expect(resolved.options).toEqual([]);
   });
 
@@ -194,7 +194,6 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolved.defaultSelectable).toBe(false);
     expect(resolved.options).toEqual([]);
   });
 
@@ -215,7 +214,7 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
-  it("omits unavailable catalog entries from picker options", () => {
+  it("keeps configured unavailable catalog entries visible but disabled", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(
         {
@@ -240,8 +239,14 @@ describe("chat-model-select-state", () => {
     });
 
     const resolved = resolveChatModelSelectState(state);
-    expect(resolved.defaultSelectable).toBe(true);
-    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5.5", label: "GPT-5.5" },
+      {
+        value: "codex/gpt-5.3-codex-spark",
+        label: "GPT-5.3 Codex Spark",
+        disabled: true,
+      },
+    ]);
   });
 
   it("keeps an available OpenAI route when an unavailable legacy route has the same model id", () => {
@@ -271,7 +276,6 @@ describe("chat-model-select-state", () => {
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5.5");
     expect(resolved.defaultModel).toBe("openai/gpt-5.5");
-    expect(resolved.defaultSelectable).toBe(true);
     expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
   });
 
@@ -304,33 +308,37 @@ describe("chat-model-select-state", () => {
     expect(resolved.defaultModel).toBe("openai/gpt-5.5");
   });
 
-  it("does not reintroduce an unavailable current or default model", () => {
+  it("keeps an all-cold default identity visible as a disabled option", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(
         {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
           provider: "openai",
-          available: true,
+          available: false,
         },
         {
-          id: "gpt-5.3-codex-spark",
-          name: "GPT-5.3 Codex Spark",
-          provider: "codex",
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
           available: false,
         },
       ),
       sessionsResult: createSessionsListResult({
-        model: "gpt-5.3-codex-spark",
+        model: "gpt-5.6-sol",
         modelProvider: "openai",
-        defaultsModel: "gpt-5.3-codex-spark",
+        defaultsModel: "gpt-5.6-sol",
         defaultsProvider: "openai",
       }),
     });
 
     const resolved = resolveChatModelSelectState(state);
-    expect(resolved.defaultSelectable).toBe(false);
-    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
+    expect(resolved.defaultLabel).toBe("Default (GPT-5.6 Sol)");
+    expect(isChatModelUnavailable("gpt-5.6-sol", "openai", state.chatModelCatalog)).toBe(true);
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol", disabled: true },
+      { value: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna", disabled: true },
+    ]);
   });
 
   it("supports fast mode for a default legacy Codex provider", () => {

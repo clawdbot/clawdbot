@@ -69,7 +69,9 @@ export function getOpenClawStateRuntimeSchema(options: {
     schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
   }
   for (const indexName of omittedIndexes) {
-    const start = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
+    const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
+    const uniqueStart = schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`);
+    const start = plainStart >= 0 ? plainStart : uniqueStart;
     const end = start >= 0 ? schema.indexOf(";", start) : -1;
     if (start < 0 || end < 0) {
       throw new Error(`lazy additive state schema index is missing for ${indexName}`);

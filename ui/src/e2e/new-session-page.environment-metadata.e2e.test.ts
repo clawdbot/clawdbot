@@ -76,8 +76,10 @@ suite.define(() => {
             {
               id: "node:offline-rich",
               type: "node",
-              status: "available",
-              sessionHost: true,
+              status: "unavailable",
+              sessionHost: false,
+              lastConnectedAtMs: 1_000,
+              lastDisconnectedAtMs: 4_000,
               capabilities: ["camera", "screen"],
             },
             {
@@ -130,7 +132,12 @@ suite.define(() => {
       expect(
         await place.locator('[data-value="gateway"] .new-session-page__menu-fact').count(),
       ).toBe(0);
-      expect(await place.locator('[data-value="node:offline-rich"]').count()).toBe(0);
+      const offline = place.locator('[data-value="node:offline-rich"]');
+      expect(await offline.count()).toBe(1);
+      expect(await offline.isDisabled()).toBe(true);
+      expect(
+        (await offline.locator(".new-session-page__menu-fact").first().textContent()) ?? "",
+      ).toMatch(/^Offline for /);
       expect(await place.locator('[data-value="node:non-exec-rich"]').count()).toBe(0);
 
       const visibleCopy = ((await place.textContent()) ?? "").toLowerCase();

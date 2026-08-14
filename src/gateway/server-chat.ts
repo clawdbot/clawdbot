@@ -10,7 +10,6 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
@@ -62,10 +61,8 @@ import {
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
-import {
-  resolveSessionSubscriptionKey,
-  resolveSessionSubscriptionKeys,
-} from "./session-subscription-keys.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -693,12 +690,17 @@ export function createAgentEventHandler({
   };
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
-    const canonicalKey = resolveSessionSubscriptionKey(sessionKey, agentId ?? "");
-    if (canonicalKey === sessionKey) {
-      return [canonicalKey];
+    if (sessionKey.trim().toLowerCase() !== "global") {
+      return [sessionKey];
     }
-    const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-    return resolveSessionSubscriptionKeys(sessionKey, agentId ?? defaultAgentId, defaultAgentId);
+    const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+      getRuntimeConfig(),
+      sessionKey,
+    );
+    const deliveryAgentId = agentId ?? compatibilityOwnerAgentId;
+    return deliveryAgentId
+      ? resolveSessionSubscriptionKeys(sessionKey, deliveryAgentId, compatibilityOwnerAgentId)
+      : [];
   };
   const sendNodeSessionPayloadForAgent = (
     sessionKey: string,
