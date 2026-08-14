@@ -271,8 +271,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       });
 
       await page.goto(`${server.baseUrl}chat`);
-      const guidance = page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
+      const scopeUpgradeCallout = page.locator("openclaw-device-scope-upgrade-banner .callout");
+      await scopeUpgradeCallout.waitFor();
+      const guidance = scopeUpgradeCallout.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
       await guidance.waitFor();
+      await waitForLayoutSettled(
+        page,
+        "openclaw-device-scope-upgrade-banner .callout, .shell-chrome-controls",
+      );
 
       const guidanceBox = await guidance.boundingBox();
       const chromeControls = page.locator(".shell-chrome-controls__button");
