@@ -379,6 +379,30 @@ describe("exa web search provider", () => {
     });
   });
 
+  it("returns a validation error for an unknown search type", async () => {
+    const provider = createExaWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "latest gpu news",
+      type: "deep_research",
+    });
+
+    expect(result).toEqual({
+      error: "invalid_type",
+      message: 'type must be one of "auto", "neural", "fast", "deep", "deep-reasoning", "instant".',
+      docs: "https://docs.openclaw.ai/tools/web",
+    });
+  });
+
   it("reports malformed Exa API JSON with a stable provider error", async () => {
     await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
       "Exa API returned malformed JSON",

@@ -494,9 +494,14 @@ export async function executeExaWebSearchProviderTool(
 
   const query = readStringParam(params, "query", { required: true });
   const rawType = readStringParam(params, "type");
-  const type: ExaSearchType = EXA_SEARCH_TYPES.includes(rawType as ExaSearchType)
-    ? (rawType as ExaSearchType)
-    : "auto";
+  if (rawType && !EXA_SEARCH_TYPES.includes(rawType as ExaSearchType)) {
+    return {
+      error: "invalid_type",
+      message: `type must be one of ${EXA_SEARCH_TYPES.map((value) => `"${value}"`).join(", ")}.`,
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+  const type: ExaSearchType = rawType ? (rawType as ExaSearchType) : "auto";
   const count =
     readPositiveIntegerParam(params, "count", {
       max: EXA_MAX_SEARCH_COUNT,
