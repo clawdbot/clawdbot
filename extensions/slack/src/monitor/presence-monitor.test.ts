@@ -93,7 +93,7 @@ describe("Slack presence monitor", () => {
       .mockResolvedValueOnce({ presence: "active" })
       .mockResolvedValueOnce({ presence: "away" })
       .mockResolvedValueOnce({ presence: "active" });
-    const enqueue = vi.fn(() => true);
+    const enqueue = vi.fn((..._args: unknown[]) => true);
     const wake = vi.fn();
     const monitor = createSlackPresenceMonitor({
       accountId: "default",
