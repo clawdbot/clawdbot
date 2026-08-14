@@ -370,7 +370,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
         : "Compaction skipped"
       : "Compaction failed";
   if (didCompact) {
-    await runtime.incrementCompactionCount({
+    const compactionCount = await runtime.incrementCompactionCount({
       agentId: sessionAgentId,
       cfg: params.cfg,
       sessionEntry: targetSessionEntry,
@@ -383,6 +383,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       expectedSession: targetSessionEntry,
       authorize: () => params.commandInvocationSignal?.aborted !== true,
     });
+    if (compactionCount === undefined) {
+      return (
+        authorityFailure() ??
+        compactionUnavailable(
+          "session accounting failed",
+          "⚙️ Compaction unavailable: session accounting failed.",
+        )
+      );
+    }
     if (result.result?.sessionId) {
       expectedSession = { ...expectedSession, sessionId: result.result.sessionId };
     }

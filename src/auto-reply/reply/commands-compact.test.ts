@@ -97,6 +97,7 @@ function requireIncrementCompactionCountCall(index = 0) {
 describe("handleCompactCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(incrementCompactionCount).mockResolvedValue(1);
     vi.mocked(isCurrentSessionEntry).mockReturnValue(true);
     resolveAgentDirMock.mockImplementation(
       (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
@@ -848,6 +849,45 @@ describe("handleCompactCommand", () => {
 
     expect(result?.sessionCompaction).toMatchObject({ compacted: true, tokensAfter: 321 });
     expect(result?.reply?.text).toContain("Compacted");
+  });
+
+  it("rejects a successor session when compaction accounting did not commit", async () => {
+    let currentSessionId = "native-session";
+    vi.mocked(isCurrentSessionEntry).mockImplementation(
+      ({ expected }) => expected.sessionId === currentSessionId,
+    );
+    vi.mocked(incrementCompactionCount).mockImplementationOnce(async () => {
+      currentSessionId = "successor-session";
+      return undefined;
+    });
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "context-engine",
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        sessionId: "successor-session",
+        tokensBefore: 999,
+        tokensAfter: 321,
+      },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: { sessionId: "native-session", updatedAt: Date.now() },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.sessionCompaction).toEqual({
+      compacted: false,
+      reason: "command session changed",
+    });
   });
 
   it.each([
