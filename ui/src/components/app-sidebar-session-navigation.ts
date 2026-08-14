@@ -22,7 +22,10 @@ import {
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
-import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
+import {
+  adoptedCatalogSessionKeys,
+  visibleSessionCatalogProjection,
+} from "./app-sidebar-session-catalogs.ts";
 import {
   applySidebarSessionCreatorFilter,
   buildReconciledSidebarZone,
@@ -35,6 +38,7 @@ import {
   findSidebarMainSessionRow,
   findProjectedSidebarSession,
   latestVisibleAgentSessionRow,
+  mergeAdoptedSessionPullRequestRows,
   partitionSidebarVisibleSections,
   promoteSidebarSessionCreatedOrder,
   resolveSidebarAgentChipSubtitle,
@@ -69,7 +73,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   readonly sessionData = new SessionDataController(this);
   private readonly sessionPullRequestIndicators = new SessionPullRequestIndicatorsController(this, {
     getConnected: () => this.connected,
-    getRows: () => this.visibleSessionPullRequestRows(),
+    getRows: () =>
+      mergeAdoptedSessionPullRequestRows({
+        rows: this.visibleSessionRowsInOrder(),
+        adopted: adoptedCatalogSessionKeys(this.visibleSessionCatalogs()),
+        sessionsResult: this.sessionData.sessionsResult,
+        sessionRowsByAgent: this.sessionData.sessionRowsByAgent,
+        navigationState: this.getSessionNavigationState(),
+      }),
     getSelectedAgentId: () => this.selectedAgentIdForSessions(),
     getGateway: () => this.context?.gateway,
   });
@@ -125,18 +136,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     loadStoredSidebarSessionStatusFilter();
   @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
 
-  /** Catalogs the sidebar actually renders. Adopted-key exclusion must read
-      this same projection: excluding a key whose catalog is hidden (or whose
-      section the archived filter suppresses) deletes the session from the
-      entire sidebar with no row anywhere. */
-  visibleSessionCatalogs() {
-    if (this.sessionsStatusFilter === "archived") {
-      return [];
-    }
-    return this.sessionData.sessionCatalogs.filter(
-      (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
+  visibleSessionCatalogs = () =>
+    visibleSessionCatalogProjection(
+      this.sessionData.sessionCatalogs,
+      this.hiddenSessionCatalogIds,
+      this.sessionsStatusFilter === "archived",
     );
-  }
 
   private sessionSelectionAnchor: string | null = null;
   private collapsedActiveRouteKey: string | null = null;
@@ -174,25 +179,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   sessionPullRequestIndicatorState(sessionKey: string, worktreeId: string) {
     return this.sessionPullRequestIndicators.state(sessionKey, worktreeId);
-  }
-
-  private visibleSessionPullRequestRows(): SidebarRecentSession[] {
-    const rows = this.visibleSessionRowsInOrder();
-    const adopted = adoptedCatalogSessionKeys(this.visibleSessionCatalogs());
-    if (adopted.size === 0) {
-      return rows;
-    }
-    const byKey = new Map(rows.map((row) => [row.key, row]));
-    const liveRows = [
-      ...(this.sessionData.sessionsResult?.sessions ?? []),
-      ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
-    ];
-    for (const row of liveRows) {
-      if (adopted.has(row.key) && !byKey.has(row.key)) {
-        byKey.set(row.key, this.getSessionNavigationState().toSidebarSession(row));
-      }
-    }
-    return [...byKey.values()];
   }
 
   override updated(changedProperties: PropertyValues<this>) {
