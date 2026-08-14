@@ -5,8 +5,24 @@ import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, describe, expect, it } from "vitest";
-import { vectorIndexProviderDiagnostic } from "./doctor-vector-index-provider.js";
-import { vectorIndexProviderDiagnosticTesting } from "./doctor-vector-index-provider.test-support.js";
+import {
+  createVectorIndexProviderDiagnostic,
+  type InspectConfiguredProviderStartup,
+} from "./doctor-vector-index-provider-diagnostic.js";
+
+function createDiagnostic(
+  inspectProviderStartup: InspectConfiguredProviderStartup = async () => ({ status: "ready" }),
+) {
+  return createVectorIndexProviderDiagnostic(
+    async () => ({
+      provider: "openai",
+      reason: "OpenAI API key missing",
+    }),
+    inspectProviderStartup,
+  );
+}
+
+const vectorIndexProviderDiagnostic = createDiagnostic();
 
 const roots = new Set<string>();
 
@@ -24,17 +40,12 @@ async function createSemanticIndex(stateDir: string, model = "text-embedding-3-s
 }
 
 afterEach(async () => {
-  vectorIndexProviderDiagnosticTesting.reset();
   await Promise.all([...roots].map((root) => fs.rm(root, { recursive: true, force: true })));
   roots.clear();
 });
 
 describe("memory vector index provider doctor diagnostic", () => {
   it("reports a protected semantic index when the configured provider cannot bootstrap", async () => {
-    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderForTest(async () => ({
-      provider: "openai",
-      reason: "OpenAI API key missing",
-    }));
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-doctor-"));
     roots.add(stateDir);
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -92,7 +103,7 @@ describe("memory vector index provider doctor diagnostic", () => {
   });
 
   it("preflights missing local managed setup without changing config or state", async () => {
-    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => ({
+    const diagnostic = createDiagnostic(async () => ({
       status: "blocked",
       issues: [
         {
@@ -119,7 +130,7 @@ describe("memory vector index provider doctor diagnostic", () => {
     const stateBefore = await fs.readFile(agentPath);
 
     await expect(
-      vectorIndexProviderDiagnostic.preflightStartup?.({
+      diagnostic.preflightStartup?.({
         config,
         env: { OPENCLAW_STATE_DIR: stateDir },
         stateDir,
@@ -149,7 +160,7 @@ describe("memory vector index provider doctor diagnostic", () => {
 
   it("reports ready when the selected provider prerequisite is configured", async () => {
     let calls = 0;
-    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => {
+    const diagnostic = createDiagnostic(async () => {
       calls += 1;
       return { status: "ready" };
     });
@@ -158,7 +169,7 @@ describe("memory vector index provider doctor diagnostic", () => {
     await createSemanticIndex(stateDir);
 
     await expect(
-      vectorIndexProviderDiagnostic.preflightStartup?.({
+      diagnostic.preflightStartup?.({
         config: { memory: { search: { provider: "local", fallback: "none" } } },
         env: { OPENCLAW_STATE_DIR: stateDir },
         stateDir,
@@ -173,7 +184,7 @@ describe("memory vector index provider doctor diagnostic", () => {
     "does not inspect a provider for a %s semantic index",
     async (indexMode) => {
       let calls = 0;
-      vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => {
+      const diagnostic = createDiagnostic(async () => {
         calls += 1;
         return { status: "ready" };
       });
@@ -184,7 +195,7 @@ describe("memory vector index provider doctor diagnostic", () => {
       }
 
       await expect(
-        vectorIndexProviderDiagnostic.preflightStartup?.({
+        diagnostic.preflightStartup?.({
           config: { memory: { search: { provider: "local", fallback: "none" } } },
           env: { OPENCLAW_STATE_DIR: stateDir },
           stateDir,
@@ -198,7 +209,7 @@ describe("memory vector index provider doctor diagnostic", () => {
 
   it("preserves the startup migration SecretRef deferral", async () => {
     let calls = 0;
-    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => {
+    const diagnostic = createDiagnostic(async () => {
       calls += 1;
       return { status: "indeterminate", reason: "must not inspect" };
     });
@@ -207,7 +218,7 @@ describe("memory vector index provider doctor diagnostic", () => {
     await createSemanticIndex(stateDir);
 
     await expect(
-      vectorIndexProviderDiagnostic.preflightStartup?.({
+      diagnostic.preflightStartup?.({
         config: {
           memory: {
             search: {
@@ -228,7 +239,7 @@ describe("memory vector index provider doctor diagnostic", () => {
   });
 
   it("keeps a non-local provider indeterminate without reporting a llama.cpp blocker", async () => {
-    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => ({
+    const diagnostic = createDiagnostic(async () => ({
       status: "indeterminate",
       reason: 'Embedding provider "openai" does not expose startup prerequisite inspection.',
     }));
@@ -236,7 +247,7 @@ describe("memory vector index provider doctor diagnostic", () => {
     roots.add(stateDir);
     await createSemanticIndex(stateDir);
 
-    const result = await vectorIndexProviderDiagnostic.preflightStartup?.({
+    const result = await diagnostic.preflightStartup?.({
       config: { memory: { search: { provider: "openai", fallback: "none" } } },
       env: { OPENCLAW_STATE_DIR: stateDir },
       stateDir,

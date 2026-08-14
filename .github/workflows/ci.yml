@@ -2207,7 +2207,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
@@ -2222,15 +2222,15 @@ jobs:
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
-          # Only the preflight writer saves an archive. Same-repo Blacksmith
-          # shards restore it; hosted and non-Node-24 paths use the pnpm store.
+          # Only the preflight writer saves an exact dependency archive.
+          # All-Blacksmith shards restore it; github/hybrid use the pnpm store.
           dependency-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          # Hosted mode elects one in-run writer so the transform cache can
-          # recover without waiting for the scheduled or manual warmer.
+          # The github/hybrid planner profile elects one in-run writer so the
+          # transform cache can recover without waiting for the cache warmer.
           save-vitest-fs-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n

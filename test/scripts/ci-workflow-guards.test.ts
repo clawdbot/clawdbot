@@ -3036,6 +3036,7 @@ NODE
       ...expectedHostedRunners,
       android: "blacksmith-8vcpu-ubuntu-2404",
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
+      "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "sqlite-session-lifecycle": "blacksmith-8vcpu-ubuntu-2404",
@@ -3118,6 +3119,16 @@ NODE
         },
         runner: "blacksmith-32vcpu-ubuntu-2404",
       },
+      {
+        jobName: "checks-node-core-test-nondist-shard",
+        matrix: { runner: "blacksmith-4vcpu-ubuntu-2404" },
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+      },
+      {
+        jobName: "checks-node-core-test-nondist-shard",
+        matrix: { runner: "blacksmith-8vcpu-ubuntu-2404" },
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+      },
     ] as const;
     for (const { jobName, matrix, runner } of widenedHybridMatrixRows) {
       const expression = jobs[jobName]?.["runs-on"];
@@ -3154,6 +3165,15 @@ NODE
           runnerBackend: "hybrid",
         }),
         `${jobName}: fork pull request`,
+      ).toBe("ubuntu-24.04");
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          eventName: "workflow_dispatch",
+          matrix,
+          runnerBackend: "hybrid",
+        }),
+        `${jobName}: workflow dispatch`,
       ).toBe("ubuntu-24.04");
     }
 
@@ -3972,6 +3992,8 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     ).toBe(false);
     expect(writerStep.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
     expect(writerStep.if).toContain("inputs.save-vitest-fs-cache == 'true'");
+    expect(writerStep.if).toContain("runner.os != 'Windows'");
+    expect(writerStep.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
     expect(writerStep.with.key).toContain("vitest-fs-v3-protected-");
     expect(writerStep.with.key).toContain("github.run_id");
     expect(writerStep.with.key).toContain("github.run_attempt");
@@ -3984,6 +4006,8 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(readerStep.uses).toBe(CACHE_V5);
     expect(readerStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(readerStep.if).toContain("inputs.save-vitest-fs-cache != 'true'");
+    expect(readerStep.if).toContain("runner.os != 'Windows'");
+    expect(readerStep.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
     expect(readerStep.with["restore-keys"]).toBe(writerStep.with["restore-keys"]);
     expect(readerStep.with.key).toContain("!**/node_modules/**");
     expect(readerStep.with.key).toContain("src/state/*.sql");
