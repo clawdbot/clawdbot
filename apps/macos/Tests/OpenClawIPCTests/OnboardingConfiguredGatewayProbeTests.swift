@@ -68,6 +68,18 @@ private actor OnboardingProbeGate {
     }
 }
 
+private actor OnboardingProbeMethodRecorder {
+    private var methods: [String] = []
+
+    func record(_ method: String) {
+        self.methods.append(method)
+    }
+
+    func snapshot() -> [String] {
+        self.methods
+    }
+}
+
 private actor OnboardingProbeConfigReadGate {
     private let blockedRead: Int
     private var readCount = 0
@@ -161,23 +173,25 @@ private enum OnboardingProbeReply: Sendable {
 
 private func onboardingProbeTaskFactory(
     reply: OnboardingProbeReply = .configured,
-    beforeReply: (@Sendable () async -> Void)? = nil) -> GatewayTestWebSocketSession.TaskFactory
+    beforeReply: (@Sendable () async -> Void)? = nil,
+    recorder: OnboardingProbeMethodRecorder? = nil) -> GatewayTestWebSocketSession.TaskFactory
 {
     {
         GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-            guard sendIndex > 0 else { return }
+            guard sendIndex > 0,
+                  let request = onboardingProbeRequest(from: message)
+            else { return }
+            await recorder?.record(request.method)
             switch reply {
             case let .agents(defaultAgentID, model):
-                guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
                 await beforeReply?()
                 task.emitReceiveSuccess(.data(onboardingAgentsResponse(
-                    id: id,
+                    id: request.id,
                     defaultAgentID: defaultAgentID,
                     model: model)))
             case .error:
-                guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
                 await beforeReply?()
-                task.emitReceiveSuccess(.data(onboardingProbeErrorResponse(id: id)))
+                task.emitReceiveSuccess(.data(onboardingProbeErrorResponse(id: request.id)))
             case .failure:
                 await beforeReply?()
                 task.emitReceiveFailure()
@@ -241,7 +255,8 @@ private enum OnboardingVerifyReply: Sendable {
 private func onboardingVerifyTaskFactory(
     reply: OnboardingVerifyReply,
     advertiseVerifyMethod: Bool = true,
-    beforeVerifyReply: (@Sendable () async -> Void)? = nil) -> GatewayTestWebSocketSession.TaskFactory
+    beforeVerifyReply: (@Sendable () async -> Void)? = nil,
+    recorder: OnboardingProbeMethodRecorder? = nil) -> GatewayTestWebSocketSession.TaskFactory
 {
     {
         GatewayTestWebSocketTask(
@@ -249,6 +264,7 @@ private func onboardingVerifyTaskFactory(
                 guard sendIndex > 0,
                       let request = onboardingProbeRequest(from: message)
                 else { return }
+                await recorder?.record(request.method)
                 guard request.method == "openclaw.setup.verify" else {
                     task.emitReceiveSuccess(.data(onboardingAgentsResponse(id: request.id)))
                     return
@@ -291,10 +307,14 @@ private func onboardingProbeFixture(
     tokenProvider: @escaping @Sendable () async -> String? = { nil },
     reply: OnboardingProbeReply = .configured,
     beforeReply: (@Sendable () async -> Void)? = nil,
+    recorder: OnboardingProbeMethodRecorder? = nil,
     taskFactory: GatewayTestWebSocketSession.TaskFactory? = nil) -> OnboardingProbeFixture
 {
     let session = GatewayTestWebSocketSession(
-        taskFactory: taskFactory ?? onboardingProbeTaskFactory(reply: reply, beforeReply: beforeReply))
+        taskFactory: taskFactory ?? onboardingProbeTaskFactory(
+            reply: reply,
+            beforeReply: beforeReply,
+            recorder: recorder))
     let gateway = GatewayConnection(
         configProvider: {
             await (url: url, token: tokenProvider(), password: nil)
@@ -349,14 +369,19 @@ private func isMissing(_ outcome: OnboardingConfiguredGatewayProbe.Outcome) -> B
 struct OnboardingConfiguredGatewayProbeTests {
     @Test func `configured route must pass live verification`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let recorder = OnboardingProbeMethodRecorder()
         let fixture = onboardingProbeFixture(
             url: url,
-            taskFactory: onboardingVerifyTaskFactory(reply: .verified))
+            taskFactory: onboardingVerifyTaskFactory(reply: .verified, recorder: recorder))
 
         let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
 
         #expect(configuredModel(outcome) == "openai/gpt-5.5")
-        #expect(fixture.session.latestTask()?.snapshotSendCount() == 3)
+        #expect(await recorder.snapshot() == [
+            "health",
+            "agents.list",
+            "openclaw.setup.verify",
+        ])
     }
 
     @Test func `failed live verification stays in onboarding`() async throws {
@@ -378,16 +403,18 @@ struct OnboardingConfiguredGatewayProbeTests {
 
     @Test func `gateway without live verification keeps config-only handoff`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let recorder = OnboardingProbeMethodRecorder()
         let fixture = onboardingProbeFixture(
             url: url,
             taskFactory: onboardingVerifyTaskFactory(
                 reply: .verified,
-                advertiseVerifyMethod: false))
+                advertiseVerifyMethod: false,
+                recorder: recorder))
 
         let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
 
         #expect(configuredModel(outcome) == "openai/gpt-5.5")
-        #expect(fixture.session.latestTask()?.snapshotSendCount() == 2)
+        #expect(await recorder.snapshot() == ["health", "agents.list"])
     }
 
     @Test func `live verification transport failure is unavailable`() async throws {
@@ -482,15 +509,17 @@ struct OnboardingConfiguredGatewayProbeTests {
 
     @Test func `reachable gateway uses its configured default agent model`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let recorder = OnboardingProbeMethodRecorder()
         let fixture = onboardingProbeFixture(
             url: url,
-            reply: .agents(defaultAgentID: "work", model: "openai/gpt-5.5"))
+            reply: .agents(defaultAgentID: "work", model: "openai/gpt-5.5"),
+            recorder: recorder)
         let session = fixture.session
         let probe = fixture.probe
 
         #expect(await configuredModel(runOnboardingProbe(probe, connectionMode: .remote)) == "openai/gpt-5.5")
         #expect(session.snapshotMakeCount() == 1)
-        #expect(session.latestTask()?.snapshotSendCount() == 2)
+        #expect(await recorder.snapshot() == ["health", "agents.list"])
     }
 
     @Test func `gateway without a default agent model stays in onboarding`() async throws {

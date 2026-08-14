@@ -34,7 +34,6 @@ extension OnboardingAISetupModel {
 
     func showConfiguredGatewayProbeUnavailable() {
         guard !self.ownsInferenceTransition ||
-            self.configuredGatewayBlocker != nil ||
             self.waitingForPendingActivationDeadline
         else { return }
         // Retire stale candidates and `started` state. A later successful
@@ -50,7 +49,6 @@ extension OnboardingAISetupModel {
 
     func showConfiguredGatewayAuthIssue(_ issue: RemoteGatewayAuthIssue) {
         guard !self.ownsInferenceTransition ||
-            self.configuredGatewayBlocker != nil ||
             self.waitingForPendingActivationDeadline
         else { return }
         self.enterGatewayAuthBlocker(issue)

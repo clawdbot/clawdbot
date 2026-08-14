@@ -169,7 +169,8 @@ extension OnboardingView {
             let outcome = await self.configuredGatewayProbe.probe(
                 connectionMode: expectedMode,
                 attempt: probeAttempt,
-                routeIdentity: expectedRouteIdentity)
+                routeIdentity: expectedRouteIdentity,
+                verifyConfiguredInference: expectedPendingState == .none)
             guard await self.isCurrentConfiguredGatewayProbeOutcome(
                 outcome,
                 attempt: probeAttempt,
@@ -188,6 +189,7 @@ extension OnboardingView {
                 self.handleConfiguredGatewayProbeSuccess(
                     modelRef: modelRef,
                     pendingState: pendingState,
+                    expectedPendingState: expectedPendingState,
                     systemAgentResumePending: systemAgentResumePending,
                     expectedMode: expectedMode)
             case let .verificationFailed(modelRef, status, error, _):
@@ -218,6 +220,7 @@ extension OnboardingView {
     private func handleConfiguredGatewayProbeSuccess(
         modelRef: String,
         pendingState: OnboardingSystemAgentResumeStore.PendingState,
+        expectedPendingState: OnboardingSystemAgentResumeStore.PendingState,
         systemAgentResumePending: Bool,
         expectedMode: AppState.ConnectionMode)
     {
@@ -240,6 +243,10 @@ extension OnboardingView {
                 self.resumePendingSystemAgent(modelRef: modelRef)
                 return
             }
+            // A receipt that existed before agents.list was allowed to defer
+            // live verification to reconciliation. If another owner cleared it,
+            // this config-only result cannot authorize a dashboard handoff.
+            guard expectedPendingState == .none else { return }
         }
         guard Self.shouldOpenConfiguredGatewayDashboard(
             onboardingVisible: self.onboardingVisible,
@@ -266,9 +273,7 @@ extension OnboardingView {
     {
         // A configured model is not usable when its live turn fails. An ambiguous
         // activation receipt retains mutation ownership; other recovery is read-only.
-        guard !self.aiSetup.ownsInferenceTransition ||
-            self.aiSetup.configuredGatewayVerificationFailure != nil
-        else { return }
+        guard !self.aiSetup.ownsInferenceTransition else { return }
         switch pendingState {
         case .activating, .completed:
             self.resumePendingSystemAgent(modelRef: modelRef)

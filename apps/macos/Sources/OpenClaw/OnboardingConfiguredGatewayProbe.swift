@@ -110,7 +110,8 @@ final class OnboardingConfiguredGatewayProbe {
     func probe(
         connectionMode: AppState.ConnectionMode,
         attempt: Attempt,
-        routeIdentity: String? = nil) async -> Outcome
+        routeIdentity: String? = nil,
+        verifyConfiguredInference: Bool = true) async -> Outcome
     {
         guard self.isCurrent(attempt) else { return .superseded }
         self.activeProbeCount += 1
@@ -142,6 +143,11 @@ final class OnboardingConfiguredGatewayProbe {
             else { return .superseded }
             let boundRoute = BoundRoute(route: route, identity: routeIdentity)
             guard let model else { return .missing(route: boundRoute) }
+            // A pending activation receipt has its own route- and owner-bound
+            // verifier. Avoid paying for a second turn before reconciliation.
+            guard verifyConfiguredInference else {
+                return .configured(modelRef: model, route: boundRoute)
+            }
 
             guard let supportsVerification = await self.gateway.supportsServerMethod(
                 "openclaw.setup.verify",

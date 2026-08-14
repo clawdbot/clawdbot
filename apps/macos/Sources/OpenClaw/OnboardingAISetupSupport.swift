@@ -201,8 +201,8 @@ extension OnboardingAISetupModel {
     /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {
         (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
-            self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
-            self.pendingActivationVerification
+            self.phase == .testing || self.manualTesting || self.providerWizardKind != nil ||
+            self.authBusy || self.connected || self.pendingActivationVerification
     }
 
     static func prepareOptions(

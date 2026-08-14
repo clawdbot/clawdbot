@@ -393,6 +393,16 @@ private func wizardProgressResponse(id: String, sessionID: String, message: Stri
         """.utf8)
 }
 
+private func wizardInputResponse(id: String, sessionID: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":false,"status":"running",
+          "step":{"id":"code","type":"text","message":"Paste the authorization code"}}}
+        """
+        .utf8)
+}
+
 private func wizardDoneResponse(
     id: String,
     sessionID: String,
@@ -814,6 +824,72 @@ struct OnboardingAISetupTests {
         #expect(view.aiSetup.configuredGatewayVerificationFailure?.error == "expired login")
     }
 
+    @Test func `reconnect probe preserves active provider reauthentication`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredVerifyAuthReconnect"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list": configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
+                case "openclaw.setup.detect": reauthenticationDetectedSetupResponse(id: request.id)
+                case "openclaw.setup.auth.start":
+                    wizardInputResponse(
+                        id: request.id,
+                        sessionID: request.params["sessionId"] as? String ?? "auth-session")
+                default: nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: [
+                        "openclaw.setup.verify",
+                        "openclaw.setup.auth.start",
+                    ]))
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(
+            state: state,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+        view.onboardingVisible = true
+
+        let initialProbe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await initialProbe.value
+        _ = await waitForAISetupRequests(harness.recorder, count: 3)
+        await settleQueuedAISetupTasks()
+
+        let option = try #require(view.aiSetup.authOptions.first)
+        view.aiSetup.startProviderAuth(option)
+        _ = await waitForAISetupRequests(harness.recorder, count: 4)
+        await settleQueuedAISetupTasks()
+        let authSessionID = try #require(view.aiSetup._test_authSessionID)
+        #expect(view.aiSetup.activeAuthOption?.id == option.id)
+        #expect(!view.aiSetup.authBusy)
+        #expect(view.aiSetup.ownsInferenceTransition)
+
+        // Reconnect snapshots enter through this same route-bound probe.
+        let reconnectProbe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await reconnectProbe.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 6)
+        await settleQueuedAISetupTasks()
+
+        #expect(requests.methods.suffix(2) == [
+            "agents.list",
+            "openclaw.setup.verify",
+        ])
+        #expect(!requests.methods.contains("wizard.cancel"))
+        #expect(view.aiSetup.activeAuthOption?.id == option.id)
+        #expect(view.aiSetup._test_authSessionID == authSessionID)
+        #expect(view.aiSetup.ownsInferenceTransition)
+    }
+
     @Test(arguments: [false, true])
     func `failed configured verification preserves activation receipt`(
         completed: Bool) async throws
@@ -851,12 +927,11 @@ struct OnboardingAISetupTests {
 
         let probe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
         await probe.value
-        let requests = await waitForAISetupRequests(harness.recorder, count: 3)
+        let requests = await waitForAISetupRequests(harness.recorder, count: 2)
         await settleQueuedAISetupTasks()
 
         #expect(requests.methods == [
             "agents.list",
-            "openclaw.setup.verify",
             "openclaw.setup.verify",
         ])
         #expect(!requests.methods.contains("openclaw.setup.detect"))
