@@ -132,25 +132,33 @@ export async function backupRestoreCommand(
   const verified = await verifyBackupArchive(options.archive);
   const target = await prepareRestoreTarget(targetPath);
 
+  let extractionError: unknown;
+  let extractionFailed = false;
   try {
     await extractBackupArchive(verified.archivePath, targetPath);
-  } catch (error) {
+  } catch (caughtExtractionError) {
+    extractionError = caughtExtractionError;
+    extractionFailed = true;
+  }
+  if (extractionFailed) {
     let cleanupError: unknown;
+    let cleanupFailed = false;
     try {
       await cleanupFailedRestore(targetPath, target.created);
     } catch (caughtCleanupError) {
       cleanupError = caughtCleanupError;
+      cleanupFailed = true;
     }
-    if (cleanupError !== undefined) {
+    if (cleanupFailed) {
       // Extraction stays the primary cause; cleanup rides along as the second AggregateError entry.
       throw new AggregateError(
-        [error, cleanupError],
+        [extractionError, cleanupError],
         `Backup restore failed and the incomplete target could not be cleaned: ${targetPath}. Cleanup error: ${formatErrorMessage(cleanupError)}`,
-        { cause: error },
+        { cause: extractionError },
       );
     }
     throw new Error(`Backup restore failed; the incomplete target was cleaned: ${targetPath}`, {
-      cause: error,
+      cause: extractionError,
     });
   }
 
