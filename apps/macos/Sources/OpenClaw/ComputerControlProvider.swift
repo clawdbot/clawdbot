@@ -29,8 +29,8 @@ struct CuaDriverWorkerEndpoint: Equatable, Sendable {
 }
 
 enum CuaDriverWorkerEnvironment {
-    static let socketPath = "OPENCLAW_CUA_DRIVER_SOCKET_PATH"
-    static let binaryPath = "OPENCLAW_CUA_DRIVER_BINARY_PATH"
+    static let socketPath = "CUA_DRIVER_SOCKET_PATH"
+    static let binaryPath = "CUA_DRIVER_BINARY_PATH"
 }
 
 enum CuaDriverArtifact {

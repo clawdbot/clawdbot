@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
@@ -49,7 +52,7 @@ function printDirectoryList(params: {
   const tableWidth = getTerminalTableWidth();
   defaultRuntime.log(`${theme.heading(params.title)} ${theme.muted(`(${params.entries.length})`)}`);
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "ID", header: "ID", minWidth: 16, flex: true },
@@ -221,7 +224,7 @@ export function registerDirectoryCli(program: Command) {
         const tableWidth = getTerminalTableWidth();
         defaultRuntime.log(theme.heading("Self"));
         defaultRuntime.log(
-          renderTable({
+          renderTerminalSafeTable({
             width: tableWidth,
             columns: [
               { key: "ID", header: "ID", minWidth: 16, flex: true },
