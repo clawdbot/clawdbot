@@ -44,11 +44,17 @@ import {
   loadMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import {
+  computeNextMemoryEmbeddingCooldown,
+  isMemoryEmbeddingCoolingDown,
+  type MemoryEmbeddingCooldownState,
+} from "./manager-embedding-cooldown.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
   filterNonEmptyMemoryChunks,
+  isBillingExhaustedMemoryEmbeddingError,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
   resolveMemoryEmbeddingRetryDelay,
@@ -314,6 +320,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   private providerIdleWaiters = new Map<EmbeddingProvider, Set<() => void>>();
   private syncProviderGenerationRelease: (() => void) | null = null;
   private syncProviderGenerationOwners = 0;
+  private embeddingBillingCooldown?: MemoryEmbeddingCooldownState;
 
   protected acquireProviderUse(provider: EmbeddingProvider): () => void {
     this.activeProviderUses.set(provider, (this.activeProviderUses.get(provider) ?? 0) + 1);
@@ -644,8 +651,26 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const structured = params.operation === "structured-batch";
     const label = structured ? "structured batch" : "batch";
+    if (isMemoryEmbeddingCoolingDown(this.embeddingBillingCooldown, provider.id, Date.now())) {
+      // A prior attempt already classified this as billing-exhausted (won't clear until a
+      // future cycle); skip the network call entirely instead of re-hitting a known-dead
+      // provider on every debounced sync cycle. Log at debug (not warn) since this is a
+      // known, already-reported state, not a new failure.
+      const reason = this.embeddingBillingCooldown!.reason;
+      log.debug("memory embeddings: skipping batch, provider in billing cooldown", {
+        provider: provider.id,
+        reason,
+        untilMs: this.embeddingBillingCooldown!.untilMs,
+      });
+      throw createMemoryEmbeddingOperationError({
+        operation: params.operation,
+        providerId: provider.id,
+        cause: new Error(reason),
+        skippedDueToCooldown: true,
+      });
+    }
     try {
-      return await this.withProviderUse(
+      const batchResult = await this.withProviderUse(
         provider,
         async () =>
           await runMemoryEmbeddingBatchRetryWithSplit({
@@ -691,11 +716,33 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             },
           }),
       );
+      if (this.embeddingBillingCooldown?.providerId === provider.id) {
+        log.warn("memory embeddings: provider recovered, clearing billing cooldown", {
+          provider: provider.id,
+        });
+        this.embeddingBillingCooldown = undefined;
+      }
+      return batchResult;
     } catch (err) {
       if (!structured) {
         log.debug("memory embeddings: batch failed", {
           provider: provider.id,
           error: formatErrorMessage(err),
+        });
+      }
+      const message = formatErrorMessage(err);
+      if (isBillingExhaustedMemoryEmbeddingError(message)) {
+        this.embeddingBillingCooldown = computeNextMemoryEmbeddingCooldown({
+          providerId: provider.id,
+          reason: message,
+          previous: this.embeddingBillingCooldown,
+          nowMs: Date.now(),
+        });
+        log.warn("memory embeddings: provider entering billing cooldown", {
+          provider: provider.id,
+          reason: message,
+          consecutiveFailures: this.embeddingBillingCooldown.consecutiveFailures,
+          cooldownUntil: new Date(this.embeddingBillingCooldown.untilMs).toISOString(),
         });
       }
       this.markLocalEmbeddingProviderDegraded(err);

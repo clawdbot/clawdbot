@@ -10,12 +10,15 @@ type MemoryEmbeddingOperationError = Error & {
   operation: MemoryEmbeddingOperationKind;
   providerId?: string;
   cause?: unknown;
+  /** Set when this rejection short-circuited a known billing cooldown instead of calling the network. */
+  skippedDueToCooldown?: boolean;
 };
 
 export function createMemoryEmbeddingOperationError(params: {
   operation: MemoryEmbeddingOperationKind;
   providerId?: string;
   cause: unknown;
+  skippedDueToCooldown?: boolean;
 }): MemoryEmbeddingOperationError {
   const message = formatErrorMessage(params.cause);
   const error = new Error(message) as MemoryEmbeddingOperationError;
@@ -25,6 +28,9 @@ export function createMemoryEmbeddingOperationError(params: {
     error.providerId = params.providerId;
   }
   error.cause = params.cause;
+  if (params.skippedDueToCooldown) {
+    error.skippedDueToCooldown = true;
+  }
   return error;
 }
 

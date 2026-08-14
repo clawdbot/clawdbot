@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
+  isBillingExhaustedMemoryEmbeddingError,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
   resolveMemoryEmbeddingRetryDelay,
@@ -331,5 +332,25 @@ describe("memory embedding policy", () => {
     expect(resolveMemoryEmbeddingRetryDelay(500, 0, 8000)).toBe(500);
     expect(resolveMemoryEmbeddingRetryDelay(500, 1, 8000)).toBe(600);
     expect(resolveMemoryEmbeddingRetryDelay(10_000, 1, 8000)).toBe(8000);
+  });
+
+  it("classifies a real 402 quota-exhausted response as billing, not retryable", () => {
+    // Regression: this is the actual Mistral-via-OmniRoute response body from a live
+    // out-of-quota incident. A 402 means "will keep failing until next billing cycle" —
+    // the in-call retry loop must not spend attempts on it, only the cross-call cooldown should.
+    const message =
+      'openai embeddings failed: 402 {"error":{"message":"Check your subscription on https://admin.mistral.ai/subscription","type":"upstream_error","code":"upstream_error","details":{"detail":"Check your subscription on https://admin.mistral.ai/subscription"}}}';
+
+    expect(isBillingExhaustedMemoryEmbeddingError(message)).toBe(true);
+    expect(isRetryableMemoryEmbeddingError(message)).toBe(false);
+  });
+
+  it("does not classify ordinary rate-limit or server errors as billing", () => {
+    expect(isBillingExhaustedMemoryEmbeddingError("openai embeddings failed: 429 rate limit")).toBe(
+      false,
+    );
+    expect(
+      isBillingExhaustedMemoryEmbeddingError("openai embeddings failed: 502 Bad Gateway"),
+    ).toBe(false);
   });
 });

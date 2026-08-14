@@ -91,12 +91,23 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
 
+// 402/billing failures mean "will keep failing until the next billing cycle or a plan
+// change" — unlike 429/5xx, retrying sooner cannot help, so this is classified separately
+// to drive a long cooldown instead of the short in-call retry loop.
+const BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE =
+  /(^| )402(\D|$)|payment required|insufficient_quota|insufficient quota|check your subscription|billing|quota exceeded/i;
+
 function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
   return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
 }
 
 export function isSplittableMemoryEmbeddingTransportError(message: string): boolean {
   return SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
+}
+
+/** Whether a failure means the embedding provider is out of quota/billing until a future cycle. */
+export function isBillingExhaustedMemoryEmbeddingError(message: string): boolean {
+  return BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE.test(message);
 }
 
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
