@@ -31,7 +31,7 @@
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connessione"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Elaborazione"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Scrittura"</string>
-    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Invio"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Invio in corso"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agente al lavoro"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Errore"</string>
     <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pronto"</string>
@@ -50,7 +50,7 @@
     <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Interrompi esecuzione"</string>
     <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apri le impostazioni delle notifiche"</string>
     <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Attivo"</string>
-    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Disattivo"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Disattivato"</string>
     <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connessione"</string>
     <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
     <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sicurezza"</string>

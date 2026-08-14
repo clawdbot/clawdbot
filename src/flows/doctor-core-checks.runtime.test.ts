@@ -383,11 +383,19 @@ describe("doctor runtime tool schema checks", () => {
     expect(mocks.loadModelCatalog).toHaveBeenCalledTimes(2);
     expect(mocks.loadModelCatalog).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ agentId: "main" }),
+      expect.objectContaining({
+        agentId: "main",
+        readOnly: true,
+        providerDiscoveryProviderIds: [],
+      }),
     );
     expect(mocks.loadModelCatalog).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ agentId: "worker" }),
+      expect.objectContaining({
+        agentId: "worker",
+        readOnly: true,
+        providerDiscoveryProviderIds: [],
+      }),
     );
     expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(1);
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
@@ -714,13 +722,17 @@ describe("doctor provider catalog projection checks", () => {
     });
   });
 
-  it("loads full provider registrations for static catalog validation", async () => {
-    await collectProviderCatalogProjectionFindings({});
+  it("loads full provider registrations without selecting a default workspace", async () => {
+    const cfg = { agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] } };
+    await collectProviderCatalogProjectionFindings(cfg);
 
     expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledWith(
       expect.not.objectContaining({
         discoveryEntriesOnly: true,
       }),
+    );
+    expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: undefined }),
     );
   });
 

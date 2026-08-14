@@ -544,6 +544,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                   opts: gatewayOpts,
                   target: gatewayResolved.target,
                   turnCapability: options?.messageActionTurnCapability,
+                  turnCapabilitySessionKey: options?.agentSessionKey,
                   runId: options?.runId,
                   sessionId: options?.sessionId,
                   sourceReplyFinal: context?.sourceReplyFinal,

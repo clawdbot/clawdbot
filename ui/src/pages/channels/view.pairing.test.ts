@@ -126,6 +126,12 @@ function renderInto(template: unknown): HTMLDivElement {
   return container;
 }
 
+// These render into the shared document, so a missing teardown leaks pairing
+// dialogs into whichever suite the worker runs next.
+afterEach(() => {
+  document.body.replaceChildren();
+});
+
 describe("channel DM access request views", () => {
   it("renders pending senders without exposing the pairing code", () => {
     const onApprove = vi.fn();

@@ -15,6 +15,12 @@ const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-
 const baseTime = Date.now();
 const chatSessionKey = "agent:main:main";
 
+// Running tasks render a live elapsed label, so comparing raw transcript text makes the
+// assertion fail whenever a second ticks over mid-check. Only the durations may move here.
+function withoutElapsedLabels(text: string | null): string {
+  return (text ?? "").replaceAll(/\d+(?:\.\d+)?\s*(?:ms|[smhd])\b/g, "<elapsed>");
+}
+
 function requestSessionKey(request: MockGatewayRequest): string | undefined {
   const { params } = request;
   if (
@@ -180,7 +186,7 @@ suite.define(() => {
 
         const chatUrl = page.url();
         const mainTranscript = page.locator(".chat-main .chat-thread");
-        const mainTranscriptBefore = await mainTranscript.textContent();
+        const mainTranscriptBefore = withoutElapsedLabels(await mainTranscript.textContent());
         const openRow = rail.locator('[data-task-id="task-subagent"]');
         await openRow.click();
         const detailPanel = page.locator("[data-task-detail-panel]");
@@ -209,7 +215,7 @@ suite.define(() => {
           limit: 100,
         });
         expect(page.url()).toBe(chatUrl);
-        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
+        expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
         await page.screenshot({
           path: path.join(railFlowDir, "02-task-detail-sidebar.png"),
           fullPage: true,

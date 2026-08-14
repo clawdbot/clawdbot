@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { AgentRunResultView } from "../../agents/agent-run-result.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
 
@@ -178,13 +179,13 @@ describe("runAuthProbes", () => {
         authProfileId?: string;
         authProfileIdSource?: string;
         config?: OpenClawConfig;
-      }) => {
+      }): Promise<AgentRunResultView> => {
         if (params.agentHarnessRuntimeOverride !== "openclaw") {
           throw new Error(
             'Requested agent harness "codex" does not support openai/gpt-5.5 (Codex cannot reproduce authored request transport overrides).',
           );
         }
-        return { text: "OK" };
+        return { payloads: [{ text: "OK" }] };
       },
     );
     vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
@@ -256,10 +257,42 @@ describe("runAuthProbes", () => {
           agentHarnessRuntimeOverride: "openclaw",
           modelRun: true,
           disableTools: true,
+          modelFallbacksOverride: [],
           authProfileId: "openai:profile",
           authProfileIdSource: "user",
         }),
       );
+
+      runEmbeddedAgent.mockResolvedValueOnce({
+        payloads: [{ text: "LLM request timed out.", isError: true }],
+        meta: { livenessState: "abandoned" },
+      });
+      const failed = await module.runAuthProbes({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                agentRuntime: { id: "codex" },
+                models: [],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        agentId: "probe-agent",
+        agentDir: "/tmp/openclaw-probe-agent",
+        workspaceDir: "/tmp/openclaw-probe-workspace",
+        providers: ["openai"],
+        modelCandidates: ["openai/gpt-5.5"],
+        options: {
+          provider: "openai",
+          profileIds: ["openai:profile"],
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 8,
+        },
+      });
+      expect(failed.results[0]).toMatchObject({ status: "timeout" });
     } finally {
       vi.doUnmock("../../agents/embedded-agent.js");
       vi.doUnmock("../../agents/auth-profiles.js");
@@ -275,7 +308,7 @@ describe("runAuthProbes", () => {
         authProfileId?: string;
         authProfileIdSource?: string;
         config?: OpenClawConfig;
-      }) => ({ text: "OK" }),
+      }) => ({ payloads: [{ text: "OK" }] }),
     );
     vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
     const upsertAuthProfileWithLock = vi.fn(
@@ -389,7 +422,7 @@ describe("runAuthProbes", () => {
   it("isolates marker credentials from stored profiles without pinning a synthetic one", async () => {
     const runEmbeddedAgent = vi.fn(
       async (_params: { agentDir?: string; authProfileId?: string; config?: OpenClawConfig }) => ({
-        text: "OK",
+        payloads: [{ text: "OK" }],
       }),
     );
     const upsertAuthProfileWithLock = vi.fn();

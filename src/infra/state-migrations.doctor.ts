@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
   hasLegacyRegistryWorktrees,
@@ -19,6 +20,7 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
@@ -140,6 +142,10 @@ import {
   resolveSessionStoreOwnership,
   type SessionStoreOwnership,
 } from "./state-migrations.session-store.js";
+import {
+  detectSharedAuthStoreMigration,
+  migrateSharedAuthStore,
+} from "./state-migrations.shared-auth-store.js";
 import {
   autoMigrateLegacyStateDir,
   migrateLegacyProfileWorkspace,
@@ -556,6 +562,13 @@ export async function detectLegacyStateMigrations(params: {
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
   const apns = detectDoctorOwnedState(detectLegacyApnsRegistrations);
   const deviceAuth = detectDoctorOwnedState(detectLegacyDeviceAuth);
+  const sharedAuthStore =
+    stateSchemaMigrations.length === 0
+      ? detectDoctorOwnedState(detectSharedAuthStoreMigration)
+      : {
+          sourcePath: path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),
+          hasLegacy: false,
+        };
   const deviceIdentity = detectLegacyDeviceIdentity({
     stateDir,
     env,
@@ -718,6 +731,10 @@ export async function detectLegacyStateMigrations(params: {
     preview.push(`- Task flow sidecar: finish archive cleanup for ${flowRunsSidecarPath}`);
   }
   const stateMigrationPreviews: Array<readonly [hasLegacy: boolean, message: string]> = [
+    [
+      sharedAuthStore.hasLegacy,
+      "- Shared auth store: legacy main-agent rows → shared SQLite state",
+    ],
     [hasDeliveryQueues, "- Delivery queues: legacy JSON queue files → shared SQLite state"],
     [hasVoiceWake, "- Voice Wake settings: legacy JSON files → shared SQLite state"],
     [hasUpdateCheck, "- Update-check state: legacy JSON file → shared SQLite state"],
@@ -822,6 +839,7 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: stateSchemaMigrations.length > 0,
       preview: stateSchemaMigrations.map((migration) => migration.path),
     },
+    sharedAuthStore,
     worktrees,
     taskStateSidecars: {
       taskRunsPath: taskRunsSidecarPath,
@@ -1057,7 +1075,7 @@ function migrateLegacyStateSchema(
 
 type LegacyStateMigrationStep = {
   phase: "shared" | "final";
-  kind?: "acp-session-metadata";
+  kind?: "acp-session-metadata" | "legacy-main-session-keys";
   collectNotices?: boolean;
   run: () => MigrationMessages | Promise<MigrationMessages>;
 };
@@ -1134,6 +1152,7 @@ function buildLegacyStateMigrationSteps(
   ];
 
   const sharedSteps: LegacyStateMigrationStep[] = [
+    ownerStep(detected.sharedAuthStore, migrateSharedAuthStore, "shared"),
     sharedStep(() => migrateLegacyPluginStateSidecar({ stateDir })),
     sharedStep(() => migrateLegacyInstalledPluginIndex({ stateDir }), true),
     ownerStep(
@@ -1217,8 +1236,6 @@ function buildLegacyStateMigrationSteps(
   ];
 
   if (!params.skipAgentScopedMigrations) {
-    // ACP metadata must run once after sessions are canonicalized; otherwise
-    // existing rows and newly imported rows generate conflicting repeat warnings.
     finalSteps.push(
       finalStep(() =>
         migrateLegacySessions(detected, now, {
@@ -1226,6 +1243,26 @@ function buildLegacyStateMigrationSteps(
           legacySessionSurfaces: params.legacySessionSurfaces,
         }),
       ),
+    );
+  }
+  if (!isDoctor) {
+    finalSteps.push({
+      ...finalStep(async () => {
+        const result = await migrateLegacyMainSessionKeys({
+          cfg: params.sessionConfig ?? params.config,
+          env,
+          mode: "automatic",
+          now,
+        });
+        return { changes: result.changes, warnings: [], notices: result.warnings };
+      }, true),
+      kind: "legacy-main-session-keys",
+    });
+  }
+  if (!params.skipAgentScopedMigrations) {
+    // ACP metadata must run once after sessions are canonicalized; otherwise
+    // existing rows and newly imported rows generate conflicting repeat warnings.
+    finalSteps.push(
       {
         ...finalStep(() =>
           migrateLegacyAcpSessionMetadata({
@@ -1533,6 +1570,7 @@ export async function autoMigrateLegacyState(params: {
     !detected.pluginInstallIndex.hasLegacy &&
     !detected.debugProxyCaptureSidecar.hasLegacy &&
     !detected.stateSchema.hasLegacy &&
+    !detected.sharedAuthStore.hasLegacy &&
     !detected.worktrees.hasLegacy &&
     detected.worktrees.pathRewrites.length === 0 &&
     !detected.taskStateSidecars.hasLegacy &&
@@ -1547,15 +1585,17 @@ export async function autoMigrateLegacyState(params: {
     !detected.workspace.hasLegacy &&
     !detected.channelPairing.hasLegacy
   ) {
-    const acpSessionMetadataStep = migrationSteps.find(
-      (step) => step.kind === "acp-session-metadata",
-    );
-    const acpSessionMetadata = acpSessionMetadataStep
-      ? await acpSessionMetadataStep.run()
-      : { changes: [], warnings: [] };
+    // SQLite-native session rows do not trip the older JSON/file detectors. Keep these keyed
+    // convergers in the empty-detection path so automatic preflight cannot skip their ledgers.
+    const alwaysRunSources: MigrationMessages[] = [];
+    for (const step of migrationSteps) {
+      if (step.kind === "legacy-main-session-keys" || step.kind === "acp-session-metadata") {
+        alwaysRunSources.push(await step.run());
+      }
+    }
     const completedSources = [
       ...initialMigrationSources,
-      acpSessionMetadata,
+      ...alwaysRunSources,
       deviceAuth,
       deviceIdentity,
       meetingTranscripts,
@@ -1564,12 +1604,18 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...new Set([
         ...initialMigrationWarnings,
-        ...[acpSessionMetadata, deviceAuth, deviceIdentity, meetingTranscripts].flatMap(
+        ...[...alwaysRunSources, deviceAuth, deviceIdentity, meetingTranscripts].flatMap(
           (source) => source.warnings,
         ),
       ]),
     ];
-    const notices = mergeNotices([stateDirResult, detected, deviceAuth, deviceIdentity]);
+    const notices = mergeNotices([
+      stateDirResult,
+      detected,
+      ...alwaysRunSources,
+      deviceAuth,
+      deviceIdentity,
+    ]);
     logMigrationResults(changes, warnings, notices);
     return {
       migrated: stateDirResult.migrated || changes.length > 0,

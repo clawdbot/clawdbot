@@ -655,6 +655,32 @@ describe("AppSidebar catalog session rows", () => {
     }
   });
 
+  it("keeps a selected adopted catalog session as one row", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([
+          {
+            threadId: "thread-1",
+            name: "Release checklist",
+            sessionKey: "agent:main:adopted-codex",
+          },
+        ]),
+        ["agent:main:main", "agent:main:adopted-codex"],
+      );
+      // Selecting the adopted session must not re-insert it as a thread row:
+      // the catalog section already renders it live.
+      sidebar.sessionKey = "agent:main:adopted-codex";
+      await sidebar.updateComplete;
+
+      const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("binds the adopted session immediately on the catalog-continued event", async () => {
     vi.useFakeTimers();
     try {

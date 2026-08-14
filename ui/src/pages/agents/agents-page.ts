@@ -574,8 +574,8 @@ class AgentsPage
     const request = { client, generation, agentId };
     this.chatModelCatalogRequest = request;
     this.chatModelCatalogError = null;
-    // Only chat metadata projects the selected agent's private provider/auth
-    // scope; models.list always resolves against the default agent.
+    // Chat metadata carries the selected agent's already-prepared startup models
+    // without initiating the live discovery reserved for explicit picker use.
     void client
       .request<{ models?: ModelCatalogEntry[] }>("chat.metadata", { agentId })
       .then((result) => {

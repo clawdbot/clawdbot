@@ -1,3 +1,4 @@
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
@@ -12,6 +13,7 @@ import {
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -205,6 +207,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const findNode = async (params: {
     transport: NodeWorkerSupervisorTransport;
     deviceId: string;
+    expectedWorkerRuns?: WorkerAdmissionHandshake;
     signal: AbortSignal;
   }): Promise<NodeWorkerSupervisorNodeProof> => {
     let nodes: readonly NodeWorkerSupervisorNodeProof[];
@@ -221,7 +224,10 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     }
     const node = nodes.find(
       (candidate) =>
-        candidate.nodeId === params.deviceId && candidate.commands.includes("system.run"),
+        candidate.nodeId === params.deviceId &&
+        (!params.expectedWorkerRuns ||
+          (candidate.workerRuns &&
+            sameWorkerBuild(candidate.workerRuns, params.expectedWorkerRuns))),
     );
     if (!node) {
       throw new NodeWorkerLaunchTransportError(
@@ -239,6 +245,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       | typeof NODE_WORKER_SUPERVISOR_STATUS_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
     payload: unknown;
+    expectedWorkerRuns?: WorkerAdmissionHandshake;
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
@@ -260,16 +267,26 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         "device worker node transport is unavailable",
       );
     }
-    const rpcController = new AbortController();
-    const rpcBudgetMs = Math.max(1, Math.min(rpcTimeoutMs, remainingMs));
-    const rpcTimer = setTimeout(
-      () => rpcController.abort(new Error("node worker RPC timed out")),
-      rpcBudgetMs,
-    );
-    rpcTimer.unref?.();
-    const signal = AbortSignal.any([params.deadline.signal, rpcController.signal]);
+    // The deadline is the sole expiry authority unless the per-RPC budget binds first.
+    // A second timer armed at the same expiry makes "retryable RPC timeout" versus
+    // "terminal deadline" a scheduling race, and the retryable branch then funds another
+    // attempt out of a residual budget too small to complete it.
+    const rpcBudgetMs = Math.min(rpcTimeoutMs, remainingMs);
+    const rpcController = rpcBudgetMs < remainingMs ? new AbortController() : undefined;
+    const rpcTimer = rpcController
+      ? setTimeout(() => rpcController.abort(new Error("node worker RPC timed out")), rpcBudgetMs)
+      : undefined;
+    rpcTimer?.unref?.();
+    const signal = rpcController
+      ? AbortSignal.any([params.deadline.signal, rpcController.signal])
+      : params.deadline.signal;
     try {
-      const node = await findNode({ transport, deviceId: params.deviceId, signal });
+      const node = await findNode({
+        transport,
+        deviceId: params.deviceId,
+        expectedWorkerRuns: params.expectedWorkerRuns,
+        signal,
+      });
       const operation = transport.invoke({
         node,
         command: params.command,
@@ -297,7 +314,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       }
       return parseInvokeReceipt(result.payloadJSON);
     } catch (error) {
-      if (rpcController.signal.aborted && !params.deadline.signal.aborted) {
+      if (rpcController?.signal.aborted && !params.deadline.signal.aborted) {
         throw new NodeWorkerLaunchTransportError("TIMEOUT", "node worker RPC timed out");
       }
       throw error;
@@ -410,6 +427,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
+            ...(!pollStatus ? { expectedWorkerRuns: input.descriptor.admission.handshake } : {}),
             isAuthorized: stableRequest.isDispatchAuthorized,
             deadline,
             ...(!pollStatus

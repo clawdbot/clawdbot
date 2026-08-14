@@ -1256,7 +1256,7 @@ function renderPromptSection(
             id: "cron-payload-model-picker",
             label: modelLabel,
             value: props.form.payloadModel,
-            options: [{ value: "", label: t("common.default") }, ...modelOptions],
+            options: [{ value: "", label: t("quickSettings.model.default") }, ...modelOptions],
             custom: {
               id: inputIdForField("payloadModel"),
               label: t("cron.form.customModel"),

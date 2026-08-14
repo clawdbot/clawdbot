@@ -144,8 +144,12 @@ export class DraftPlaceState {
     return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
   }
 
-  execNodes(): DraftNode[] {
+  executionNodes(): DraftNode[] {
     return this.nodesValue.filter((node) => node.canExec);
+  }
+
+  execNodes(): DraftNode[] {
+    return this.executionNodes().filter((node) => node.connected);
   }
 
   execNodeReady(): boolean {
