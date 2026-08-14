@@ -80,7 +80,10 @@ not overwrite the existing skill.
   `--non-interactive`; omit `--classic` for automated setup.
 - `--agent-name <name>`: names the first agent when no roster exists. Interactive
   onboarding asks **What should we call your first agent?** and suggests `main`;
-  non-interactive onboarding keeps `main` unless this flag is provided.
+  non-interactive onboarding keeps `main` unless this flag is provided. The id
+  `main` is not reserved: if you later recreate it beside a named agent, run
+  `openclaw doctor --fix` first when creation reports legacy-session or
+  shared-auth ownership still attached to the old `main` installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   token auth by default, and generates a token when no stored or explicit
   credential applies. Explicit local Gateway flags such as

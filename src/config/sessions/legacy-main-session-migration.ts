@@ -427,6 +427,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
       ...base,
       armed: false,
       complete: false,
+      ledgerComplete: false,
       outcomes: [{ kind: "not-armed", detail: arming.reason }],
       warnings: unresolved
         ? [
@@ -472,6 +473,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
           ...base,
           armed: true,
           complete: true,
+          ledgerComplete: true,
           ownerAgentId,
           outcomes: [{ kind: "no-legacy-rows", detail: "matching completed ledger" }],
         };
@@ -481,6 +483,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
         ...base,
         armed: true,
         complete: false,
+        ledgerComplete: false,
         ownerAgentId,
         outcomes: [{ kind: "store-unreadable", detail: String(error) }],
         warnings: [`session: could not read the legacy-main migration ledger: ${String(error)}`],
@@ -655,6 +658,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
     armed: true,
     changes,
     complete,
+    ledgerComplete: complete && params.mode !== "detect",
     legacyAgentId,
     mainKey,
     outcomes,
@@ -683,6 +687,7 @@ export async function migrateLegacyMainSessionKeys(params: {
       armed: arming.armed,
       changes: [],
       complete: false,
+      ledgerComplete: false,
       legacyAgentId,
       mainKey,
       outcomes: [{ kind: "store-unreadable", detail: String(error) }],

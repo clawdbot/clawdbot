@@ -2,10 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { mutateConfigFileWithRetry } from "../config/config.js";
+import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgent } from "./agent-create.js";
+import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
   ensureAgentWorkspace,
@@ -114,4 +127,70 @@ describe("agent roster persistence", () => {
       await state.cleanup();
     }
   });
+});
+
+it("creates main as an ordinary fresh agent after doctor completes both ownership handoffs", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    scenario: "empty",
+    label: "ordinary-main-agent",
+  });
+  const cfg: OpenClawConfig = {
+    agents: { entries: { robby: { workspace: state.path("workspace-robby") } } },
+  };
+  const legacyDatabasePath = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
+  const ownerDatabasePath = path.join(state.agentDir("robby"), "openclaw-agent.sqlite");
+  const legacyKey = "agent:main:main";
+  const canonicalKey = "agent:robby:main";
+
+  try {
+    await state.writeConfig(cfg);
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        writeSessionEntry(
+          database,
+          legacyKey,
+          { sessionId: "legacy-before-main-reuse", updatedAt: 100 },
+          { allowStoredAliases: true, previousEntry: null },
+        );
+      },
+      { agentId: "main", env: state.env, path: legacyDatabasePath },
+    );
+    await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "doctor-fix" });
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
+
+    const created = await createAgent({ name: "main", workspace: state.path("workspace-main") });
+
+    expect(created).toMatchObject({ status: "created", agentId: "main" });
+    if (created.status !== "created") {
+      throw new Error(`expected main creation, got ${JSON.stringify(created)}`);
+    }
+    const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+    const mainSessionTarget = resolveSqliteTargetFromSessionStorePath(
+      resolveSessionStorePathCore(persisted.session?.store, { agentId: "main", env: state.env }),
+      { agentId: "main", env: state.env },
+    );
+    expect(mainSessionTarget).toMatchObject({ agentId: "main", path: legacyDatabasePath });
+    expect(resolveAuthProfileDatabasePath(created.agentDir)).toBe(legacyDatabasePath);
+    expect(resolveSharedAuthStorePath(state.env)).toBe(resolveOpenClawStateSqlitePath(state.env));
+    expect(resolveAuthProfileDatabasePath(created.agentDir)).not.toBe(
+      resolveSharedAuthStorePath(state.env),
+    );
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => readExactSessionEntryRowForCanonicalRepair(database, legacyKey),
+        { agentId: "main", env: state.env, path: legacyDatabasePath },
+      ),
+    ).toBeUndefined();
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => readExactSessionEntryRowForCanonicalRepair(database, canonicalKey)?.entry,
+        { agentId: "robby", env: state.env, path: ownerDatabasePath },
+      ),
+    ).toMatchObject({ sessionId: "legacy-before-main-reuse" });
+  } finally {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    await state.cleanup();
+  }
 });

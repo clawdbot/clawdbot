@@ -21,7 +21,7 @@ export function validateFirstOnboardingAgentName(value: string | undefined): str
   if (!name) {
     return "Agent name is required.";
   }
-  const validation = validateAgentIdInput(name, { allowBootstrapMain: true });
+  const validation = validateAgentIdInput(name);
   return validation.ok ? undefined : `${validation.message}. Choose another name.`;
 }
 
