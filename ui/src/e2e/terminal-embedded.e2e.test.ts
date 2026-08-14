@@ -53,7 +53,11 @@ suite.define(() => {
         const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
           runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
         };
-        shell.runtime?.context?.agentSelection?.set("research");
+        const setAgent = shell.runtime?.context?.agentSelection?.set;
+        if (!setAgent) {
+          throw new Error("Agent selection is not ready");
+        }
+        setAgent("research");
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
             detail: { agentId: "research", open: true },
