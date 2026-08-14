@@ -2678,9 +2678,9 @@ jobs:
           --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
 
   # The github/hybrid planner profile stripes the 14 serial core test-type
-  # graphs (~256s on one 4-core runner) across two hosted jobs; the
-  # check-test-types row keeps the extensions/root/scripts tail. All-Blacksmith
-  # mode keeps the single 16-vCPU test-types job.
+  # graphs (~256-500s on one 4-core runner, load-dependent) across three
+  # hosted jobs; the check-test-types row keeps the extensions/root/scripts
+  # tail. All-Blacksmith mode keeps the single 16-vCPU test-types job.
   check-test-types-hosted-core-shard:
     permissions:
       contents: read
@@ -2691,9 +2691,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
       matrix:
-        stripe: [1, 2]
+        stripe: [1, 2, 3]
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -2713,7 +2713,7 @@ jobs:
             echo "[skip] target does not support core test-type stripes"
             exit 0
           fi
-          node scripts/run-tsgo-core-test-shards.mjs --stripe "${{ matrix.stripe }}/2"
+          node scripts/run-tsgo-core-test-shards.mjs --stripe "${{ matrix.stripe }}/3"
 
   check-additional-shard:
     permissions:
