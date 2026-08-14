@@ -360,6 +360,9 @@ describe("Control UI Vite config", () => {
     expect(findStringAlias("@openclaw/net-policy/ip")?.replacement).toBe(
       path.join(repoRoot, "packages/net-policy/src/ip.ts"),
     );
+    expect(findStringAlias("@openclaw/gateway-client/model")?.replacement).toBe(
+      path.join(repoRoot, "packages/gateway-client/src/model/index.ts"),
+    );
   });
 
   it("resolves Control UI dev-server source aliases for internal packages", () => {
