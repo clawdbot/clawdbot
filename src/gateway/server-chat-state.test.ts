@@ -17,10 +17,16 @@ describe("createChatRunState", () => {
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
       bufferUpdatedAt: 1,
       deltaSentAt: 2,
-      deltaLastBroadcastLen: 9,
       deltaLastBroadcastText: "projected",
       agentText: { assistant: { lastSentAt: 3 } },
       abortMarker: createChatAbortMarker(4),
+    });
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: 1,
+      data: { kind: "preamble", progressText: "Inspecting" },
     });
 
     state.clearRun("run-1");
@@ -44,6 +50,91 @@ describe("createChatRunState", () => {
     expect([...state.runs.keys()]).toEqual(["run-b", "run-a"]);
     expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-1");
     expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-2");
+  });
+
+  it("keeps bounded active progress ordered and removes completed tools", () => {
+    const state = createChatRunState();
+    const event = (seq: number, stream: "item" | "tool", data: Record<string, unknown>) =>
+      state.recordProgressEvent("run-1", {
+        runId: "run-1",
+        seq,
+        stream,
+        ts: 1_000 + seq,
+        sessionKey: "main",
+        data,
+      });
+
+    event(1, "item", { kind: "preamble", itemId: "p-1", progressText: "Inspecting" });
+    event(2, "tool", {
+      phase: "start",
+      name: "read",
+      toolCallId: "active",
+      args: { path: "a" },
+    });
+    event(3, "tool", {
+      phase: "input_delta",
+      name: "edit",
+      toolCallId: "active",
+      diff: { added: 3, removed: 1 },
+    });
+    event(4, "tool", {
+      phase: "update",
+      name: "read",
+      toolCallId: "active",
+      partialResult: "halfway",
+    });
+    event(5, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
+    event(6, "tool", {
+      phase: "result",
+      name: "exec",
+      toolCallId: "done",
+      result: "x".repeat(256_000),
+    });
+    event(7, "item", {
+      kind: "preamble",
+      itemId: "p-1",
+      progressText: "Inspection complete",
+    });
+    event(8, "item", {
+      kind: "preamble",
+      itemId: "p-2",
+      progressText: "Running autoreview",
+    });
+    event(4, "tool", { phase: "result", name: "read", toolCallId: "active" });
+
+    expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
+      { seq: 2, stream: "tool", data: { phase: "start", toolCallId: "active" } },
+      {
+        seq: 3,
+        stream: "tool",
+        data: { phase: "input_delta", toolCallId: "active", diff: { added: 3, removed: 1 } },
+      },
+      { seq: 4, stream: "tool", data: { phase: "update", toolCallId: "active" } },
+      {
+        seq: 7,
+        stream: "item",
+        ts: 1_001,
+        data: { itemId: "p-1", progressText: "Inspection complete" },
+      },
+      { seq: 8, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
+    ]);
+
+    for (let seq = 9; seq <= 71; seq += 1) {
+      event(seq, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId: `tool-${seq}`,
+        args: { payload: "y".repeat(80_000) },
+      });
+    }
+    const snapshot = state.runs.get("run-1")?.progressSnapshot;
+    expect(snapshot?.events).toHaveLength(50);
+    expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
+    expect(snapshot?.events.at(-1)?.data).toEqual({
+      phase: "start",
+      name: "read",
+      toolCallId: "tool-71",
+    });
   });
 });
 

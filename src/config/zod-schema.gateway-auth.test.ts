@@ -43,3 +43,22 @@ describe("gateway trusted-proxy device auto-approval config", () => {
     },
   );
 });
+
+describe("gateway identity scope grants config", () => {
+  test.each([
+    { scope: "operator.admin", success: true },
+    { scope: "operator.superuser", success: false },
+  ])("validates configured scope $scope", ({ scope, success }) => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        auth: {
+          identityScopes: {
+            "admin@example.com": [scope],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(success);
+  });
+});

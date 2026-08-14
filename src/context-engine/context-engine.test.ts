@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  createContextEngineLogicalTurnLease,
+  selectContextEngineForTranscriptHost,
+} from "../agents/harness/context-engine-logical-turn.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -18,6 +23,7 @@ import {
   setActivePluginRegistry,
   withPluginRegistrationContext,
 } from "../plugins/runtime.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
@@ -61,16 +67,16 @@ function registerTestContextEngine(id: string, factory: ContextEngineFactory) {
   });
 }
 
-const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
-  compactEmbeddedAgentSessionDirectMock: vi.fn(),
+const { compactEmbeddedAgentSessionOnDemandMock } = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionOnDemandMock: vi.fn(),
 }));
 
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
-  compactEmbeddedAgentSessionDirect: compactEmbeddedAgentSessionDirectMock,
+  compactEmbeddedAgentSessionOnDemand: compactEmbeddedAgentSessionOnDemandMock,
 }));
 
 function installCompactRuntimeSpy() {
-  return compactEmbeddedAgentSessionDirectMock.mockResolvedValue({
+  return compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({
     ok: true,
     compacted: false,
     reason: "mock compaction",
@@ -85,7 +91,7 @@ function installCompactRuntimeSpy() {
 }
 
 function requireCompactRuntimeParams(callIndex: number): Record<string, unknown> {
-  const params = compactEmbeddedAgentSessionDirectMock.mock.calls[callIndex]?.[0] as
+  const params = compactEmbeddedAgentSessionOnDemandMock.mock.calls[callIndex]?.[0] as
     | Record<string, unknown>
     | undefined;
   if (!params) {
@@ -101,6 +107,22 @@ function requireCompactRuntimeParams(callIndex: number): Record<string, unknown>
 /** Build a config object with a contextEngine slot for testing. */
 function configWithSlot(engineId: string): OpenClawConfig {
   return { plugins: { slots: { contextEngine: engineId } } };
+}
+
+function testAdmissionReceipt(): UserTurnTranscriptAdmissionReceipt {
+  return {
+    agentId: "main",
+    sessionId: "session",
+    sessionKey: "agent:main:session",
+    storePath: "sqlite://session",
+    generation: "generation",
+    entryId: "user-entry",
+    rawSeq: 1,
+    effectiveParentId: null,
+    activeMessagePosition: 0,
+    logicalTurnId: "logical-turn",
+    role: "user",
+  };
 }
 
 function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): AgentMessage {
@@ -225,7 +247,7 @@ class MockContextEngine implements ContextEngine {
 describe("Engine contract tests", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    compactEmbeddedAgentSessionDirectMock.mockReset();
+    compactEmbeddedAgentSessionOnDemandMock.mockReset();
     clearMemoryPluginState();
   });
 
@@ -303,7 +325,7 @@ describe("Engine contract tests", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-target-"));
     const storePath = path.join(root, "openclaw-agent.sqlite");
     try {
-      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
         ok: true,
         compacted: true,
         reason: undefined,
@@ -348,15 +370,15 @@ describe("Engine contract tests", () => {
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:successor";
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         { sessionId: "before-compaction", updatedAt: 1 },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:aaa-successor-alias", storePath },
         { sessionId: "after-compaction", updatedAt: 2 },
       );
-      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
         ok: true,
         compacted: true,
         reason: undefined,
@@ -409,7 +431,7 @@ describe("Engine contract tests", () => {
   });
 
   it("rejects a successor marker that changes the caller store", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
       result: {
@@ -434,7 +456,7 @@ describe("Engine contract tests", () => {
   });
 
   it("rejects contradictory marker and top-level successor identities", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
       result: {
@@ -471,7 +493,7 @@ describe("Engine contract tests", () => {
   });
 
   it("rejects a legacy successor marker for another caller agent", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
       reason: undefined,
@@ -701,6 +723,404 @@ describe("Default engine selection", () => {
   it("resolveContextEngine() with config contextEngine='test-engine' returns the custom engine", async () => {
     const engine = await resolveContextEngine(configWithSlot("test-engine"));
     expect(engine.info.id).toBe("test-engine");
+  });
+
+  it.each([
+    {
+      label: "implicit legacy without an admission receipt",
+      config: undefined,
+      admission: undefined,
+    },
+    {
+      label: "explicit legacy without an admission receipt",
+      config: configWithSlot("legacy"),
+      admission: undefined,
+    },
+    {
+      label: "implicit legacy without declared transcript fencing",
+      config: undefined,
+      admission: testAdmissionReceipt(),
+    },
+  ])("keeps $label configured without a warning", async ({ config, admission }) => {
+    const warn = vi.fn();
+    const lease = await createContextEngineLogicalTurnLease({ config, warn });
+
+    const selected = selectContextEngineForTranscriptHost({
+      lease,
+      host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
+      operation: "agent-run",
+      recorder: { getAdmissionReceipt: () => admission, hasPersisted: () => true },
+    });
+
+    expect(selected).toMatchObject({ registeredId: "legacy", mode: "configured" });
+    expect(lease.effectiveEngineId).toBe("legacy");
+    expect(lease.degraded).toBe(false);
+    expect(lease.degradedReason).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+    await lease.dispose();
+  });
+
+  it("keeps repeated baseline host selection stable after the turn starts", async () => {
+    const warn = vi.fn();
+    const lease = await createContextEngineLogicalTurnLease({ warn });
+    const selection = {
+      host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
+      operation: "agent-run" as const,
+      requiresDurableCommit: true,
+    };
+
+    const first = lease.selectForHost(selection);
+    lease.begin();
+    const second = lease.selectForHost(selection);
+
+    expect(second).toMatchObject({ registeredId: "legacy", mode: "configured" });
+    expect(second.engine).toBe(first.engine);
+    expect(lease.degraded).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    await lease.dispose();
+  });
+
+  it("keeps repeated baseline transcript-host selection stable after the turn starts", async () => {
+    const warn = vi.fn();
+    const lease = await createContextEngineLogicalTurnLease({ warn });
+    const selection = {
+      lease,
+      host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
+      operation: "agent-run" as const,
+      recorder: { getAdmissionReceipt: () => undefined, hasPersisted: () => true },
+    };
+
+    const first = selectContextEngineForTranscriptHost(selection);
+    lease.begin();
+    const second = selectContextEngineForTranscriptHost(selection);
+
+    expect(second).toMatchObject({ registeredId: "legacy", mode: "configured" });
+    expect(second.engine).toBe(first.engine);
+    expect(lease.degraded).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    await lease.dispose();
+  });
+
+  it("rejects baseline transcript-host selection after disposal", async () => {
+    const lease = await createContextEngineLogicalTurnLease({});
+    await lease.dispose();
+
+    expect(() =>
+      selectContextEngineForTranscriptHost({
+        lease,
+        host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
+        operation: "agent-run",
+        recorder: { getAdmissionReceipt: () => undefined, hasPersisted: () => true },
+      }),
+    ).toThrow("context-engine logical turn selection is already pinned");
+  });
+
+  it("still rejects an attempted custom-engine transition after the turn starts", async () => {
+    const engineId = uniqueEngineId("logical-turn-late-transition");
+    registerTestContextEngine(engineId, () => ({
+      info: {
+        id: engineId,
+        name: "Late Transition",
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async commitTurn() {
+        return { status: "committed" };
+      },
+    }));
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+    });
+    lease.begin();
+
+    expect(() => lease.degradeBeforeStart("late transition")).toThrow(
+      "context-engine logical turn selection is already pinned",
+    );
+    await lease.dispose();
+  });
+
+  it("degrades and warns when an invalid configured id resolves to legacy", async () => {
+    const engineId = uniqueEngineId("logical-turn-invalid");
+    const warn = vi.fn();
+
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+
+    expect(lease.effectiveEngineId).toBe("legacy");
+    expect(lease.degraded).toBe(true);
+    expect(lease.degradedReason).toBe(`context engine "${engineId}" is not registered`);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Context engine "${engineId}" degraded to "legacy"`),
+    );
+    await lease.dispose();
+  });
+
+  it("degrades and warns when configured engine discovery is read-only", async () => {
+    const engineId = uniqueEngineId("logical-turn-discovery");
+    registerContextEngineForOwner(engineId, () => new MockContextEngine(), `test:${engineId}`, {
+      lifecycle: "readOnlyDiscovery",
+    });
+    const warn = vi.fn();
+
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+
+    expect(lease.effectiveEngineId).toBe("legacy");
+    expect(lease.degradedReason).toBe(
+      `context engine "${engineId}" is available for discovery only`,
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    await lease.dispose();
+  });
+
+  it("degrades and warns when the configured engine factory fails", async () => {
+    const engineId = uniqueEngineId("logical-turn-factory");
+    registerTestContextEngine(engineId, () => {
+      throw new Error("factory unavailable");
+    });
+    const warn = vi.fn();
+
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+
+    expect(lease.effectiveEngineId).toBe("legacy");
+    expect(lease.degradedReason).toBe("factory unavailable");
+    expect(warn).toHaveBeenCalledOnce();
+    await lease.dispose();
+  });
+
+  it("uses registered identity when custom engine metadata is also legacy", async () => {
+    const engineId = uniqueEngineId("logical-turn-legacy-alias");
+    registerTestContextEngine(engineId, () => ({
+      info: { id: "legacy", name: "Legacy Alias" },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+    const warn = vi.fn();
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+
+    const selected = selectContextEngineForTranscriptHost({
+      lease,
+      host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
+      operation: "agent-run",
+      recorder: { getAdmissionReceipt: testAdmissionReceipt, hasPersisted: () => true },
+    });
+
+    expect(selected).toMatchObject({ registeredId: "legacy", mode: "legacy-degraded" });
+    expect(lease.degradedReason).toBe("current-turn transcript fencing is not declared");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Context engine "${engineId}" degraded to "legacy"`),
+    );
+    await lease.dispose();
+  });
+
+  it("does not replay a started engine operation and retries the configured engine next turn", async () => {
+    const engineId = uniqueEngineId("logical-turn-retry");
+    const assemble = vi
+      .fn<ContextEngine["assemble"]>()
+      .mockRejectedValueOnce(new Error("configured engine unavailable"))
+      .mockImplementation(async ({ messages }) => ({ messages, estimatedTokens: 0 }));
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Logical Turn Retry" },
+      async ingest() {
+        return { ingested: true };
+      },
+      assemble,
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+    const warn = vi.fn();
+    const first = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+    const messages = [makeMockMessage()];
+
+    first.begin();
+    await expect(first.engine.assemble({ sessionId: "first", messages })).rejects.toThrow(
+      "configured engine unavailable",
+    );
+    expect(first.degraded).toBe(false);
+    expect(first.engine.info.id).toBe(engineId);
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    await first.dispose();
+
+    const second = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+    await expect(second.engine.assemble({ sessionId: "second", messages })).resolves.toMatchObject({
+      messages,
+    });
+    expect(second.degraded).toBe(false);
+    expect(second.engine.info.id).toBe(engineId);
+    expect(assemble).toHaveBeenCalledTimes(2);
+    await second.dispose();
+  });
+
+  it("rejects an incompatible fallback host after the logical turn starts", async () => {
+    const engineId = uniqueEngineId("logical-turn-host-transition");
+    registerTestContextEngine(engineId, () => ({
+      info: {
+        id: engineId,
+        name: "Host Transition",
+        hostRequirements: {
+          "agent-run": { requiredCapabilities: ["thread-bootstrap-projection"] },
+        },
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async commitTurn() {
+        return { status: "committed" };
+      },
+    }));
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+    });
+
+    lease.selectForHost({
+      host: {
+        id: "agent-harness:first",
+        label: 'agent harness "first"',
+        capabilities: ["thread-bootstrap-projection"],
+      },
+      operation: "agent-run",
+      requiresDurableCommit: true,
+    });
+    lease.begin();
+
+    expect(() =>
+      lease.selectForHost({
+        host: {
+          id: "agent-harness:fallback",
+          label: 'agent harness "fallback"',
+          capabilities: [],
+        },
+        operation: "agent-run",
+        requiresDurableCommit: true,
+      }),
+    ).toThrow(
+      'context-engine logical turn cannot change to incompatible agent harness "fallback": host "agent-harness:fallback" is missing thread-bootstrap-projection',
+    );
+    expect(lease.engine.info.id).toBe(engineId);
+    await lease.dispose();
+  });
+
+  it.each([
+    {
+      label: "persisted without a receipt",
+      persisted: true,
+      declaresFence: true,
+      expectedEngine: "legacy",
+      expectedReason: "current-turn transcript admission receipt is unavailable",
+    },
+    {
+      label: "not yet persisted",
+      persisted: false,
+      declaresFence: true,
+      expectedEngine: "configured",
+      expectedReason: undefined,
+    },
+    {
+      label: "not yet persisted without declared fencing",
+      persisted: false,
+      declaresFence: false,
+      expectedEngine: "legacy",
+      expectedReason: "current-turn transcript fencing is not declared",
+    },
+  ])("selects $expectedEngine for a turn $label", async (testCase) => {
+    const engineId = uniqueEngineId("logical-turn-recorder-state");
+    registerTestContextEngine(engineId, () => ({
+      info: {
+        id: engineId,
+        name: "Recorder State",
+        transcriptSemantics: {
+          ...(testCase.declaresFence
+            ? { currentTurnFence: "before-current-turn-entry-v1" as const }
+            : {}),
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async commitTurn() {
+        return { status: "committed" };
+      },
+    }));
+    const warn = vi.fn();
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+
+    const selected = selectContextEngineForTranscriptHost({
+      lease,
+      host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
+      operation: "agent-run",
+      recorder: {
+        getAdmissionReceipt: () => undefined,
+        hasPersisted: () => testCase.persisted,
+      },
+    });
+    lease.begin();
+
+    expect(selected.engine.info.id).toBe(
+      testCase.expectedEngine === "configured" ? engineId : "legacy",
+    );
+    expect(lease.degradedReason).toBe(testCase.expectedReason);
+    if (testCase.expectedReason) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(testCase.expectedReason));
+    } else {
+      expect(warn).not.toHaveBeenCalled();
+    }
+    await lease.dispose();
   });
 });
 
@@ -1115,6 +1535,56 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.ownsCompaction).toBeUndefined();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
     expect(assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes legacy resolver fence failures through normal quarantine", async () => {
+    const engineId = uniqueEngineId("transcript-fence-fallback");
+    const ingest = vi.fn(async () => ({ ingested: true }));
+    const assemble = vi.fn(async () => {
+      throw new SessionTranscriptReadFenceError("admitted user row is unavailable");
+    });
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info: {
+          id: "lcm",
+          name: "Lossless Context Manager",
+          ownsCompaction: true,
+        },
+        ingest,
+        assemble,
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+      }),
+      "plugin:lossless-claw",
+      { allowSameOwnerRefresh: true },
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
+
+    const first = makeMockMessage("user", "first");
+    const second = makeMockMessage("user", "second");
+    await expect(engine.assemble({ sessionId: "s1", messages: [first] })).resolves.toMatchObject({
+      messages: [first],
+    });
+    await expect(engine.assemble({ sessionId: "s1", messages: [second] })).resolves.toMatchObject({
+      messages: [second],
+    });
+    await engine.ingest({ sessionId: "s1", message: second });
+
+    expect(engine.info.id).toBe("legacy");
+    expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({
+        engineId,
+        operation: "assemble",
+        reason: "admitted user row is unavailable",
+      }),
+    ]);
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(ingest).not.toHaveBeenCalled();
   });
 
   it("quarantines compact failures without same-call legacy fallback", async () => {

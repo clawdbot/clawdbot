@@ -1,6 +1,8 @@
 // Config-facts module for the curated Talk settings page. No lit imports: like
 // memory-schema.ts, settings search evaluates these facts from the startup
 // chunk and must not pull settings UI code in with them.
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
 
 /** Normalized model/voice pair from one `talk.realtime.providers.<id>` entry. */
 type TalkProviderEntryValues = {
@@ -20,20 +22,6 @@ export type TalkRealtimeSelection = {
   /** Per-provider fallback values keyed by the raw config map key. */
   providerEntries: Record<string, TalkProviderEntryValues>;
 };
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readTrimmedString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
 
 /**
  * Raw talk.realtime picks plus each provider entry's fallback values. Which

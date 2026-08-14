@@ -63,6 +63,7 @@ type SlackTestState = {
   appConstructorArgs?: Record<string, unknown>;
   appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  interactionRegistrations: string[];
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
@@ -91,6 +92,7 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
     appConstructorArgs: undefined,
     appStartMock: vi.fn(),
     appStopMock: vi.fn(),
+    interactionRegistrations: [],
     sendMock: vi.fn(),
     replyMock: vi.fn(),
     updateLastRouteMock: vi.fn(),
@@ -345,6 +347,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   slackTestState.socketModeLogger = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.interactionRegistrations.length = 0;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
@@ -485,7 +488,16 @@ vi.mock("@slack/bolt", () => {
       });
     }
     command() {
-      /* no-op */
+      slackTestState.interactionRegistrations.push("command");
+    }
+    action() {
+      slackTestState.interactionRegistrations.push("action");
+    }
+    shortcut() {
+      slackTestState.interactionRegistrations.push("shortcut");
+    }
+    view() {
+      slackTestState.interactionRegistrations.push("view");
     }
     start = (...args: unknown[]) => slackTestState.appStartMock(...args);
     stop = (...args: unknown[]) => slackTestState.appStopMock(...args);

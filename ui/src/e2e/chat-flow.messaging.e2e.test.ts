@@ -772,7 +772,7 @@ suite.define(() => {
     });
   });
 
-  it("steers an active run when the session row only reports hasActiveRun", async () => {
+  it("steers the exact run with the current leaf reported by the session row", async () => {
     await withChatPage(async (page) => {
       const sessionKey = "main";
       const gateway = await installMockGateway(page, {
@@ -787,6 +787,8 @@ suite.define(() => {
           "sessions.list": chatSessionListResponse([
             {
               hasActiveRun: true,
+              activeRunIds: ["active-run"],
+              activeLeafEntryId: "leaf-before-steer",
               key: "agent:main:main",
               kind: "direct",
               label: "Main",
@@ -811,6 +813,8 @@ suite.define(() => {
       expect(params.sessionKey).toBe(sessionKey);
       expect(params.message).toBe("use the smaller fix");
       expect(params.deliver).toBe(false);
+      expect(params.expectedRunId).toBe("active-run");
+      expect(params.expectedLeafEntryId).toBe("leaf-before-steer");
 
       await page.getByText("Steered.", { exact: true }).waitFor({ timeout: 10_000 });
       expect(await page.getByText("No active run").count()).toBe(0);

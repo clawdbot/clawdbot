@@ -2,9 +2,19 @@ import type { JsonObject, JsonValue } from "./protocol-json.js";
 
 export type CodexMcpServerStatus = {
   name: string;
+  /** Present only after the configured server completed MCP initialization. */
+  serverInfo?: {
+    name: string;
+    title?: string | null;
+    version: string;
+    description?: string | null;
+    icons?: JsonValue[] | null;
+    websiteUrl?: string | null;
+  } | null;
   tools: JsonObject;
   resources?: JsonValue[];
   resourceTemplates?: JsonValue[];
+  authStatus?: "unsupported" | "notLoggedIn" | "bearerToken" | "oAuth";
 };
 
 export type CodexListMcpServerStatusResponse = {

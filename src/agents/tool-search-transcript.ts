@@ -68,10 +68,7 @@ function buildToolSearchTargetTranscriptMessages(
       : [
           {
             type: "text",
-            text: textFromToolSearchProjectionResult(
-              projection.result,
-              projection.isError === true,
-            ),
+            text: textFromToolSearchProjectionResult(projection.result, projection.isError),
           },
         ];
   return [
@@ -93,7 +90,7 @@ function buildToolSearchTargetTranscriptMessages(
       role: "toolResult",
       toolCallId: projection.toolCallId,
       toolName: projection.toolName,
-      isError: projection.isError === true,
+      isError: projection.isError,
       content: resultContent,
       timestamp,
     } as unknown as AgentMessage,

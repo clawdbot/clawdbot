@@ -14,6 +14,8 @@ import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
 import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
+const DEFAULT_MEDIA_MAX_MB = 10;
+
 interface LineBotOptions {
   channelAccessToken: string;
   channelSecret: string;
@@ -42,7 +44,15 @@ export function createLineBot(opts: LineBotOptions): LineBot {
     accountId: opts.accountId,
   });
 
-  const mediaMaxBytes = (opts.mediaMaxMb ?? account.config.mediaMaxMb ?? 10) * 1024 * 1024;
+  // A non-positive cap cannot bound a transfer, so treat it as unset at every
+  // link. `??` alone keeps a configured 0 or negative and turns every inbound
+  // media download into a 0-byte budget the media core rejects, which degrades
+  // the attachment to an unavailable notice without naming the setting.
+  const effectiveMediaMaxMb =
+    [opts.mediaMaxMb, account.config.mediaMaxMb].find(
+      (value) => typeof value === "number" && value > 0,
+    ) ?? DEFAULT_MEDIA_MAX_MB;
+  const mediaMaxBytes = effectiveMediaMaxMb * 1024 * 1024;
 
   const processMessage =
     opts.onMessage ??

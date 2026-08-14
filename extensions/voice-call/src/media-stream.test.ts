@@ -1,6 +1,7 @@
 // Voice Call tests cover media stream plugin behavior.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderPlugin,
@@ -32,23 +33,6 @@ const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin =>
     label: "OpenAI",
     isConfigured: () => true,
   }) as unknown as RealtimeTranscriptionProviderPlugin;
-
-const createDeferred = (): {
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
-} => {
-  let resolve: (() => void) | undefined;
-  let reject: ((error: Error) => void) | undefined;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-};
 
 const waitForAbort = (signal: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
@@ -750,9 +734,9 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("defers transcription readiness until STT connect resolves", async () => {
-    const sttReady = createDeferred();
-    const sttConnectStarted = createDeferred();
-    const transcriptionReady = createDeferred();
+    const sttReady = createDeferred<void>();
+    const sttConnectStarted = createDeferred<void>();
+    const transcriptionReady = createDeferred<void>();
     const events: string[] = [];
 
     const session: RealtimeTranscriptionSession = {
@@ -817,10 +801,10 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("forwards early Twilio media into the STT session before readiness", async () => {
-    const sttReady = createDeferred();
-    const sttConnectStarted = createDeferred();
-    const transcriptionReady = createDeferred();
-    const audioReceived = createDeferred();
+    const sttReady = createDeferred<void>();
+    const sttConnectStarted = createDeferred<void>();
+    const transcriptionReady = createDeferred<void>();
+    const audioReceived = createDeferred<void>();
     const receivedAudio: Buffer[] = [];
     let onConnectCalls = 0;
     let onTranscriptionReadyCalls = 0;
@@ -901,8 +885,8 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("closes the media stream and disconnects once when STT readiness fails", async () => {
-    const sttConnectStarted = createDeferred();
-    const onDisconnectReady = createDeferred();
+    const sttConnectStarted = createDeferred<void>();
+    const onDisconnectReady = createDeferred<void>();
     const onConnect = vi.fn();
     const onTranscriptionReady = vi.fn();
     const onDisconnect = vi.fn(() => {

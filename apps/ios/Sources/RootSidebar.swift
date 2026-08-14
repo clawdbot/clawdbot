@@ -43,7 +43,8 @@ struct RootSidebar: View {
         .background(OpenClawSidebarPalette.background)
         .sheet(isPresented: self.$showsPagesEditor) {
             RootSidebarPagesEditor(
-                pinnedPages: self.pinnedPages,
+                destinations: RootTabs.pinnableSidebarPages.filter(self.isDestinationAvailable),
+                pinnedPages: self.storedPinnedPages,
                 onSelect: { destination in
                     self.showsPagesEditor = false
                     self.selectSidebarDestination(destination)
@@ -52,12 +53,20 @@ struct RootSidebar: View {
         }
     }
 
-    private var pinnedPages: [RootTabs.SidebarDestination] {
+    private var storedPinnedPages: [RootTabs.SidebarDestination] {
         RootTabs.pinnedSidebarPages(from: self.pinnedPagesStorage)
     }
 
+    private var pinnedPages: [RootTabs.SidebarDestination] {
+        self.storedPinnedPages.filter(self.isDestinationAvailable)
+    }
+
+    private func isDestinationAvailable(_ destination: RootTabs.SidebarDestination) -> Bool {
+        destination != .desktop || self.appModel.isDesktopObserveAvailable
+    }
+
     private func togglePinnedPage(_ destination: RootTabs.SidebarDestination) {
-        var pages = self.pinnedPages
+        var pages = self.storedPinnedPages
         if let index = pages.firstIndex(of: destination) {
             pages.remove(at: index)
         } else {
@@ -807,6 +816,7 @@ struct RootSidebar: View {
             do {
                 try await self.appModel.makeChatTransport().patchSession(
                     key: session.key,
+                    expectedSessionID: archived == nil ? nil : session.sessionId,
                     label: label,
                     category: category,
                     pinned: pinned,
@@ -863,6 +873,7 @@ struct RootSidebar: View {
 /// Web-parity Pages editor (the pen menu): navigate to any page, pin/unpin
 /// which ones stay in the sidebar. Home is fixed and not listed.
 struct RootSidebarPagesEditor: View {
+    let destinations: [RootTabs.SidebarDestination]
     let pinnedPages: [RootTabs.SidebarDestination]
     let onSelect: (RootTabs.SidebarDestination) -> Void
     let onTogglePin: (RootTabs.SidebarDestination) -> Void
@@ -873,7 +884,7 @@ struct RootSidebarPagesEditor: View {
         NavigationStack {
             List {
                 Section {
-                    ForEach(RootTabs.pinnableSidebarPages) { destination in
+                    ForEach(self.destinations) { destination in
                         self.pageRow(destination)
                     }
                 } footer: {

@@ -183,6 +183,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;
+  type?: string;
   callOverrides?: {
     url: string;
     token?: string;
@@ -195,7 +196,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   const { callGateway } = await loadGatewayCallModule();
   return await callGateway<unknown>({
     method: "diagnostics.stability",
-    params: { limit: 1000 },
+    params: { limit: 1000, ...(params.type ? { type: params.type } : {}) },
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,

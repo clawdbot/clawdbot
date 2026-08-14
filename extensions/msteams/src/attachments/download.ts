@@ -1,4 +1,5 @@
 // Msteams plugin module implements download behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -334,7 +335,7 @@ export async function downloadMSTeamsAttachments(params: {
       } catch (err) {
         out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
         params.logger?.warn?.("msteams inline attachment decode failed", {
-          error: err instanceof Error ? err.message : String(err),
+          error: coerceErrorMessage(err),
         });
       }
       continue;
@@ -370,7 +371,7 @@ export async function downloadMSTeamsAttachments(params: {
       out.push(withSourceId(media, candidate.sourceId));
     } catch (err) {
       out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = coerceErrorMessage(err);
       params.logger?.warn?.(
         `msteams attachment download failed host=${safeHostForLog(candidate.url)} error=${msg}`,
       );

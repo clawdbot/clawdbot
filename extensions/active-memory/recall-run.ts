@@ -14,7 +14,6 @@ import {
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
-  applyActiveMemoryRuntimeConfigSnapshot,
   isMissingRegisteredMemoryToolsError,
   requireTransientWorkspaceDir,
   resolvePersistentTranscriptBaseDir,
@@ -22,7 +21,7 @@ import {
 } from "./config.js";
 import { buildRecallPrompt } from "./prompt.js";
 import { getModelRef } from "./query.js";
-import { toSingleLineLogValue } from "./recall-state.js";
+import { toSingleLineErrorMessage } from "./recall-state.js";
 import { resolveRecallRunChannelContext } from "./session.js";
 import {
   attachPartialTimeoutData,
@@ -262,10 +261,6 @@ async function runRecallSubagent(params: {
       messageProvider: params.messageProvider,
       channelId: params.channelId,
     });
-    const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(
-      params.runtimeConfig,
-      params.config,
-    );
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
     const result = await params.api.runtime.agent.runEmbeddedAgent({
       sessionId: subagentSessionId,
@@ -282,7 +277,7 @@ async function runRecallSubagent(params: {
       sessionFile: runtimeSessionFile,
       workspaceDir,
       agentDir,
-      config: embeddedConfig,
+      config: params.runtimeConfig,
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
@@ -388,7 +383,7 @@ async function runRecallSubagent(params: {
       return { rawReply: "NONE", resultStatus: "unavailable" };
     }
     if (!params.abortSignal?.aborted) {
-      const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
+      const message = toSingleLineErrorMessage(error);
       params.api.logger.warn?.(
         `active-memory: memory sub-agent failed, skipping recall: ${message}`,
       );
@@ -403,9 +398,7 @@ async function runRecallSubagent(params: {
             sources: transcriptSources,
             sessionFile: artifactSessionFile,
           }).catch((error: unknown) => {
-            const message = toSingleLineLogValue(
-              error instanceof Error ? error.message : String(error),
-            );
+            const message = toSingleLineErrorMessage(error);
             params.api.logger.debug?.(
               `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
             );
@@ -417,9 +410,7 @@ async function runRecallSubagent(params: {
           sessionKey: subagentSessionKey,
           storePath,
         }).catch((error: unknown) => {
-          const message = toSingleLineLogValue(
-            error instanceof Error ? error.message : String(error),
-          );
+          const message = toSingleLineErrorMessage(error);
           params.api.logger.warn?.(
             `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
           );

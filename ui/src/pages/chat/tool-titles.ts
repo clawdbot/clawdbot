@@ -8,6 +8,7 @@
  * labels.
  */
 
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { resolveToolCallKind, unwrapShellWrapperCommand } from "../../lib/chat/tool-call-view.ts";
@@ -85,10 +86,7 @@ function resolveToolTitleRequest(
 ): { key: string; input: string } | null {
   const kind = resolveToolCallKind(name, args);
   if (kind === "command") {
-    const record =
-      args && typeof args === "object" && !Array.isArray(args)
-        ? (args as Record<string, unknown>)
-        : null;
+    const record = asNullableRecord(args);
     const rawCommand = typeof record?.command === "string" ? record.command.trim() : "";
     const command = unwrapShellWrapperCommand(rawCommand).trim();
     if (command.length < MIN_COMMAND_CHARS_FOR_TITLE) {

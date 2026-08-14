@@ -1,4 +1,5 @@
 // Control UI helpers shared by config form node renderers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ConfigUiHints } from "../api/types.ts";
@@ -111,7 +112,7 @@ export function isSecretRefObject(value: unknown): value is {
   id: string;
   provider?: string;
 } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const candidate = value as Record<string, unknown>;
@@ -357,7 +358,7 @@ export function renderSegmentedControl(params: {
     value: selectedIndex < 0 ? "" : String(selectedIndex),
     options: params.options.map((option, index) => ({
       value: String(index),
-      label: formatUnknownText(option),
+      label: configEnumOptionLabel(option, params.options),
     })),
     disabled: params.disabled,
     ariaLabel: params.ariaLabel,
@@ -368,6 +369,20 @@ export function renderSegmentedControl(params: {
       }
     },
   });
+}
+
+export function configEnumOptionLabel(option: unknown, options: readonly unknown[]): string {
+  const presentsBooleanState = options.includes(true) && options.includes(false);
+  if (!presentsBooleanState) {
+    return formatUnknownText(option);
+  }
+  if (option === true) {
+    return t("configForm.enumOn");
+  }
+  if (option === false) {
+    return t("configForm.enumOff");
+  }
+  return option === "auto" ? t("configForm.enumAuto") : formatUnknownText(option);
 }
 
 export function renderJsonTextareaControl(params: {

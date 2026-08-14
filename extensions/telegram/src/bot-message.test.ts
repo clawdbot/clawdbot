@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
 import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
@@ -69,7 +70,7 @@ describe("telegram bot message processor", () => {
   const baseTurnContext = {
     cfg: {},
     telegramCfg: {},
-  } satisfies import("./bot-message.js").TelegramMessageProcessorTurnContext;
+  } satisfies TelegramMessageProcessorTurnContext;
 
   it("passes the effective per-DM history limit into message context", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
@@ -122,7 +123,7 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
-    turnContext?: Partial<import("./bot-message.js").TelegramMessageProcessorTurnContext>,
+    turnContext?: Partial<TelegramMessageProcessorTurnContext>,
     primaryCtxOverrides: Record<string, unknown> = {},
     options: Parameters<typeof processMessage>[4] = {},
     allMedia: Parameters<typeof processMessage>[1] = [],

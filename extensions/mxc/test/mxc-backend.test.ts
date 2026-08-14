@@ -299,6 +299,29 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
   });
 
+  test("normalizes agent-tool workdirs before execution", async () => {
+    const childDir = path.join(baseParams.workdir, "child");
+    mkdirSync(childDir);
+    const handle = createMxcSandboxBackendHandle(baseParams);
+
+    expect(handle.workdirValidation).toBe("backend");
+    await expect(handle.validateWorkdir?.(`${baseParams.workdir}/child`)).resolves.toBe(childDir);
+    await expect(
+      handle.validateWorkdir?.(path.join(baseParams.workdir, "missing")),
+    ).resolves.toBeNull();
+  });
+
+  test("reports workdirs nested under a file as unavailable instead of throwing", async () => {
+    // A file parent surfaces ENOTDIR on Linux (CI truth) and ENOENT on Windows.
+    // Both must reach the contract's null result rather than a raw filesystem error.
+    const filePath = path.join(baseParams.workdir, "not-a-directory.txt");
+    writeFileSync(filePath, "content");
+    const handle = createMxcSandboxBackendHandle(baseParams);
+
+    await expect(handle.validateWorkdir?.(path.join(filePath, "child"))).resolves.toBeNull();
+    await expect(handle.validateWorkdir?.(filePath)).resolves.toBeNull();
+  });
+
   test("buildExecSpec keeps command and env payload out of process argv", async () => {
     await withProcessEnv({ OPENCLAW_MXC_HOST_SECRET_TEST: "host-secret" }, async () => {
       const handle = createMxcSandboxBackendHandle(baseParams);

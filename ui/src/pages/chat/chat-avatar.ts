@@ -23,7 +23,7 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
+import { resolveAvatarImageUrl, resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -99,18 +99,19 @@ export function renderChatAvatar(
           : "other";
 
   if (normalized === "user" && userAvatarUrl) {
+    const imageUrl = resolveAvatarImageUrl(userAvatarUrl) ?? userAvatarUrl;
     return renderUserAvatarSlot(
       {
         fallback: resolveAvatarInitials({ name: userName }),
-        imageUrl: userAvatarUrl,
-        pending: false,
+        imageUrl,
+        pending: typeof imageUrl !== "string",
       },
       userName,
     );
   }
 
   if (normalized === "user" && userAvatarText) {
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
+    return html`<div class="chat-avatar ${className}" role="img" aria-label="${userName}">
       ${userAvatarText}
     </div>`;
   }
@@ -131,7 +132,7 @@ export function renderChatAvatar(
       />`;
     }
     if (assistantAvatarText) {
-      return html`<div class="chat-avatar ${className}" aria-label="${assistantName}">
+      return html`<div class="chat-avatar ${className}" role="img" aria-label="${assistantName}">
         ${assistantAvatarText}
       </div>`;
     }
@@ -162,6 +163,7 @@ function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
   const initialsAvatar = html`<div
     class="chat-avatar user chat-avatar--sender-initials"
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+    role="img"
     aria-label="${label}"
   >
     ${view.fallback.initials}

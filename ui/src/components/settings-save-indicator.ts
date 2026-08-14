@@ -1,7 +1,7 @@
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
-import type { ConfigAutoSaveStatus } from "../lib/config/index.ts";
+import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { icons } from "./icons.ts";
 
 const SAVED_VISIBLE_MS = 2_000;

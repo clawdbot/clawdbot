@@ -23,7 +23,7 @@ function runCapability(domain: string, action: string, ...argv: string[]): Promi
 }
 
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
-  mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+  mocks.resolveApiKeyForProviderCore.mockResolvedValueOnce({
     apiKey: mode === "token" ? "profile-openai-token" : "profile-openai-key",
     source: mode === "token" ? "profile:openai:token" : "profile:openai:qa",
     mode,
@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => ({
   setRuntimeConfigSnapshot: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {}, order: {} })),
   listProfilesForProvider: vi.fn(() => []),
-  resolveApiKeyForProvider: vi.fn(),
+  resolveApiKeyForProviderCore: vi.fn(),
   loadManifestMetadataSnapshot: vi.fn(() => ({ manifestRegistry: { plugins: [] } })),
   planEffectiveModelCatalogRows: vi.fn<
     typeof import("../model-catalog/index.js").planEffectiveModelCatalogRows
@@ -284,6 +284,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog:
     mocks.loadModelCatalog as typeof import("../agents/prepared-model-catalog.js").loadPreparedModelCatalog,
 }));
@@ -303,8 +304,8 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider:
-    mocks.resolveApiKeyForProvider as typeof import("../agents/model-auth.js").resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore:
+    mocks.resolveApiKeyForProviderCore as typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => ({
@@ -371,9 +372,9 @@ vi.mock("../media/media-services.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/memory-embedding-providers.js", () => ({
-  listMemoryEmbeddingProviders:
-    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
+vi.mock("../plugins/memory-embedding-provider-runtime.js", () => ({
+  listRegisteredMemoryEmbeddingProviderAdapters:
+    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-provider-runtime.js").listRegisteredMemoryEmbeddingProviderAdapters,
 }));
 
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({
@@ -518,6 +519,7 @@ describe("capability cli", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("OPENAI_API_KEY", "");
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
@@ -526,7 +528,7 @@ describe("capability cli", () => {
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
     mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
-    mocks.resolveApiKeyForProvider.mockReset().mockRejectedValue(new Error("no auth profile"));
+    mocks.resolveApiKeyForProviderCore.mockReset().mockRejectedValue(new Error("no auth profile"));
     mocks.loadManifestMetadataSnapshot
       .mockReset()
       .mockReturnValue({ manifestRegistry: { plugins: [] } });
@@ -2614,7 +2616,7 @@ describe("capability cli", () => {
       "--json",
     );
 
-    expect(mocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
+    expect(mocks.resolveApiKeyForProviderCore).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
         cfg: rawConfig,
@@ -2638,7 +2640,7 @@ describe("capability cli", () => {
 
     await runCapability("tts", "convert", "--text", "hello", "--json");
 
-    expect(mocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
+    expect(mocks.resolveApiKeyForProviderCore).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
         cfg: rawConfig,
@@ -2728,7 +2730,7 @@ describe("capability cli", () => {
     };
     expect(cfg.tts?.providers?.openai?.apiKey).toBe("config-key");
     expect(cfg.channels?.discord?.tts?.providers?.openai).toEqual({ speakerVoice: "nova" });
-    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
   });
 
   it("does not hydrate local TTS provider config from token auth profiles", async () => {

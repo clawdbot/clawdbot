@@ -13,7 +13,7 @@ type WorkspaceResultDatabase = Pick<
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
-type WorkerWorkspacePendingResult = {
+export type WorkerWorkspacePendingResult = {
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;

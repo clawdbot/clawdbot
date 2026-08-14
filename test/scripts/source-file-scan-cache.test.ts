@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectSourceFileContents } from "../../scripts/lib/source-file-scan-cache.mjs";
+import { collectSourceFileContents } from "../../scripts/lib/source-file-scan-cache.mts";
 
 const tempDirs: string[] = [];
 

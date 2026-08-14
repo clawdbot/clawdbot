@@ -14,9 +14,13 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  codexTestTurnIds,
+  createFakeCodexAppServerClient,
+} from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import type { CodexServerNotification, JsonObject, JsonValue, RpcRequest } from "./protocol.js";
+import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
 import {
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
@@ -110,65 +114,18 @@ function runCodexAppServerSideQuestion(
   return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
 }
 
-type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
-  params?: RpcRequest["params"];
-};
-type ClientRequest = (
-  method: string,
-  requestParams?: unknown,
-  options?: unknown,
-) => Promise<unknown>;
-
-type FakeClient = {
-  request: ReturnType<typeof vi.fn<ClientRequest>>;
-  addNotificationHandler: ReturnType<typeof vi.fn>;
-  addRequestHandler: ReturnType<typeof vi.fn>;
-  notifications: Array<(notification: CodexServerNotification) => void>;
-  requests: Array<(request: ServerRequest) => unknown>;
-  emit: (notification: CodexServerNotification) => void;
-  handleRequest: (request: ServerRequest) => Promise<unknown>;
-};
-
-function createFakeClient(): FakeClient {
-  const notifications: FakeClient["notifications"] = [];
-  const requests: FakeClient["requests"] = [];
-  const client: FakeClient = {
-    notifications,
-    requests,
-    request: vi.fn<ClientRequest>(),
-    addNotificationHandler: vi.fn((handler: (notification: CodexServerNotification) => void) => {
-      notifications.push(handler);
-      return () => {
-        const index = notifications.indexOf(handler);
-        if (index >= 0) {
-          notifications.splice(index, 1);
-        }
-      };
-    }),
-    addRequestHandler: vi.fn((handler: FakeClient["requests"][number]) => {
-      requests.push(handler);
-      return () => {
-        const index = requests.indexOf(handler);
-        if (index >= 0) {
-          requests.splice(index, 1);
-        }
-      };
-    }),
-    emit: (notification) => {
-      for (const handler of notifications) {
-        handler(notification);
-      }
+function createFakeClient() {
+  const fixture = createFakeCodexAppServerClient();
+  const client = Object.assign(fixture.client, {
+    notifications: fixture.notifications,
+    request: fixture.request,
+    requests: fixture.requests,
+    emit: (notification: CodexServerNotification) => {
+      void fixture.notify(notification);
     },
-    handleRequest: async (request) => {
-      for (const handler of requests) {
-        const result = await handler(request);
-        if (result !== undefined) {
-          return result;
-        }
-      }
-      return undefined;
-    },
-  };
+    handleRequest: (request: Parameters<typeof fixture.handleServerRequest>[0]) =>
+      fixture.handleServerRequest(request),
+  });
   client.request.mockImplementation(async (method: string) => {
     if (method === "thread/fork") {
       return threadResult("side-thread");
@@ -288,7 +245,7 @@ function threadResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/workspace",
-      cliVersion: "0.146.0",
+      cliVersion: "0.147.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -366,7 +323,19 @@ function nativeCommandItem(
   };
 }
 
-function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQuestion>[0]> = {}) {
+type SideQuestionParams = Parameters<typeof runCodexAppServerSideQuestion>[0];
+
+const TEST_HOST_CAPABILITIES: SideQuestionParams["hostCapabilities"] = Object.freeze({
+  kind: "agent-harness-host-capability",
+  version: 1,
+  assertActive: () => {},
+  bindToolSurface: (tools) => tools,
+  runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
+  requestApproval: async () => undefined,
+  waitForApproval: async () => undefined,
+});
+
+function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
   const authProfileId = Object.hasOwn(overrides, "authProfileId")
     ? overrides.authProfileId
     : "openai:work";
@@ -426,7 +395,8 @@ function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQu
       modelRegistry: {} as never,
     },
     ...overrides,
-  } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0];
+    hostCapabilities: overrides.hostCapabilities ?? TEST_HOST_CAPABILITIES,
+  };
 }
 
 function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
@@ -485,8 +455,7 @@ async function runSideQuestionWithManagedWebSearchCall(
             id: 42,
             method: "item/tool/call",
             params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
+              ...codexTestTurnIds("side-thread"),
               callId: "tool-1",
               tool: "web_search",
               arguments: { query: "service providers" },
@@ -1483,8 +1452,7 @@ describe("runCodexAppServerSideQuestion", () => {
               id: 42,
               method: "item/commandExecution/requestApproval",
               params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
+                ...codexTestTurnIds("side-thread"),
                 itemId: "cmd-side",
                 command: "/bin/bash -lc 'node -v'",
                 cwd: "/tmp/workspace",
@@ -1529,14 +1497,12 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(approvalArgs).toMatchObject({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "side-thread",
-        turnId: "turn-1",
+        ...codexTestTurnIds("side-thread"),
         itemId: "cmd-side",
         command: "/bin/bash -lc 'node -v'",
         cwd: "/tmp/workspace",
       },
-      threadId: "side-thread",
-      turnId: "turn-1",
+      ...codexTestTurnIds("side-thread"),
       autoApprove: false,
       paramsForRun: {
         messageChannel: "discord",
@@ -2170,8 +2136,7 @@ describe("runCodexAppServerSideQuestion", () => {
           client.emit({
             method: "item/started",
             params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
+              ...codexTestTurnIds("side-thread"),
               item: nativeCommandItem("side-cleanup-failure-tool", "inProgress", null),
             },
           });
@@ -2245,8 +2210,7 @@ describe("runCodexAppServerSideQuestion", () => {
               id: 42,
               method: "item/tool/call",
               params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
+                ...codexTestTurnIds("side-thread"),
                 callId: "tool-1",
                 tool: "wiki_status",
                 arguments: { topic: "AGENTS.md" },
@@ -2280,6 +2244,62 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
+  it("binds /btw tools and retained bound callbacks fail after capability closure", async () => {
+    let active = true;
+    let retainedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
+    const bindToolSurface = vi.fn((tools: Array<{ execute?: (...args: never[]) => unknown }>) =>
+      tools.map((tool) => {
+        const execute = async (...args: never[]) => {
+          if (!active) {
+            throw new Error("agent harness host capability is no longer active");
+          }
+          return await tool.execute?.(...args);
+        };
+        retainedExecute = execute;
+        return { ...tool, execute };
+      }),
+    );
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          client.emit(turnCompleted("side-thread", "turn-1", "Bound answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          hostCapabilities: {
+            ...TEST_HOST_CAPABILITIES,
+            bindToolSurface: bindToolSurface as never,
+          },
+        }),
+      ),
+    ).resolves.toEqual({ text: "Bound answer." });
+    expect(bindToolSurface).toHaveBeenCalledTimes(1);
+    expect(bindToolSurface).toHaveBeenCalledWith(expect.any(Array), {
+      cwd: expect.any(String),
+    });
+    active = false;
+    const copiedExecute = retainedExecute;
+    await expect(copiedExecute?.()).rejects.toThrow("no longer active");
+    expect(toolExecuteMock).not.toHaveBeenCalled();
+  });
+
   it("omits computer control from side threads without a compaction owner", async () => {
     const client = createFakeClient();
     const computerExecute = vi.fn();
@@ -2306,8 +2326,7 @@ describe("runCodexAppServerSideQuestion", () => {
               id: 43,
               method: "item/tool/call",
               params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
+                ...codexTestTurnIds("side-thread"),
                 callId: "computer-1",
                 tool: "computer",
                 arguments: { action: "screenshot" },
@@ -2375,8 +2394,7 @@ describe("runCodexAppServerSideQuestion", () => {
               id: 42,
               method: "item/tool/call",
               params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
+                ...codexTestTurnIds("side-thread"),
                 callId: "tool-1",
                 tool: "wiki_status",
                 arguments: {},
@@ -2427,8 +2445,7 @@ describe("runCodexAppServerSideQuestion", () => {
               id: 42,
               method: "item/tool/call",
               params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
+                ...codexTestTurnIds("side-thread"),
                 callId: "tool-1",
                 tool: "wiki_status",
                 arguments: { topic: "AGENTS.md" },
@@ -2502,16 +2519,14 @@ describe("runCodexAppServerSideQuestion", () => {
           client.emit({
             method: "item/started",
             params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
+              ...codexTestTurnIds("side-thread"),
               item: nativeCommandItem("native-tool-1", "inProgress", null),
             },
           });
           client.emit({
             method: "item/completed",
             params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
+              ...codexTestTurnIds("side-thread"),
               item: nativeCommandItem("native-tool-1", "completed", 12),
             },
           });
@@ -2634,8 +2649,7 @@ describe("runCodexAppServerSideQuestion", () => {
           client.emit({
             method: "item/started",
             params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
+              ...codexTestTurnIds("side-thread"),
               item: nativeCommandItem("native-tool-unfinished", "inProgress", null),
             },
           });
@@ -2772,8 +2786,7 @@ describe("runCodexAppServerSideQuestion", () => {
           client.emit({
             method: "item/started",
             params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
+              ...codexTestTurnIds("side-thread"),
               item: nativeCommandItem("native-tool-timeout", "inProgress", null),
             },
           });
@@ -2844,8 +2857,7 @@ describe("runCodexAppServerSideQuestion", () => {
             id: 42,
             method: "item/tool/call",
             params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
+              ...codexTestTurnIds("side-thread"),
               callId: "tool-timeout",
               tool: "wiki_status",
               arguments: {},
@@ -2912,8 +2924,7 @@ describe("runCodexAppServerSideQuestion", () => {
               id: 42,
               method: "item/tool/call",
               params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
+                ...codexTestTurnIds("side-thread"),
                 callId: "tool-1",
                 tool: "wiki_status",
                 arguments: { topic: "AGENTS.md" },
@@ -2977,8 +2988,7 @@ describe("runCodexAppServerSideQuestion", () => {
               id: 43,
               method: "item/tool/requestUserInput",
               params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
+                ...codexTestTurnIds("side-thread"),
                 itemId: "input-1",
                 questions: [
                   {

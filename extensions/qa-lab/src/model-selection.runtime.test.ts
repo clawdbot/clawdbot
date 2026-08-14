@@ -18,7 +18,10 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   listProfilesForProvider,
 }));
 
-import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
+import {
+  defaultQaRuntimeModelForMode,
+  resolveQaRuntimeModelPair,
+} from "./model-selection.runtime.js";
 
 describe("qa model selection runtime", () => {
   beforeEach(() => {
@@ -34,26 +37,36 @@ describe("qa model selection runtime", () => {
     resolveEnvApiKey.mockReturnValue({ apiKey: "sk-test" });
 
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
+    expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
+      primaryModel: "openai/gpt-5.6",
+      alternateModel: "openai/gpt-5.6-luna",
+    });
     expect(loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
-  it("prefers the Codex OAuth live default when only Codex auth profiles are available", () => {
-    loadAuthProfileStoreForRuntime.mockReturnValue({
-      profiles: {
-        "openai:user@example.com": {
-          provider: "openai",
-          type: "oauth",
+  it.each(["oauth", "token"] as const)(
+    "prefers the Codex live default for a stored %s profile",
+    (type) => {
+      loadAuthProfileStoreForRuntime.mockReturnValue({
+        profiles: {
+          "openai:user@example.com": {
+            provider: "openai",
+            type,
+          },
         },
-      },
-    });
+      });
 
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6-luna");
-    expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
-      readOnly: true,
-      allowKeychainPrompt: false,
-      externalCliProviderIds: ["openai"],
-    });
-  });
+      expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-sol",
+      });
+      expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCliProviderIds: ["openai"],
+      });
+    },
+  );
 
   it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
     loadAuthProfileStoreForRuntime.mockReturnValue({
@@ -66,6 +79,66 @@ describe("qa model selection runtime", () => {
     });
 
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
+  });
+
+  it.each(["openai/gpt-5.6", "openai/gpt-5.6-sol"])(
+    "derives Luna after explicit Sol primary %s",
+    (primaryModel) => {
+      expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier", primaryModel })).toEqual({
+        primaryModel,
+        alternateModel: "openai/gpt-5.6-luna",
+      });
+    },
+  );
+
+  it("derives Sol after an explicit Luna primary", () => {
+    expect(
+      resolveQaRuntimeModelPair({
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+      }),
+    ).toEqual({
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-sol",
+    });
+  });
+
+  it("falls back through the provider default for an unmapped primary", () => {
+    expect(
+      resolveQaRuntimeModelPair({
+        providerMode: "live-frontier",
+        primaryModel: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toEqual({
+      primaryModel: "anthropic/claude-sonnet-4-6",
+      alternateModel: "openai/gpt-5.6",
+    });
+  });
+
+  it("preserves an explicit alternate model", () => {
+    expect(
+      resolveQaRuntimeModelPair({
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6",
+        alternateModel: "openai/gpt-5.6-terra",
+      }),
+    ).toEqual({
+      primaryModel: "openai/gpt-5.6",
+      alternateModel: "openai/gpt-5.6-terra",
+    });
+  });
+
+  it.each([
+    ["openai/gpt-5.4", "openai/gpt-5.4"],
+    ["openai/gpt-5.6", "openai/gpt-5.6-sol"],
+  ])("preserves the explicit model pair %s / %s", (primaryModel, alternateModel) => {
+    expect(
+      resolveQaRuntimeModelPair({
+        providerMode: "live-frontier",
+        primaryModel,
+        alternateModel,
+      }),
+    ).toEqual({ primaryModel, alternateModel });
   });
 
   it("leaves mock defaults unchanged", () => {

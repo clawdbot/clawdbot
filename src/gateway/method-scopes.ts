@@ -173,7 +173,18 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
         : undefined;
     return bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
   }
+  if (method === "fs.listDir") {
+    const targetsNode =
+      params !== null &&
+      typeof params === "object" &&
+      !Array.isArray(params) &&
+      Object.hasOwn(params, "nodeId");
+    return [targetsNode ? ADMIN_SCOPE : WRITE_SCOPE];
+  }
   if (method === "sessions.patch") {
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+  }
+  if (method === "sessions.patchMany") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
   if (method === "sessions.create") {

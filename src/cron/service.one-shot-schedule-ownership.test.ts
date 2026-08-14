@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearCommandLane,
   enqueueCommandInLane,
@@ -6,7 +7,7 @@ import {
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { CronService } from "./service.js";
-import { createDeferred, setupCronServiceSuite } from "./service.test-harness.js";
+import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronEvent, CronServiceDeps } from "./service/state.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
@@ -94,9 +95,9 @@ describe("cron one-shot schedule ownership", () => {
     "does not finalize an active $mode run into a removed and recreated one-shot (deleteAfterRun=$deleteAfterRun)",
     async ({ mode, deleteAfterRun }) => {
       const store = await makeStorePath();
-      const started = createDeferred<void>();
+      const started = createDeferred();
       const release = createDeferred<{ status: "ok"; summary: string }>();
-      const finished = createDeferred<void>();
+      const finished = createDeferred();
       const events: CronEvent[] = [];
       const cron = createCron({
         storePath: store.storePath,
@@ -224,7 +225,7 @@ describe("cron one-shot schedule ownership", () => {
 
   it("keeps the future scheduled fire after a queued manual run", async () => {
     const store = await makeStorePath();
-    const finished = createDeferred<void>();
+    const finished = createDeferred();
     const events: CronEvent[] = [];
     const cron = createCron({
       storePath: store.storePath,
@@ -266,9 +267,9 @@ describe("cron one-shot schedule ownership", () => {
 
   it("preserves a manual run accepted before its scheduled fire but admitted afterward", async () => {
     const store = await makeStorePath();
-    const finished = createDeferred<void>();
-    const blockerStarted = createDeferred<void>();
-    const releaseBlocker = createDeferred<void>();
+    const finished = createDeferred();
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
     const cron = createCron({
       storePath: store.storePath,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "done" })),
@@ -320,7 +321,7 @@ describe("cron one-shot schedule ownership", () => {
 
   it("consumes a manually verified one-shot only when its scheduled occurrence fires", async () => {
     const store = await makeStorePath();
-    const removed = createDeferred<void>();
+    const removed = createDeferred();
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "ok" as const,
       summary: "done",
@@ -385,7 +386,7 @@ describe("cron one-shot schedule ownership", () => {
       const jobs = [];
       for (let index = 0; index < 24; index += 1) {
         const job = await addOneShot({ cron, name: `queued one-shot ${index}`, atMs });
-        completions.set(job.id, createDeferred<void>());
+        completions.set(job.id, createDeferred());
         jobs.push(job);
       }
 

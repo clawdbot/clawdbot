@@ -1,5 +1,6 @@
 // Control UI module implements control ui auth behavior.
-import { normalizeOptionalString, uniqueStrings } from "../lib/string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
 type ControlUiAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
@@ -39,12 +40,17 @@ export function resolveControlUiAuthHeader(source: ControlUiAuthSource): string 
 // call sites that can retry a single request against an alternate credential
 // when the first returns 401 — for example, recovering from a stale
 // `settings.token` when the live session is authenticated via `password`.
+// Shared secrets go first: several byte routes (plugin/catalog/workspace
+// icons) only accept the gateway shared secret, so leading with the hello
+// device token made every icon fetch 401 first — and each of those 401s pays
+// the shared-secret brute-force penalty on the gateway. Pairing-only browsers
+// still reach the device token as the last candidate.
 export function resolveControlUiAuthCandidates(source: ControlUiAuthSource): string[] {
   return uniqueStrings(
     [
-      normalizeOptionalString(source.hello?.auth?.deviceToken),
       normalizeOptionalString(source.settings?.token),
       normalizeOptionalString(source.password),
+      normalizeOptionalString(source.hello?.auth?.deviceToken),
     ].flatMap((raw) => sanitizeHeaderToken(raw ?? null) ?? []),
   );
 }

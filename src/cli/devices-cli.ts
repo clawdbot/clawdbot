@@ -51,6 +51,16 @@ export function registerDevicesCli(program: Command) {
 
   devicesCallOpts(
     devices
+      .command("join-code")
+      .description("Mint a single-use node onboarding URL")
+      .action(async (opts: DevicesRpcOpts) => {
+        const { runDevicesJoinCodeCommand } = await loadDevicesRuntime();
+        await runDevicesJoinCodeCommand(opts);
+      }),
+  );
+
+  devicesCallOpts(
+    devices
       .command("remove")
       .description("Remove a paired device entry")
       .argument("<deviceId>", "Paired device id")

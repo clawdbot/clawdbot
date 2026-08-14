@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveDeliveryQueueMediaDir } from "../../config/paths.js";
 import {
@@ -36,10 +37,6 @@ function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
 function resolveArtifactExtension(source: string): string {
   const extension = path.extname(source.split("?")[0] ?? "");
   return ARTIFACT_EXT_RE.test(extension) ? extension.toLowerCase() : "";
-}
-
-function isNonEmptyMediaSource(source: unknown): source is string {
-  return typeof source === "string" && Boolean(source.trim());
 }
 
 function payloadMediaSources(payload: ReplyPayload): string[] {

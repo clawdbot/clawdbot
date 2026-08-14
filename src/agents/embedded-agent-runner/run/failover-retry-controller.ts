@@ -1,8 +1,14 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
-import { type AuthProfileFailureReason, markAuthProfileFailure } from "../../auth-profiles.js";
+import {
+  type AuthProfileFailureReason,
+  markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+} from "../../auth-profiles.js";
+import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-materializations.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
+import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
@@ -18,6 +24,12 @@ import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 
+type RateLimitAuthProfileContext = {
+  failoverProvider: string;
+  failoverModel: string;
+  logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
+};
+
 export function createEmbeddedRunFailoverRetryController(input: {
   runParams: PreparedEmbeddedRunInput["runParams"];
   provider: string;
@@ -29,6 +41,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
   getLastProfileId: () => string | undefined;
   getSessionId: () => string;
   harnessOwnsTransport: () => boolean;
+  getRuntimeAuthOwnerId: () => string;
+  getApiKeyInfo: () => ResolvedProviderAuth | null;
+  advanceAuthProfile: PreparedRuntime["advanceAttemptAuthProfile"];
 }) {
   const {
     runParams: params,
@@ -60,10 +75,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
 
   return {
     overloadProfileRotationLimit,
-    rateLimitProfileRotationLimit,
-    get rateLimitProfileRotations() {
-      return rateLimitProfileRotations;
-    },
     get consecutiveSameModelRateLimitRetries() {
       return consecutiveSameModelRateLimitRetries;
     },
@@ -73,51 +84,85 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retriedSameModelRateLimit: false,
       });
     },
-    maybeEscalateRateLimitProfileFallback: (paramsLocal: {
-      failoverProvider: string;
-      failoverModel: string;
-      logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
-    }) => {
-      rateLimitProfileRotations += 1;
-      if (rateLimitProfileRotations <= rateLimitProfileRotationLimit || !fallbackConfigured) {
-        return;
+    advanceAuthProfile: input.advanceAuthProfile,
+    advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
+      if (rateLimitProfileRotations >= rateLimitProfileRotationLimit && fallbackConfigured) {
+        const status = resolveFailoverStatus("rate_limit");
+        log.warn(
+          `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
+        );
+        context.logFallbackDecision("fallback_model", { status });
+        throw new FailoverError(
+          "The AI service is temporarily rate-limited. Please try again in a moment.",
+          {
+            reason: "rate_limit",
+            provider: context.failoverProvider,
+            model: context.failoverModel,
+            profileId: input.getLastProfileId(),
+            sessionId: input.getSessionId(),
+            lane: globalLane,
+            status,
+          },
+        );
       }
-      const status = resolveFailoverStatus("rate_limit");
-      log.warn(
-        `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
-      );
-      paramsLocal.logFallbackDecision("fallback_model", { status });
-      throw new FailoverError(
-        "The AI service is temporarily rate-limited. Please try again in a moment.",
-        {
-          reason: "rate_limit",
-          provider: paramsLocal.failoverProvider,
-          model: paramsLocal.failoverModel,
-          profileId: input.getLastProfileId(),
-          sessionId: input.getSessionId(),
-          lane: globalLane,
-          status,
-        },
-      );
+      const rotated = await input.advanceAuthProfile();
+      if (rotated) {
+        rateLimitProfileRotations += 1;
+      }
+      return rotated;
     },
     maybeMarkAuthProfileFailure: async (failure: {
       profileId?: string;
       reason?: AuthProfileFailureReason | null;
       modelId?: string;
     }) => {
+      const { profileId, reason } = failure;
+      if (input.harnessOwnsTransport() && (reason === "auth" || reason === "auth_permanent")) {
+        revokeRuntimeAuthMaterializations({
+          agentDir,
+          provider,
+          runtimeOwnerId: input.getRuntimeAuthOwnerId(),
+        });
+      }
       if (params.authProfileStateMode === "read-only") {
         return;
       }
-      const { profileId, reason } = failure;
-      if (!profileId || !reason) {
+      if (!reason) {
         return;
       }
       if (input.harnessOwnsTransport() && reason === "timeout") {
         return;
       }
-      await markAuthProfileFailure({
+      if (profileId) {
+        await markAuthProfileFailure({
+          store: profileFailureStore,
+          profileId,
+          reason,
+          cfg: params.config,
+          agentDir,
+          runId: params.runId,
+          modelId: failure.modelId,
+        });
+        return;
+      }
+      // Inline provider API keys have no auth profile, so record their
+      // billing/auth failures under the provider-scoped inline cooldown so the
+      // resolver stops handing back the exhausted key on the next turn.
+      const apiKeyInfo = input.getApiKeyInfo();
+      if (
+        apiKeyInfo?.mode !== "api-key" ||
+        !isConfigBackedInlineProviderApiKey({
+          cfg: params.config,
+          provider,
+          source: apiKeyInfo.source,
+          store: profileFailureStore,
+        })
+      ) {
+        return;
+      }
+      await markInlineProviderApiKeyFailure({
         store: profileFailureStore,
-        profileId,
+        provider,
         reason,
         cfg: params.config,
         agentDir,
@@ -148,7 +193,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
     maybeRetrySameModelRateLimit: async (retry?: {
       retryAfterSeconds?: number;
     }): Promise<boolean> => {
-      if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
+      if (
+        rateLimitProfileRotations >= rateLimitProfileRotationLimit ||
+        consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES
+      ) {
         return false;
       }
       const delayMs = resolveSameModelRateLimitRetryDelayMs({

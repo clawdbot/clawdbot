@@ -1,136 +1,43 @@
 ---
 name: discord
-description: "Discord message-tool ops: send/read/edit/delete, react, poll, pin, thread, search, presence, media/components."
+description: "Discord messaging workflows through OpenClaw's message tool."
 metadata: { "openclaw": { "emoji": "🎮", "requires": { "config": ["channels.discord.token"] } } }
 allowed-tools: ["message"]
 ---
 
 # Discord
 
-Use the `message` tool with `channel: "discord"`. No separate Discord tool.
+Use the `message` tool with `channel: "discord"`. The tool schema lists the actions enabled by the current account's `channels.discord.actions.*` gates; do not assume unavailable actions.
 
-## Rules
+## Workflow
 
-- Respect `channels.discord.actions.*` gates.
-- Prefer explicit `guildId`, `channelId`, `messageId`, `userId`.
-- Multi-account: pass `accountId` when needed.
-- Send targets: `to: "channel:<id>"` or `to: "user:<id>"`.
-- Mention users as `<@USER_ID>`.
-- Avoid Markdown tables in outbound Discord messages.
-- Prefer components v2 for rich UI; do not mix v2 `components` with legacy `embeds`.
+- Prefer stable `guildId`, `channelId`, `messageId`, and `userId` values from context. Pass `accountId` when more than one Discord account could apply.
+- Resolve the exact message before editing, deleting, pinning, moderating, or reacting when the user's reference is ambiguous.
+- Keep thread replies in their existing thread. A forum parent cannot receive components; send components to the created forum thread instead.
+- Confirm destructive or moderation actions unless the user already specified the exact target and action.
 
-## Common actions
+## Interactive components
 
-Send:
-
-```json
-{ "action": "send", "channel": "discord", "to": "channel:123", "message": "hello", "silent": true }
-```
-
-Send media:
+`components` must be a structured object or native component array, never a placeholder string. Do not combine components v2 with legacy `embeds`.
 
 ```json
 {
   "action": "send",
   "channel": "discord",
   "to": "channel:123",
-  "message": "see attachment",
-  "media": "file:///tmp/example.png"
+  "message": "Choose an option",
+  "components": {
+    "blocks": [
+      {
+        "type": "actions",
+        "buttons": [
+          { "label": "Approve", "style": "success", "callbackData": "approve" },
+          { "label": "Decline", "style": "danger", "callbackData": "decline" }
+        ]
+      }
+    ]
+  }
 }
 ```
 
-Components v2:
-
-```json
-{
-  "action": "send",
-  "channel": "discord",
-  "to": "channel:123",
-  "message": "Status",
-  "components": "[Carbon v2 components]"
-}
-```
-
-React:
-
-```json
-{ "action": "react", "channel": "discord", "channelId": "123", "messageId": "456", "emoji": "👍" }
-```
-
-Read:
-
-```json
-{ "action": "read", "channel": "discord", "to": "channel:123", "limit": 20 }
-```
-
-Edit/delete:
-
-```json
-{
-  "action": "edit",
-  "channel": "discord",
-  "channelId": "123",
-  "messageId": "456",
-  "message": "fixed typo"
-}
-```
-
-```json
-{ "action": "delete", "channel": "discord", "channelId": "123", "messageId": "456" }
-```
-
-Poll:
-
-```json
-{
-  "action": "poll",
-  "channel": "discord",
-  "to": "channel:123",
-  "pollQuestion": "Lunch?",
-  "pollOption": ["Pizza", "Sushi"],
-  "pollDurationHours": 24
-}
-```
-
-Pin:
-
-```json
-{ "action": "pin", "channel": "discord", "channelId": "123", "messageId": "456" }
-```
-
-Thread:
-
-```json
-{
-  "action": "thread-create",
-  "channel": "discord",
-  "channelId": "123",
-  "messageId": "456",
-  "threadName": "bug triage"
-}
-```
-
-Search:
-
-```json
-{
-  "action": "search",
-  "channel": "discord",
-  "guildId": "999",
-  "query": "release notes",
-  "channelIds": ["123"],
-  "limit": 10
-}
-```
-
-Presence, often gated:
-
-```json
-{
-  "action": "set-presence",
-  "channel": "discord",
-  "activityType": "playing",
-  "activityName": "OpenClaw",
-  "status": "online"
-}
-```
+Discord mention syntax, component availability, and form hints are injected automatically. Follow the current hints and tool schema rather than a duplicated action catalog.

@@ -12,6 +12,73 @@ import { NonEmptyString } from "./primitives.js";
 /** Empty request payload for reloading configured secret providers. */
 export const SecretsReloadParamsSchema = closedObject({});
 
+const SecretStoreNameSchema = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+});
+
+const SecretStoreEntryMetadataProperties = {
+  name: SecretStoreNameSchema,
+  scopeKind: Type.Literal("team"),
+  scopeId: Type.Literal(""),
+  createdAtMs: Type.Integer({ minimum: 0 }),
+  updatedAtMs: Type.Integer({ minimum: 0 }),
+  updatedBy: Type.Optional(Type.String()),
+} as const;
+
+/** Secret metadata never structurally carries the stored value. */
+export const SecretStoreSecretEntrySchema = closedObject({
+  ...SecretStoreEntryMetadataProperties,
+  kind: Type.Literal("secret"),
+});
+
+/** Environment entries include their value because they are intentionally visible. */
+export const SecretStoreEnvEntrySchema = closedObject({
+  ...SecretStoreEntryMetadataProperties,
+  kind: Type.Literal("env"),
+  value: Type.String({ maxLength: 64 * 1024 }),
+});
+
+/** Team secret-store list entry, discriminated by disclosure behavior. */
+export const SecretStoreEntrySchema = Type.Union([
+  SecretStoreSecretEntrySchema,
+  SecretStoreEnvEntrySchema,
+]);
+
+/** Empty request payload for listing the team secret store. */
+export const SecretsStoreListParamsSchema = closedObject({});
+
+/** Team secret-store inventory. */
+export const SecretsStoreListResultSchema = closedObject({
+  entries: Type.Array(SecretStoreEntrySchema),
+});
+
+/** Create or replace one team secret-store entry. */
+export const SecretsStoreSetParamsSchema = closedObject({
+  name: SecretStoreNameSchema,
+  value: Type.String({ maxLength: 64 * 1024 }),
+  kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
+});
+
+/** Soft-delete one team secret-store entry. */
+export const SecretsStoreDeleteParamsSchema = closedObject({
+  name: SecretStoreNameSchema,
+});
+
+/** Mutation acknowledgement including whether the active runtime was refreshed. */
+export const SecretsStoreMutationResultSchema = closedObject({
+  ok: Type.Literal(true),
+  reloaded: Type.Boolean(),
+  warningCount: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+
+export type SecretStoreEntry = Static<typeof SecretStoreEntrySchema>;
+export type SecretsStoreListResult = Static<typeof SecretsStoreListResultSchema>;
+export type SecretsStoreSetParams = Static<typeof SecretsStoreSetParamsSchema>;
+export type SecretsStoreDeleteParams = Static<typeof SecretsStoreDeleteParamsSchema>;
+export type SecretsStoreMutationResult = Static<typeof SecretsStoreMutationResultSchema>;
+
 /** Request payload for resolving the secrets needed by one command invocation. */
 export const SecretsResolveParamsSchema = closedObject({
   commandName: NonEmptyString,

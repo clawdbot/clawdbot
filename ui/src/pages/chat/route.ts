@@ -1,4 +1,4 @@
-import type { RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation, RouteMatch } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { INTERNAL_SESSION_PATH_PARAM, pathForRoute, routePageSpec } from "../../app-route-paths.ts";
@@ -6,6 +6,9 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { ChatRouteData } from "./route-loader.ts";
+
+type SessionOwnerMatch = Pick<RouteMatch, "data">;
+const CHAT_PAGE_OWNER_KEY = "chat-page";
 
 function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
   return html`
@@ -50,6 +53,11 @@ function sessionLoaderDeps(
   }`;
 }
 
+function sessionRenderOwnerKey(match: SessionOwnerMatch): string | undefined {
+  const data = match.data as ChatRouteData | undefined;
+  return data?.kind === "ambiguous" ? undefined : CHAT_PAGE_OWNER_KEY;
+}
+
 function sessionPage(face: BoardFace) {
   return definePage({
     ...routePageSpec(face),
@@ -64,6 +72,9 @@ function sessionPage(face: BoardFace) {
     component: () =>
       import("./chat-page.ts").then(() => ({
         header: true,
+        // ChatPage's bounded inner cache owns per-session teardown, so session
+        // routes share the outer owner while their data and URL keep changing.
+        renderOwnerKey: sessionRenderOwnerKey,
         render: (data: unknown) => {
           const routeData = data as ChatRouteData | undefined;
           if (!routeData) {

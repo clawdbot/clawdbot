@@ -3,44 +3,46 @@ import {
   type WorkerAdmissionHandshake,
   type WorkerConnectParams,
   type WorkerProtocolCloseReason,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
+import {
+  sameWorkerBuild,
+  sameWorkerProtocolFeatures,
+  type ExpectedWorkerBuild,
+} from "../../worker/worker-build-identity.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
+export type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
 
-export type ExpectedWorkerBuild = {
-  bundleHash: string;
-  openclawVersion: string;
-  protocolFeatures: readonly string[];
-};
+/** Local-install receipts pin the node's paired-machine claim instead of Gateway bundle bytes. */
+export function resolveLocalWorkerBuild(
+  receipt: (WorkerAdmissionHandshake & { installKind?: "bundle" | "local" }) | null | undefined,
+): ExpectedWorkerBuild | undefined {
+  return receipt?.installKind === "local" ? receipt : undefined;
+}
+
+/** True only for bundles that accept the exact admitted execution carrier. */
+export function supportsWorkerExecutionContextLaunch(
+  handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
+): boolean {
+  return handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true;
+}
 
 type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerAdmissionFailureReason };
-
-function sameStrings(left: readonly string[], right: readonly string[]): boolean {
-  const normalizedLeft = left.toSorted();
-  const normalizedRight = right.toSorted();
-  return (
-    normalizedLeft.length === normalizedRight.length &&
-    normalizedLeft.every((value, index) => value === normalizedRight[index])
-  );
-}
 
 /** Admits only the exact build selected for this worker environment. */
 export function verifyWorkerAdmissionHandshake(
   handshake: WorkerAdmissionHandshake,
   expected: ExpectedWorkerBuild,
 ): boolean {
-  return (
-    handshake.bundleHash === expected.bundleHash &&
-    handshake.openclawVersion === expected.openclawVersion &&
-    sameStrings(handshake.protocolFeatures, expected.protocolFeatures)
-  );
+  return sameWorkerBuild(handshake, expected);
 }
 
 /** Validate an opaque credential and every server-owned worker admission binding. */
@@ -49,6 +51,8 @@ export function admitWorkerConnection(params: {
   admission: WorkerConnectParams["admission"];
   expectedBuild: ExpectedWorkerBuild;
   nowMs: number;
+  /** Service-only: exact durable turn validation must follow before admission succeeds. */
+  allowExpiredCredential?: boolean;
 }): WorkerConnectionAdmissionResult {
   const { admission, store } = params;
   const credentialHash = hashWorkerCredential(admission.credential);
@@ -63,7 +67,7 @@ export function admitWorkerConnection(params: {
   if (credential.environmentId !== admission.environmentId) {
     return { ok: false, reason: "environment-mismatch" };
   }
-  if (params.nowMs >= credential.expiresAtMs) {
+  if (params.nowMs >= credential.expiresAtMs && params.allowExpiredCredential !== true) {
     return { ok: false, reason: "credential-expired" };
   }
   const environment = store.get(admission.environmentId);
@@ -109,11 +113,14 @@ export function admitWorkerConnection(params: {
     return { ok: false, reason: "rpc-set-mismatch" };
   }
   if (
-    !sameStrings(
+    !sameWorkerProtocolFeatures(
       admission.handshake.protocolFeatures,
       environment.bootstrapReceipt.protocolFeatures,
     ) ||
-    !sameStrings(admission.handshake.protocolFeatures, params.expectedBuild.protocolFeatures)
+    !sameWorkerProtocolFeatures(
+      admission.handshake.protocolFeatures,
+      params.expectedBuild.protocolFeatures,
+    )
   ) {
     return { ok: false, reason: "protocol-features-mismatch" };
   }

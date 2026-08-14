@@ -211,6 +211,151 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result.warning).toContain("gateway.auth.token");
     expect(result.warning).toContain("unresolved");
   });
+
+  it("keeps a configured remote token authoritative over an environment password", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: envSecretRef("REMOTE_GATEWAY_TOKEN"),
+        },
+      }),
+      mode: "remote",
+      env: {
+        REMOTE_GATEWAY_TOKEN: "resolved-remote-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toEqual({
+      auth: {
+        token: "resolved-remote-token",
+        password: undefined,
+      },
+    });
+  });
+
+  it("keeps a configured remote password authoritative over environment auth", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example",
+            password: "remote-password", // pragma: allowlist secret
+          },
+        },
+      },
+      mode: "remote",
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toEqual({
+      auth: {
+        token: undefined,
+        password: "remote-password", // pragma: allowlist secret
+      },
+    });
+  });
+
+  it("blocks ambient password fallback when a configured remote token ref fails", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        remote: { url: "wss://gateway.example", token: envSecretRef("MISSING_REMOTE_TOKEN") },
+      }),
+      mode: "remote",
+      env: { OPENCLAW_GATEWAY_PASSWORD: "ambient-password" } as NodeJS.ProcessEnv, // pragma: allowlist secret
+    });
+
+    expect(result.auth).toStrictEqual({});
+    expect(result.warning).toContain("gateway.remote.token SecretRef is unresolved");
+  });
+
+  it("preserves a configured remote password when the token ref fails", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: envSecretRef("MISSING_REMOTE_TOKEN"),
+          password: "remote-password", // pragma: allowlist secret
+        },
+      }),
+      mode: "remote",
+      env: { OPENCLAW_GATEWAY_PASSWORD: "ambient-password" } as NodeJS.ProcessEnv, // pragma: allowlist secret
+    });
+
+    expect(result.auth).toEqual({ token: undefined, password: "remote-password" }); // pragma: allowlist secret
+    expect(result.warning).toContain("gateway.remote.token SecretRef is unresolved");
+  });
+
+  it("blocks ambient token fallback when a configured remote password ref fails", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          password: envSecretRef("MISSING_REMOTE_PASSWORD"), // pragma: allowlist secret
+        },
+      }),
+      mode: "remote",
+      env: { OPENCLAW_GATEWAY_TOKEN: "ambient-token" } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.auth).toStrictEqual({});
+    expect(result.warning).toContain("gateway.remote.password SecretRef is unresolved");
+  });
+
+  it("does not resolve a local password SecretRef for a remote probe", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        auth: {
+          mode: "password",
+          password: envSecretRef("LOCAL_GATEWAY_PASSWORD"),
+        },
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      }),
+      mode: "remote",
+      env: {
+        LOCAL_GATEWAY_PASSWORD: "local-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toEqual({
+      auth: {
+        token: "remote-token",
+        password: undefined,
+      },
+    });
+  });
+
+  it("does not use ambient credentials for a CLI URL override", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://configured.example" },
+        },
+      } as OpenClawConfig,
+      mode: "remote",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: "ambient-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+      urlOverride: "wss://override.example",
+      urlOverrideSource: "cli",
+    });
+
+    expect(result).toEqual({ auth: {} });
+  });
 });
 
 describe("resolveGatewayProbeAuthWithSecretInputs", () => {

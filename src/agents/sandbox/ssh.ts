@@ -581,15 +581,11 @@ export async function createSshSandboxSessionFromConfigText(params: {
   if (!host) {
     throw new Error("Failed to parse SSH config output.");
   }
-  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
-  const configPath = path.join(configDir, "config");
-  await fs.writeFile(configPath, params.configText, { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(configPath, 0o600);
-  return {
-    command: params.command?.trim() || "ssh",
-    configPath,
+  return await createSshSandboxSession(
+    params.command?.trim() || "ssh",
     host,
-  };
+    () => params.configText,
+  );
 }
 
 /** Create a temporary SSH session from structured sandbox SSH settings. */
@@ -601,71 +597,60 @@ export async function createSshSandboxSessionFromSettings(
     throw new Error(`Invalid sandbox SSH target: ${settings.target}`);
   }
 
-  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
-  try {
-    // Inline secret material is written into the temp config dir with strict
-    // permissions so ssh can consume it without exposing values in argv/env.
-    const materializedIdentity = settings.identityData
-      ? await writeSecretMaterial(configDir, "identity", settings.identityData)
-      : undefined;
-    const materializedCertificate = settings.certificateData
-      ? await writeSecretMaterial(configDir, "certificate.pub", settings.certificateData)
-      : undefined;
-    const materializedKnownHosts = settings.knownHostsData
-      ? await writeSecretMaterial(configDir, "known_hosts", settings.knownHostsData)
-      : undefined;
-    const identityFile = materializedIdentity ?? resolveOptionalLocalPath(settings.identityFile);
-    const certificateFile =
-      materializedCertificate ?? resolveOptionalLocalPath(settings.certificateFile);
-    const knownHostsFile =
-      materializedKnownHosts ?? resolveOptionalLocalPath(settings.knownHostsFile);
-    assertSshConfigLineValue(identityFile, "identityFile");
-    assertSshConfigLineValue(certificateFile, "certificateFile");
-    assertSshConfigLineValue(knownHostsFile, "knownHostsFile");
-    const hostAlias = "openclaw-sandbox";
-    const configPath = path.join(configDir, "config");
-    const lines = [
-      `Host ${hostAlias}`,
-      `  HostName ${parsed.host}`,
-      `  Port ${parsed.port}`,
-      "  BatchMode yes",
-      "  ConnectTimeout 5",
-      "  ServerAliveInterval 15",
-      "  ServerAliveCountMax 3",
-      `  StrictHostKeyChecking ${settings.strictHostKeyChecking ? "yes" : "no"}`,
-      `  UpdateHostKeys ${settings.updateHostKeys ? "yes" : "no"}`,
-    ];
-    if (parsed.user) {
-      lines.push(`  User ${parsed.user}`);
-    }
-    if (knownHostsFile) {
-      lines.push(`  UserKnownHostsFile ${knownHostsFile}`);
-    } else if (!settings.strictHostKeyChecking) {
-      lines.push("  UserKnownHostsFile /dev/null");
-    }
-    if (identityFile) {
-      lines.push(`  IdentityFile ${identityFile}`);
-    }
-    if (certificateFile) {
-      lines.push(`  CertificateFile ${certificateFile}`);
-    }
-    if (identityFile || certificateFile) {
-      lines.push("  IdentitiesOnly yes");
-    }
-    await fs.writeFile(configPath, `${lines.join("\n")}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await fs.chmod(configPath, 0o600);
-    return {
-      command: settings.command.trim() || "ssh",
-      configPath,
-      host: hostAlias,
-    };
-  } catch (error) {
-    await fs.rm(configDir, { recursive: true, force: true });
-    throw error;
-  }
+  return await createSshSandboxSession(
+    settings.command.trim() || "ssh",
+    "openclaw-sandbox",
+    async (configDir) => {
+      // Inline secret material is written into the temp config dir with strict
+      // permissions so ssh can consume it without exposing values in argv/env.
+      const materializedIdentity = settings.identityData
+        ? await writeSecretMaterial(configDir, "identity", settings.identityData)
+        : undefined;
+      const materializedCertificate = settings.certificateData
+        ? await writeSecretMaterial(configDir, "certificate.pub", settings.certificateData)
+        : undefined;
+      const materializedKnownHosts = settings.knownHostsData
+        ? await writeSecretMaterial(configDir, "known_hosts", settings.knownHostsData)
+        : undefined;
+      const identityFile = materializedIdentity ?? resolveOptionalLocalPath(settings.identityFile);
+      const certificateFile =
+        materializedCertificate ?? resolveOptionalLocalPath(settings.certificateFile);
+      const knownHostsFile =
+        materializedKnownHosts ?? resolveOptionalLocalPath(settings.knownHostsFile);
+      assertSshConfigLineValue(identityFile, "identityFile");
+      assertSshConfigLineValue(certificateFile, "certificateFile");
+      assertSshConfigLineValue(knownHostsFile, "knownHostsFile");
+      const lines = [
+        "Host openclaw-sandbox",
+        `  HostName ${parsed.host}`,
+        `  Port ${parsed.port}`,
+        "  BatchMode yes",
+        "  ConnectTimeout 5",
+        "  ServerAliveInterval 15",
+        "  ServerAliveCountMax 3",
+        `  StrictHostKeyChecking ${settings.strictHostKeyChecking ? "yes" : "no"}`,
+        `  UpdateHostKeys ${settings.updateHostKeys ? "yes" : "no"}`,
+      ];
+      if (parsed.user) {
+        lines.push(`  User ${parsed.user}`);
+      }
+      if (knownHostsFile) {
+        lines.push(`  UserKnownHostsFile ${knownHostsFile}`);
+      } else if (!settings.strictHostKeyChecking) {
+        lines.push("  UserKnownHostsFile /dev/null");
+      }
+      if (identityFile) {
+        lines.push(`  IdentityFile ${identityFile}`);
+      }
+      if (certificateFile) {
+        lines.push(`  CertificateFile ${certificateFile}`);
+      }
+      if (identityFile || certificateFile) {
+        lines.push("  IdentitiesOnly yes");
+      }
+      return `${lines.join("\n")}\n`;
+    },
+  );
 }
 
 /** Remove temporary SSH config and materialized secret files. */
@@ -914,6 +899,23 @@ function resolveSshTmpRoot(): string {
   return path.resolve(resolvePreferredOpenClawTmpDir() ?? os.tmpdir());
 }
 
+async function createSshSandboxSession(
+  command: string,
+  host: string,
+  buildConfigText: (configDir: string) => string | Promise<string>,
+): Promise<SshSandboxSession> {
+  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
+  const configPath = path.join(configDir, "config");
+  try {
+    await writePrivateFile(configPath, await buildConfigText(configDir));
+    return { command, configPath, host };
+  } catch (error) {
+    // Best-effort rollback must not replace the initialization failure.
+    await fs.rm(configDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 function assertSshConfigLineValue(value: string | undefined, field: string): void {
   if (value && /[\r\n]/.test(value)) {
     throw new Error(`SSH sandbox ${field} must not contain line breaks.`);
@@ -931,11 +933,12 @@ async function writeSecretMaterial(
   contents: string,
 ): Promise<string> {
   const pathname = path.join(dir, filename);
-  await fs.writeFile(pathname, normalizeInlineSshMaterial(contents, filename), {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await fs.chmod(pathname, 0o600);
+  await writePrivateFile(pathname, normalizeInlineSshMaterial(contents, filename));
   return pathname;
+}
+
+async function writePrivateFile(pathname: string, contents: string): Promise<void> {
+  await fs.writeFile(pathname, contents, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(pathname, 0o600);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,10 +13,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   hasSessionEntriesByStatusReadOnly,
-  listSessionEntries,
+  listSessionEntriesCore,
   listSessionEntriesReadOnly,
   resolveTranscriptSessionKeyBySessionId,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.js";
 
 const tempDirs: string[] = [];
@@ -44,15 +44,15 @@ describe("session accessor readonly listing", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const listScope = { agentId: "worker-1", env };
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { ...listScope, sessionKey: "agent:worker-1:main" },
       { sessionId: "session-1", updatedAt: 10 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { ...listScope, sessionKey: "agent:worker-1:telegram:dm:42" },
       { sessionId: "session-2", updatedAt: 20 },
     );
-    const writableEntries = listSessionEntries(listScope);
+    const writableEntries = listSessionEntriesCore(listScope);
     closeOpenClawAgentDatabasesForTest();
 
     expect(listSessionEntriesReadOnly(listScope)).toEqual(writableEntries);
@@ -94,7 +94,7 @@ describe("session accessor readonly listing", () => {
     expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["running"])).toBe(false);
     expect(countRegisteredAgentDatabases(env)).toBe(0);
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId, env, sessionKey: "agent:worker-1:main" },
       { sessionId: "session-1", status: "running", updatedAt: 10 },
     );
@@ -125,7 +125,7 @@ describe("session accessor readonly listing", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentId = "worker-1";
     const sessionKey = "agent:worker-1:main";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId, env, sessionKey },
       { sessionId: "session-1", updatedAt: 1 },
     );
@@ -144,7 +144,7 @@ describe("session accessor readonly listing", () => {
     const agentId = "worker-1";
     const scope = { agentId, env };
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { ...scope, sessionKey: "agent:worker-1:main" },
       { sessionId: "session-1", updatedAt: 10 },
     );

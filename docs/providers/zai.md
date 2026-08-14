@@ -141,7 +141,7 @@ you want to force a specific Coding Plan or general API surface.
 
 ```json5
 {
-  env: { ZAI_API_KEY: "sk-..." },
+  env: { vars: { ZAI_API_KEY: "sk-..." } },
   models: {
     providers: {
       zai: {

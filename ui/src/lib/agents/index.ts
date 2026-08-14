@@ -25,6 +25,7 @@ import {
 } from "./tools-effective.ts";
 
 export type { AgentsPanel } from "./panels.ts";
+export { watchAgentScope } from "./watch-agent-scope.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -50,9 +51,11 @@ export type AgentsState = {
   agentsPanel?: AgentsPanel;
 };
 
+type AgentToolsState = Omit<AgentsState, "agentsLoading" | "agentsError">;
+
 type AgentsConfigCapability = {
   readonly state: { configFormDirty: boolean };
-  save: () => Promise<boolean>;
+  save: (options?: { canDispatch?: () => boolean }) => Promise<boolean>;
   stageDefaultAgent: (agentId: string) => boolean;
 };
 
@@ -99,7 +102,7 @@ async function loadAgentFilesList(
   return client.request<AgentsFilesListResult | null>("agents.files.list", { agentId });
 }
 
-function hasSelectedAgentMismatch(state: AgentsState, agentId: string): boolean {
+function hasSelectedAgentMismatch(state: AgentToolsState, agentId: string): boolean {
   return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
 }
 
@@ -112,7 +115,7 @@ function resolveToolsErrorMessage(
     : String(err);
 }
 
-export async function loadToolsCatalog(state: AgentsState, agentId: string) {
+export async function loadToolsCatalog(state: AgentToolsState, agentId: string) {
   const resolvedAgentId = agentId.trim();
   const client = state.client;
   if (
@@ -166,7 +169,7 @@ export {
 };
 
 export async function loadToolsEffective(
-  state: AgentsState,
+  state: AgentToolsState,
   params: { agentId: string; sessionKey: string },
 ) {
   const client = state.client;
@@ -184,12 +187,16 @@ export async function setDefaultAgent(
   config: AgentsConfigCapability,
   agentId: string,
   refreshAgents: () => Promise<unknown>,
+  canDispatch: () => boolean = () => true,
 ): Promise<void> {
+  if (!canDispatch()) {
+    return;
+  }
   const hadPendingConfigDraft = config.state.configFormDirty;
   if (config.stageDefaultAgent(agentId)) {
     if (!hadPendingConfigDraft && config.state.configFormDirty) {
-      const saved = await config.save();
-      if (saved) {
+      const saved = await config.save({ canDispatch });
+      if (saved && canDispatch()) {
         await refreshAgents();
       }
     }
@@ -221,7 +228,7 @@ function emptyAgentFilesStatus(): AgentFilesStatus {
   return { list: null, loading: false, error: null };
 }
 
-function normalizeAgentId(agentId: string | null | undefined): string | null {
+function readOptionalAgentId(agentId: string | null | undefined): string | null {
   const normalized = agentId?.trim();
   return normalized ? normalized : null;
 }
@@ -310,7 +317,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     rawAgentId: string,
     force: boolean,
   ): Promise<AgentsFilesListResult | null> => {
-    const agentId = normalizeAgentId(rawAgentId);
+    const agentId = readOptionalAgentId(rawAgentId);
     const scope = lifecycle.capture();
     if (!agentId || !scope) {
       return agentId ? (files.get(agentId)?.list ?? null) : null;
@@ -395,7 +402,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
     files(agentId) {
-      const normalized = normalizeAgentId(agentId);
+      const normalized = readOptionalAgentId(agentId);
       return normalized
         ? (files.get(normalized) ?? emptyAgentFilesStatus())
         : emptyAgentFilesStatus();
@@ -403,7 +410,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     invalidateFiles(agentIds) {
       let changed = false;
       const normalizedIds = new Set(
-        agentIds.map(normalizeAgentId).filter((agentId): agentId is string => agentId !== null),
+        agentIds.map(readOptionalAgentId).filter((agentId): agentId is string => agentId !== null),
       );
       for (const agentId of normalizedIds) {
         changed = files.delete(agentId) || changed;

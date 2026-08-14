@@ -14,11 +14,13 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { shortenHomePath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
 import {
   projectDefaultInferenceRoute,
   sameDefaultInferenceRoute,
@@ -59,8 +61,10 @@ export type SystemAgentSetupApplyParams = {
   enablePluginId?: string;
   /** Refresh an installed plugin after its success-gated enablement commits. */
   refreshPluginRegistry?: boolean;
-  /** Synchronous cross-store guard checked under the final config write lock. */
-  assertCommitPreconditions?: () => void;
+  /** Synchronous cross-store guard receives authored config under the final write lock. */
+  assertCommitPreconditions?: (sourceConfig: OpenClawConfig) => void;
+  /** Resume an interrupted local installation without restarting a running Gateway. */
+  resume?: boolean;
   surface: "cli" | "gateway";
   runtime: RuntimeEnv;
 };
@@ -70,6 +74,8 @@ export type SystemAgentSetupApplyResult = {
   configHashBefore: string | null;
   configHashAfter: string | null;
   bootstrapPending: boolean;
+  workspaceReady: boolean;
+  gateway: GatewayServiceSetupOutcome;
   lines: string[];
 };
 
@@ -500,7 +506,17 @@ export async function applySystemAgentSetup(
           }
           // This is the auth/config operation's linearization point. Never hold
           // the synchronous cross-store guard across async config I/O.
-          assertCommitPreconditions?.();
+          if (assertCommitPreconditions) {
+            assertCommitPreconditions(currentSnapshot.sourceConfig);
+            if (
+              resolveUserPath(resolveOnboardingAgentTarget(finalizedConfig).workspaceDir) !==
+              resolveUserPath(workspace)
+            ) {
+              throw new Error(
+                "Another onboarding run owns a different workspace. Retry onboarding with its approved workspace.",
+              );
+            }
+          }
           return {
             nextConfig: finalizedConfig,
             result: {
@@ -626,6 +642,7 @@ export async function applySystemAgentSetup(
     );
   }
 
+  let gateway: GatewayServiceSetupOutcome = { status: "ready", action: "reused" };
   if (surface === "cli") {
     // The gateway daemon runs outside this process; install/start it so
     // channels and apps have a live gateway. Inside the gateway process
@@ -633,16 +650,19 @@ export async function applySystemAgentSetup(
     await runCommittedFollowUp(
       async () => {
         const { ensureGatewayServiceForOnboarding } = await import("../wizard/setup.finalize.js");
-        const { installDaemon } = await ensureGatewayServiceForOnboarding({
+        const serviceSetup = await ensureGatewayServiceForOnboarding({
           flow: "quickstart",
           opts: {},
           nextConfig,
           settings,
           prompter,
           runtime,
-          loadedAction: "restart",
+          loadedAction: params.resume ? "resume" : "restart",
         });
-        if (installDaemon) {
+        gateway = serviceSetup.gateway;
+        if (gateway.status === "failed") {
+          lines.push(`Gateway service: ${gateway.error}`);
+        } else if (gateway.status === "ready") {
           const probeLinks = onboardHelpers.resolveLocalControlUiProbeLinks({
             bind: settings.bind,
             port: settings.port,
@@ -653,20 +673,39 @@ export async function applySystemAgentSetup(
           const probe = await onboardHelpers.waitForGatewayReachable({
             url: probeLinks.wsUrl,
             token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+            password:
+              settings.authMode === "password"
+                ? await (
+                    await import("../wizard/setup.secret-input.js")
+                  ).resolveSetupSecretInputString({
+                    config: nextConfig,
+                    value: nextConfig.gateway?.auth?.password,
+                    path: "gateway.auth.password",
+                    env: process.env,
+                  })
+                : undefined,
             deadlineMs: 15_000,
           });
-          lines.push(
-            probe.ok
-              ? `Gateway: running at ${probeLinks.wsUrl}`
-              : `Gateway: not reachable yet (${probe.detail ?? "still starting"}) — say \`gateway status\` to check`,
-          );
+          if (probe.ok) {
+            lines.push(`Gateway: running at ${probeLinks.wsUrl}`);
+          } else {
+            const detail = probe.detail ?? "still starting";
+            gateway = { status: "failed", error: `Gateway is not reachable yet (${detail}).` };
+            lines.push(`Gateway: not reachable yet (${detail}) — say \`gateway status\` to check`);
+          }
+        } else if (gateway.reason === "external") {
+          lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
         } else {
           lines.push(
             "Gateway: service install skipped — say `start gateway` when you want it running.",
           );
         }
       },
-      (error) => lines.push(`Gateway service: ${formatErrorMessage(error)}`),
+      (error) => {
+        const message = formatErrorMessage(error);
+        gateway = { status: "failed", error: message };
+        lines.push(`Gateway service: ${message}`);
+      },
     );
   } else {
     lines.push("Gateway: running (managed by this app).");
@@ -677,6 +716,8 @@ export async function applySystemAgentSetup(
     configHashBefore: committed.previousHash,
     configHashAfter: committed.persistedHash,
     bootstrapPending: workspaceResult?.bootstrapPending === true,
+    workspaceReady: workspaceResult !== undefined,
+    gateway,
     lines,
   };
 }

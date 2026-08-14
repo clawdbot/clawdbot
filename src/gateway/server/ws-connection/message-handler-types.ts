@@ -20,6 +20,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import type { resolveControlUiAuthPolicy } from "./connect-policy.js";
 import type { resolvePairingLocality } from "./handshake-auth-helpers.js";
+import type { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 type ControlUiAuthPolicy = ReturnType<typeof resolveControlUiAuthPolicy>;
@@ -60,6 +61,7 @@ export type GatewayWsMessageHandlerParams = {
   extraHandlers: GatewayRequestHandlers;
   getMethodRegistry?: () => GatewayMethodRegistry;
   buildRequestContext: () => GatewayRequestContext;
+  nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   send: (obj: unknown) => void;
   close: (code?: number, reason?: string) => void;
@@ -105,10 +107,10 @@ export type GatewayConnectPhaseContext = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
   pendingNodePairingCleanup: {
-    value?: import("../../../infra/node-pairing.js").NodePairingCleanupClaim;
+    value?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   };
   broadcastNodePairingResult: (
-    result: import("../../../infra/node-pairing.js").RequestNodePairingResult,
+    result: import("../../../infra/device-pairing-node.js").RequestNodePairingResult,
   ) => void;
   releasePendingNodePairingCleanup: () => Promise<void>;
 };

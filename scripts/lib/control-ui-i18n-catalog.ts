@@ -6,6 +6,28 @@ export function hashControlUiTranslationText(text: string): string {
   return createHash("sha256").update(text.trim().split(/\s+/).join(" ")).digest("hex");
 }
 
+export function mergeControlUiTranslationMaps(
+  ...maps: ReadonlyArray<TranslationMap>
+): TranslationMap {
+  const merged: TranslationMap = {};
+  const mergeInto = (target: TranslationMap, source: TranslationMap): void => {
+    for (const [key, value] of Object.entries(source)) {
+      if (typeof value === "string") {
+        target[key] = value;
+        continue;
+      }
+      const existing = target[key];
+      const nested = typeof existing === "object" ? existing : {};
+      target[key] = nested;
+      mergeInto(nested, value);
+    }
+  };
+  for (const map of maps) {
+    mergeInto(merged, map);
+  }
+  return merged;
+}
+
 export function loadControlUiTranslationMemory(
   filePath: string,
 ): Map<string, TranslationMemoryEntry> {

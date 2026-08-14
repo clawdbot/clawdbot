@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover skill workshop controller behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import {
@@ -130,17 +131,6 @@ function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshop
   };
 }
 
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred promise callback to be initialized");
-  }
-  return { promise, resolve };
-}
-
 function clearNoticeTimer(state: SkillWorkshopState): void {
   if (state.skillWorkshopActionNoticeTimer) {
     globalThis.clearTimeout(state.skillWorkshopActionNoticeTimer);
@@ -149,6 +139,33 @@ function clearNoticeTimer(state: SkillWorkshopState): void {
 }
 
 describe("Skill Workshop proposal RPCs", () => {
+  it("does not dispatch proposal mutations with read-only operator access", async () => {
+    const { state, context, request } = createFixture(
+      { skillWorkshopProposals: [proposal()] },
+      {
+        hello: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: {
+            methods: [
+              "skills.proposals.apply",
+              "skills.proposals.evaluate",
+              "skills.proposals.requestRevision",
+            ],
+          },
+        } as ApplicationGatewaySnapshot["hello"],
+      },
+    );
+
+    await runSkillWorkshopLifecycleAction(state, context, "apply", "proposal-1");
+    await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
+    await expect(requestSkillWorkshopRevision(state, context, "proposal-1", vi.fn())).resolves.toBe(
+      false,
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("lists proposals with the selected agent id and carries it into the initial inspect", async () => {
     const { state, context, request } = createFixture();
     request.mockImplementation(async (method: string) => {
@@ -333,6 +350,26 @@ describe("Skill Workshop proposal RPCs", () => {
       status: "completed",
       result: { decision: "block" },
     });
+  });
+
+  it("does not evaluate after the initiating source changes during inspection", async () => {
+    const detail = createDeferred<ReturnType<typeof inspectResult>>();
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal({ body: "" })],
+    });
+    let current = true;
+    request.mockImplementation((method: string) =>
+      method === "skills.proposals.inspect" ? detail.promise : Promise.resolve({}),
+    );
+
+    const evaluation = runSkillWorkshopEvaluation(state, context, "proposal-1", () => current);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    current = false;
+    detail.resolve(inspectResult());
+
+    await expect(evaluation).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalledWith("skills.proposals.evaluate", expect.anything());
   });
 
   it("drops an inspected evaluation that belongs to a different revision", async () => {
@@ -531,6 +568,31 @@ describe("Skill Workshop proposal RPCs", () => {
       sendRevisionRequest,
     );
     state.skillWorkshopAgentId = "ops";
+    detail.resolve(inspectResult());
+
+    await expect(revision).resolves.toBe(false);
+    expect(sendRevisionRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not prepare a revision after the initiating source changes during inspection", async () => {
+    const detail = createDeferred<ReturnType<typeof inspectResult>>();
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal({ body: "" })],
+      skillWorkshopRevisionDraft: "Tighten the trigger.",
+    });
+    let current = true;
+    request.mockReturnValueOnce(detail.promise);
+    const sendRevisionRequest = vi.fn(async () => {});
+
+    const revision = requestSkillWorkshopRevision(
+      state,
+      context,
+      "proposal-1",
+      sendRevisionRequest,
+      () => current,
+    );
+    current = false;
     detail.resolve(inspectResult());
 
     await expect(revision).resolves.toBe(false);

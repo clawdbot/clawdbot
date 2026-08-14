@@ -124,6 +124,14 @@ describe("renderMemoryImport", () => {
     expect(container.textContent).not.toContain("private memory body");
   });
 
+  it("hides the agent row when only one agent is configured", () => {
+    const container = document.createElement("div");
+    render(renderMemoryImport(createProps()), container);
+
+    expect(container.querySelector('openclaw-agent-select[name="memory-import-agent"]')).toBeNull();
+    expect(container.textContent).not.toContain("Destination agent");
+  });
+
   it("renders the avatar agent picker and routes agent changes", async () => {
     const onSelectAgent = vi.fn();
     const container = document.createElement("div");
@@ -275,6 +283,10 @@ describe("renderMemoryImport", () => {
     render(
       renderMemoryImport(
         createProps({
+          agents: [
+            { id: "research", name: "Research" },
+            { id: "writer", name: "Writer" },
+          ],
           pendingProviderId: "codex",
           applyingProviderId: "codex",
           onConfirmImport,

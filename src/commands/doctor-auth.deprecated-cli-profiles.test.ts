@@ -17,7 +17,7 @@ const repairMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProviders: () => resolvePluginProvidersMock(),
+  resolvePluginProvidersCore: () => resolvePluginProvidersMock(),
 }));
 
 vi.mock("../agents/auth-profiles/repair.js", () => ({

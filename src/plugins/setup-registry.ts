@@ -713,7 +713,7 @@ export function resolvePluginSetupRegistry(params?: {
   return registry;
 }
 
-export function resolvePluginSetupProvider(params: {
+export function resolvePluginSetupProviderCore(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;

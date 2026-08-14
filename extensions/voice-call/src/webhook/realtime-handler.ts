@@ -724,6 +724,16 @@ export class RealtimeCallHandler {
       }
       callEndEmitted = true;
       this.endCallInManager(callSid, callId, reason);
+      if (reason !== "error") {
+        return;
+      }
+      void Promise.resolve(
+        this.provider.hangupCall({ callId, providerCallId: callSid, reason }),
+      ).catch((error: unknown) => {
+        console.warn(
+          `[voice-call] Failed to hang up realtime call ${callSid}: ${formatErrorMessage(error)}`,
+        );
+      });
     };
 
     const sendString = (message: string): boolean => {
@@ -967,17 +977,17 @@ export class RealtimeCallHandler {
           });
           return;
         }
-        if (event.type === "response.done") {
-          harness.finishOutputAudio("response.done");
-          harness.endTurn("response.done");
-          return;
-        }
         if (event.type === "error") {
           harness.emit({
             type: "session.error",
             payload: { message: event.detail ?? "Realtime provider error" },
             final: true,
           });
+        }
+      },
+      onResponseDone: (outcome) => {
+        if (outcome.status === "failed" || outcome.status === "incomplete") {
+          console.warn(`[voice-call] realtime response ${outcome.status}: ${outcome.message}`);
         }
       },
       onReady: () => {
@@ -1025,15 +1035,6 @@ export class RealtimeCallHandler {
           return;
         }
         emitCallEnd("error");
-        void this.provider
-          .hangupCall({ callId, providerCallId: callSid, reason: "error" })
-          .catch((error: unknown) => {
-            console.warn(
-              `[voice-call] Failed to hang up realtime call ${callSid}: ${formatErrorMessage(
-                error,
-              )}`,
-            );
-          });
       },
     };
     let session: ActiveRealtimeVoiceBridge;
@@ -1041,7 +1042,17 @@ export class RealtimeCallHandler {
       session = harness.createBridge(bridgeParams);
     } catch (error) {
       this.rollbackUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
-      throw error;
+      harness.close();
+      audioPacer.close();
+      // A failed provisional replacement must not terminate its active predecessor.
+      if (!hadPredecessorOnAdmission || !this.activeBridgesByCallId.has(callId)) {
+        emitCallEnd("error");
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1011, "Failed to create realtime bridge");
+      }
+      console.error("[voice-call] Failed to create realtime bridge:", error);
+      return null;
     }
     this.commitUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
     nativeConsultOwner.current = session;
@@ -1105,11 +1116,18 @@ export class RealtimeCallHandler {
     session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       const ownsCallState = this.isActiveBridgeOwner(callId, session);
-      session.close();
-      if (ownsCallState) {
-        emitCallEnd("error");
+      try {
+        session.close();
+      } catch (closeError) {
+        console.warn(
+          `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(closeError)}`,
+        );
+      } finally {
+        if (ownsCallState) {
+          emitCallEnd("error");
+        }
+        ws.close(1011, "Failed to connect");
       }
-      ws.close(1011, "Failed to connect");
     });
 
     return session;

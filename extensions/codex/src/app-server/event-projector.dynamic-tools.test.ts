@@ -39,6 +39,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
+    expect(result.toolMetas).toEqual([{ toolName: "browser", isError: false }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -219,6 +220,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
         toolName: "image_generate",
         meta: "lighthouse",
         asyncStarted: true,
+        isError: false,
       },
     ]);
     expect(result.replayMetadata).toEqual({

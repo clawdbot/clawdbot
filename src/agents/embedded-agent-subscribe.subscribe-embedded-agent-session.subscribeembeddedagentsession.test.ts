@@ -1104,6 +1104,52 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAgentEventSpy.mockRestore();
   });
 
+  it("emits live edit diff progress while tool arguments stream", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({ runId: "run-live-edit-diff" });
+    const partialJson =
+      '{"path":"notes.md","edits":[{"oldText":"old\\nline","newText":"new\\nline\\n';
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "tool-live-edit",
+          name: "edit",
+          arguments: {},
+          partialJson,
+        },
+      ],
+    };
+
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type: "toolcall_delta",
+        contentIndex: 0,
+        delta: partialJson,
+        partial: message,
+      },
+    });
+
+    expect(
+      emitAgentEventSpy.mock.calls
+        .map(([event]) => event)
+        .find((event) => event.stream === "tool" && event.data?.phase === "input_delta"),
+    ).toMatchObject({
+      runId: "run-live-edit-diff",
+      stream: "tool",
+      data: {
+        phase: "input_delta",
+        toolCallId: "tool-live-edit",
+        name: "edit",
+        diff: { added: 2, removed: 1 },
+      },
+    });
+    emitAgentEventSpy.mockRestore();
+  });
+
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
     const onReasoningEnd = vi.fn();
 

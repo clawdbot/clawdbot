@@ -939,6 +939,32 @@ describe("openclaw-board-view", () => {
     expect(applyOps).not.toHaveBeenCalled();
   });
 
+  it("cancels an in-progress gesture when the board becomes inactive", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount({ callbacks: callbacks({ applyOps }) });
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
+    const pointerDown = new MouseEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      cancelable: true,
+      clientX: 100,
+      clientY: 100,
+    });
+    Object.defineProperty(pointerDown, "pointerId", { value: 7 });
+    handle?.dispatchEvent(pointerDown);
+    await view.updateComplete;
+    expect(view.querySelector(".board-widget--dragging")).not.toBeNull();
+
+    view.active = false;
+    await settleCells(view);
+    expect(view.querySelector(".board-widget--dragging")).toBeNull();
+
+    const pointerUp = new MouseEvent("pointerup", { bubbles: true, clientX: 200, clientY: 200 });
+    Object.defineProperty(pointerUp, "pointerId", { value: 7 });
+    window.dispatchEvent(pointerUp);
+    expect(applyOps).not.toHaveBeenCalled();
+  });
+
   it("moves widgets to another tab from the kebab menu", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });

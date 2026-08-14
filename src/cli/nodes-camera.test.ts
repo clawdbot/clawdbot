@@ -139,23 +139,47 @@ describe("nodes camera helpers", () => {
     );
   });
 
-  it("collapses Linux facing requests into one unknown-position capture", () => {
-    expect(resolveCameraSnapTargets({ facing: "both", platform: "linux" })).toEqual([
-      { artifactFacing: "unknown" },
-    ]);
-    expect(resolveCameraSnapTargets({ facing: "back", platform: "linux" })).toEqual([
-      { artifactFacing: "unknown" },
-    ]);
+  it.each([undefined, "front", "back", "both"] as const)(
+    "collapses Linux facing=%s into one unknown-position capture",
+    (facing) => {
+      expect(resolveCameraSnapTargets({ facing, platform: "linux" })).toEqual([
+        { artifactFacing: "unknown" },
+      ]);
+    },
+  );
+
+  it("keeps Linux device selection facing-less", () => {
     expect(
       resolveCameraSnapTargets({ facing: "front", platform: "linux", deviceId: "/dev/video2" }),
     ).toEqual([{ artifactFacing: "unknown" }]);
+    expect(
+      resolveCameraSnapTargets({ facing: "both", platform: "linux", deviceId: "/dev/video2" }),
+    ).toEqual([{ artifactFacing: "unknown" }]);
   });
 
-  it("keeps front and back requests for positioned camera platforms", () => {
+  it("uses one unknown target when facing is omitted on a positioned camera platform", () => {
+    expect(resolveCameraSnapTargets({ platform: "macos" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(resolveCameraSnapTargets({ platform: "macos", deviceId: "camera-device" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+  });
+
+  it("keeps explicit facing requests for positioned camera platforms", () => {
+    expect(resolveCameraSnapTargets({ facing: "front", platform: "macos" })).toEqual([
+      { requestFacing: "front", artifactFacing: "front" },
+    ]);
+    expect(resolveCameraSnapTargets({ facing: "back", platform: "macos" })).toEqual([
+      { requestFacing: "back", artifactFacing: "back" },
+    ]);
     expect(resolveCameraSnapTargets({ facing: "both", platform: "macos" })).toEqual([
       { requestFacing: "front", artifactFacing: "front" },
       { requestFacing: "back", artifactFacing: "back" },
     ]);
+    expect(() =>
+      resolveCameraSnapTargets({ facing: "both", platform: "macos", deviceId: "camera-device" }),
+    ).toThrow("facing=both is not allowed when deviceId is set");
   });
 
   it("labels Linux clips as unknown without sending unsupported facing", () => {
@@ -498,7 +522,7 @@ describe("nodes camera helpers", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
-  it("removes partially written file when url stream fails", async () => {
+  it("preserves an existing file when url stream fails", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("partial"));
@@ -509,6 +533,10 @@ describe("nodes camera helpers", () => {
 
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "broken.bin");
+      const sentinel = Buffer.from("existing-camera");
+      await fs.writeFile(out, sentinel);
+      await fs.chmod(out, 0o640);
+
       await expect(
         writeCameraPayloadToFile({
           filePath: out,
@@ -516,7 +544,40 @@ describe("nodes camera helpers", () => {
           expectedHost: "198.51.100.42",
         }),
       ).rejects.toThrow(/stream exploded/i);
-      await expectPathMissing(out);
+      await expect(fs.readFile(out)).resolves.toEqual(sentinel);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["broken.bin"]);
+    });
+  });
+
+  it("rejects a url stream that closes without data", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    });
+    stubFetchResponse(new Response(stream, { status: 200 }));
+
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "empty.bin");
+      const sentinel = Buffer.from("existing-camera");
+      await fs.writeFile(out, sentinel);
+      await fs.chmod(out, 0o640);
+
+      await expect(
+        writeCameraPayloadToFile({
+          filePath: out,
+          payload: { url: "https://198.51.100.42/empty.bin" },
+          expectedHost: "198.51.100.42",
+        }),
+      ).rejects.toThrow(/empty download/i);
+      await expect(fs.readFile(out)).resolves.toEqual(sentinel);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["empty.bin"]);
     });
   });
 });

@@ -3,12 +3,9 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import {
-  MODEL_CONTEXT_TOKEN_CACHE,
-  providerContextTokenCacheKey,
-} from "../agents/context-cache.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
   replaceSessionEntrySync,
@@ -57,7 +54,7 @@ afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   listPluginCommands.mockReset();
   listPluginCommands.mockImplementation(() => []);
-  MODEL_CONTEXT_TOKEN_CACHE.clear();
+  getContextWindowCaches().discoveredTokenCache.clear();
 });
 
 function registerAnthropicCliBackendForTest(): void {
@@ -79,6 +76,103 @@ function registerAnthropicCliBackendForTest(): void {
       },
     ],
   });
+}
+
+type ContextBudgetStatus = NonNullable<
+  NonNullable<Parameters<typeof buildStatusMessage>[0]["sessionEntry"]>["contextBudgetStatus"]
+>;
+
+function makeContextBudgetStatus(
+  overrides: Partial<ContextBudgetStatus> = {},
+): ContextBudgetStatus {
+  return {
+    schemaVersion: 1,
+    source: "pre-prompt-estimate",
+    updatedAt: 1,
+    provider: "anthropic",
+    model: "claude-sonnet-4.6",
+    route: "fits",
+    shouldCompact: false,
+    estimatedPromptTokens: 640_000,
+    contextTokenBudget: 1_000_000,
+    promptBudgetBeforeReserve: 900_000,
+    reserveTokens: 100_000,
+    effectiveReserveTokens: 100_000,
+    remainingPromptBudgetTokens: 260_000,
+    overflowTokens: 0,
+    toolResultReducibleChars: 0,
+    messageCount: 2,
+    unwindowedMessageCount: 2,
+    ...overrides,
+  };
+}
+
+type FallbackContextStatusOverrides = {
+  sessionId: string;
+  selectedContextWindow?: number;
+  activeProvider?: string;
+  activeModel?: string;
+  activeContextWindow?: number | null;
+  agentContextTokens?: number;
+  explicitConfiguredContextTokens?: number;
+  runtimeContextTokens?: number;
+  sessionContextTokens?: number;
+};
+
+function makeFallbackContextStatusArgs({
+  sessionId,
+  selectedContextWindow = 1_048_576,
+  activeProvider = "minimax-portal",
+  activeModel = "MiniMax-M2.7",
+  activeContextWindow = 200_000,
+  agentContextTokens,
+  explicitConfiguredContextTokens,
+  runtimeContextTokens,
+  sessionContextTokens,
+}: FallbackContextStatusOverrides): Parameters<typeof buildStatusMessage>[0] {
+  const providers: Record<string, { models: Array<{ id: string; contextWindow: number }> }> = {
+    xiaomi: {
+      models: [{ id: "mimo-v2-flash", contextWindow: selectedContextWindow }],
+    },
+  };
+  if (activeContextWindow !== null) {
+    providers[activeProvider] = {
+      models: [{ id: activeModel, contextWindow: activeContextWindow }],
+    };
+  }
+
+  return {
+    config: { models: { providers } } as unknown as OpenClawConfig,
+    agent: {
+      model: "xiaomi/mimo-v2-flash",
+      ...(agentContextTokens === undefined ? {} : { contextTokens: agentContextTokens }),
+    },
+    ...(explicitConfiguredContextTokens === undefined ? {} : { explicitConfiguredContextTokens }),
+    ...(runtimeContextTokens === undefined ? {} : { runtimeContextTokens }),
+    sessionEntry: {
+      sessionId,
+      updatedAt: 0,
+      providerOverride: "xiaomi",
+      modelOverride: "mimo-v2-flash",
+      modelProvider: activeProvider,
+      model: activeModel,
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "xiaomi/mimo-v2-flash",
+        activeModel: `${activeProvider}/${activeModel}`,
+        reason: "model not allowed",
+      },
+      totalTokens: 49_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1 as const,
+      ...(sessionContextTokens === undefined ? {} : { contextTokens: sessionContextTokens }),
+    },
+    sessionKey: "agent:main:main",
+    sessionScope: "per-sender",
+    queue: { mode: "collect", depth: 0 },
+    modelAuth: "api-key",
+    activeModelAuth: "api-key",
+  };
 }
 
 describe("buildStatusMessage", () => {
@@ -116,6 +210,7 @@ describe("buildStatusMessage", () => {
         outputTokens: 800,
         totalTokens: 16_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         contextTokens: 32_000,
         thinkingLevel: "low",
         verboseLevel: "on",
@@ -148,7 +243,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Execution: direct");
     expect(normalized).toContain("Runtime: OpenClaw Default");
     expect(normalized).not.toContain("Runner:");
-    expect(normalized).toContain("Think: medium");
+    expect(normalized).toContain("think medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
@@ -206,12 +301,9 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Cost: $0.04");
   });
 
-  it("does not render stale totalTokens as current context usage", () => {
-    const text = buildStatusMessage({
-      agent: {
-        model: "anthropic/test:opus",
-        contextTokens: 1_000_000,
-      },
+  it.each([
+    {
+      name: "does not render stale totalTokens as current context usage",
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
@@ -221,30 +313,27 @@ describe("buildStatusMessage", () => {
         totalTokensFresh: false,
         contextTokens: 1_000_000,
       },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      now: 10 * 60_000,
-    });
-    const normalized = normalizeTestText(text);
-
-    expect(normalized).toContain("Context: ?/1.0m");
-    expect(normalized).not.toContain("Context: 3.8m/1.0m");
-  });
-
-  it("preserves legacy unknown-freshness totalTokens as context usage", () => {
-    const text = buildStatusMessage({
-      agent: {
-        model: "anthropic/test:opus",
-        contextTokens: 1_000_000,
-      },
+      expectedContext: "Context: ?/1.0m",
+      unexpectedContext: "Context: 3.8m/1.0m",
+    },
+    {
+      name: "treats legacy unknown-freshness totalTokens as unknown context",
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
         totalTokens: 25_000,
         contextTokens: 1_000_000,
       },
+      expectedContext: "Context: ?/1.0m",
+      unexpectedContext: "Context: 25k/1.0m",
+    },
+  ])("$name", ({ sessionEntry, expectedContext, unexpectedContext }) => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/test:opus",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry,
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
@@ -253,8 +342,8 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Context: 25k/1.0m");
-    expect(normalized).not.toContain("Context: ?/1.0m");
+    expect(normalized).toContain(expectedContext);
+    expect(normalized).not.toContain(unexpectedContext);
   });
 
   it("uses estimated context budget status when fresh totalTokens are unavailable", () => {
@@ -271,25 +360,7 @@ describe("buildStatusMessage", () => {
         totalTokens: 3_800_000,
         totalTokensFresh: false,
         contextTokens: 1_000_000,
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: 1,
-          provider: "anthropic",
-          model: "claude-sonnet-4.6",
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 640_000,
-          contextTokenBudget: 1_000_000,
-          promptBudgetBeforeReserve: 900_000,
-          reserveTokens: 100_000,
-          effectiveReserveTokens: 100_000,
-          remainingPromptBudgetTokens: 260_000,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          messageCount: 2,
-          unwindowedMessageCount: 2,
-        },
+        contextBudgetStatus: makeContextBudgetStatus(),
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -304,80 +375,42 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 3.8m/1.0m");
   });
 
-  it("prefers fresh totalTokens over estimated context budget status", () => {
-    const text = buildStatusMessage({
-      agent: {
-        model: "anthropic/claude-sonnet-4.6",
-        contextTokens: 1_000_000,
-      },
+  it.each([
+    {
+      name: "prefers fresh totalTokens over estimated context budget status",
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
         totalTokens: 36_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         contextTokens: 1_000_000,
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: 1,
-          provider: "anthropic",
-          model: "claude-sonnet-4.6",
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 640_000,
-          contextTokenBudget: 1_000_000,
-          promptBudgetBeforeReserve: 900_000,
-          reserveTokens: 100_000,
-          effectiveReserveTokens: 100_000,
-          remainingPromptBudgetTokens: 260_000,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          messageCount: 2,
-          unwindowedMessageCount: 2,
-        },
+        contextBudgetStatus: makeContextBudgetStatus(),
       },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      now: 10 * 60_000,
-    });
-    const normalized = normalizeTestText(text);
-
-    expect(normalized).toContain("Context: 36k/1.0m (4%)");
-    expect(normalized).not.toContain("~640k");
-  });
-
-  it("uses estimated context budget status when token usage is absent", () => {
+      expectedContext: "Context: 36k/1.0m (4%)",
+      unexpectedContext: "~640k",
+    },
+    {
+      name: "uses estimated context budget status when token usage is absent",
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        contextTokens: 1_000_000,
+        contextBudgetStatus: makeContextBudgetStatus({
+          estimatedPromptTokens: 125_000,
+          remainingPromptBudgetTokens: 775_000,
+        }),
+      },
+      expectedContext: "Context: ~125k/1.0m (13% est)",
+      unexpectedContext: "Context: 0/1.0m",
+    },
+  ])("$name", ({ sessionEntry, expectedContext, unexpectedContext }) => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-sonnet-4.6",
         contextTokens: 1_000_000,
       },
-      sessionEntry: {
-        sessionId: "abc",
-        updatedAt: 0,
-        contextTokens: 1_000_000,
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: 1,
-          provider: "anthropic",
-          model: "claude-sonnet-4.6",
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 125_000,
-          contextTokenBudget: 1_000_000,
-          promptBudgetBeforeReserve: 900_000,
-          reserveTokens: 100_000,
-          effectiveReserveTokens: 100_000,
-          remainingPromptBudgetTokens: 775_000,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          messageCount: 2,
-          unwindowedMessageCount: 2,
-        },
-      },
+      sessionEntry,
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
@@ -386,8 +419,8 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Context: ~125k/1.0m (13% est)");
-    expect(normalized).not.toContain("Context: 0/1.0m");
+    expect(normalized).toContain(expectedContext);
+    expect(normalized).not.toContain(unexpectedContext);
   });
 
   it("shows sanitized TTS provider details in the voice status line", async () => {
@@ -532,9 +565,9 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Think: high");
+    expect(normalized).toContain("think high");
     expect(normalized).toContain("verbose:full");
-    expect(normalized).toContain("Reasoning: on");
+    expect(normalized).toContain("reasoning on");
   });
 
   it("shows plugin status lines only when verbose is enabled", () => {
@@ -676,80 +709,60 @@ describe("buildStatusMessage", () => {
     expect(visible).toContain("trace:raw");
   });
 
-  it("shows fast mode when enabled", () => {
+  it.each([
+    {
+      name: "shows fast mode when enabled",
+      model: "openai/gpt-5.4",
+      sessionId: "fast",
+      fastMode: true,
+      expected: "fast",
+    },
+    {
+      name: "shows fast mode when disabled",
+      model: "anthropic/claude-opus-4-6",
+      sessionId: "fast-off",
+      fastMode: false,
+      expected: "fast off",
+    },
+  ])("$name", ({ model, sessionId, fastMode, expected }) => {
     const text = buildStatusMessage({
-      agent: {
-        model: "openai/gpt-5.4",
-      },
-      sessionEntry: {
-        sessionId: "fast",
-        updatedAt: 0,
-        fastMode: true,
-      },
+      agent: { model },
+      sessionEntry: { sessionId, updatedAt: 0, fastMode },
       sessionKey: "agent:main:main",
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Fast");
+    expect(normalizeTestText(text)).toContain(expected);
   });
 
-  it("shows the Codex harness as the model runtime when resolved", () => {
+  it.each([
+    {
+      name: "shows the Codex harness as the model runtime when resolved",
+      sessionId: "codex-harness",
+      resolvedHarness: "codex" as const,
+      expectedRuntime: "Runtime: OpenAI Codex",
+      unexpectedSuffix: "· codex",
+    },
+    {
+      name: "shows the default OpenClaw harness as the model runtime",
+      sessionId: "openclaw-harness",
+      resolvedHarness: "openclaw" as const,
+      expectedRuntime: "Runtime: OpenClaw Default",
+      unexpectedSuffix: "· openclaw",
+    },
+  ])("$name", ({ sessionId, resolvedHarness, expectedRuntime, unexpectedSuffix }) => {
     const text = buildStatusMessage({
-      agent: {
-        model: "openai/gpt-5.4",
-      },
-      sessionEntry: {
-        sessionId: "codex-harness",
-        updatedAt: 0,
-        fastMode: true,
-      },
+      agent: { model: "openai/gpt-5.4" },
+      sessionEntry: { sessionId, updatedAt: 0, fastMode: true },
       sessionKey: "agent:main:main",
       queue: { mode: "collect", depth: 0 },
-      resolvedHarness: "codex",
+      resolvedHarness,
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fast");
-    expect(normalized).toContain("Runtime: OpenAI Codex");
-    expect(normalized).not.toContain("· codex");
-  });
-
-  it("shows the default OpenClaw harness as the model runtime", () => {
-    const text = buildStatusMessage({
-      agent: {
-        model: "openai/gpt-5.4",
-      },
-      sessionEntry: {
-        sessionId: "openclaw-harness",
-        updatedAt: 0,
-        fastMode: true,
-      },
-      sessionKey: "agent:main:main",
-      queue: { mode: "collect", depth: 0 },
-      resolvedHarness: "openclaw",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fast");
-    expect(normalized).toContain("Runtime: OpenClaw Default");
-    expect(normalized).not.toContain("· openclaw");
-  });
-
-  it("shows fast mode when disabled", () => {
-    const text = buildStatusMessage({
-      agent: {
-        model: "anthropic/claude-opus-4-6",
-      },
-      sessionEntry: {
-        sessionId: "fast-off",
-        updatedAt: 0,
-        fastMode: false,
-      },
-      sessionKey: "agent:main:main",
-      queue: { mode: "collect", depth: 0 },
-    });
-
-    expect(normalizeTestText(text)).toContain("Fast: off");
+    expect(normalized).toContain("fast");
+    expect(normalized).toContain(expectedRuntime);
+    expect(normalized).not.toContain(unexpectedSuffix);
   });
 
   it("shows configured text verbosity for the active model", () => {
@@ -779,7 +792,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Text: low");
+    expect(normalizeTestText(text)).toContain("text low");
   });
 
   it("shows per-agent text verbosity overrides for the active model", () => {
@@ -818,7 +831,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Text: low");
+    expect(normalizeTestText(text)).toContain("text low");
   });
 
   it("notes channel model overrides in status output", () => {
@@ -883,6 +896,7 @@ describe("buildStatusMessage", () => {
         groupId: "123",
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -919,6 +933,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 200_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -938,6 +953,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 200_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -958,6 +974,7 @@ describe("buildStatusMessage", () => {
       contextTokens: 4_096,
       totalTokens: 1_024,
       totalTokensFresh: true,
+      totalTokensVersion: 1 as const,
     };
 
     applyModelOverrideToSessionEntry({
@@ -997,6 +1014,7 @@ describe("buildStatusMessage", () => {
         model: "deepseek-v4-pro",
         totalTokens: 501,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 1_000_000,
       },
       sessionKey: "agent:main:main",
@@ -1037,6 +1055,7 @@ describe("buildStatusMessage", () => {
         model: "kimi-k2.7-code",
         totalTokens: 0,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 262_144,
       },
       sessionKey: "agent:main:main",
@@ -1051,51 +1070,77 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 0/262k");
   });
 
-  it("recomputes context window from the active fallback model when session contextTokens are stale", () => {
-    const text = buildStatusMessage({
-      config: {
-        models: {
-          providers: {
-            "minimax-portal": {
-              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
-            },
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-      },
-      sessionEntry: {
+  it.each([
+    {
+      name: "recomputes context window from the active fallback model when session contextTokens are stale",
+      overrides: {
         sessionId: "fallback-context-window",
-        updatedAt: 0,
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
-        modelProvider: "minimax-portal",
-        model: "MiniMax-M2.7",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "minimax-portal/MiniMax-M2.7",
-          reason: "model not allowed",
-        },
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-        contextTokens: 1_048_576,
+        sessionContextTokens: 1_048_576,
       },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-    });
+      expectedFallback: "Fallback: minimax-portal/MiniMax-M2.7",
+      expectedContext: "Context: 49k/200k",
+      unexpectedContext: "Context: 49k/1.0m",
+    },
+    {
+      name: "keeps an explicit configured context cap even when it matches the selected model window",
+      overrides: {
+        sessionId: "fallback-context-window-configured-cap-equals-selected",
+        selectedContextWindow: 128_000,
+        agentContextTokens: 128_000,
+        explicitConfiguredContextTokens: 128_000,
+      },
+      expectedFallback: "Fallback: minimax-portal/MiniMax-M2.7",
+      expectedContext: "Context: 49k/128k",
+      unexpectedContext: "Context: 49k/200k",
+    },
+    {
+      name: "clamps an explicit configured context cap to the active fallback window",
+      overrides: {
+        sessionId: "fallback-context-window-configured-cap-clamped",
+        agentContextTokens: 1_048_576,
+        explicitConfiguredContextTokens: 1_048_576,
+      },
+      expectedFallback: "Fallback: minimax-portal/MiniMax-M2.7",
+      expectedContext: "Context: 49k/200k",
+      unexpectedContext: "Context: 49k/1.0m",
+    },
+    {
+      name: "keeps a persisted fallback limit when the active runtime model lookup is unavailable",
+      overrides: {
+        sessionId: "fallback-context-window-persisted-unknown-active",
+        activeProvider: "custom-runtime",
+        activeModel: "unknown-fallback-model",
+        activeContextWindow: null,
+        agentContextTokens: 1_048_576,
+        explicitConfiguredContextTokens: 1_048_576,
+        sessionContextTokens: 128_000,
+      },
+      expectedFallback: "Fallback: custom-runtime/unknown-fallback-model",
+      expectedContext: "Context: 49k/128k",
+      unexpectedContext: "Context: 49k/1.0m",
+    },
+    {
+      name: "does not synthesize a 32k fallback window when the active runtime model is unknown",
+      overrides: {
+        sessionId: "fallback-context-window-unknown-active-model",
+        selectedContextWindow: 128_000,
+        activeProvider: "custom-runtime",
+        activeModel: "unknown-fallback-model",
+        activeContextWindow: null,
+        sessionContextTokens: 128_000,
+      },
+      expectedFallback: "Fallback: custom-runtime/unknown-fallback-model",
+      expectedContext: "Context: 49k/128k",
+      unexpectedContext: "Context: 49k/32k",
+    },
+  ])("$name", ({ overrides, expectedFallback, expectedContext, unexpectedContext }) => {
+    const normalized = normalizeTestText(
+      buildStatusMessage(makeFallbackContextStatusArgs(overrides)),
+    );
 
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
-    expect(normalized).toContain("Context: 49k/200k");
-    expect(normalized).not.toContain("Context: 49k/1.0m");
+    expect(normalized).toContain(expectedFallback);
+    expect(normalized).toContain(expectedContext);
+    expect(normalized).not.toContain(unexpectedContext);
   });
 
   it("renders CLI runtime aliases as the selected model route", () => {
@@ -1123,6 +1168,7 @@ describe("buildStatusMessage", () => {
         cacheRead: 3_000_000,
         totalTokens: 36_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 1_000_000,
       },
       sessionKey: "agent:main:main",
@@ -1192,292 +1238,48 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Cost:");
   });
 
-  it("keeps an explicit runtime context limit when fallback status already computed one", () => {
-    const text = buildStatusMessage({
-      config: {
-        models: {
-          providers: {
-            "minimax-portal": {
-              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
-            },
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-      },
-      runtimeContextTokens: 123_456,
-      sessionEntry: {
+  it.each([
+    {
+      name: "keeps an explicit runtime context limit when fallback status already computed one",
+      overrides: {
         sessionId: "fallback-context-window-live-limit",
-        updatedAt: 0,
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
-        modelProvider: "minimax-portal",
-        model: "MiniMax-M2.7",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "minimax-portal/MiniMax-M2.7",
-          reason: "model not allowed",
-        },
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-        contextTokens: 1_048_576,
+        runtimeContextTokens: 123_456,
+        sessionContextTokens: 1_048_576,
       },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
-    expect(normalized).toContain("Context: 49k/123k");
-    expect(normalized).not.toContain("Context: 49k/1.0m");
-    expect(normalized).not.toContain("Context: 49k/200k");
-  });
-
-  it("keeps the persisted runtime context limit for fallback sessions when no live override is passed", () => {
-    const text = buildStatusMessage({
-      config: {
-        models: {
-          providers: {
-            "minimax-portal": {
-              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
-            },
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-      },
-      sessionEntry: {
+      expectedContext: "Context: 49k/123k",
+      unexpectedContext: "Context: 49k/1.0m",
+      otherUnexpectedContext: "Context: 49k/200k",
+    },
+    {
+      name: "keeps the persisted runtime context limit for fallback sessions when no live override is passed",
+      overrides: {
         sessionId: "fallback-context-window-persisted-limit",
-        updatedAt: 0,
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
-        modelProvider: "minimax-portal",
-        model: "MiniMax-M2.7",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "minimax-portal/MiniMax-M2.7",
-          reason: "model not allowed",
-        },
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-        contextTokens: 123_456,
+        sessionContextTokens: 123_456,
       },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
-    expect(normalized).toContain("Context: 49k/123k");
-    expect(normalized).not.toContain("Context: 49k/1.0m");
-    expect(normalized).not.toContain("Context: 49k/200k");
-  });
-
-  it("keeps an explicit configured context cap for fallback status before runtime snapshot persists", () => {
-    const text = buildStatusMessage({
-      config: {
-        models: {
-          providers: {
-            "minimax-portal": {
-              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
-            },
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-        contextTokens: 120_000,
-      },
-      explicitConfiguredContextTokens: 120_000,
-      sessionEntry: {
+      expectedContext: "Context: 49k/123k",
+      unexpectedContext: "Context: 49k/1.0m",
+      otherUnexpectedContext: "Context: 49k/200k",
+    },
+    {
+      name: "keeps an explicit configured context cap for fallback status before runtime snapshot persists",
+      overrides: {
         sessionId: "fallback-context-window-configured-cap",
-        updatedAt: 0,
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
-        modelProvider: "minimax-portal",
-        model: "MiniMax-M2.7",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "minimax-portal/MiniMax-M2.7",
-          reason: "model not allowed",
-        },
-        totalTokens: 49_000,
-        totalTokensFresh: true,
+        agentContextTokens: 120_000,
+        explicitConfiguredContextTokens: 120_000,
       },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-    });
+      expectedContext: "Context: 49k/120k",
+      unexpectedContext: "Context: 49k/200k",
+      otherUnexpectedContext: "Context: 49k/1.0m",
+    },
+  ])("$name", ({ overrides, expectedContext, unexpectedContext, otherUnexpectedContext }) => {
+    const normalized = normalizeTestText(
+      buildStatusMessage(makeFallbackContextStatusArgs(overrides)),
+    );
 
-    const normalized = normalizeTestText(text);
     expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
-    expect(normalized).toContain("Context: 49k/120k");
-    expect(normalized).not.toContain("Context: 49k/200k");
-    expect(normalized).not.toContain("Context: 49k/1.0m");
-  });
-
-  it("keeps an explicit configured context cap even when it matches the selected model window", () => {
-    const text = buildStatusMessage({
-      config: {
-        models: {
-          providers: {
-            "minimax-portal": {
-              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
-            },
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 128_000 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-        contextTokens: 128_000,
-      },
-      explicitConfiguredContextTokens: 128_000,
-      sessionEntry: {
-        sessionId: "fallback-context-window-configured-cap-equals-selected",
-        updatedAt: 0,
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
-        modelProvider: "minimax-portal",
-        model: "MiniMax-M2.7",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "minimax-portal/MiniMax-M2.7",
-          reason: "model not allowed",
-        },
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-      },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
-    expect(normalized).toContain("Context: 49k/128k");
-    expect(normalized).not.toContain("Context: 49k/200k");
-  });
-
-  it("clamps an explicit configured context cap to the active fallback window", () => {
-    const text = buildStatusMessage({
-      config: {
-        models: {
-          providers: {
-            "minimax-portal": {
-              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
-            },
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-        contextTokens: 1_048_576,
-      },
-      explicitConfiguredContextTokens: 1_048_576,
-      sessionEntry: {
-        sessionId: "fallback-context-window-configured-cap-clamped",
-        updatedAt: 0,
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
-        modelProvider: "minimax-portal",
-        model: "MiniMax-M2.7",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "minimax-portal/MiniMax-M2.7",
-          reason: "model not allowed",
-        },
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-      },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
-    expect(normalized).toContain("Context: 49k/200k");
-    expect(normalized).not.toContain("Context: 49k/1.0m");
-  });
-
-  it("keeps a persisted fallback limit when the active runtime model lookup is unavailable", () => {
-    const text = buildStatusMessage({
-      config: {
-        models: {
-          providers: {
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-        contextTokens: 1_048_576,
-      },
-      explicitConfiguredContextTokens: 1_048_576,
-      sessionEntry: {
-        sessionId: "fallback-context-window-persisted-unknown-active",
-        updatedAt: 0,
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
-        modelProvider: "custom-runtime",
-        model: "unknown-fallback-model",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "custom-runtime/unknown-fallback-model",
-          reason: "model not allowed",
-        },
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-        contextTokens: 128_000,
-      },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
-    expect(normalized).toContain("Context: 49k/128k");
-    expect(normalized).not.toContain("Context: 49k/1.0m");
+    expect(normalized).toContain(expectedContext);
+    expect(normalized).not.toContain(unexpectedContext);
+    expect(normalized).not.toContain(otherUnexpectedContext);
   });
 
   it("uses per-agent sandbox config when config and session key are provided", () => {
@@ -1528,6 +1330,7 @@ describe("buildStatusMessage", () => {
         {
           capability: "audio",
           outcome: "skipped",
+          attachmentDispositions: { 1: { kind: "failed" } },
           attachments: [
             {
               attachmentIndex: 1,
@@ -1558,6 +1361,7 @@ describe("buildStatusMessage", () => {
         {
           capability: "audio",
           outcome: "success",
+          attachmentDispositions: { 0: { kind: "handled" } },
           attachments: [
             {
               attachmentIndex: 0,
@@ -1589,6 +1393,7 @@ describe("buildStatusMessage", () => {
         {
           capability: "audio",
           outcome: "failed",
+          attachmentDispositions: { 0: { kind: "failed" } },
           attachments: [
             {
               attachmentIndex: 0,
@@ -1623,9 +1428,25 @@ describe("buildStatusMessage", () => {
       sessionKey: "agent:main:main",
       queue: { mode: "none" },
       mediaDecisions: [
-        { capability: "image", outcome: "no-attachment", attachments: [] },
-        { capability: "audio", outcome: "no-attachment", attachments: [] },
-        { capability: "video", outcome: "no-attachment", attachments: [] },
+        {
+          capability: "image",
+          outcome: "no-attachment",
+          attachments: [],
+          attachmentDispositions: {},
+          nativeVisionActive: false,
+        },
+        {
+          capability: "audio",
+          outcome: "no-attachment",
+          attachments: [],
+          attachmentDispositions: {},
+        },
+        {
+          capability: "video",
+          outcome: "no-attachment",
+          attachments: [],
+          attachmentDispositions: {},
+        },
       ],
     });
 
@@ -2022,7 +1843,7 @@ describe("buildStatusMessage", () => {
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: `agent:${params.agentId}:main`,
-      storePath: resolveStorePath(undefined, { agentId: params.agentId }),
+      storePath: resolveSessionStorePathCore(undefined, { agentId: params.agentId }),
     };
     replaceSessionEntrySync(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
     appendTranscriptMessageSync(scope, {
@@ -2073,22 +1894,36 @@ describe("buildStatusMessage", () => {
     });
   }
 
-  it("prefers cached prompt tokens from the session log", async () => {
+  it.each([
+    {
+      name: "prefers cached prompt tokens from the session log",
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      expected: "Context: 1.0k/32k",
+    },
+    {
+      name: "reads transcript usage for non-default agents",
+      agentId: "worker1",
+      sessionId: "sess-worker1",
+      sessionKey: "agent:worker1:telegram:12345",
+      expected: "Context: 1.0k/32k",
+    },
+    {
+      name: "hydrates cache usage from transcript fallback",
+      agentId: "main",
+      sessionId: "sess-cache-hydration",
+      sessionKey: "agent:main:main",
+      expected: "Cache: 100% hit · 1.0k cached, 0 new",
+    },
+  ])("$name", async ({ agentId, sessionId, sessionKey, expected }) => {
     await withTempHome(
       async (dir) => {
-        const sessionId = "sess-1";
-        writeBaselineTranscriptUsageLog({
-          dir,
-          agentId: "main",
-          sessionId,
-        });
+        writeBaselineTranscriptUsageLog({ dir, agentId, sessionId });
 
-        const text = buildTranscriptStatusText({
-          sessionId,
-          sessionKey: "agent:main:main",
-        });
+        const text = buildTranscriptStatusText({ sessionId, sessionKey });
 
-        expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+        expect(normalizeTestText(text)).toContain(expected);
       },
       { prefix: "openclaw-status-" },
     );
@@ -2189,27 +2024,6 @@ describe("buildStatusMessage", () => {
     );
   });
 
-  it("reads transcript usage for non-default agents", async () => {
-    await withTempHome(
-      async (dir) => {
-        const sessionId = "sess-worker1";
-        writeBaselineTranscriptUsageLog({
-          dir,
-          agentId: "worker1",
-          sessionId,
-        });
-
-        const text = buildTranscriptStatusText({
-          sessionId,
-          sessionKey: "agent:worker1:telegram:12345",
-        });
-
-        expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
-      },
-      { prefix: "openclaw-status-" },
-    );
-  });
-
   it("reads transcript usage using explicit agentId when sessionKey is missing", async () => {
     await withTempHome(
       async (dir) => {
@@ -2252,27 +2066,6 @@ describe("buildStatusMessage", () => {
     );
   });
 
-  it("hydrates cache usage from transcript fallback", async () => {
-    await withTempHome(
-      async (dir) => {
-        const sessionId = "sess-cache-hydration";
-        writeBaselineTranscriptUsageLog({
-          dir,
-          agentId: "main",
-          sessionId,
-        });
-
-        const text = buildTranscriptStatusText({
-          sessionId,
-          sessionKey: "agent:main:main",
-        });
-
-        expect(normalizeTestText(text)).toContain("Cache: 100% hit · 1.0k cached, 0 new");
-      },
-      { prefix: "openclaw-status-" },
-    );
-  });
-
   it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
     await withTempHome(
       async (dir) => {
@@ -2283,7 +2076,7 @@ describe("buildStatusMessage", () => {
             agentId: "main",
             sessionId,
             sessionKey: "agent:main:main",
-            storePath: resolveStorePath(undefined, { agentId: "main" }),
+            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
           },
           {
             message: {
@@ -2352,7 +2145,7 @@ describe("buildStatusMessage", () => {
   it("keeps transcript-derived slash model ids on model-only context lookup", async () => {
     await withTempHome(
       async (dir) => {
-        MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+        getContextWindowCaches().discoveredTokenCache.set("google/gemini-2.5-pro", 999_000);
 
         const sessionId = "sess-openrouter-google";
         writeTranscriptUsageLog({
@@ -2403,7 +2196,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps runtime slash model ids on model-only context lookup when modelProvider is missing", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+    getContextWindowCaches().discoveredTokenCache.set("google/gemini-2.5-pro", 999_000);
 
     const text = buildStatusMessage({
       config: {
@@ -2423,6 +2216,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 1205,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         model: "google/gemini-2.5-pro",
       },
       sessionKey: "agent:main:main",
@@ -2437,7 +2231,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    getContextWindowCaches().discoveredTokenCache.clear();
 
     const text = buildStatusMessage({
       config: {
@@ -2469,6 +2263,7 @@ describe("buildStatusMessage", () => {
         },
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2484,7 +2279,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    getContextWindowCaches().discoveredTokenCache.clear();
 
     const text = buildStatusMessage({
       config: {
@@ -2505,6 +2300,7 @@ describe("buildStatusMessage", () => {
         model: "openai/gpt-4o",
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2521,8 +2317,8 @@ describe("buildStatusMessage", () => {
   it("keeps provider-aware lookup for bare transcript model ids", async () => {
     await withTempHome(
       async (dir) => {
-        MODEL_CONTEXT_TOKEN_CACHE.set("gemini-2.5-pro", 128_000);
-        MODEL_CONTEXT_TOKEN_CACHE.set(
+        getContextWindowCaches().discoveredTokenCache.set("gemini-2.5-pro", 128_000);
+        getContextWindowCaches().discoveredTokenCache.set(
           providerContextTokenCacheKey("google-gemini-cli", "gemini-2.5-pro"),
           1_000_000,
         );
@@ -2567,8 +2363,8 @@ describe("buildStatusMessage", () => {
   });
 
   it("prefers provider-qualified context windows for fresh bare model ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set(
+    getContextWindowCaches().discoveredTokenCache.set("claude-opus-4-6", 200_000);
+    getContextWindowCaches().discoveredTokenCache.set(
       providerContextTokenCacheKey("anthropic", "claude-opus-4-6"),
       1_000_000,
     );
@@ -2582,6 +2378,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 25_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2595,7 +2392,10 @@ describe("buildStatusMessage", () => {
   });
 
   it("does not let agent contextTokens inflate status above the model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("openai", "gpt-5.5"), 272_000);
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey("openai", "gpt-5.5"),
+      272_000,
+    );
 
     const text = buildStatusMessage({
       agent: {
@@ -2607,6 +2407,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 25_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2632,6 +2433,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 25_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2642,50 +2444,6 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Context: 25k/272k");
     expect(normalized).not.toContain("Context: 25k/1.0m");
-  });
-
-  it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {
-    const text = buildStatusMessage({
-      config: {
-        models: {
-          providers: {
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 128_000 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-      },
-      sessionEntry: {
-        sessionId: "fallback-context-window-unknown-active-model",
-        updatedAt: 0,
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
-        modelProvider: "custom-runtime",
-        model: "unknown-fallback-model",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "custom-runtime/unknown-fallback-model",
-          reason: "model not allowed",
-        },
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-        contextTokens: 128_000,
-      },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
-    expect(normalized).toContain("Context: 49k/128k");
-    expect(normalized).not.toContain("Context: 49k/32k");
   });
 });
 

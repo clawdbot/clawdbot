@@ -741,12 +741,12 @@ export class VoiceCallWebhookServer {
       const isReplay = Boolean(verification.isReplay);
       if (isReplay) {
         this.logger.warn("Replay detected; skipping event side effects");
-        if (this.provider.name === "twilio") {
-          return buildTwilioReplayTwiML();
-        }
         const cachedResponse = await this.getCachedReplayResponse(verification.verifiedRequestKey);
         if (cachedResponse) {
           return cachedResponse;
+        }
+        if (this.provider.name === "twilio") {
+          return buildTwilioReplayTwiML();
         }
       }
 
@@ -784,8 +784,8 @@ export class VoiceCallWebhookServer {
         const parsed = this.provider.parseWebhookEvent(ctx, {
           verifiedRequestKey: verification.verifiedRequestKey,
         });
-        if (!isReplay) {
-          this.processParsedEvents(parsed.events);
+        if (!isReplay && this.processParsedEvents(parsed.events)) {
+          verification.releaseReplay?.();
         }
 
         return normalizeWebhookResponse(parsed);
@@ -795,11 +795,11 @@ export class VoiceCallWebhookServer {
         return await buildResponse();
       }
 
-      if (this.provider.name === "twilio") {
-        return await buildResponse();
-      }
-
-      return await this.cacheReplayResponse(verification.verifiedRequestKey, buildResponse);
+      return await this.cacheReplayResponse(
+        verification.verifiedRequestKey,
+        buildResponse,
+        verification.releaseReplay,
+      );
     } finally {
       this.webhookInFlightLimiter.release(inFlightKey);
     }
@@ -839,6 +839,7 @@ export class VoiceCallWebhookServer {
   private async cacheReplayResponse(
     key: string,
     buildResponse: () => Promise<WebhookResponsePayload>,
+    releaseReplay?: () => void,
   ): Promise<WebhookResponsePayload> {
     const now = Date.now();
     const expiresAt = resolveExpiresAtMsFromDurationMs(WEBHOOK_REPLAY_RESPONSE_TTL_MS, {
@@ -849,22 +850,35 @@ export class VoiceCallWebhookServer {
       this.pruneReplayResponses(now);
     }
 
-    const response = buildResponse()
+    let cachedEntry: CachedWebhookResponse | undefined;
+    const ownerResponse = buildResponse()
       .then(cloneWebhookResponsePayload)
       .catch((err: unknown) => {
-        this.replayResponses.delete(key);
+        if (cachedEntry && this.replayResponses.get(key) === cachedEntry) {
+          this.replayResponses.delete(key);
+        }
+        releaseReplay?.();
         throw err;
       });
+    // Twilio owners receive the real one-time TwiML; waiters only see token-free XML.
+    const response = ownerResponse.then((payload) =>
+      this.provider.name === "twilio"
+        ? buildTwilioReplayTwiML()
+        : cloneWebhookResponsePayload(payload),
+    );
+    // Preserve rejection for concurrent waiters without creating an orphaned rejection.
+    void response.catch(() => {});
     if (expiresAt !== undefined) {
-      this.replayResponses.set(key, {
+      cachedEntry = {
         expiresAt,
         response,
-      });
+      };
+      this.replayResponses.set(key, cachedEntry);
     }
     if (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
       this.pruneReplayResponses(now);
     }
-    return cloneWebhookResponsePayload(await response);
+    return cloneWebhookResponsePayload(await ownerResponse);
   }
 
   private verifyPreAuthWebhookHeaders(headers: http.IncomingHttpHeaders): WebhookHeaderGateResult {
@@ -965,24 +979,30 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private processParsedEvents(events: NormalizedEvent[]): void {
+  private processParsedEvents(events: NormalizedEvent[]): boolean {
+    let replayable = false;
     for (const event of events) {
       try {
-        this.processEventWithAutoResponse(event);
+        replayable = this.processEventWithAutoResponse(event) || replayable;
       } catch (err) {
         this.logger.error(`Error processing event ${event.type}: ${String(err)}`);
+        throw err;
       }
     }
+    return replayable;
   }
 
-  private processEventWithAutoResponse(event: NormalizedEvent): void {
+  private processEventWithAutoResponse(event: NormalizedEvent): boolean {
     const result = this.manager.processEvent(event);
-    if (result.kind !== "final-speech" || result.waiterResolved) {
-      return;
+    if (result.kind !== "final-speech") {
+      return result.replayable === true;
+    }
+    if (result.waiterResolved) {
+      return false;
     }
     const callMode = result.call.metadata?.mode as string | undefined;
     if (result.call.direction !== "inbound" && callMode !== "conversation") {
-      return;
+      return false;
     }
 
     // Both media-stream and carrier-webhook transcripts share this handoff.
@@ -990,6 +1010,7 @@ export class VoiceCallWebhookServer {
     void this.handleInboundResponse(result.call.callId, result.transcript).catch((err: unknown) => {
       this.logger.warn(`Failed to auto-respond: ${String(err)}`);
     });
+    return false;
   }
 
   private writeWebhookResponse(res: http.ServerResponse, payload: WebhookResponsePayload): void {

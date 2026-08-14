@@ -56,6 +56,16 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     isAvailable: () => this.available,
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
+  private readonly viewportResizeObserver = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (entry) {
+      this.browserPanelController.handleViewportResize(
+        entry.contentRect.width,
+        entry.contentRect.height,
+      );
+    }
+  });
+  private observedViewportElement: Element | null = null;
 
   static override styles = [panelTabStripStyles, dockPanelStyles, browserPanelStyles];
 
@@ -73,6 +83,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    this.viewportResizeObserver.disconnect();
+    this.observedViewportElement = null;
   }
 
   override updated(changed: Map<string, unknown>): void {
@@ -94,6 +106,15 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     }
     this.dockLayout.syncReservation();
     this.browserPanelController.paintOverlay();
+    const viewportElement = this.renderRoot.querySelector(".bp-viewport");
+    if (viewportElement !== this.observedViewportElement) {
+      // The viewport is transient while the dock opens, closes, or becomes unavailable.
+      this.viewportResizeObserver.disconnect();
+      this.observedViewportElement = viewportElement;
+      if (viewportElement) {
+        this.viewportResizeObserver.observe(viewportElement);
+      }
+    }
   }
 
   browserPanelIsOpen(): boolean {

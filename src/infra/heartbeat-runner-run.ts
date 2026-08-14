@@ -1,8 +1,7 @@
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
-import { markCommitmentsAttempted } from "../commitments/store.js";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import {
@@ -41,7 +40,6 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   const { cfg, agentId, heartbeat, startedAt } = wake;
   const { delivery, visibility, replyPrefix, runSessionKey } = prepared;
   const { outboundPolicySessionKey, hasRelayableExecCompletion } = prepared;
-  const { hasDueCommitments, dueCommitmentIds } = prepared;
 
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -53,8 +51,6 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     });
     return { status: "skipped", reason: "alerts-disabled" };
   }
-  await markCommitmentsAttempted({ cfg, ids: dueCommitmentIds, nowMs: startedAt });
-
   const resolveHeartbeatResponsePrefix = () =>
     resolveResponsePrefixTemplate(
       replyPrefix.responsePrefix,
@@ -72,7 +68,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   });
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, agentId);
   const canAttemptHeartbeatOk = Boolean(
-    !hasDueCommitments && visibility.showOk && delivery.channel !== "none" && delivery.to,
+    visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
   const hasChatDelivery = Boolean(
     delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
@@ -119,7 +115,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           return false;
         }
       }
-      const send = await sendDurableMessageBatch({
+      const send = await sendDurableMessageBatchCore({
         cfg,
         channel: delivery.channel,
         to: delivery.to,

@@ -253,6 +253,18 @@ export type CliBackendRuntimeArtifactPolicy = Readonly<{
   nativeExecutableNames?: readonly string[];
 }>;
 
+/** Provider-owned protocol requirement for a long-lived CLI session. */
+export type CliBackendLiveSessionRequirement = Readonly<{
+  /** Exact capability the CLI must advertise before streamed output is trusted. */
+  capability: string;
+  /** First published version known to advertise the capability; runtime still feature-detects. */
+  minimumVersion: string;
+  /** Arguments used by setup and Doctor to obtain the installed CLI version. */
+  versionArgs: readonly string[];
+  /** Operator command that installs a compatible CLI version. */
+  updateCommand: string;
+}>;
+
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
@@ -298,6 +310,8 @@ export type CliBackendPlugin = {
   };
   /** Required whenever this backend can become a verified inference owner. */
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
+  /** Negotiated protocol capability required by this backend's live-session transport. */
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *

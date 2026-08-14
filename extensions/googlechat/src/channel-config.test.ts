@@ -25,6 +25,14 @@ describe("googlechatPlugin config adapter", () => {
     expect(googlechatPlugin.capabilities?.reactions).toBeUndefined();
   });
 
+  it("classifies Google Chat users as direct and spaces as groups", () => {
+    const inferTargetChatType = googlechatPlugin.messaging?.inferTargetChatType;
+
+    expect(inferTargetChatType?.({ to: "users/abc" })).toBe("direct");
+    expect(inferTargetChatType?.({ to: "spaces/xyz" })).toBe("group");
+    expect(inferTargetChatType?.({ to: "unknown" })).toBeUndefined();
+  });
+
   it("does not advertise user-auth-only actions", () => {
     const cfg = {
       channels: {

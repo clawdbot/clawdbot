@@ -4,6 +4,7 @@ import {
   listAgentEntries,
   resolveDefaultAgentId,
   toAgentEntriesRecord,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { createMergePatch } from "../config/merge-patch.js";
@@ -64,7 +65,8 @@ export async function ensureOnboardingAgent(params: {
   ) {
     return {
       config: params.config,
-      agentId: resolveDefaultAgentId(params.config),
+      agentId:
+        tryResolveLegacyCompatibilityAgentId(params.config) ?? resolveDefaultAgentId(params.config),
       bootstrapPending: false,
     };
   }
@@ -81,7 +83,7 @@ export async function ensureOnboardingAgent(params: {
         candidate: params.config,
         currentRuntime: effective,
       }),
-      agentId: resolveDefaultAgentId(effective),
+      agentId: tryResolveLegacyCompatibilityAgentId(effective) ?? resolveDefaultAgentId(effective),
       bootstrapPending: false,
     };
   }
@@ -89,9 +91,9 @@ export async function ensureOnboardingAgent(params: {
     entry: {
       id: "main",
       name: "main",
-      default: true,
       workspace: params.workspace,
     },
+    bootstrapMain: true,
     skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
     skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
   });
