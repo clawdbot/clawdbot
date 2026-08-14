@@ -3373,6 +3373,66 @@ td.data-table-key-col {
   font-size: 12px;
 }
 
+.secret-reveal__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Same tile geometry as .summary-stat__icon, in the ok tone: the outcome is settled,
+   and the mark says so before any sentence is read. */
+.secret-reveal__status {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.secret-reveal__status svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* The reassurance carries full text weight, unlike the muted .exec-approval-sub it
+   replaced; this is the zone that should read as settled rather than incidental. */
+.secret-reveal__body {
+  margin-top: 16px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.secret-reveal__body p {
+  margin: 0;
+}
+
+.secret-reveal__callout {
+  margin-top: 12px;
+  text-wrap: balance;
+}
+
+/* .btn's resting border (--border) sits within ~4/255 of --card in dark
+   (#1e2028 on #161920), so a neutral button reads as unpainted on this surface.
+   --border-strong is the token that separates from a card in both themes; the
+   inherited .btn:hover still supplies the hover surface. */
+.secret-reveal__dismiss {
+  border-color: var(--border-strong);
+}
+
+/* Trailing rationale: readable, but never competing with the outcome above it. */
+.secret-reveal__note {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* ===========================================
    Agents
    =========================================== */

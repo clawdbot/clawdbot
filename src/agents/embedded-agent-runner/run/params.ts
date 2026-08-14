@@ -25,7 +25,7 @@ import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import type { SkillSnapshot } from "../../../skills/types.js";
+import type { ExplicitSkillSelection, SkillSnapshot } from "../../../skills/types.js";
 import type {
   SkillProposalOrigin,
   SkillWorkshopProposalMutationBudget,
@@ -226,6 +226,7 @@ export type RunEmbeddedAgentParams = {
   finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
+  explicitSkillSelections?: ExplicitSkillSelection[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in the current prompt. */

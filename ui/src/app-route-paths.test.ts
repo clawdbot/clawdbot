@@ -107,6 +107,14 @@ describe("Dynamic route startup bridge", () => {
     expect(routeIdFromPath("/portals")).toBe("portals");
   });
 
+  it("matches mixed-case deep links exactly like the uirouter path key", () => {
+    // uirouter lowercases static path keys; a case-sensitive pre-gate would
+    // rewrite /Usage to /chat before the router ever saw it.
+    expect(routeIdFromPath("/Usage")).toBe("usage");
+    expect(routeIdFromPath("/Settings/About")).toBe("about");
+    expect(routeIdFromPath("/ui/Usage", "/ui")).toBe("usage");
+  });
+
   it.each(DYNAMIC_STARTUP_CASES)(
     "loads the $label once while publishing its real location",
     async ({ routeId, location: initialLocation }) => {

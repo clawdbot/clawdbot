@@ -13,6 +13,7 @@ import {
   type OpenAIResponsesReplayContext,
   type ReplayableResponseCompactionItem,
 } from "./openai-responses-contracts.js";
+import { log } from "./openai-transport-shared.js";
 
 const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
 const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA = "rejected";
@@ -120,7 +121,11 @@ export function captureOpenAIResponsesCompaction(
   captureMetadata?: OpenAIResponsesReasoningReplayMetadata,
 ): void {
   const metadata = captureMetadata ?? buildOpenAIResponsesReasoningReplayMetadata(model);
-  if (!item.encrypted_content || !metadata?.baseUrlHash) {
+  if (!item.encrypted_content) {
+    return;
+  }
+  if (!metadata?.baseUrlHash) {
+    log.debug("[responses] skipping compaction capture: missing base URL hash");
     return;
   }
   if (
