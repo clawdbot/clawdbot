@@ -976,6 +976,7 @@ openclaw-settings-save-indicator {
   --sidebar-text-start: 34px;
   --sidebar-tree-depth: 16px;
   --sidebar-trailing-slot: 20px;
+  --sidebar-header-action-size: 22px;
   --sidebar-scrollbar-gutter: 8px;
   --sidebar-lucide-icon-size: 16px;
   --sidebar-lucide-stroke-width: 1.5px;
@@ -1748,12 +1749,21 @@ body.update-dialog-open .sidebar-update-card__status {
   cursor: grabbing;
 }
 
+/* Header action surfaces may overflow the 20px rail; symmetric margins keep
+   their centers on the shared trailing axis. */
+.sidebar-session-sort,
+.sidebar-session-group-actions,
+.sidebar-nav__head-action {
+  width: var(--sidebar-header-action-size);
+  margin-inline: calc((var(--sidebar-trailing-slot) - var(--sidebar-header-action-size)) / 2);
+}
+
 .sidebar-session-sort {
+  --sidebar-header-action-size: 28px;
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--sidebar-trailing-slot);
   height: 28px;
   flex: 0 0 auto;
   border: none;
@@ -1801,7 +1811,6 @@ body.update-dialog-open .sidebar-update-card__status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--sidebar-trailing-slot);
   height: 22px;
   flex: 0 0 auto;
   border: none;
@@ -1842,7 +1851,6 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-session-group-actions.sidebar-session-sort {
-  width: var(--sidebar-trailing-slot);
   height: 28px;
 }
 
@@ -3283,7 +3291,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--sidebar-trailing-slot);
   height: 22px;
   flex: none;
   border: none;
