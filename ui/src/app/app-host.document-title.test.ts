@@ -20,7 +20,7 @@ function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult 
   return { defaultId, mainKey: "main", scope: "per-sender", agents };
 }
 
-describe("OpenClaw shell document title", () => {
+describe("OpenCrustacean shell document title", () => {
   function createShell(context?: ApplicationContext): ShellDocumentTitleState {
     const shell = document.createElement(
       "openclaw-app-shell",
@@ -58,18 +58,18 @@ describe("OpenClaw shell document title", () => {
 
   it("keeps the boot title before a route commits", () => {
     const shell = createShell();
-    document.title = "OpenClaw Control";
+    document.title = "OpenCrustacean Control";
 
     shell.routeState = {};
     shell.syncDocumentTitle();
-    expect(document.title).toBe("OpenClaw Control");
+    expect(document.title).toBe("OpenCrustacean Control");
   });
 
   it("uses the route title for a connected route", () => {
     const shell = createShell(createContext({ sessions: null }));
     shell.routeState = { routeId: "usage" };
     shell.syncDocumentTitle();
-    expect(document.title).toBe("Usage — OpenClaw");
+    expect(document.title).toBe("Usage — OpenCrustacean");
   });
 
   it("uses the active session's derived title for a non-main chat", () => {
@@ -85,7 +85,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("Quarterly launch plan — OpenClaw");
+    expect(document.title).toBe("Quarterly launch plan — OpenCrustacean");
   });
 
   it("uses the agent name for an agent main chat", () => {
@@ -97,7 +97,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("Molty — OpenClaw");
+    expect(document.title).toBe("Molty — OpenCrustacean");
   });
 
   it("uses the selected agent name for a global-scope main chat", () => {
@@ -112,7 +112,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("Molty — OpenClaw");
+    expect(document.title).toBe("Molty — OpenCrustacean");
   });
 
   it("falls back to the session display name when the main agent is missing", () => {
@@ -130,7 +130,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("Fallback thread — OpenClaw");
+    expect(document.title).toBe("Fallback thread — OpenCrustacean");
   });
 
   it("prefixes the pending approval count", () => {
@@ -139,7 +139,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("(2) Usage — OpenClaw");
+    expect(document.title).toBe("(2) Usage — OpenCrustacean");
   });
 
   it("shows offline instead of a stale approval count", () => {
@@ -148,7 +148,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("(Offline) Usage — OpenClaw");
+    expect(document.title).toBe("(Offline) Usage — OpenCrustacean");
   });
 
   it("includes stored chat outbox messages in the offline marker", () => {
@@ -160,7 +160,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("(Offline · 3 queued) Usage — OpenClaw");
+    expect(document.title).toBe("(Offline · 3 queued) Usage — OpenCrustacean");
   });
 
   it("uses the meaningful custodian label without a brand suffix", () => {
@@ -169,6 +169,6 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("Ask OpenClaw");
+    expect(document.title).toBe("Ask OpenCrustacean");
   });
 });

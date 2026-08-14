@@ -341,7 +341,7 @@ function waitForChatResult(params: {
             return;
           }
           emptyFinalFallbackTimer = window.setTimeout(() => {
-            settleResolve("OpenClaw finished with no text.");
+            settleResolve("OpenCrustacean finished with no text.");
           }, EMPTY_FINAL_FALLBACK_GRACE_MS);
         })
         .catch((error: unknown) => {
@@ -595,7 +595,7 @@ export async function submitRealtimeTalkConsult(params: {
     );
     runId = response.runId ?? response.idempotencyKey;
     if (!runId) {
-      throw new Error("OpenClaw realtime tool call did not return a run id");
+      throw new Error("OpenCrustacean realtime tool call did not return a run id");
     }
     if (params.signal?.aborted) {
       abortRun();

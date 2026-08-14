@@ -91,7 +91,7 @@ export function submitFinalProviderToolResult(params: {
       await params.session.bridge.submitToolResult(
         params.callId,
         buildRealtimeVoiceAgentCancelProviderResult(
-          "OpenClaw cancelled this consult before completion. Do not restart it.",
+          "OpenCrustacean cancelled this consult before completion. Do not restart it.",
         ),
         suppressedToolResultOptions(params.session),
       );

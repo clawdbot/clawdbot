@@ -392,7 +392,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       timeoutMs: 120_000,
     });
     expect(submit).toHaveBeenCalledWith("call-1", {
-      result: "OpenClaw finished with no text.",
+      result: "OpenCrustacean finished with no text.",
     });
   });
 
@@ -572,7 +572,7 @@ describe("RealtimeTalkSession consult handoff", () => {
 
     expect(submit).toHaveBeenCalledWith("call-1", {
       status: "cancelled",
-      message: "Cancelled the active OpenClaw run.",
+      message: "Cancelled the active OpenCrustacean run.",
     });
   });
 
@@ -620,7 +620,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       mode: "status",
       sessionKey: "agent:main:main",
       active: true,
-      message: "OpenClaw is working in read (running).",
+      message: "OpenCrustacean is working in read (running).",
       speak: true,
       show: true,
       suppress: false,
@@ -638,7 +638,7 @@ describe("RealtimeTalkSession consult handoff", () => {
     });
 
     expect(speakControlResult).toHaveBeenCalledWith(
-      expect.stringContaining('Status: "OpenClaw is working in read (running)."'),
+      expect.stringContaining('Status: "OpenCrustacean is working in read (running)."'),
     );
   });
 
@@ -649,7 +649,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       sessionKey: "agent:main:main",
       active: true,
       aborted: true,
-      message: "Cancelled the active OpenClaw run.",
+      message: "Cancelled the active OpenCrustacean run.",
       speak: true,
       show: true,
       suppress: false,
