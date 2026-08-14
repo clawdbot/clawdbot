@@ -12,7 +12,7 @@ export function detectModelSetup(
 ): Promise<SystemAgentSetupDetectResult> {
   return client.request<SystemAgentSetupDetectResult>(
     "openclaw.setup.detect",
-    { ...(agentId ? { agentId } : {}) },
+    agentId ? { agentId } : {},
     { timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS, ...(signal ? { signal } : {}) },
   );
 }
@@ -24,7 +24,7 @@ export function verifyModelSetup(
 ): Promise<SystemAgentSetupVerifyResult> {
   return client.request<SystemAgentSetupVerifyResult>(
     "openclaw.setup.verify",
-    { ...(agentId ? { agentId } : {}) },
+    agentId ? { agentId } : {},
     { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, ...(signal ? { signal } : {}) },
   );
 }

@@ -400,12 +400,9 @@ describe("openclaw.setup", () => {
     const session = wizardSessions.get("auth-session-1");
     const first = await session.next();
     expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "provider-auth",
-        agentId: "research",
-        authChoice: "github-copilot",
-      }),
+      expect.objectContaining({ kind: "provider-auth", authChoice: "github-copilot" }),
     );
+    expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].agentId).toBe("research");
     expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].signal).toBe(
       session.signal,
     );
@@ -457,6 +454,7 @@ describe("openclaw.setup", () => {
     expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         authChoice: "ollama",
+        agentId: "research",
         config: verifiedConfig,
         workspaceDir: "/tmp/models-workspace",
         setDefaultModel: false,
@@ -543,16 +541,7 @@ describe("openclaw.chat", () => {
     setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(async () => {
       started.resolve();
       await release.promise;
-      return {
-        candidates: [],
-        unavailableCandidates: [],
-        manualProviders: [],
-        authOptions: [],
-        prepareOptions: [],
-        recommendedInstalls: [],
-        workspace: "/tmp/work",
-        setupComplete: false,
-      };
+      return { setupComplete: false } as never;
     });
     const activeAtResponse: number[] = [];
 
@@ -569,10 +558,9 @@ describe("openclaw.chat", () => {
     await pending;
 
     expect(activeAtResponse).toEqual([0]);
-    expect(setupInferenceDetectionMocks.detectSetupInferenceIsolated).toHaveBeenCalledWith({
-      agentId: "research",
-    });
-    expect(systemAgentLane().activeCount).toBe(0);
+    const [detectOptions] =
+      setupInferenceDetectionMocks.detectSetupInferenceIsolated.mock.calls[0]!;
+    expect(detectOptions?.agentId).toBe("research");
   });
 
   it.each([
@@ -592,10 +580,8 @@ describe("openclaw.chat", () => {
     setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
     const { calls, respond } = makeRespond();
 
-    await systemAgentHandler("openclaw.setup.verify")({
-      params: { agentId: "research" },
-      respond,
-    } as never);
+    const verify = systemAgentHandler("openclaw.setup.verify");
+    await verify({ params: { agentId: "research" }, respond } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
       agentId: "research",

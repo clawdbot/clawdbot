@@ -19,7 +19,7 @@ export type ModelSetupWizardCompletion = {
 
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
-  getAgentId?: () => string | null;
+  getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
@@ -55,7 +55,7 @@ export class ModelSetupWizardRunner {
     this.startMethod = startMethod;
     this.setState({ phase: "starting", authChoice });
     try {
-      const agentId = this.options.getAgentId?.() ?? null;
+      const agentId = this.options.getAgentId();
       const started = await client.request<SystemAgentSetupAuthStartResult>(
         startMethod,
         {

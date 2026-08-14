@@ -296,13 +296,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     // the mutation lane and off the Gateway event loop so health stays live.
     const { detectSetupInferenceIsolated } =
       await import("../../system-agent/setup-inference-detection.js");
-    respond(
-      true,
-      await detectSetupInferenceIsolated({
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-      }),
-      undefined,
-    );
+    respond(true, await detectSetupInferenceIsolated(params), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": async ({ params, respond }) => {
@@ -318,14 +312,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     }
     await runSystemAgentGatewayTask(async () => {
       const { verifySetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(
-        true,
-        await verifySetupInference({
-          runtime: defaultRuntime,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-        }),
-        undefined,
-      );
+      respond(true, await verifySetupInference({ runtime: defaultRuntime, ...params }), undefined);
     });
   },
   /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
