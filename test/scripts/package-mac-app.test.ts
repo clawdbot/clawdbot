@@ -1701,6 +1701,19 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
+  it("refreshes runtime metadata before packing and then stages external defaults", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const refreshIndex = script.indexOf(
+      'node --import tsx "$ROOT_DIR/scripts/runtime-postbuild.mts"',
+    );
+    const packageIndex = script.indexOf('node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs"');
+    const stageIndex = script.indexOf('node "$ROOT_DIR/scripts/stage-macos-prewarmed-plugins.mjs"');
+
+    expect(refreshIndex).toBeGreaterThanOrEqual(0);
+    expect(packageIndex).toBeGreaterThan(refreshIndex);
+    expect(stageIndex).toBeGreaterThan(packageIndex);
+  });
+
   it("does not mask required Info.plist stamp failures", () => {
     const script = readFileSync(scriptPath, "utf8");
     const stampBlock = script.slice(

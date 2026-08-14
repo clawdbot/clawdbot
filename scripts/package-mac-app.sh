@@ -652,13 +652,17 @@ run_pnpm() {
 }
 
 bundle_prewarmed_runtime() {
-  local work_dir package_dir prefix_dir runtime_tgz runtime_directory node_path entry_path
+  local work_dir package_dir prefix_dir runtime_tgz runtime_directory runtime_root node_path entry_path
+  local plugin_work_dir
   local archive_name archive_path manifest_path archive_sha version_output
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-mac-runtime.XXXXXX")"
   PACKAGE_TEMP_DIRS+=("$work_dir")
   package_dir="$work_dir/package"
   prefix_dir="$work_dir/prefix"
   mkdir -p "$package_dir" "$prefix_dir"
+
+  echo "🧭 Refreshing packaged runtime metadata"
+  node --import tsx "$ROOT_DIR/scripts/runtime-postbuild.mts"
 
   echo "📦 Packing the exact OpenClaw runtime"
   runtime_tgz="$(
@@ -683,12 +687,21 @@ bundle_prewarmed_runtime() {
     --version "file:$runtime_tgz"
 
   runtime_directory="node-v${PREWARMED_NODE_VERSION}"
+  runtime_root="$prefix_dir/tools/$runtime_directory/lib/node_modules/openclaw"
   node_path="$prefix_dir/tools/$runtime_directory/bin/node"
-  entry_path="$prefix_dir/tools/$runtime_directory/lib/node_modules/openclaw/dist/entry.js"
+  entry_path="$runtime_root/dist/entry.js"
   [[ -x "$node_path" && -r "$entry_path" ]] || {
     echo "ERROR: Prewarmed runtime staging is incomplete." >&2
     return 1
   }
+
+  echo "🧩 Prewarming external plugins"
+  plugin_work_dir="$work_dir/plugins"
+  node "$ROOT_DIR/scripts/stage-macos-prewarmed-plugins.mjs" \
+    --repo-root "$ROOT_DIR" \
+    --runtime-root "$runtime_root" \
+    --work-dir "$plugin_work_dir"
+
   version_output="$("$node_path" "$entry_path" --version)"
   [[ "$version_output" == *"OpenClaw ${APP_VERSION}"* ]] || {
     echo "ERROR: Prewarmed runtime version does not match app version: $version_output" >&2
