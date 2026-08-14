@@ -1,6 +1,12 @@
 import { createHash, X509Certificate } from "node:crypto";
+import type { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import http, {
+  createServer as createHttpServer,
+  type RequestOptions,
+  type Server as HttpServer,
+} from "node:http";
 import https, { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import type { Socket } from "node:net";
 import path from "node:path";
@@ -14,6 +20,28 @@ import { runCommandBuffered, runExec } from "../process/exec.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+type DrainProbe = {
+  emitter: EventEmitter;
+  drains: number;
+  maxErrorListeners: number;
+};
+
+function observeDrainListeners(emitter: EventEmitter): DrainProbe {
+  const probe = { emitter, drains: 0, maxErrorListeners: 0 };
+  emitter.on("newListener", (event) => {
+    if (event === "error") {
+      probe.maxErrorListeners = Math.max(
+        probe.maxErrorListeners,
+        emitter.listenerCount("error") + 1,
+      );
+    }
+  });
+  emitter.on("drain", () => {
+    probe.drains += 1;
+  });
+  return probe;
+}
 
 async function listen(server: HttpServer | HttpsServer): Promise<string> {
   await new Promise<void>((resolve, reject) => {

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
@@ -118,7 +119,7 @@ function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<vo
   });
 }
 
-function openRequest(params: {
+async function openRequest(params: {
   gatewayUrl: string;
   tlsFingerprint?: string;
   routePath: string;
@@ -129,27 +130,25 @@ function openRequest(params: {
   writeBody?: (request: ClientRequest) => Promise<void>;
 }): Promise<IncomingMessage> {
   const url = transferUrl(params.gatewayUrl, params.routePath);
-  return new Promise<IncomingMessage>((resolve, reject) => {
-    const transport = url.protocol === "https:" ? https : http;
-    const request = transport.request(url, {
-      method: params.method,
-      headers: { authorization: `Bearer ${params.token}`, ...params.headers },
-      signal: params.signal,
-      ...(url.protocol === "https:" && params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
-    });
-    request.once("response", resolve);
-    request.once("error", reject);
-    const send = async () => {
-      if (url.protocol === "https:") {
-        await waitForTlsPin(request, params.tlsFingerprint);
-      }
-      await params.writeBody?.(request);
-      request.end();
-    };
-    void send().catch((error: unknown) =>
-      request.destroy(error instanceof Error ? error : new Error(String(error))),
-    );
+  const transport = url.protocol === "https:" ? https : http;
+  const request = transport.request(url, {
+    method: params.method,
+    headers: { authorization: `Bearer ${params.token}`, ...params.headers },
+    signal: params.signal,
+    ...(url.protocol === "https:" && params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
   });
+  const response = once(request, "response").then(([message]) => message as IncomingMessage);
+  const send = async () => {
+    if (url.protocol === "https:") {
+      await waitForTlsPin(request, params.tlsFingerprint);
+    }
+    await params.writeBody?.(request);
+    request.end();
+  };
+  void send().catch((error: unknown) =>
+    request.destroy(error instanceof Error ? error : new Error(String(error))),
+  );
+  return await response;
 }
 
 async function readResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
@@ -211,16 +210,12 @@ async function downloadFile(params: {
       }
       hash.update(chunk);
       if (!output.write(chunk)) {
-        await new Promise<void>((resolve, reject) => {
-          output.once("drain", resolve);
-          output.once("error", reject);
-        });
+        await once(output, "drain");
       }
     }
-    await new Promise<void>((resolve, reject) => {
-      output.once("error", reject);
-      output.end(resolve);
-    });
+    const finished = once(output, "finish");
+    output.end();
+    await finished;
   } catch (error) {
     output.destroy();
     await fsp.rm(params.destination, { force: true });
@@ -583,10 +578,7 @@ async function writeChunk(request: ClientRequest, chunk: Buffer): Promise<void> 
   if (request.write(chunk)) {
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    request.once("drain", resolve);
-    request.once("error", reject);
-  });
+  await once(request, "drain");
 }
 
 async function uploadFile(request: ClientRequest, filePath: string): Promise<void> {
