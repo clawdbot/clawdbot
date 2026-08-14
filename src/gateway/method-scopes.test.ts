@@ -137,13 +137,13 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });
 
-  it("allows existing Mac device grants to verify configured inference", () => {
+  it("keeps bounded setup verification within existing write-turn authority", () => {
+    const existingMacScopes = ["operator.read", "operator.write", "operator.approvals"];
+    expect(authorizeOperatorScopesForMethod("openclaw.setup.verify", existingMacScopes)).toEqual({
+      allowed: true,
+    });
     expect(
-      authorizeOperatorScopesForMethod("openclaw.setup.verify", [
-        "operator.read",
-        "operator.write",
-        "operator.approvals",
-      ]),
+      authorizeOperatorScopesForMethod("agent", existingMacScopes, { message: "hello" }),
     ).toEqual({ allowed: true });
   });
 

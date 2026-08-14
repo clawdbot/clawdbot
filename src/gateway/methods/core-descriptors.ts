@@ -407,8 +407,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // sessions.files.* trusted-operator read domain.
   ["sessions.diff", "sessions-diff", "operator.read", "<=2026.7"],
   // Additive protocol methods append here to preserve existing advertised indices.
-  // Runs a live inference turn and can spend provider tokens, but does not
-  // mutate Gateway configuration.
+  // Match ordinary write-scoped agent turns: the caller cannot select a model,
+  // tools are disabled, output is capped at 32 tokens, and config/auth stay read-only.
   ["openclaw.setup.verify", "system-agent", "operator.write", "<=2026.7"],
   // Cloud-worker mutations depend on the loaded provider registry and owned
   // reconciler, so advertise them early but gate dispatch until sidecars are ready.

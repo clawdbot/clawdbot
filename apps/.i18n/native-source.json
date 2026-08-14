@@ -24747,6 +24747,17 @@
       ]
     },
     {
+      "id": "native.apple.c4aa52c5646a434e",
+      "source": "Configured AI needs attention",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.c81b1c4da43da35d",
       "source": "Confirm",
       "surface": "apple",
