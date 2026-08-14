@@ -12,6 +12,10 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
+import {
+  attachToolAllowlistIntersection,
+  readToolAllowlistIntersection,
+} from "../../agents/tool-policy.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
@@ -323,6 +327,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
+  const queuedToolsAllow = opts?.toolsAllow ? [...opts.toolsAllow] : opts?.toolsAllow;
+  const queuedToolIntersections = opts?.toolsAllow
+    ? readToolAllowlistIntersection(opts.toolsAllow)
+    : undefined;
+  if (queuedToolsAllow && queuedToolIntersections) {
+    attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
+  }
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -340,6 +351,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
+    ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
+    ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
@@ -374,6 +387,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+      memberRoleIds: Array.isArray(sessionCtx.MemberRoleIds)
+        ? sessionCtx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
+            (roleId): roleId is string => Boolean(roleId),
+          )
+        : undefined,
       // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
       spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),

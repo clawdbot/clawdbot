@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  resolveFreshSessionTotalTokens,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -2776,17 +2779,17 @@ describe("recordCliCompactionInStore", () => {
 
       await recordCliCompactionInStore({
         compactionKind: "native-harness",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,
-        tokensAfter: 0,
+        tokensAfter: 3_210,
       });
 
       const persisted = loadPersistedSessionStore(storePath);
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(3_210);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(resolveFreshSessionTotalTokens(sessionStore[sessionKey])).toBe(3_210);
       expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
@@ -2796,8 +2799,9 @@ describe("recordCliCompactionInStore", () => {
         sessionId: "stale-cli-session",
       });
       expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBe("stale-cli-session");
-      expect(persisted[sessionKey]?.totalTokens).toBe(0);
+      expect(persisted[sessionKey]?.totalTokens).toBe(3_210);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(resolveFreshSessionTotalTokens(persisted[sessionKey])).toBe(3_210);
       expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
       expect(persisted[sessionKey]?.cliSessionBindings?.codex).toEqual({
         sessionId: "stale-cli-session",
@@ -2845,7 +2849,6 @@ describe("recordCliCompactionInStore", () => {
 
       await recordCliCompactionInStore({
         compactionKind: "native-harness",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,
@@ -2881,7 +2884,6 @@ describe("recordCliCompactionInStore", () => {
 
       await recordCliCompactionInStore({
         compactionKind: "native-harness",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,
@@ -2919,16 +2921,20 @@ describe("recordCliCompactionInStore", () => {
             codex: {
               sessionId: "stale-cli-session",
             },
+            "claude-cli": {
+              sessionId: "stale-claude-session",
+            },
           },
           cliSessionIds: {
             codex: "stale-cli-session",
+            "claude-cli": "stale-claude-session",
           },
+          claudeCliSessionId: "stale-claude-session",
         },
       };
 
       await recordCliCompactionInStore({
         compactionKind: "context-engine",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,
@@ -2942,6 +2948,9 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.totalTokens).toBe(42);
       expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds).toBeUndefined();
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
       expect(persisted?.sessionId).toBe(sessionId);
       expect(persisted?.modelProvider).toBe("openai");
       expect(persisted?.model).toBe("gpt-5.5");
@@ -2968,7 +2977,6 @@ describe("recordCliCompactionInStore", () => {
 
       const result = await recordCliCompactionInStore({
         compactionKind: "context-engine",
-        provider: "codex",
         sessionKey,
         sessionStore,
         storePath,

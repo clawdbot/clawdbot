@@ -197,7 +197,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (snapshot.client !== this.observedClient) {
       this.resetClientState(snapshot.client);
     }
-    if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
+    if (
+      !this.context.agents.state.agentsList &&
+      !this.context.agents.state.agentsLoading &&
+      !this.context.agents.state.agentsError
+    ) {
       void this.context.agents.ensureList();
     }
     if (
@@ -587,7 +591,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
-    const agents = this.context.agents.state.agentsList?.agents ?? [];
+    const agentsState = this.context.agents.state;
+    const agents = agentsState.agentsList?.agents ?? [];
+    const rosterError = agentsState.agentsList ? null : agentsState.agentsError;
     const selected = agents.find((agent) => normalizeAgentId(agent.id) === this.selectedAgentId);
     const selectedAgentLabel = selected ? normalizeAgentLabel(selected) : this.selectedAgentId;
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
@@ -620,9 +626,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const configuredModels = buildSelectableDefaultModels(data.models, defaults);
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
-      loading: gatewaySnapshot.phase === "connected" && this.data === null,
+      loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
       refreshing: this.refreshTask.status === TaskStatus.PENDING,
-      error: data.error ?? data.catalogError,
+      error: rosterError ?? data.error ?? data.catalogError,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,
@@ -649,7 +655,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       addProviderOpen: this.addProviderOpen,
       addProviderId: this.addProviderId,
       addProviderKey: this.addProviderKey,
-      onRefresh: () => void this.refresh({ force: true }),
+      onRefresh: () =>
+        void (rosterError ? this.context.agents.refreshList() : this.refresh({ force: true })),
       onOpenKeyEditor: (provider) => this.openKeyEditor(provider),
       onCloseKeyEditor: () => this.closeKeyEditor(),
       onKeyDraftChange: (value) => (this.keyDraft = value),

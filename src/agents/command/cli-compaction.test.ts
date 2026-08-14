@@ -674,7 +674,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
         compactionKind: "native-harness",
-        provider: "openai",
         sessionKey,
         tokensAfter: 100,
       }),
@@ -891,7 +890,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "codex",
         sessionKey,
         tokensAfter: 42,
         newSessionId: "session-codex-owned-engine-rotated",
@@ -927,7 +925,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
         compactionKind: "context-engine",
-        provider: "external-harness",
         sessionKey,
         tokensAfter: 100,
       }),
@@ -971,7 +968,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "codex",
         sessionKey,
         tokensAfter: 100,
       }),
@@ -1048,7 +1044,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "codex",
         sessionKey,
         tokensAfter: 100,
       }),
@@ -1082,7 +1077,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(1);
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "codex", sessionKey }),
+      expect.objectContaining({ sessionKey }),
     );
     expect(updatedEntry?.compactionCount).toBe(1);
   });

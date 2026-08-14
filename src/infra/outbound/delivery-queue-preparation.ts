@@ -11,6 +11,7 @@ import {
   loadDeliveryQueueEntry,
   type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
+import { unknownDeliveryTerminalPolicy } from "../delivery-queue-terminal-policy.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
@@ -59,6 +60,7 @@ function createStablePreparation(
     enqueuedAt: now,
     retryCount: 0,
     attemptCount: 0,
+    failureRetention: "permanent",
     preparationState: "claimed",
     preparationOwnerId: ownerId,
     preparationLeaseExpiresAt: now + STABLE_PREPARATION_LEASE_MS,
@@ -83,6 +85,7 @@ function failStablePreparation(
       enqueuedAt: entry.enqueuedAt,
       retryCount: entry.retryCount,
       attemptCount: entry.attemptCount,
+      terminalPolicy: unknownDeliveryTerminalPolicy(),
     },
     stateDir,
   });

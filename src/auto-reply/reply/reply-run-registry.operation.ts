@@ -94,6 +94,8 @@ export function createReplyOperation(params: {
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
+  let toolAuthorityFingerprint: string | undefined;
+  let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
   let ownerSettled = false;
   const settleOwner = () => {
@@ -237,6 +239,12 @@ export function createReplyOperation(params: {
     get acceptedSteeredInboundAudio() {
       return acceptedSteeredInboundAudio;
     },
+    get toolAuthorityFingerprint() {
+      return toolAuthorityFingerprint;
+    },
+    get toolAuthorityRoute() {
+      return toolAuthorityRoute;
+    },
     get phase() {
       return phase;
     },
@@ -319,6 +327,24 @@ export function createReplyOperation(params: {
     },
     markAcceptedSteeredInboundAudio() {
       acceptedSteeredInboundAudio = true;
+    },
+    bindToolAuthorityFingerprint(fingerprint) {
+      const normalized = normalizeOptionalString(fingerprint);
+      if (!normalized) {
+        throw new Error("Reply operation tool authority fingerprint is required");
+      }
+      if (toolAuthorityFingerprint && toolAuthorityFingerprint !== normalized) {
+        throw new Error("Reply operation cannot change tool authority after admission");
+      }
+      toolAuthorityFingerprint = normalized;
+    },
+    bindToolAuthorityRoute(route) {
+      const provider = normalizeOptionalString(route.provider);
+      const model = normalizeOptionalString(route.model);
+      if (!provider || !model) {
+        throw new Error("Reply operation tool authority route is required");
+      }
+      toolAuthorityRoute = { provider, model };
     },
     updateSessionId(nextSessionId) {
       if (result) {
@@ -406,6 +432,12 @@ export function createReplyOperation(params: {
         return;
       }
       recordActivity();
+      const backendToolAuthorityFingerprint = normalizeOptionalString(
+        handle.toolAuthorityFingerprint,
+      );
+      if (backendToolAuthorityFingerprint) {
+        toolAuthorityFingerprint = backendToolAuthorityFingerprint;
+      }
       attachedBackendByOperation.set(operation, handle);
       if (controller.signal.aborted) {
         handle.cancel("superseded");

@@ -3764,6 +3764,17 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     const buildStepCache = workflow.jobs["build-artifacts"].steps.find(
       (step: WorkflowStep) => step.name === "Restore build-all step cache",
     );
+    const hostedTestCacheInput =
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}";
+    const hostedTestCacheJobs = [
+      "checks-ui",
+      "checks-ui-e2e",
+      "sqlite-session-lifecycle",
+      "checks-fast-plugin-contracts-shard",
+      "checks-fast-channel-contracts-shard",
+    ];
+    const hostedFastCoreTestCacheInput =
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}";
 
     expect(setupNodeStep.with).toMatchObject({
       "node-compile-cache": "true",
@@ -3776,6 +3787,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(setupNodeStep.with).not.toHaveProperty("runtime-cache-sticky-disk");
     expect(action.inputs).not.toHaveProperty("runtime-cache-sticky-disk");
     expect(action.inputs["vitest-fs-cache"].default).toBe("false");
+    expect(action.inputs["restore-test-caches"].default).toBe("false");
     expect(action.inputs["save-vitest-fs-cache"].default).toBe("false");
     expect(action.inputs["node-compile-cache"].default).toBe("false");
     expect(action.inputs["node-compile-cache-scope"].default).toBe("test");
@@ -3802,12 +3814,14 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(writerStep.with.key).toContain("!**/node_modules/**");
     expect(writerStep.with["restore-keys"]).toContain("!**/node_modules/**");
     expect(readerStep.uses).toBe(CACHE_V5);
+    expect(readerStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(readerStep.if).toContain("inputs.save-vitest-fs-cache != 'true'");
     expect(readerStep.with["restore-keys"]).toBe(writerStep.with["restore-keys"]);
     expect(readerStep.with.key).toContain("!**/node_modules/**");
     expect(readerStep.with.key).toContain("src/state/*.sql");
     expect(configureStep.env.CACHE_GENERATION).toContain("!**/node_modules/**");
     expect(configureStep.env.CACHE_GENERATION).toContain("src/state/*.sql");
+    expect(configureStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
     expect(configureStep.run).not.toContain("protected Vitest transform seed");
@@ -3823,7 +3837,10 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
     expect(compileWriterStep.with.key).toContain("steps.node-compile-cache-epoch.outputs.value");
     expect(compileWriterStep.with.key).not.toContain("pull_request");
+    expect(compileEpochStep.if).toContain("inputs.restore-test-caches == 'true'");
+    expect(compileReaderStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(compileReaderStep.with["restore-keys"]).toBe(compileWriterStep.with["restore-keys"]);
+    expect(compileConfigureStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(compileConfigureStep.run).toContain("NODE_COMPILE_CACHE=$cache_root");
     expect(compileConfigureStep.run).toContain("NODE_COMPILE_CACHE_PORTABLE=1");
     expect(compileConfigureStep.env.CACHE_WRITER).toBe(
@@ -3844,6 +3861,84 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(buildStepCache.with.key).toContain("'!packages/**/dist/**'");
     expect(buildStepCache.with.key).toContain("'!packages/**/node_modules/**'");
     expect(buildStepCache.with["restore-keys"]).toContain("build-all-v4-");
+
+    for (const jobName of hostedTestCacheJobs) {
+      const setup = workflow.jobs[jobName].steps.find(
+        (step: WorkflowStep) => step.name === "Setup Node environment",
+      );
+      expect(setup.with["restore-test-caches"], jobName).toBe(hostedTestCacheInput);
+      expect(
+        evaluateWorkflowExpression(setup.with["restore-test-caches"], {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        }),
+        jobName,
+      ).toBe("true");
+      expect(
+        evaluateWorkflowExpression(setup.with["restore-test-caches"], {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runnerBackend: "blacksmith",
+          runAttempt: 1,
+        }),
+        jobName,
+      ).toBe("false");
+      expect(setup.with, jobName).not.toHaveProperty("save-node-compile-cache");
+      expect(setup.with, jobName).not.toHaveProperty("save-vitest-fs-cache");
+    }
+    const fastCoreSetup = workflow.jobs["checks-fast-core"].steps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
+    expect(fastCoreSetup.with["restore-test-caches"]).toBe(hostedFastCoreTestCacheInput);
+    for (const task of [
+      "bundled-protocol",
+      "contracts-plugins-ci-routing",
+      "ci-routing",
+      "bun-launcher",
+    ]) {
+      expect(
+        evaluateWorkflowExpression(fastCoreSetup.with["restore-test-caches"], {
+          eventName: "push",
+          matrix: { task },
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        }),
+        task,
+      ).toBe("true");
+    }
+    for (const task of ["coercion-helpers", "max-lines-ratchet"]) {
+      expect(
+        evaluateWorkflowExpression(fastCoreSetup.with["restore-test-caches"], {
+          eventName: "push",
+          matrix: { task },
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        }),
+        task,
+      ).toBe("false");
+    }
+    expect(
+      evaluateWorkflowExpression(fastCoreSetup.with["restore-test-caches"], {
+        eventName: "push",
+        matrix: { task: "bundled-protocol" },
+        repository: "openclaw/openclaw",
+        runnerBackend: "blacksmith",
+        runAttempt: 1,
+      }),
+    ).toBe("false");
+    expect(fastCoreSetup.with).not.toHaveProperty("save-node-compile-cache");
+    expect(fastCoreSetup.with).not.toHaveProperty("save-vitest-fs-cache");
+
+    for (const jobName of ["checks-ui-e2e-real-gateway", "native-i18n", "control-ui-i18n"]) {
+      const setup = workflow.jobs[jobName].steps.find(
+        (step: WorkflowStep) => step.name === "Setup Node environment",
+      );
+      expect(setup.with, jobName).not.toHaveProperty("restore-test-caches");
+    }
   });
 
   it("warms protected caches without main-run cancellation", () => {
@@ -6016,7 +6111,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Control UI E2E Node setup",
     );
     expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
-    const expectedUiE2eSetup = {
+    const expectedSharedUiE2eSetup = {
       "node-version": "24.x",
       "install-bun": "false",
       "dependency-cache":
@@ -6024,12 +6119,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "use-actions-cache":
         "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
     } as const;
+    const expectedUiE2eSetup = {
+      ...expectedSharedUiE2eSetup,
+      "restore-test-caches":
+        "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}",
+    } as const;
     expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
     const realGatewaySetup = expectDefined(
       uiE2eRealGateway.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
       "real-Gateway Control UI E2E Node setup",
     );
-    expect(realGatewaySetup).toEqual(uiE2eSetup);
+    expect(realGatewaySetup).toMatchObject({
+      uses: uiE2eSetup.uses,
+      with: expectedSharedUiE2eSetup,
+    });
+    expect(realGatewaySetup.with).toEqual(expectedSharedUiE2eSetup);
 
     const routedUiE2eJobs = [
       {

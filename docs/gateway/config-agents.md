@@ -17,7 +17,7 @@ OpenClaw stamps `agents.ownership: "explicit"` when creating a multi-agent fleet
 
 ### `agents.defaults.workspace`
 
-Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `~/.openclaw/workspace` (or `~/.openclaw/workspace-<profile>` when `OPENCLAW_PROFILE` is set to a non-default profile).
+Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `<state-dir>/workspace`. This is `~/.openclaw/workspace` for the default install and `~/.openclaw-<profile>/workspace` for a named profile. A custom `OPENCLAW_STATE_DIR` keeps the workspace under that state directory.
 
 ```json5
 {

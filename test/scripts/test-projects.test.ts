@@ -42,26 +42,35 @@ import {
 
 const normalizeRepoPath = toRepoPath;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
+const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 5;
 
 function expectedMatrixTestProcessCount() {
   const testFileCount = listExtensionTestFilesForRoots(["extensions/matrix"]).length;
   return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
 }
 
+function expectedTelegramTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots(["extensions/telegram"]).length;
+  return Math.max(1, Math.ceil(testFileCount / TELEGRAM_TEST_PROCESS_FILE_LIMIT));
+}
+
 function listExpectedFullExtensionRunPlans() {
   const matrixConfig = "test/vitest/vitest.extension-matrix.config.ts";
-  const matrixPlans = buildVitestRunPlans(["extensions/matrix"], process.cwd());
-  return listFullExtensionVitestProjectConfigs().flatMap((config) =>
-    config === matrixConfig
-      ? matrixPlans
-      : [
-          {
-            config,
-            forwardedArgs: [],
-            includePatterns: null,
-            watchMode: false,
-          },
-        ],
+  const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
+  const boundedPlansByConfig = new Map([
+    [matrixConfig, buildVitestRunPlans(["extensions/matrix"], process.cwd())],
+    [telegramConfig, buildVitestRunPlans(["extensions/telegram"], process.cwd())],
+  ]);
+  return listFullExtensionVitestProjectConfigs().flatMap(
+    (config) =>
+      boundedPlansByConfig.get(config) ?? [
+        {
+          config,
+          forwardedArgs: [],
+          includePatterns: null,
+          watchMode: false,
+        },
+      ],
   );
 }
 
@@ -1924,6 +1933,40 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plan.targets).not.toContain("extensions/discord/src/channel-actions.contract.test.ts");
   });
 
+  it.each([
+    ["extensions/imessage/message-tool-api.ts", "extensions/imessage/src/message-tool-api.test.ts"],
+    ["extensions/imessage/src/actions.ts", "extensions/imessage/src/actions.test.ts"],
+    ["extensions/imessage/src/channel.ts", "extensions/imessage/src/test-plugin.test.ts"],
+    ["extensions/slack/message-tool-api.ts", "extensions/slack/message-tool-api.ts"],
+    [
+      "extensions/slack/src/channel-actions.ts",
+      "extensions/slack/src/channel-actions-setup-status.contract.test.ts",
+    ],
+    ["extensions/slack/src/channel.ts", "extensions/slack/src/channel.test.ts"],
+    ["extensions/mattermost/gateway-auth-api.ts", "extensions/mattermost/gateway-auth-api.ts"],
+    ["extensions/mattermost/src/channel.ts", "extensions/mattermost/src/channel.test.ts"],
+    ["extensions/feishu/session-key-api.ts", "extensions/feishu/session-key-api.ts"],
+    ["extensions/feishu/src/channel.ts", "extensions/feishu/src/channel.test.ts"],
+    ["extensions/telegram/session-key-api.ts", "extensions/telegram/session-key-api.ts"],
+    ["extensions/telegram/src/channel.ts", "test/telegram-question-gateway.test.ts"],
+    ["extensions/discord/session-key-api.ts", "extensions/discord/session-key-api.ts"],
+    ["extensions/discord/thread-binding-api.ts", "extensions/discord/thread-binding-api.ts"],
+    ["extensions/discord/src/channel.ts", "extensions/discord/src/channel.test.ts"],
+    ["extensions/matrix/thread-binding-api.ts", "extensions/matrix/thread-binding-api.ts"],
+    ["extensions/matrix/src/channel.ts", "extensions/matrix/src/channel.threading.test.ts"],
+  ] as const)(
+    "routes %s through its owner and the plugin-shape parity contract",
+    (changedPath, ownerTarget) => {
+      const plan = resolveChangedTestTargetPlan([changedPath]);
+
+      expect(plan.mode).toBe("targets");
+      expect(plan.targets).toContain(ownerTarget);
+      expect(plan.targets).toContain(
+        "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
+      );
+    },
+  );
+
   it("routes precise plugin contract helpers without broad-running every shard", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
@@ -2050,12 +2093,15 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes the top-level extensions target to every extension shard", () => {
     const matrixConfig = "test/vitest/vitest.extension-matrix.config.ts";
+    const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
     const plans = buildVitestRunPlans(["extensions"], process.cwd());
     const matrixPlans = plans.filter((plan) => plan.config === matrixConfig);
+    const telegramPlans = plans.filter((plan) => plan.config === telegramConfig);
+    const boundedConfigs = new Set([matrixConfig, telegramConfig]);
 
-    expect(plans.filter((plan) => plan.config !== matrixConfig)).toEqual(
+    expect(plans.filter((plan) => !boundedConfigs.has(plan.config))).toEqual(
       listFullExtensionVitestProjectConfigs()
-        .filter((config) => config !== matrixConfig)
+        .filter((config) => !boundedConfigs.has(config))
         .map((config) => ({
           config,
           forwardedArgs: [],
@@ -2072,7 +2118,32 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(matrixPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
+    expect(telegramPlans).toHaveLength(expectedTelegramTestProcessCount());
+    expect(
+      telegramPlans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= TELEGRAM_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
+    expect(telegramPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
+      listExtensionTestFilesForRoots(["extensions/telegram"]),
+    );
     expect(plans).toEqual(listExpectedFullExtensionRunPlans());
+  });
+
+  it("bounds an explicit Telegram config target across process lifetimes", () => {
+    const config = "test/vitest/vitest.extension-telegram.config.ts";
+    const plans = buildVitestRunPlans([config], process.cwd());
+
+    expect(plans).toHaveLength(expectedTelegramTestProcessCount());
+    expect(plans.every((plan) => plan.config === config)).toBe(true);
+    expect(
+      plans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= TELEGRAM_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
+    expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
+      listExtensionTestFilesForRoots(["extensions/telegram"]),
+    );
   });
 
   it("bounds an explicit Matrix directory target across process lifetimes", () => {

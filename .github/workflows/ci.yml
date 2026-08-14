@@ -1505,6 +1505,7 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
 
       - name: Download exact-run built runtime
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -1585,6 +1586,7 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
 
       - &cache_playwright_chromium
         name: Cache Playwright Chromium
@@ -1659,6 +1661,7 @@ jobs:
           # Blacksmith runs restore the preflight-published dependency tree.
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
+          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
 
       - *cache_playwright_chromium
       - *install_playwright_chromium
@@ -1828,6 +1831,7 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -2101,6 +2105,7 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
 
       - name: Run plugin contract shard
         env:
@@ -2143,6 +2148,7 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
 
       - name: Run channel contract shard
         env:

@@ -4,6 +4,8 @@ set -euo pipefail
 APP_BUNDLE="dist/OpenClaw.app"
 IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
+CODESIGN_TIMESTAMP_RETRY_ATTEMPTS="${CODESIGN_TIMESTAMP_RETRY_ATTEMPTS:-8}"
+CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS="${CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS:-5}"
 DISABLE_LIBRARY_VALIDATION="${DISABLE_LIBRARY_VALIDATION:-0}"
 SKIP_TEAM_ID_CHECK="${SKIP_TEAM_ID_CHECK:-0}"
 ENT_TMP_DIR=""
@@ -22,6 +24,8 @@ Env:
   SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"
   ALLOW_ADHOC_SIGNING=1
   CODESIGN_TIMESTAMP=auto|on|off
+  CODESIGN_TIMESTAMP_RETRY_ATTEMPTS=8
+  CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS=5
   DISABLE_LIBRARY_VALIDATION=1      # dev-only Sparkle Team ID workaround
   SKIP_TEAM_ID_CHECK=1              # bypass Team ID audit
 HELP
@@ -147,9 +151,19 @@ if [[ "$IDENTITY" == "-" ]]; then
   timestamp_arg="--timestamp=none"
 fi
 
+if [[ ! "$CODESIGN_TIMESTAMP_RETRY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: CODESIGN_TIMESTAMP_RETRY_ATTEMPTS must be a positive integer" >&2
+  exit 1
+fi
+if [[ ! "$CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS must be a nonnegative integer" >&2
+  exit 1
+fi
+
 ENT_TMP_DIR=$(mktemp -d -t openclaw-entitlements.XXXXXX)
 trap cleanup EXIT
 ENT_TMP_APP="$ENT_TMP_DIR/app.plist"
+CODESIGN_OUTPUT="$ENT_TMP_DIR/codesign-output"
 
 options_args=()
 if [[ "$IDENTITY" != "-" ]]; then
@@ -185,15 +199,46 @@ APP_ENTITLEMENTS="$ENT_TMP_APP"
 # clear extended attributes to avoid stale signatures
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
+codesign_with_timestamp_retry() {
+  local attempt=1
+  local command_rc
+  local delay
+
+  while true; do
+    : >"$CODESIGN_OUTPUT"
+    command_rc=0
+    codesign "$@" >"$CODESIGN_OUTPUT" 2>&1 || command_rc=$?
+    cat "$CODESIGN_OUTPUT" >&2
+    if [[ "$command_rc" -eq 0 ]]; then
+      return 0
+    fi
+    if [[ "$timestamp_arg" != "--timestamp" ]] ||
+      ! grep -Eiq 'A timestamp was expected but was not found|timestamp service is not available' "$CODESIGN_OUTPUT"
+    then
+      return "$command_rc"
+    fi
+    if [[ "$attempt" -ge "$CODESIGN_TIMESTAMP_RETRY_ATTEMPTS" ]]; then
+      echo "codesign timestamp retry limit reached after $attempt attempts" >&2
+      return "$command_rc"
+    fi
+
+    delay=$((CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS * attempt))
+    ((delay <= 30)) || delay=30
+    echo "Transient Apple timestamp failure; retrying codesign in ${delay}s (attempt $((attempt + 1))/$CODESIGN_TIMESTAMP_RETRY_ATTEMPTS)" >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
 sign_item() {
   local target="$1"
   local entitlements="$2"
-  codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --entitlements "$entitlements" --sign "$IDENTITY" "$target"
+  codesign_with_timestamp_retry --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --entitlements "$entitlements" --sign "$IDENTITY" "$target"
 }
 
 sign_plain_item() {
   local target="$1"
-  codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --sign "$IDENTITY" "$target"
+  codesign_with_timestamp_retry --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --sign "$IDENTITY" "$target"
 }
 
 team_id_for() {

@@ -148,8 +148,10 @@ function createHarness(initialScopeId: string) {
           ],
         },
         agentsLoading: false,
+        agentsError: null as string | null,
       },
       ensureList: vi.fn(),
+      refreshList: vi.fn(),
       subscribe,
     },
     agentSelection,
@@ -571,6 +573,25 @@ describe("ModelProvidersPage agent scope", () => {
         ([method]) => method === "models.authStatus" || method === "models.list",
       ),
     ).toEqual([]);
+  });
+
+  it("shows a roster failure without automatically retrying it", async () => {
+    const { agentSelection, context } = createHarness("main");
+    agentSelection.state.selectedId = null;
+    agentSelection.state.scopeId = null;
+    context.agents.state.agentsList = null;
+    context.agents.state.agentsError = "Agent roster unavailable";
+
+    const page = appendPage(context);
+    await page.updateComplete;
+
+    expect(context.agents.ensureList).not.toHaveBeenCalled();
+    expect(page.textContent).toContain("Agent roster unavailable");
+
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Refresh")
+      ?.click();
+    expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
 
   it("recovers when the agent changes while a refresh is in flight", async () => {

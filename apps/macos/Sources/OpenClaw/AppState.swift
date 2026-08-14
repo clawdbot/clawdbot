@@ -328,6 +328,26 @@ final class AppState {
         didSet { self.ifNotPreview { AppDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
     }
 
+    var cookieSyncEnabled: Bool {
+        didSet {
+            self.ifNotPreview { AppDefaults.standard.set(self.cookieSyncEnabled, forKey: cookieSyncEnabledKey) }
+        }
+    }
+
+    var cookieSyncIntoProfile: String {
+        didSet {
+            self.ifNotPreview {
+                AppDefaults.standard.set(self.cookieSyncIntoProfile, forKey: cookieSyncIntoProfileKey)
+            }
+        }
+    }
+
+    var cookieSyncDomains: [String] {
+        didSet {
+            self.ifNotPreview { AppDefaults.standard.set(self.cookieSyncDomains, forKey: cookieSyncDomainsKey) }
+        }
+    }
+
     var activeComputerPresenceEnabled: Bool {
         didSet { self.scheduleActiveComputerPresenceUpdate() }
     }
@@ -557,6 +577,7 @@ final class AppState {
         self.remoteCliPath = AppDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = AppDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         self.quickChatEnabled = AppDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
+        (self.cookieSyncEnabled, self.cookieSyncIntoProfile, self.cookieSyncDomains) = Self.loadCookieSyncDefaults()
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.execApprovalMode = .deny
         self.execApprovalPolicyLoadState = .loading
@@ -1521,44 +1542,14 @@ extension AppState {
 }
 
 extension AppState {
-    static var preview: AppState {
-        let state = AppState(preview: true)
-        state.isPaused = false
-        state.launchAtLogin = true
-        state.onboardingSeen = true
-        state.debugPaneEnabled = true
-        state.nativeSettingsPanesEnabled = true
-        state.swabbleEnabled = true
-        state.swabbleTriggerWords = ["Claude", "Computer", "Jarvis"]
-        state.voiceWakeTriggerChime = .system(name: "Glass")
-        state.voiceWakeSendChime = .system(name: "Ping")
-        state.iconAnimationsEnabled = true
-        state.showDockIcon = true
-        state.voiceWakeMicID = "BuiltInMic"
-        state.voiceWakeMicName = "Built-in Microphone"
-        state.voiceWakeLocaleID = Locale.current.identifier
-        state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
-        state.voicePushToTalkEnabled = false
-        state.talkEnabled = false
-        state.talkPhaseSoundsEnabled = true
-        state.talkShiftToStopEnabled = true
-        state.iconOverride = .system
-        state.heartbeatsEnabled = true
-        state.connectionMode = .local
-        state.remoteTransport = .ssh
-        state.canvasEnabled = true
-        state.quickChatEnabled = true
-        state.remoteTarget = "user@example.com"
-        state.remoteUrl = "wss://gateway.example.ts.net"
-        state.remoteToken = "example-token"
-        state.remoteIdentity = "~/.ssh/id_ed25519"
-        state.remoteProjectRoot = "~/Projects/openclaw"
-        state.remoteCliPath = ""
-        return state
+    private static func loadCookieSyncDefaults() -> (Bool, String, [String]) {
+        let defaults = AppDefaults.standard
+        return (
+            defaults.object(forKey: cookieSyncEnabledKey) as? Bool ?? false,
+            defaults.string(forKey: cookieSyncIntoProfileKey) ?? "imported",
+            defaults.stringArray(forKey: cookieSyncDomainsKey) ?? [])
     }
-}
 
-extension AppState {
     static func resolveActiveComputerPresenceEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
         defaults.bool(forKey: activeComputerPresenceEnabledKey)
     }
