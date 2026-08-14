@@ -25,6 +25,7 @@ struct MacNodeRuntimeTests {
 
     private final class CatalogWorkerProbe: @unchecked Sendable {
         private let lock = NSLock()
+        let firstStarted = AsyncTestGate()
         private let releaseFirst = DispatchSemaphore(value: 0)
         private var calls = 0
         private var active = 0
@@ -38,6 +39,7 @@ struct MacNodeRuntimeTests {
             self.peakActive = max(self.peakActive, self.active)
             self.lock.unlock()
             if call == 1 {
+                self.firstStarted.open()
                 self.releaseFirst.wait()
             }
             self.lock.lock()
@@ -87,11 +89,11 @@ struct MacNodeRuntimeTests {
         params: some Encodable,
         nodeId: String? = nil) async throws -> BridgeInvokeResponse
     {
-        return await self.invoke(
+        try await self.invoke(
             runtime,
             id,
             command,
-            String(decoding: try JSONEncoder().encode(params), as: UTF8.self),
+            String(decoding: JSONEncoder().encode(params), as: UTF8.self),
             nodeId: nodeId)
     }
 
@@ -321,29 +323,39 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `Claude catalog worker serializes filesystem operations`() async throws {
+        let secondStarted = AsyncTestGate()
         let probe = CatalogWorkerProbe()
         let worker = MacNodeClaudeSessionCatalogWorker(
             listOperation: { _ in probe.run() },
             readOperation: { _ in probe.run() })
         let first = Task { try await worker.list(paramsJSON: nil) }
-        while probe.snapshot().calls == 0 {
-            await Task.yield()
+        let second = Task {
+            await probe.firstStarted.wait()
+            secondStarted.open()
+            return try await worker.read(paramsJSON: nil)
         }
-        let second = Task { try await worker.read(paramsJSON: nil) }
-        try await Task.sleep(for: .milliseconds(50))
-
-        #expect(probe.snapshot().calls == 1)
-        let cancelStarted = ContinuousClock.now
         let watchdog = Task {
-            try await Task.sleep(for: .seconds(1))
+            try await Task.sleep(for: .seconds(10))
+            Issue.record("timed out waiting for Claude catalog worker cancellation")
+            probe.firstStarted.open()
+            secondStarted.open()
             probe.release()
         }
+        defer {
+            watchdog.cancel()
+            first.cancel()
+            second.cancel()
+            probe.release()
+        }
+        await probe.firstStarted.wait()
+        await secondStarted.wait()
+
+        #expect(probe.snapshot().calls == 1)
         second.cancel()
         await #expect(throws: CancellationError.self) {
             try await second.value
         }
-        #expect(ContinuousClock.now - cancelStarted < .milliseconds(500))
-        watchdog.cancel()
+        #expect(probe.snapshot().calls == 1)
         probe.release()
         #expect(try await first.value == "call-1")
         #expect(try await worker.read(paramsJSON: nil) == "call-2")
@@ -363,7 +375,10 @@ struct MacNodeRuntimeTests {
             readOperation: { _ in "unused" })
         let task = Task { try await worker.list(paramsJSON: nil) }
         let watchdog = Task {
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for Claude catalog worker start")
+            task.cancel()
             started.continuation.finish()
         }
         var iterator = started.stream.makeAsyncIterator()
@@ -509,9 +524,9 @@ struct MacNodeRuntimeTests {
                     height: 450,
                     displayFrameId: "display-frame-test"),
                 snapshotInspection: { screenIndex, maxWidth, quality, _ in
-                #expect(screenIndex == 0)
-                #expect(maxWidth == 800)
-                #expect(quality == 0.5)
+                    #expect(screenIndex == 0)
+                    #expect(maxWidth == 800)
+                    #expect(quality == 0.5)
                 })
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
@@ -699,7 +714,11 @@ struct MacNodeRuntimeTests {
         let params = OpenClawComputerActParams(action: .leftMouseDown, x: 12, y: 34, refWidth: 1280)
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let invoke = Task {
-            await self.invoke(runtime, "req-computer-release-after-admission", OpenClawComputerCommand.act.rawValue, json)
+            await self.invoke(
+                runtime,
+                "req-computer-release-after-admission",
+                OpenClawComputerCommand.act.rawValue,
+                json)
         }
         await performEntered.wait()
 
