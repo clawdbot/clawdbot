@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => ({
   setRuntimeConfigSnapshot: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn<
     typeof import("../agents/auth-profiles.js").loadAuthProfileStoreForRuntime
-  >(() => ({ profiles: {}, order: {} })),
+  >(() => ({ version: 1, profiles: {}, order: {} })),
   listProfilesForProvider: vi.fn<
     typeof import("../agents/auth-profiles.js").listProfilesForProvider
   >(() => []),
@@ -546,7 +546,9 @@ describe("capability cli", () => {
     mocks.loadModelCatalog
       .mockReset()
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
-    mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
+    mocks.loadAuthProfileStoreForRuntime
+      .mockReset()
+      .mockReturnValue({ version: 1, profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
     mocks.resolveApiKeyForProviderCore.mockReset().mockRejectedValue(new Error("no auth profile"));
     mocks.loadManifestMetadataSnapshot
@@ -893,8 +895,11 @@ describe("capability cli", () => {
       },
     };
     mocks.loadConfig.mockReturnValue(cfg);
-    mocks.resolveMemorySearchConfig.mockImplementation((_cfg, agentId) =>
-      agentId === "beta" ? { provider: "openai", model: "text-embedding-3-small" } : null,
+    mocks.resolveMemorySearchConfig.mockImplementation(
+      (_cfg, agentId) =>
+        (agentId === "beta"
+          ? { provider: "openai", model: "text-embedding-3-small" }
+          : null) as never,
     );
 
     await runCapability("embedding", "providers", "--json");
