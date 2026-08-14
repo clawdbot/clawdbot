@@ -551,6 +551,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-terminal-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
+        .agentId=${selectedAgentId}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
