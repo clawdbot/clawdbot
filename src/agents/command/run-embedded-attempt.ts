@@ -32,7 +32,6 @@ import { prepareInternalSessionEffectsSession } from "../internal-session-effect
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
-import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import {
   isAgentRunDirectAbortReason,
@@ -41,9 +40,9 @@ import {
 } from "../run-termination.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import { measureAgentStartup } from "../startup-timing.js";
+import { hydrateProviderScopedThinkingCatalog } from "../thinking-catalog-hydration.js";
 import {
   hasResolvedThinkingCatalogEntry,
-  normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
@@ -121,7 +120,9 @@ export async function runEmbeddedAgentAttempt(params: {
     effectiveTurnThinkLevel,
   } = params.modelSelection;
   let thinkingCatalog = params.modelSelection.thinkingCatalog;
-  let attemptedThinkingCatalogHydration = false;
+  // Keyed per override target: one hydration attempt per provider/model, so a
+  // failed discovery neither retries forever nor blocks a later different override.
+  const attemptedThinkingCatalogHydrations = new Set<string>();
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -388,40 +389,34 @@ export async function runEmbeddedAgentAttempt(params: {
               provider: providerOverride,
               model: modelOverride,
             });
+          const thinkingHydrationKey = `${providerOverride}/${modelOverride}`;
           if (
             pluginsEnabled &&
             candidateConfiguredThinkLevel !== "off" &&
-            !attemptedThinkingCatalogHydration &&
+            !attemptedThinkingCatalogHydrations.has(thinkingHydrationKey) &&
             !hasResolvedThinkingCatalogEntry({
               catalog: thinkingCatalog,
               provider: providerOverride,
               model: modelOverride,
             })
           ) {
-            attemptedThinkingCatalogHydration = true;
-            const { loadPreparedModelCatalogSnapshot } =
-              await import("../model-catalog.runtime.js");
-            const runtimeCatalog = normalizeThinkingCatalogProviders(
-              (
-                await loadPreparedModelCatalogSnapshot({
-                  config: cfg,
-                  agentId: sessionAgentId,
-                  workspaceDir,
-                })
-              ).entries,
-            );
-            const allowedRuntimeCatalog = createModelVisibilityPolicy({
+            attemptedThinkingCatalogHydrations.add(thinkingHydrationKey);
+            // Runtime-only models (for example provider OAuth "auto" aliases)
+            // resolve thinking params only through scoped live discovery; the
+            // unscoped read-only snapshot never reaches them (#122872).
+            const hydratedCatalog = await hydrateProviderScopedThinkingCatalog({
               cfg,
-              catalog: runtimeCatalog,
+              provider: providerOverride,
+              model: modelOverride,
+              agentId: sessionAgentId,
+              workspaceDir,
               defaultProvider,
               defaultModel,
-              agentId: sessionAgentId,
-              allowManifestNormalization: true,
               allowPluginNormalization: true,
-              ...modelManifestContext,
-            }).allowedCatalog;
-            if (allowedRuntimeCatalog.length > 0) {
-              thinkingCatalog = allowedRuntimeCatalog;
+              modelManifestContext,
+            });
+            if (hydratedCatalog) {
+              thinkingCatalog = hydratedCatalog;
             }
           }
           const candidateRequestedThinkLevel =

@@ -54,9 +54,9 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
+import { hydrateProviderScopedThinkingCatalog } from "../thinking-catalog-hydration.js";
 import {
   hasResolvedThinkingCatalogEntry,
-  normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
@@ -512,35 +512,19 @@ export async function resolveEmbeddedModelSelection(params: {
     primaryConfiguredThinkLevel !== "off" &&
     !hasResolvedThinkingCatalogEntry({ catalog: catalogForThinking, provider, model })
   ) {
-    // Thinking capability is a per-model fact; never materialize the full live catalog here.
-    const { loadProviderScopedThinkingCatalog } = await import("../model-catalog.runtime.js");
-    const runtimeCatalog = normalizeThinkingCatalogProviders(
-      await loadProviderScopedThinkingCatalog({
-        config: params.cfg,
-        provider,
-        model,
-        ...(params.sessionAgentId ? { agentId: params.sessionAgentId } : {}),
-        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      }),
-    );
-    const allowedRuntimeCatalog = createModelVisibilityPolicy({
+    const hydratedCatalog = await hydrateProviderScopedThinkingCatalog({
       cfg: params.cfg,
-      catalog: runtimeCatalog,
+      provider,
+      model,
+      agentId: params.sessionAgentId,
+      workspaceDir: params.workspaceDir,
       defaultProvider,
       defaultModel,
-      agentId: params.sessionAgentId,
-      allowManifestNormalization: true,
       allowPluginNormalization: params.pluginsEnabled,
-      ...params.modelManifestContext,
-    }).allowedCatalog;
-    if (
-      hasResolvedThinkingCatalogEntry({
-        catalog: allowedRuntimeCatalog,
-        provider,
-        model,
-      })
-    ) {
-      catalogForThinking = allowedRuntimeCatalog;
+      modelManifestContext: params.modelManifestContext,
+    });
+    if (hydratedCatalog) {
+      catalogForThinking = hydratedCatalog;
     }
   }
   const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;

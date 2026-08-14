@@ -1134,6 +1134,31 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("hydrates a runtime-only switched model's thinking entry via the provider-scoped catalog", async () => {
+    // Regression for #122872: the override rehydration used the unscoped
+    // read-only snapshot, so models that exist only through scoped live
+    // discovery (provider OAuth "auto" aliases) never resolved thinking params.
+    setupModelSwitchRetry({ provider: "openai", model: "gpt-5.4" });
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          provider: "openai",
+          reasoning: true,
+        },
+      ],
+      routeVariants: [],
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", model: "gpt-5.4" }),
+    );
+  });
+
   it("keeps collection off by default without blocking local execution", async () => {
     setupAdmittedSuccessfulAttempt();
 
