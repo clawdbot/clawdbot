@@ -57,6 +57,39 @@
   outline-offset: 2px;
 }
 
+/* Exhausted full-message load: quiet inline error + manual retry. */
+.chat-message-load-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+
+.chat-message-load-error__retry {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 78%, transparent);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  cursor: var(--cursor-action);
+}
+
+.chat-message-load-error__retry:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  color: var(--text);
+}
+
+.chat-message-load-error__retry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table, details) {
   margin: 0;
 }

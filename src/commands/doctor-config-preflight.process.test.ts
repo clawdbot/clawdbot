@@ -118,6 +118,63 @@ function seedPluginStateConflict(stateDir: string): void {
   }
 }
 
+describe("doctor invalid config process exit", () => {
+  it("exits after a complete best-effort report for an unparseable config", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-doctor-invalid-config-exit-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.NODE_OPTIONS;
+    delete env.OPENCLAW_GATEWAY_PASSWORD;
+    delete env.OPENCLAW_GATEWAY_TOKEN;
+    delete env.OPENCLAW_GATEWAY_URL;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, '{"agents": {broken json');
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.resolve("src/entry.ts"),
+        "doctor",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        env,
+        timeout: 60_000,
+      },
+    );
+    const output = `${result.stderr}\n${result.stdout}`;
+
+    expect(result.error, output).toBeUndefined();
+    expect(result.status, output).toBe(0);
+    expect(result.signal, output).toBeNull();
+    expect(output).toContain("Config invalid; doctor will run with best-effort config.");
+    expect(output).toContain("Doctor complete.");
+  }, 75_000);
+});
+
 describe.concurrent("gateway startup-migration refusal", () => {
   it("exits cleanly after reporting the refusal once and releasing its lease", async () => {
     const temporaryRoot = await fs.promises.mkdtemp(

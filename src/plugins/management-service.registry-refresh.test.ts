@@ -205,6 +205,41 @@ describe("plugin management registry refresh", () => {
     });
   });
 
+  it("keeps an ownerless managed install and returns the partial-scope action", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: {
+          main: { workspace: "/tmp/main-workspace" },
+          gadget: { workspace: "/tmp/gadget-workspace" },
+        },
+      },
+    };
+    mockClawHubWorkboardInstall();
+    mocks.readConfig.mockResolvedValue({
+      snapshot: {
+        valid: true,
+        parsed: config,
+        path: "/tmp/openclaw.json",
+        sourceConfig: config,
+        hash: "base-hash",
+      },
+      writeOptions: installSnapshot.writeOptions,
+    });
+    mocks.persistInstall.mockResolvedValue(config);
+    mocks.metadata.mockReturnValue(metadataSnapshot(false, true));
+
+    const result = await installManagedPlugin({
+      request: { source: "clawhub", packageName: "community/workboard" },
+      env: {},
+    });
+
+    expect(result.plugin.id).toBe("workboard");
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("set agents.defaults.systemAgent.agentId"),
+    );
+  });
+
   it("does not forward source-install loggers into private persistence warnings", async () => {
     mockClawHubWorkboardInstall();
     mocks.persistInstall.mockResolvedValue({});

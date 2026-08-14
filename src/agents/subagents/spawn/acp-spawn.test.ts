@@ -906,6 +906,9 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.acpTurnSource).toBe("manual_spawn");
+    expect(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "requiresTaskRow",
+    );
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       mode: "persistent",

@@ -123,6 +123,7 @@ describe("Skill Workshop proposal evaluation", () => {
     });
     const hookEvent = hookMocks.evaluate.mock.calls[0]?.[0] as PluginHookSkillProposalEvaluateEvent;
     expect(hookEvent).toMatchObject({
+      correlationId: "optimization-run-1",
       proposal: {
         id: proposal.record.id,
         revision: "v1",

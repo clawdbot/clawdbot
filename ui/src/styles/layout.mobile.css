@@ -428,9 +428,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     font-size: 14px;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-menu {
-    bottom: auto;
-    top: calc(100% + 6px);
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model-menu,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__effort-menu {
     width: 100%;
   }
 
