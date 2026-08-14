@@ -908,8 +908,8 @@ struct OnboardingAISetupTests {
             url: url,
             handler: { _, request, _ in
                 switch request.method {
-                case "agents.list": configuredModelResponse(id: request.id)
-                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
+                case "agents.list": return configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify": return rejectedSetupVerificationResponse(id: request.id)
                 case "openclaw.setup.detect":
                     if detections.claim() == 0 {
                         return reauthenticationDetectedSetupResponse(id: request.id)
@@ -917,10 +917,10 @@ struct OnboardingAISetupTests {
                     await reconciliationGate.wait()
                     return persistedDetectedSetupResponse(id: request.id)
                 case "openclaw.setup.auth.start":
-                    wizardDoneResponse(
+                    return wizardDoneResponse(
                         id: request.id,
                         sessionID: request.params["sessionId"] as? String ?? "auth-session")
-                default: nil
+                default: return nil
                 }
             },
             receiveHook: { task, receiveIndex in
@@ -977,8 +977,8 @@ struct OnboardingAISetupTests {
             url: url,
             handler: { _, request, _ in
                 switch request.method {
-                case "agents.list": configuredModelResponse(id: request.id)
-                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
+                case "agents.list": return configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify": return rejectedSetupVerificationResponse(id: request.id)
                 case "openclaw.setup.detect":
                     switch detections.claim() {
                     case 0:
@@ -1122,13 +1122,13 @@ struct OnboardingAISetupTests {
             url: url,
             handler: { _, request, _ in
                 switch request.method {
-                case "agents.list": configuredModelResponse(id: request.id)
+                case "agents.list": return configuredModelResponse(id: request.id)
                 case "openclaw.setup.verify":
                     await verificationGate.wait()
                     return verificationSucceeds
                         ? verifiedSetupResponse(id: request.id)
                         : rejectedSetupVerificationResponse(id: request.id)
-                default: nil
+                default: return nil
                 }
             },
             receiveHook: { task, receiveIndex in
