@@ -2,12 +2,18 @@
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
+import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { TuiResult } from "../tui/tui-types.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
-import { isSystemAgentSensitiveConfigValue } from "./config-redaction.js";
+import {
+  isSystemAgentSensitiveConfigPathEmbedding,
+  isSystemAgentSensitiveConfigValue,
+  redactSystemAgentConfigPath,
+} from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -74,18 +80,15 @@ export type SystemAgentCommandDeps = {
 // Grammar tokens. Workspace/path tokens accept quoted strings so paths with
 // spaces survive; model refs and ids stay single tokens.
 const ARG_WORD = String.raw`(?:"[^"]+"|'[^']+'|\S+)`;
-const CONFIG_PATH = String.raw`[A-Za-z0-9_.[\]-]+`;
 
 // Every command pattern is anchored to the whole input. Optional clauses use a
 // fixed order (workspace before model) so filler words never become values.
 const CONFIG_SET_PREFIX_RE = /^(?:config\s+set|set\s+config)\s+/i;
-const CONFIG_GET_RE = new RegExp(String.raw`^config\s+get\s+(?<path>${CONFIG_PATH})$`, "i");
-const CONFIG_SCHEMA_RE = new RegExp(
-  String.raw`^config\s+schema(?:\s+(?<path>${CONFIG_PATH}))?$`,
-  "i",
-);
-const CONFIG_SET_REF_RE = new RegExp(
-  String.raw`^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+(?<path>${CONFIG_PATH})\s+(?:(?<source>env|file|exec|store)\s+)?(?<id>\S+)(?:\s+provider\s+(?<provider>[A-Za-z0-9_-]+))?$`,
+const CONFIG_SET_REF_PREFIX_RE = /^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+/i;
+const CONFIG_GET_PREFIX_RE = /^config\s+get(?=\s|$)/i;
+const CONFIG_SCHEMA_PREFIX_RE = /^config\s+schema(?=\s|$)/i;
+const CONFIG_SET_REF_ARGS_RE = new RegExp(
+  String.raw`^(?:(?<source>env|file|exec|store)\s+)?(?<id>\S+)(?:\s+provider\s+(?<provider>[A-Za-z0-9_-]+))?$`,
   "i",
 );
 const SETUP_RE = new RegExp(
@@ -155,6 +158,9 @@ function parseConfigSetCommand(
       // Reuse the writer's grammar so quoted/escaped dynamic keys cannot fall
       // through to model-visible text while remaining valid config commands.
       parseConfigSetPath(path);
+      if (isSystemAgentSensitiveConfigPathEmbedding(path)) {
+        return { valid: false };
+      }
       return { path, value, valid: true };
     } catch {
       continue;
@@ -162,6 +168,82 @@ function parseConfigSetCommand(
   }
   // Keep malformed writes on the host side so their values never reach the
   // model. This outcome is deliberately non-executable.
+  return body.trim() ? { valid: false } : undefined;
+}
+
+function parseConfigReadPath(
+  input: string,
+  prefixPattern: RegExp,
+  options: { allowEmpty: boolean; allowRoot?: boolean },
+): { path?: string; valid: true } | { valid: false } | undefined {
+  const prefix = input.match(prefixPattern)?.[0];
+  if (!prefix) {
+    return undefined;
+  }
+  const path = input.slice(prefix.length).trim();
+  if (!path) {
+    return options.allowEmpty ? { valid: true } : { valid: false };
+  }
+  if (options.allowRoot && path === ".") {
+    return { path, valid: true };
+  }
+  try {
+    parseConfigSetPath(path);
+    return isSystemAgentSensitiveConfigPathEmbedding(path)
+      ? { valid: false }
+      : { path, valid: true };
+  } catch {
+    return { valid: false };
+  }
+}
+
+function parseConfigSetRefCommand(input: string):
+  | {
+      path: string;
+      source: "env" | "file" | "exec" | "store";
+      id: string;
+      provider?: string;
+      valid: true;
+    }
+  | { valid: false }
+  | undefined {
+  const prefix = input.match(CONFIG_SET_REF_PREFIX_RE)?.[0];
+  if (!prefix) {
+    return undefined;
+  }
+  const body = input.slice(prefix.length);
+  for (const separator of body.matchAll(/\s+/gu)) {
+    const path = body.slice(0, separator.index);
+    const args = body.slice(separator.index).trim().match(CONFIG_SET_REF_ARGS_RE);
+    if (!args?.groups?.id) {
+      continue;
+    }
+    try {
+      parseConfigSetPath(path);
+      if (isSystemAgentSensitiveConfigPathEmbedding(path)) {
+        return { valid: false };
+      }
+    } catch {
+      continue;
+    }
+    const source = (args.groups.source?.toLowerCase() ?? "env") as
+      | "env"
+      | "file"
+      | "exec"
+      | "store";
+    const id = args.groups.id.trim();
+    const provider = args.groups.provider ?? DEFAULT_SECRET_PROVIDER_ALIAS;
+    if (!isValidSecretRef({ source, provider, id })) {
+      return { valid: false };
+    }
+    return {
+      path,
+      source,
+      id,
+      ...(args.groups.provider ? { provider: args.groups.provider } : {}),
+      valid: true,
+    };
+  }
   return body.trim() ? { valid: false } : undefined;
 }
 
@@ -215,17 +297,18 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     default:
       break;
   }
-  const configSetRefMatch = trimmed.match(CONFIG_SET_REF_RE);
-  if (configSetRefMatch?.groups?.path && configSetRefMatch.groups.id?.trim()) {
-    // SecretRef commands store references only; raw secret values are never embedded here.
-    const source = configSetRefMatch.groups.source?.toLowerCase() ?? "env";
+  const configSetRef = parseConfigSetRefCommand(trimmed);
+  if (configSetRef?.valid) {
     return {
       kind: "config-set-ref",
-      path: configSetRefMatch.groups.path,
-      source: source as "env" | "file" | "exec" | "store",
-      id: configSetRefMatch.groups.id.trim(),
-      ...(configSetRefMatch.groups.provider ? { provider: configSetRefMatch.groups.provider } : {}),
+      path: configSetRef.path,
+      source: configSetRef.source,
+      id: configSetRef.id,
+      ...(configSetRef.provider ? { provider: configSetRef.provider } : {}),
     };
+  }
+  if (configSetRef && !configSetRef.valid) {
+    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
   }
   const configSet = parseConfigSetCommand(trimmed);
   if (configSet) {
@@ -238,14 +321,22 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       value: configSet.value,
     };
   }
-  const configGetMatch = trimmed.match(CONFIG_GET_RE);
-  if (configGetMatch?.groups?.path) {
-    return { kind: "config-get", path: configGetMatch.groups.path };
+  const configGet = parseConfigReadPath(trimmed, CONFIG_GET_PREFIX_RE, { allowEmpty: false });
+  if (configGet?.valid && configGet.path) {
+    return { kind: "config-get", path: configGet.path };
   }
-  const configSchemaMatch = trimmed.match(CONFIG_SCHEMA_RE);
-  if (configSchemaMatch) {
-    const path = configSchemaMatch.groups?.path?.trim();
-    return { kind: "config-schema", ...(path ? { path } : {}) };
+  if (configGet && !configGet.valid) {
+    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+  }
+  const configSchema = parseConfigReadPath(trimmed, CONFIG_SCHEMA_PREFIX_RE, {
+    allowEmpty: true,
+    allowRoot: true,
+  });
+  if (configSchema?.valid) {
+    return { kind: "config-schema", ...(configSchema.path ? { path: configSchema.path } : {}) };
+  }
+  if (configSchema && !configSchema.valid) {
+    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
   }
   if (PLUGIN_LIST_RE.test(trimmed)) {
     return { kind: "plugin-list" };
@@ -435,9 +526,9 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
         ? `set agent ${operation.agentId}'s model to ${operation.model}`
         : `set agents.defaults.model.primary to ${operation.model}`;
     case "config-set":
-      return `set config ${operation.path} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
+      return `set config ${redactSystemAgentConfigPath(operation.path)} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":
-      return `set config ${operation.path} to ${operation.source} SecretRef ${operation.source === "env" ? operation.id : "<redacted>"}`;
+      return `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`;
     case "setup":
       return formatSetupPlanDescription(operation);
     case "model-setup":

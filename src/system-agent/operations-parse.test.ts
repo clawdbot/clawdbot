@@ -1,6 +1,27 @@
 // OpenClaw operation parser tests protect direct command routing before model fallback.
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { isPersistentSystemAgentOperation, parseSystemAgentOperation } from "./operations.js";
+import {
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
+
+let pluginMetadata: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+beforeAll(() => {
+  const config = {};
+  setRuntimeConfigSnapshot(config, config);
+  pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
+});
+
+afterAll(() => {
+  pluginMetadata?.restore();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("parseSystemAgentOperation", () => {
   it("parses typed model writes", () => {
@@ -58,6 +79,29 @@ describe("parseSystemAgentOperation", () => {
       path: "gateway.port",
       value: "19001",
     });
+    expect(parseSystemAgentOperation('config set channels.defaults.groupPolicy "open"')).toEqual({
+      kind: "config-set",
+      path: "channels.defaults.groupPolicy",
+      value: '"open"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        'config set channels.modelByChannel.telegram.chat "openai/gpt-5.5"',
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: "channels.modelByChannel.telegram.chat",
+      value: '"openai/gpt-5.5"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        'config set channels.modelByChannel["token=prod"].chat "openai/gpt-5.5"',
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: 'channels.modelByChannel["token=prod"].chat',
+      value: '"openai/gpt-5.5"',
+    });
     expect(
       parseSystemAgentOperation(
         'config set channels.synology-chat.accounts["prod.guild"].webhookUrl "secret"',
@@ -76,6 +120,108 @@ describe("parseSystemAgentOperation", () => {
       path: String.raw`channels.synology-chat.accounts.prod\ guild.webhookUrl`,
       value: '"secret"',
     });
+    expect(
+      parseSystemAgentOperation(
+        'config set channels.synology-chat.accounts["prod=us"].webhookUrl "secret"',
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: 'channels.synology-chat.accounts["prod=us"].webhookUrl',
+      value: '"secret"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        'config set plugins.entries.codex.config.appServer.headers["X-Test"] "secret"',
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: 'plugins.entries.codex.config.appServer.headers["X-Test"]',
+      value: '"secret"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        'config set channels.synology-chat.accounts["token=prod"].webhookUrl "secret"',
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: 'channels.synology-chat.accounts["token=prod"].webhookUrl',
+      value: '"secret"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        String.raw`config set plugins.entries.codex.config.appServer.headers.X\-Test "secret"`,
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: String.raw`plugins.entries.codex.config.appServer.headers.X\-Test`,
+      value: '"secret"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        String.raw`config set channels.synology-chat.accounts.token\=prod.webhookUrl "secret"`,
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: String.raw`channels.synology-chat.accounts.token\=prod.webhookUrl`,
+      value: '"secret"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        'config set channels.synology-chat.accounts["token=prod"].webhookPath "/hook"',
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: 'channels.synology-chat.accounts["token=prod"].webhookPath',
+      value: '"/hook"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        String.raw`config set channels.synology-chat.accounts.token\=prod.webhookPath "/hook"`,
+      ),
+    ).toEqual({
+      kind: "config-set",
+      path: String.raw`channels.synology-chat.accounts.token\=prod.webhookPath`,
+      value: '"/hook"',
+    });
+    expect(
+      parseSystemAgentOperation(
+        'config set-ref channels.telegram.accounts["prod=us"].botToken env TELEGRAM_TOKEN',
+      ),
+    ).toEqual({
+      kind: "config-set-ref",
+      path: 'channels.telegram.accounts["prod=us"].botToken',
+      source: "env",
+      id: "TELEGRAM_TOKEN",
+    });
+    expect(
+      parseSystemAgentOperation(
+        String.raw`config set-ref channels.telegram.accounts.prod\=us.botToken env TELEGRAM_TOKEN`,
+      ),
+    ).toEqual({
+      kind: "config-set-ref",
+      path: String.raw`channels.telegram.accounts.prod\=us.botToken`,
+      source: "env",
+      id: "TELEGRAM_TOKEN",
+    });
+    expect(parseSystemAgentOperation('config set broadcast["token=prod"] ["telegram"]')).toEqual({
+      kind: "config-set",
+      path: 'broadcast["token=prod"]',
+      value: '["telegram"]',
+    });
+    expect(
+      parseSystemAgentOperation('config set hooks.mappings["token=abcDEF123"].agentId main'),
+    ).toEqual({
+      kind: "none",
+      message: "Invalid config path. Check its quoting or escaping and try again.",
+    });
+    expect(
+      parseSystemAgentOperation(
+        'config set channels.buzz.groups["gateway.auth.token=ACTUAL_GATEWAY_TOKEN"].enabled true',
+      ),
+    ).toEqual({
+      kind: "none",
+      message: "Invalid config path. Check its quoting or escaping and try again.",
+    });
     expect(parseSystemAgentOperation("config set gateway.auth..token very-secret")).toEqual({
       kind: "none",
       message: "Invalid config path. Check its quoting or escaping and try again.",
@@ -84,6 +230,32 @@ describe("parseSystemAgentOperation", () => {
       kind: "none",
       message: "Invalid config path. Check its quoting or escaping and try again.",
     });
+    expect(parseSystemAgentOperation("config set gateway.auth.token=very-secret please")).toEqual({
+      kind: "none",
+      message: "Invalid config path. Check its quoting or escaping and try again.",
+    });
+    expect(
+      parseSystemAgentOperation('config set channels.synology-chat["webhookUrl=abcDEF123"] please'),
+    ).toEqual({
+      kind: "none",
+      message: "Invalid config path. Check its quoting or escaping and try again.",
+    });
+    for (const command of [
+      String.raw`config set gateway.auth.token\=very-secret please`,
+      String.raw`config set gateway.auth.token\ very-secret please`,
+      "config set gateway.auth.tokenabcDEF123 please",
+      "config set gateway.auth.token_abcDEF123 please",
+      "config set gateway.auth.token$abcDEF123 please",
+      'config set gateway.auth["token=very-secret"] please',
+      'config set gateway.auth["token very-secret"] please',
+      'config set gateway.auth["token:very-secret"] please',
+      'config set gateway.auth["token=very-secret"].nested please',
+    ]) {
+      expect(parseSystemAgentOperation(command)).toEqual({
+        kind: "none",
+        message: "Invalid config path. Check its quoting or escaping and try again.",
+      });
+    }
     expect(
       parseSystemAgentOperation("config set-ref gateway.auth.token env GATEWAY_TOKEN"),
     ).toEqual({
@@ -99,6 +271,24 @@ describe("parseSystemAgentOperation", () => {
       path: "gateway.auth.token",
       source: "store",
       id: "GATEWAY_TOKEN",
+    });
+    expect(
+      parseSystemAgentOperation("config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN"),
+    ).toEqual({
+      kind: "none",
+      message: "Invalid config path. Check its quoting or escaping and try again.",
+    });
+    expect(
+      parseSystemAgentOperation("config set-ref gateway.auth.token=abcDEF123 env GATEWAY_TOKEN"),
+    ).toEqual({
+      kind: "none",
+      message: "Invalid config path. Check its quoting or escaping and try again.",
+    });
+    expect(
+      parseSystemAgentOperation("config set-ref gateway.auth.token env 123:actual-gateway-token"),
+    ).toEqual({
+      kind: "none",
+      message: "Invalid config path. Check its quoting or escaping and try again.",
     });
     expect(parseSystemAgentOperation("doctor fix")).toEqual({ kind: "doctor-fix" });
   });
@@ -139,6 +329,36 @@ describe("parseSystemAgentOperation", () => {
       path: "channels.telegram",
     });
     expect(parseSystemAgentOperation("config schema")).toEqual({ kind: "config-schema" });
+    expect(parseSystemAgentOperation("config schema .")).toEqual({
+      kind: "config-schema",
+      path: ".",
+    });
+    expect(
+      parseSystemAgentOperation('config get channels.telegram.accounts["prod=us"].botToken'),
+    ).toEqual({
+      kind: "config-get",
+      path: 'channels.telegram.accounts["prod=us"].botToken',
+    });
+    expect(parseSystemAgentOperation("config get channels.missing.opaque")).toEqual({
+      kind: "config-get",
+      path: "channels.missing.opaque",
+    });
+    for (const command of [
+      "config get gateway.auth.tokenabcDEF123",
+      'config get gateway.auth["token=abcDEF123"]',
+      String.raw`config get gateway.auth.token\=abcDEF123`,
+      "config get gateway.auth.token abcDEF123",
+      "config get channels.missing.opaque=abcDEF123",
+      "config schema gateway.port=abcDEF123",
+      "config schema gateway.auth.token=abcDEF123",
+      'config schema gateway.auth["token=abcDEF123"]',
+      "config schema channels.missing.opaque=abcDEF123",
+    ]) {
+      expect(parseSystemAgentOperation(command)).toEqual({
+        kind: "none",
+        message: "Invalid config path. Check its quoting or escaping and try again.",
+      });
+    }
     // Read-only: no approval gate.
     expect(isPersistentSystemAgentOperation({ kind: "config-get", path: "gateway.port" })).toBe(
       false,

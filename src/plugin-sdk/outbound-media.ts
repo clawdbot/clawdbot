@@ -66,13 +66,6 @@ export type HostedOutboundMediaEntry = {
   buffer: Buffer;
 };
 
-export type HostedOutboundMediaChunkStream = {
-  metadata: HostedOutboundMediaMetadata;
-  chunks: AsyncIterable<Buffer>;
-  /** Release the active-reader lease when the stream is abandoned before iteration. */
-  close: () => Promise<void>;
-};
-
 export type HostedOutboundMediaMetaRecord = HostedOutboundMediaMetadata & {
   id: string;
   chunkCount: number;
@@ -100,17 +93,18 @@ export type HostedOutboundMediaStore = {
     mediaAccess?: OutboundMediaAccess;
     proxyUrl?: string;
     requestInit?: RequestInit;
+    /** Validate the exact loaded bytes before capability creation or persistence. */
+    validateBeforePersist?: (media: {
+      buffer: Buffer;
+      contentType?: string;
+      fileName?: string;
+    }) => void | Promise<void>;
   }) => Promise<string>;
   readMetadata: (id: string, nowMs?: number) => Promise<HostedOutboundMediaMetadata | null>;
   read: (id: string, nowMs?: number) => Promise<HostedOutboundMediaEntry | null>;
   delete: (id: string) => Promise<void>;
   cleanupExpired: (nowMs?: number) => Promise<void>;
   clear: () => Promise<void>;
-};
-
-export type ChunkReadableHostedOutboundMediaStore = HostedOutboundMediaStore & {
-  /** Open a lazy, ordered chunk stream without reconstructing the complete payload in memory. */
-  readChunks: (id: string, nowMs?: number) => Promise<HostedOutboundMediaChunkStream | null>;
 };
 
 export type CreateHostedOutboundMediaStoreOptions = {
@@ -238,7 +232,7 @@ async function deleteHostedOutboundMediaRows(
 
 export function createHostedOutboundMediaStore(
   options: CreateHostedOutboundMediaStoreOptions,
-): ChunkReadableHostedOutboundMediaStore {
+): HostedOutboundMediaStore {
   const rawChunkBytes = options.rawChunkBytes ?? DEFAULT_HOSTED_OUTBOUND_MEDIA_RAW_CHUNK_BYTES;
   const maxEntries = options.maxEntries ?? DEFAULT_HOSTED_OUTBOUND_MEDIA_MAX_ENTRIES;
   const chunkRowsPerEntryBudget =
@@ -399,64 +393,6 @@ export function createHostedOutboundMediaStore(
     return { meta, close };
   }
 
-  async function readChunks(
-    id: string,
-    nowMs = Date.now(),
-  ): Promise<HostedOutboundMediaChunkStream | null> {
-    const reader = await acquireReader(id, nowMs);
-    if (!reader) {
-      return null;
-    }
-    const { close, meta } = reader;
-    return {
-      metadata: createHostedOutboundMediaMetadata(meta),
-      close,
-      // Keep chunk lookup lazy so HTTP owners can honor downstream backpressure
-      // instead of reconstructing the complete stored payload before serving it.
-      chunks: (async function* () {
-        try {
-          const deleteIncompletePayload = async (): Promise<Error> => {
-            await withCapacityMutation(async () => await deleteEntry(id));
-            return new Error("hosted outbound media payload is incomplete");
-          };
-          const expectedChunkCount = Math.max(1, Math.ceil(meta.byteLength / rawChunkBytes));
-          if (
-            !Number.isSafeInteger(meta.byteLength) ||
-            meta.byteLength < 0 ||
-            meta.chunkCount !== expectedChunkCount ||
-            meta.chunkCount > maxChunkRows
-          ) {
-            throw await deleteIncompletePayload();
-          }
-          let streamedBytes = 0;
-          for (let index = 0; index < meta.chunkCount; index += 1) {
-            const chunk = await options.chunkStore.lookup(
-              buildHostedOutboundMediaChunkKey(id, index),
-            );
-            if (!chunk || chunk.id !== id || chunk.index !== index) {
-              throw await deleteIncompletePayload();
-            }
-            const decoded = Buffer.from(chunk.dataBase64, "base64");
-            const expectedBytes =
-              index === meta.chunkCount - 1
-                ? meta.byteLength - rawChunkBytes * (meta.chunkCount - 1)
-                : rawChunkBytes;
-            if (decoded.byteLength !== expectedBytes) {
-              throw await deleteIncompletePayload();
-            }
-            streamedBytes += decoded.byteLength;
-            yield decoded;
-          }
-          if (streamedBytes !== meta.byteLength) {
-            throw await deleteIncompletePayload();
-          }
-        } finally {
-          await close();
-        }
-      })(),
-    };
-  }
-
   async function pruneForCapacity(
     incomingChunkCount: number,
     incomingByteLength: number,
@@ -554,6 +490,7 @@ export function createHostedOutboundMediaStore(
         ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
         ...(params.requestInit ? { requestInit: params.requestInit } : {}),
       });
+      await params.validateBeforePersist?.(media);
       const id = createId();
       const token = createToken();
       const chunkCount = Math.max(1, Math.ceil(media.buffer.byteLength / rawChunkBytes));
@@ -601,18 +538,18 @@ export function createHostedOutboundMediaStore(
       });
     },
     async readMetadata(id, nowMs = Date.now()) {
-      if (deferredDeletes.has(id) || deletingEntries.has(id)) {
+      const reader = await acquireReader(id, nowMs);
+      if (!reader) {
         return null;
       }
-      const meta = await readMetadataRecord(id, nowMs);
-      // Deletion may linearize while the SQLite lookup is awaited; do not
-      // project metadata captured before that capability revocation.
-      if (deferredDeletes.has(id) || deletingEntries.has(id)) {
-        return null;
+      try {
+        return deferredDeletes.has(id) || deletingEntries.has(id)
+          ? null
+          : createHostedOutboundMediaMetadata(reader.meta);
+      } finally {
+        await reader.close();
       }
-      return meta ? createHostedOutboundMediaMetadata(meta) : null;
     },
-    readChunks,
     async read(id, nowMs = Date.now()) {
       const reader = await acquireReader(id, nowMs);
       if (!reader) {
@@ -620,7 +557,18 @@ export function createHostedOutboundMediaStore(
       }
       const { close, meta } = reader;
       try {
-        const chunks: Buffer[] = [];
+        const expectedChunkCount = Math.max(1, Math.ceil(meta.byteLength / rawChunkBytes));
+        if (
+          !Number.isSafeInteger(meta.byteLength) ||
+          meta.byteLength < 0 ||
+          meta.chunkCount !== expectedChunkCount ||
+          meta.chunkCount > maxChunkRows
+        ) {
+          await withCapacityMutation(async () => await deleteEntry(id));
+          return null;
+        }
+        const buffer = Buffer.allocUnsafe(meta.byteLength);
+        let offset = 0;
         for (let index = 0; index < meta.chunkCount; index += 1) {
           const chunk = await options.chunkStore.lookup(
             buildHostedOutboundMediaChunkKey(id, index),
@@ -629,11 +577,21 @@ export function createHostedOutboundMediaStore(
             await withCapacityMutation(async () => await deleteEntry(id));
             return null;
           }
-          chunks.push(Buffer.from(chunk.dataBase64, "base64"));
+          const decoded = Buffer.from(chunk.dataBase64, "base64");
+          const expectedBytes =
+            index === meta.chunkCount - 1
+              ? meta.byteLength - rawChunkBytes * (meta.chunkCount - 1)
+              : rawChunkBytes;
+          if (decoded.byteLength !== expectedBytes) {
+            await withCapacityMutation(async () => await deleteEntry(id));
+            return null;
+          }
+          decoded.copy(buffer, offset);
+          offset += decoded.byteLength;
         }
         return {
           metadata: createHostedOutboundMediaMetadata(meta),
-          buffer: Buffer.concat(chunks, meta.byteLength),
+          buffer,
         };
       } finally {
         await close();

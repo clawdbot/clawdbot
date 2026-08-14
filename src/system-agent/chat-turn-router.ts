@@ -15,7 +15,10 @@ import type {
   ChatWizardResult,
   SystemAgentChatReply,
 } from "./chat-wizard-host.js";
-import { isSystemAgentSensitiveConfigValue } from "./config-redaction.js";
+import {
+  isSystemAgentSensitiveConfigValue,
+  redactSystemAgentConfigPath,
+} from "./config-redaction.js";
 import { approvalQuestion } from "./dialogue.js";
 import {
   SystemAgentInferenceUnavailableError,
@@ -79,11 +82,18 @@ export function redactSensitiveCommandText(text: string): string {
   if (isInvalidConfigSetOperation(operation)) {
     return "config set <invalid path> <redacted secret>";
   }
-  if (
-    operation.kind === "config-set" &&
-    isSystemAgentSensitiveConfigValue(operation.path, operation.value)
-  ) {
-    return `config set ${operation.path} <redacted secret>`;
+  if (operation.kind === "config-set") {
+    const displayPath = redactSystemAgentConfigPath(operation.path);
+    if (
+      displayPath !== operation.path ||
+      isSystemAgentSensitiveConfigValue(operation.path, operation.value)
+    ) {
+      return `config set ${displayPath} <redacted secret>`;
+    }
+  }
+  if (operation.kind === "config-set-ref") {
+    const displayPath = redactSystemAgentConfigPath(operation.path);
+    return `config set-ref ${displayPath} <redacted reference>`;
   }
   return text;
 }
@@ -228,7 +238,12 @@ export class ChatTurnRouter {
     if (isInvalidConfigSetOperation(typed)) {
       return { text: typed.message, action: "none" };
     }
-    if (typed.kind === "config-set" && isSystemAgentSensitiveConfigValue(typed.path, typed.value)) {
+    if (
+      typed.kind === "config-set" ||
+      typed.kind === "config-set-ref" ||
+      typed.kind === "config-get" ||
+      typed.kind === "config-schema"
+    ) {
       return await this.runOperation(typed, undefined);
     }
     const typedRefusal = this.refuseDelegatedNavigationDirective(typed.kind);

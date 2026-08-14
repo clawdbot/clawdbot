@@ -188,24 +188,37 @@ describe("runSystemAgent", () => {
     );
   });
 
-  it("keeps malformed config writes away from the one-shot assistant planner", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const planWithAssistant = vi.fn(async () => ({ command: "restart gateway" }));
+  it.each([
+    "config set gateway.auth.token=very-secret",
+    "config set gateway.auth.token=very-secret please",
+    String.raw`config set gateway.auth.token\ very-secret please`,
+    "config set gateway.auth.tokenabcDEF123 please",
+    "config set gateway.auth.token_abcDEF123 please",
+    "config set gateway.auth.token$abcDEF123 please",
+    "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
+    'config set gateway.auth["token:very-secret"] please',
+  ])(
+    "keeps malformed config write %s away from the one-shot assistant planner",
+    async (message) => {
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const planWithAssistant = vi.fn(async () => ({ command: "restart gateway" }));
 
-    await runSystemAgent(
-      {
-        ...createVerifiedRunOptions(),
-        message: "config set gateway.auth.token=very-secret",
-        planWithAssistant,
-        ...systemAgentOverviewDeps,
-      },
-      runtime,
-    );
+      await runSystemAgent(
+        {
+          ...createVerifiedRunOptions(),
+          message,
+          planWithAssistant,
+          ...systemAgentOverviewDeps,
+        },
+        runtime,
+      );
 
-    expect(planWithAssistant).not.toHaveBeenCalled();
-    expect(lines.join("\n")).toContain("Invalid config path");
-    expect(lines.join("\n")).not.toContain("very-secret");
-  });
+      expect(planWithAssistant).not.toHaveBeenCalled();
+      expect(lines.join("\n")).toContain("Invalid config path");
+      expect(lines.join("\n")).not.toContain("very-secret");
+      expect(lines.join("\n")).not.toContain("abcDEF123");
+    },
+  );
 
   it("does not apply a one-shot plan after the verified route changes", async () => {
     const { runtime } = createSystemAgentTestRuntime();

@@ -327,6 +327,27 @@ describe("system agent operations", () => {
     expect(output).not.toContain("missing-channel-secret");
   });
 
+  it("preserves kernel-owned channel namespaces in model-visible config reads", async () => {
+    mockConfig.setConfig({
+      channels: {
+        defaults: { groupPolicy: "open" },
+        modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
+      },
+    });
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation({ kind: "config-get", path: "channels.defaults" }, runtime);
+    await executeSystemAgentOperation(
+      { kind: "config-get", path: "channels.modelByChannel" },
+      runtime,
+    );
+
+    const output = lines.join("\n");
+    expect(output).toContain('"groupPolicy": "open"');
+    expect(output).toContain('"chat": "openai/gpt-5.5"');
+    expect(output).not.toContain("<redacted>");
+  });
+
   it("redacts config values marked sensitive only by active plugin metadata", async () => {
     const authorization = "Bearer plugin-only-secret";
     const config = {

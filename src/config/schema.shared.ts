@@ -8,6 +8,7 @@ export type ConfigJsonSchemaObject = Record<string, unknown> & {
   properties?: Record<string, ConfigJsonSchemaObject>;
   required?: string[];
   additionalProperties?: ConfigJsonSchemaObject | boolean;
+  propertyNames?: ConfigJsonSchemaObject | boolean;
   items?: ConfigJsonSchemaObject | ConfigJsonSchemaObject[];
   anyOf?: ConfigJsonSchemaObject[];
   allOf?: ConfigJsonSchemaObject[];

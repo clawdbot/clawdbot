@@ -173,7 +173,7 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 - Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.
 - Keep `dangerouslyAllowInheritedWebhookPath` off unless you explicitly accept shared-path routing risk in a multi-account setup.
 - Reverse-proxy access logs can capture attachment capability tokens. Disable query-string logging or redact `__openclaw_synology_media_token_*` parameters, and keep application logs free of full capability URLs.
-- Hosted attachments use `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`. OpenClaw preserves the frozen file bytes and supported content type, including HTML, SVG, XHTML, and XML, without executing or reinterpreting the attachment.
+- Hosted attachments use `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`. Files declared or named as HTML, SVG, or XML are rejected. Frozen bytes that begin as a UTF-8, UTF-16, or UTF-32 markup document after an optional encoding marker, whitespace, and comments are also rejected; literal tags later in passive text or source files do not make those files active documents.
 
 ## Troubleshooting
 
