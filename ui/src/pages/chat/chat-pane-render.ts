@@ -511,6 +511,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
+      attachmentLimits: state.hello?.policy?.attachments,
       getAttachments: () => state.chatAttachments,
       pendingAttachmentReads: attachmentReads.pendingReads,
       getPendingAttachmentReads: () => attachmentReads.pendingReads,
@@ -528,12 +529,12 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
             ? void this.addCurrentSessionSuggestion()
             : void state.handleSendChat(),
       onCompact: sessionActionCallbacks.onCompact,
+      // Checkpoint deep-link carries the archived filter so the row stays findable.
       onOpenSessionCheckpoints: () => {
-        const search = new URLSearchParams({ session: state.sessionKey });
-        if (selectedSessionArchived) {
-          search.set("status", "archived");
-        }
-        this.context.navigate("sessions", { search: `?${search.toString()}` });
+        const status = selectedSessionArchived ? "&status=archived" : "";
+        this.context.navigate("sessions", {
+          search: `?session=${encodeURIComponent(state.sessionKey)}${status}`,
+        });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),

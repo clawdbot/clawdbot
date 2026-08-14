@@ -1,5 +1,8 @@
 // Sms plugin module implements inbound behavior.
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -25,6 +28,7 @@ async function authorizeSmsSender(params: {
   channelRuntime: SmsChannelRuntime;
   from: string;
   rawBody: string;
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   const commandRequested = params.channelRuntime.commands.shouldComputeCommandAuthorized(
     params.rawBody,
@@ -46,8 +50,9 @@ async function authorizeSmsSender(params: {
     subject: { stableId: params.from },
     conversation: {
       kind: "direct",
-      id: "direct",
+      id: params.from,
     },
+    contextBinding: params.contextBinding,
     event: { mayPair: true },
     dmPolicy: params.account.dmPolicy,
     allowFrom: params.account.allowFrom,
@@ -107,7 +112,7 @@ export async function dispatchSmsInboundEvent(params: {
   log?: SmsLog;
 }): Promise<void> {
   const from = normalizeSmsPhoneNumber(params.msg.from);
-  const auth = await authorizeSmsSender({
+  let auth = await authorizeSmsSender({
     cfg: params.cfg,
     account: params.account,
     channelRuntime: params.channelRuntime,
@@ -187,6 +192,23 @@ export async function dispatchSmsInboundEvent(params: {
       },
     });
     const sessionKey = route.sessionKey;
+    auth = await authorizeSmsSender({
+      cfg: params.cfg,
+      account: params.account,
+      channelRuntime: params.channelRuntime,
+      from,
+      rawBody: params.msg.body,
+      contextBinding: {
+        agentId: route.agentId,
+        sessionKey,
+        messageId: params.msg.messageSid,
+        inboundEventKind: "user_request",
+      },
+    });
+    if (!auth.senderAccess.allowed) {
+      params.log?.warn?.(`SMS sender ${from} authorization changed before dispatch`);
+      return;
+    }
     const commandRequested = auth.commandAccess.requested;
     const commandAuthorized = auth.commandAccess.authorized;
     const isTextCommand = params.channelRuntime.commands.isControlCommandMessage(
@@ -210,8 +232,10 @@ export async function dispatchSmsInboundEvent(params: {
         }),
         resolveTurn: async (input) => {
           const ctxPayload = params.channelRuntime.inbound.buildContext({
+            channelIngress: auth,
             channel: CHANNEL_ID,
             accountId: params.account.accountId,
+            messageId: input.id,
             timestamp: input.timestamp,
             from: `sms:${from}`,
             sender: {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
+  NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -14,6 +15,7 @@ import {
   NodeWorkerWorkspaceTransferError,
 } from "../worker/node-workspace-transfer-protocol.js";
 import { handleInvoke } from "./invoke.js";
+import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import {
@@ -431,6 +433,28 @@ describe("node-host worker supervisor commands", () => {
     const message = result?.error?.message ?? "";
     expect(message).not.toContain("private/path");
     expect(message.length).toBeLessThan(256);
+  });
+
+  it("preserves a terminal capacity result across node invoke", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    supervisorMocks(supervisor).launch.mockRejectedValueOnce(
+      new NodeWorkerCapacityExhaustedError(10_000),
+    );
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      paramsJSON: JSON.stringify(input),
+      supervisor,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+        message: "node worker capacity remained full for 10000 ms",
+      },
+    });
   });
 
   it("preserves a typed workspace transfer failure across node invoke", async () => {

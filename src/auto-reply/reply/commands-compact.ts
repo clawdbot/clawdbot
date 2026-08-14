@@ -225,7 +225,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     }
   }
   const sessionAgentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: params.cfg,
+        agentId: params.agentId,
+      })
     : (params.agentId ?? "main");
   const currentAgentId = params.agentId ?? "main";
   const sessionAgentDir =
@@ -320,11 +324,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const compactLabel =
     result.ok || isBenignCompactionSkipResult(result)
       ? didCompact
-        ? typeof tokensAfterCompaction !== "number"
-          ? "Compaction finished (resulting context unknown)"
-          : result.result?.tokensBefore != null
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-            : "Compacted"
+        ? result.compactionKind === "server-endpoint" &&
+          typeof tokensAfterCompaction === "number" &&
+          result.result?.tokensBefore != null
+          ? `Server-side compaction (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+          : typeof tokensAfterCompaction !== "number"
+            ? "Compaction finished (resulting context unknown)"
+            : result.result?.tokensBefore != null
+              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+              : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
   if (didCompact) {

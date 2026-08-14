@@ -201,6 +201,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
     autoExpandToolCalls?: boolean;
+    attachmentLimits?: { maxBytes: number; maxImageBytes: number };
     attachments?: ChatAttachment[];
     getAttachments?: () => ChatAttachment[];
     pendingAttachmentReads?: number;
@@ -427,6 +428,7 @@ export function renderChat(props: ChatProps) {
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
     followUpMode: props.followUpMode,
+    attachmentLimits: props.attachmentLimits,
     attachments: props.attachments,
     getAttachments: props.getAttachments,
     pendingAttachmentReads: props.pendingAttachmentReads,

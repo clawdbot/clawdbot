@@ -1,6 +1,7 @@
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
+  NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -314,7 +315,9 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         const code = result.error?.code ?? "UNAVAILABLE";
         throw new NodeWorkerLaunchTransportError(
           code,
-          `node worker supervisor invocation failed (${code})`,
+          code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
+            ? "device worker capacity remained full"
+            : `node worker supervisor invocation failed (${code})`,
         );
       }
       return parseInvokeReceipt(result.payloadJSON);
@@ -496,6 +499,14 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     } catch (error) {
       if (!dispatchReady && availabilityDeadline.signal.aborted && !deadline.signal.aborted) {
         throw new WorkerRunnerUnavailableError();
+      }
+      // The node authors this result only after its durable claim stayed absent.
+      // Transport dispatch is therefore not launch ambiguity and needs no cancel.
+      if (
+        error instanceof NodeWorkerLaunchTransportError &&
+        error.code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
+      ) {
+        throw error;
       }
       if (!mayHaveLaunched) {
         throw error;

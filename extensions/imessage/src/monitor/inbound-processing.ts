@@ -1,7 +1,7 @@
 // Imessage plugin module implements inbound processing behavior.
 import {
-  buildMentionRegexes,
   buildChannelInboundEventContext,
+  buildMentionRegexes,
   formatMediaPlaceholderText,
   type EnvelopeFormatOptions,
   filterChannelInboundQuoteContext,
@@ -350,6 +350,7 @@ function resolveIMessageGroupSystemPrompt(params: {
 
 type IMessageInboundDispatchDecision = {
   kind: "dispatch";
+  channelIngress?: Awaited<ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>>;
   isGroup: boolean;
   chatId?: number;
   chatGuid?: string;
@@ -538,6 +539,14 @@ export async function resolveIMessageInboundDecision(params: {
   const groupAllowFromForAccess = isGroup
     ? groupAllowFromWithLegacyChatTargets
     : params.groupAllowFrom;
+  const route = resolveIMessageConversationRoute({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    isGroup,
+    peerId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+    sender,
+    chatId,
+  });
   const accessDecision = await createChannelIngressResolver({
     channelId: "imessage",
     accountId: params.accountId,
@@ -559,6 +568,15 @@ export async function resolveIMessageInboundDecision(params: {
         ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
         : normalizeIMessageHandle(sender),
     },
+    ...(reactionContext
+      ? {}
+      : {
+          contextBinding: {
+            agentId: route.agentId,
+            sessionKey: route.sessionKey,
+            inboundEventKind: "user_request",
+          },
+        }),
     dmPolicy: normalizeDmPolicy(params.dmPolicy),
     groupPolicy: normalizeGroupPolicy(params.groupPolicy),
     policy: { groupAllowFromFallbackToAllowFrom: false },
@@ -609,14 +627,6 @@ export async function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "group id not in allowlist" };
   }
 
-  const route = resolveIMessageConversationRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    isGroup,
-    peerId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
-    sender,
-    chatId,
-  });
   if (reactionContext) {
     const notificationMode = params.reactionNotifications ?? "own";
     if (notificationMode === "off") {
@@ -858,6 +868,7 @@ export async function resolveIMessageInboundDecision(params: {
 
   return {
     kind: "dispatch",
+    channelIngress: accessDecision,
     isGroup,
     chatId,
     chatGuid,
@@ -891,6 +902,7 @@ export async function buildIMessageInboundContext(params: {
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmHistory?: IMessageDmHistoryContext;
+  buildContext?: typeof buildChannelInboundEventContext;
 }): Promise<{
   ctxPayload: FinalizedMsgContext;
   fromLabel: string;
@@ -996,7 +1008,8 @@ export async function buildIMessageInboundContext(params: {
   const media = await toInboundMediaFactsWithMetadata(
     params.media?.facts?.map((entry) => ({ ...entry, url: entry.url ?? entry.path })),
   );
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress: decision.channelIngress,
     channel: "imessage",
     supplemental: {
       quote: decision.replyContext

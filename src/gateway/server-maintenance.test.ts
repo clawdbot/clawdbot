@@ -17,6 +17,25 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedFileCount: 0,
   retainedCount: 0,
 }));
+const pruneExpiredDeliveryQueueTombstonesMock = vi.fn();
+const pruneOrphanedDeliveryQueueMediaMock = vi.fn(async () => undefined);
+
+vi.mock("../infra/delivery-queue-sqlite.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/delivery-queue-sqlite.js")>(
+    "../infra/delivery-queue-sqlite.js",
+  );
+  return {
+    ...actual,
+    pruneExpiredDeliveryQueueTombstones: pruneExpiredDeliveryQueueTombstonesMock,
+  };
+});
+
+vi.mock("../infra/outbound/delivery-queue-media-spool.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../infra/outbound/delivery-queue-media-spool.js")
+  >("../infra/outbound/delivery-queue-media-spool.js");
+  return { ...actual, pruneOrphanedDeliveryQueueMedia: pruneOrphanedDeliveryQueueMediaMock };
+});
 
 vi.mock("../media/store.js", async () => {
   const actual = await vi.importActual<typeof import("../media/store.js")>("../media/store.js");
@@ -50,13 +69,6 @@ function createMaintenanceTimerDeps() {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
-    runDeliveryFailureSweep: vi.fn(async () => ({
-      scanned: 0,
-      compacted: 0,
-      deleted: 0,
-      legacyUnknown: 0,
-      errors: 0,
-    })),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runDevicePairSetupCompletionGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
@@ -234,29 +246,34 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("finishes the delivery failure sweep before queue media cleanup at startup and hourly", async () => {
+  it("runs queue media cleanup at startup and hourly", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
-    let finishFirstSweep = () => {};
-    deps.runDeliveryFailureSweep.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finishFirstSweep = () =>
-            resolve({ scanned: 400, compacted: 200, deleted: 100, legacyUnknown: 0, errors: 0 });
-        }),
-    );
     const timers = startGatewayMaintenanceTimers(deps);
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(deps.runDeliveryFailureSweep).toHaveBeenCalledTimes(1);
-    expect(deps.runDeliveryQueueMediaGc).not.toHaveBeenCalled();
-    finishFirstSweep();
-    await vi.advanceTimersByTimeAsync(0);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(deps.runDeliveryFailureSweep).toHaveBeenCalledTimes(2);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
+    expect(pruneExpiredDeliveryQueueTombstonesMock).not.toHaveBeenCalled();
+
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("runs tombstone expiry with default queue media cleanup at startup and hourly", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const { runDeliveryQueueMediaGc: _runDeliveryQueueMediaGc, ...deps } =
+      createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(1);
+    expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(2);
+    expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);
   });
@@ -1016,6 +1033,27 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(terminalRun.controller.signal.aborted).toBe(false);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("evicts an expired non-abortable active run instead of retrying forever", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-unabortable";
+    const wedged = createActiveRun("main");
+    wedged.expiresAtMs = Date.now() - 1;
+    // Owner cleanup lost after a direct controller.abort: the entry is no
+    // longer abortable, so the timeout abort returns { aborted: false } and
+    // pre-fix the entry survived every sweep as a phantom active run.
+    wedged.controller.abort();
+    deps.chatAbortControllers.set(runId, wedged);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
     expect(deps.chatAbortControllers.has(runId)).toBe(false);
     await stopMaintenanceTimers(timers);
   });

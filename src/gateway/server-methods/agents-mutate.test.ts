@@ -101,6 +101,7 @@ const mocks = vi.hoisted(() => ({
     size: 0,
   })),
   rootWrite: vi.fn(async (_params?: unknown) => {}),
+  migrateLegacyMainSessionKeys: vi.fn(),
 }));
 
 const RESERVED_SYSTEM_AGENT_IDS_FOR_TEST = ["openclaw", "crestodian"] as const; // reserved ids
@@ -183,6 +184,10 @@ vi.mock("../../agents/auth-profiles/path-resolve.js", async () => ({
   )),
   resolveSharedAuthStoreOwnership: () => mocks.sharedAuthStoreOwnership,
   resolveSharedAuthStorePath: () => "/resolved/agents/main/agent/openclaw-agent.sqlite",
+}));
+
+vi.mock("../../config/sessions/legacy-main-session-migration.js", () => ({
+  migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -364,6 +369,17 @@ beforeEach(() => {
   agentsTesting.resetDepsForTests();
   mocks.omitConfigMutationResult = false;
   mocks.sharedAuthStoreOwnership = { location: "legacy-main" };
+  mocks.migrateLegacyMainSessionKeys.mockReset().mockResolvedValue({
+    armed: true,
+    changes: [],
+    complete: true,
+    ledgerComplete: true,
+    legacyAgentId: "main",
+    mainKey: "main",
+    outcomes: [{ kind: "no-legacy-rows", detail: "matching completed ledger" }],
+    ownerAgentId: "robby",
+    warnings: [],
+  });
   mocks.withAgentExecApprovalsRemoved
     .mockReset()
     .mockImplementation(async (_agentId: string, commit: () => Promise<unknown>) => await commit());
@@ -767,14 +783,31 @@ describe("agents.create", () => {
     );
   });
 
-  it("rejects creating an agent with reserved 'main' id", async () => {
+  it("routes main through the canonical shared-auth creation gate", async () => {
+    mocks.loadConfigReturn = { agents: { list: [{ id: "robby" }] } };
     const { respond, promise } = makeCall("agents.create", {
       name: "main",
       workspace: "/tmp/ws",
     });
     await promise;
 
-    expectRespondErrorContaining(respond, "reserved");
+    expectRespondErrorContaining(respond, "owns the shared auth store");
+    expect(mocks.migrateLegacyMainSessionKeys).toHaveBeenCalledOnce();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("creates main through the canonical service after both gates clear", async () => {
+    mocks.loadConfigReturn = { agents: { list: [{ id: "robby" }] } };
+    mocks.sharedAuthStoreOwnership = { location: "state-db" };
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "main",
+      workspace: "/tmp/ws",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "main", name: "main" });
+    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
   it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(

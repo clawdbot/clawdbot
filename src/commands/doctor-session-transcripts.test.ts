@@ -130,6 +130,7 @@ describe("doctor session transcript repair", () => {
       armed: false,
       changes: [],
       complete: false,
+      ledgerComplete: false,
       legacyAgentId: "main",
       mainKey: "main",
       outcomes: [{ kind: "not-armed" }],

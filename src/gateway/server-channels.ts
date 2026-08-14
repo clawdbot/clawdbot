@@ -4,7 +4,12 @@ import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
 import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  type ChannelId,
+  getChannelPlugin,
+  listChannelPlugins,
+  resolveChannelPluginRegistration,
+} from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import {
   applyChannelAccountState,
@@ -365,7 +370,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return channelOverride;
     }
 
-    const plugin = getChannelPlugin(channelId);
+    const registration = resolveChannelPluginRegistration(channelId);
+    const plugin = registration?.plugin;
     if (!plugin) {
       return true;
     }
@@ -495,7 +501,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     accountId?: string,
     optsValue: StartChannelOptions = {},
   ) => {
-    const plugin = getChannelPlugin(channelId);
+    const registration = resolveChannelPluginRegistration(channelId);
+    const plugin = registration?.plugin;
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
       return;
@@ -720,7 +727,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
           scopedChannelRuntime = await measureStartup(`channels.${channelId}.runtime`, async () =>
             createTaskScopedChannelRuntime({
-              channelRuntime: await getChannelRuntime(),
+              channelRuntime:
+                registration?.resolveChannelRuntime?.() ?? (await getChannelRuntime()),
             }),
           );
           channelRuntimeForTask = scopedChannelRuntime.channelRuntime;

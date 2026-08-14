@@ -91,10 +91,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   diagnostics: () =>
     import("./server-methods/diagnostics.js").then((module) => module.diagnosticsHandlers),
-  "delivery-failures": () =>
-    import("./server-methods/delivery-failures.js").then(
-      (module) => module.deliveryFailureHandlers,
-    ),
   doctor: () => import("./server-methods/doctor.js").then((module) => module.doctorHandlers),
   environments: () =>
     import("./server-methods/environments.js").then((module) => module.environmentsHandlers),

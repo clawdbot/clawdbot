@@ -20,6 +20,15 @@ suite.define(() => {
         defaultAgentId: "main",
         featureMethods: ["terminal.open"],
         methodResponses: {
+          "agents.list": {
+            agents: [
+              { id: "main", identity: { name: "Main" }, name: "Main" },
+              { id: "research", identity: { name: "Research" }, name: "Research" },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
           "terminal.open": {
             agentId: "research",
             confined: false,
@@ -33,13 +42,35 @@ suite.define(() => {
 
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
       await gateway.waitForRequest("connect");
+      await gateway.waitForRequest("agents.list");
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean })
+          | null;
+        const shell = document.querySelector("openclaw-app-shell") as
+          | (HTMLElement & {
+              runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
+            })
+          | null;
+        return (
+          customElements.get("openclaw-terminal-panel") !== undefined &&
+          panel?.available &&
+          typeof shell?.runtime?.context?.agentSelection?.set === "function"
+        );
+      });
       await page.evaluate(() => {
         const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
           runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
         };
-        shell.runtime?.context?.agentSelection?.set("research");
+        const setAgent = shell.runtime?.context?.agentSelection?.set;
+        if (!setAgent) {
+          throw new Error("Agent selection is not ready");
+        }
+        setAgent("research");
         window.dispatchEvent(
-          new CustomEvent("openclaw:terminal-toggle", { detail: { open: true } }),
+          new CustomEvent("openclaw:terminal-toggle", {
+            detail: { agentId: "research", open: true },
+          }),
         );
       });
 

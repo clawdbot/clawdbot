@@ -14,6 +14,7 @@ import {
 } from "../worker/launch-descriptor.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 import type { NodeWorkerInstallation } from "./node-worker-build.js";
+import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { resolveNodeWorkerEntry } from "./node-worker-entry.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
@@ -109,7 +110,9 @@ class NodeWorkerSupervisor {
   private readonly store: NodeWorkerLaunchStore;
   private readonly workerEnv: NodeJS.ProcessEnv;
   private readonly localInstallation?: NodeWorkerInstallation;
+  private readonly capacity: NodeWorkerCapacity;
   private supervisorIdentity?: NodeWorkerProcessIdentity;
+  private initializationPromise?: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
 
@@ -118,6 +121,9 @@ class NodeWorkerSupervisor {
       bundleRoot?: string;
       env?: NodeJS.ProcessEnv;
       localInstallation?: NodeWorkerInstallation;
+      capacity?: number;
+      capacityWaitMs?: number;
+      onAvailabilityChanged?: (available: boolean) => void;
     } = {},
   ) {
     const env = options.env ?? process.env;
@@ -127,15 +133,23 @@ class NodeWorkerSupervisor {
     this.store = new NodeWorkerLaunchStore({ env });
     this.workerEnv = snapshotNodeWorkerEnv(env);
     this.localInstallation = options.localInstallation;
+    this.capacity = new NodeWorkerCapacity(this.store, options);
   }
 
   private requireSupervisorIdentity(): NodeWorkerProcessIdentity {
     return (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
   }
 
+  initialize(): Promise<void> {
+    return (this.initializationPromise ??= this.capacity.initialize(async (receipt) => {
+      await this.recoverRunning(receipt, false);
+    }));
+  }
+
   async launch(
     input: NodeWorkerLaunchInput,
     connectionEndpoint: WorkerConnectionEndpoint,
+    signal?: AbortSignal,
   ): Promise<NodeWorkerLaunchReceipt> {
     if (!GATEWAY_NAMESPACE_PATTERN.test(input.gatewayNamespace)) {
       throw new Error("gateway namespace must be a safe bounded path component");
@@ -152,6 +166,10 @@ class NodeWorkerSupervisor {
       throw new Error("node worker descriptor bundle hash does not match the launch bundle");
     }
     const planHash = nodeWorkerPlanHash(input);
+    if (this.closed) {
+      throw new Error("node worker supervisor is closed");
+    }
+    await this.initialize();
     const local = this.active.get(input.launchId);
     if (local) {
       if (local.planHash !== planHash) {
@@ -165,23 +183,21 @@ class NodeWorkerSupervisor {
         return receipt;
       }
     }
+    const supervisor = this.requireSupervisorIdentity();
+    const claimInput = {
+      launchId: input.launchId,
+      planHash,
+      gatewayNamespace: input.gatewayNamespace,
+      environmentId: descriptor.admission.environmentId,
+      sessionId: descriptor.admission.sessionId,
+      ownerEpoch: descriptor.admission.ownerEpoch,
+      placementGeneration: input.placementGeneration,
+      runId: descriptor.assignment.runId,
+    };
     if (this.closed) {
       throw new Error("node worker supervisor is closed");
     }
-    const supervisor = this.requireSupervisorIdentity();
-    const claim = this.store.claim(
-      {
-        launchId: input.launchId,
-        planHash,
-        gatewayNamespace: input.gatewayNamespace,
-        environmentId: descriptor.admission.environmentId,
-        sessionId: descriptor.admission.sessionId,
-        ownerEpoch: descriptor.admission.ownerEpoch,
-        placementGeneration: input.placementGeneration,
-        runId: descriptor.assignment.runId,
-      },
-      supervisor,
-    );
+    const claim = await this.capacity.claim(claimInput, supervisor, signal);
     if (claim.action === "recover") {
       return await this.recoverRunning(claim.receipt);
     }
@@ -205,6 +221,7 @@ class NodeWorkerSupervisor {
   }
 
   async status(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined> {
+    await this.initialize();
     const active = this.active.get(launchId);
     if (active?.state === "observed") {
       return this.reconcileActiveTerminal(active);
@@ -236,6 +253,7 @@ class NodeWorkerSupervisor {
   async cancel(
     expected: NodeWorkerSupervisorIdentity,
   ): Promise<NodeWorkerLaunchReceipt | undefined> {
+    await this.initialize();
     const receipt = this.store.getMatching(expected);
     if (!receipt || receipt.state === "completed" || receipt.state === "failed") {
       return receipt;
@@ -262,7 +280,7 @@ class NodeWorkerSupervisor {
     }
     const startup = this.starting.get(expected.launchId);
     if (startup && receipt.state === "pending" && receipt.supervisor.pid === process.pid) {
-      const cancelled = this.store.finishCancelled({
+      const cancelled = this.capacity.finishCancelled({
         expected,
         supervisor: receipt.supervisor,
         worker: null,
@@ -275,7 +293,7 @@ class NodeWorkerSupervisor {
       return receipt;
     }
     if (!receipt.worker) {
-      return this.store.finishCancelled({
+      return this.capacity.finishCancelled({
         expected,
         supervisor: receipt.supervisor,
         worker: null,
@@ -310,7 +328,7 @@ class NodeWorkerSupervisor {
     if (workerState !== "dead") {
       return this.store.getMatching(expected);
     }
-    return this.store.finishCancelled({
+    return this.capacity.finishCancelled({
       expected,
       supervisor: receipt.supervisor,
       worker: receipt.worker,
@@ -322,14 +340,22 @@ class NodeWorkerSupervisor {
       return this.closePromise;
     }
     this.closed = true;
+    this.capacity.close();
     const operation = (async () => {
+      const errors: unknown[] = [];
+      if (this.initializationPromise) {
+        try {
+          await this.initializationPromise;
+        } catch (error) {
+          errors.push(error);
+        }
+      }
       await Promise.allSettled(this.starting.values());
       await Promise.all(
         [...this.active.values()]
           .filter((active): active is RunningChild => active.state === "running")
           .map(async (active) => await this.stopChild(active, "interrupted")),
       );
-      const errors: unknown[] = [];
       for (const active of this.active.values()) {
         if (active.state !== "observed") {
           continue;
@@ -358,7 +384,7 @@ class NodeWorkerSupervisor {
 
   private reconcileActiveTerminal(active: ObservedTerminal): NodeWorkerLaunchReceipt {
     try {
-      const receipt = this.store.finish({
+      const receipt = this.capacity.finish({
         launchId: active.launchId,
         planHash: active.planHash,
         supervisor: active.supervisor,
@@ -378,7 +404,10 @@ class NodeWorkerSupervisor {
     }
   }
 
-  private async recoverRunning(receipt: NodeWorkerLaunchReceipt): Promise<NodeWorkerLaunchReceipt> {
+  private async recoverRunning(
+    receipt: NodeWorkerLaunchReceipt,
+    notifyCapacity = true,
+  ): Promise<NodeWorkerLaunchReceipt> {
     if (receipt.state !== "running" || !receipt.worker) {
       return receipt;
     }
@@ -401,14 +430,17 @@ class NodeWorkerSupervisor {
     if (workerState !== "dead") {
       return this.store.get(receipt.launchId) ?? receipt;
     }
-    return this.store.finish({
-      launchId: receipt.launchId,
-      planHash: receipt.planHash,
-      supervisor: receipt.supervisor,
-      worker: receipt.worker,
-      state: "interrupted",
-      errorText: "node host stopped before the worker launch completed",
-    });
+    return this.capacity.finish(
+      {
+        launchId: receipt.launchId,
+        planHash: receipt.planHash,
+        supervisor: receipt.supervisor,
+        worker: receipt.worker,
+        state: "interrupted",
+        errorText: "node host stopped before the worker launch completed",
+      },
+      notifyCapacity,
+    );
   }
 
   private async startClaimed(params: {
@@ -437,7 +469,7 @@ class NodeWorkerSupervisor {
         input: JSON.stringify(params.descriptor),
       });
     } catch (error) {
-      return this.store.finish({
+      return this.capacity.finish({
         launchId: params.input.launchId,
         planHash: params.planHash,
         supervisor: params.supervisor,
@@ -449,7 +481,7 @@ class NodeWorkerSupervisor {
     if (!adapter.pid) {
       adapter.kill("SIGKILL");
       adapter.dispose();
-      return this.store.finish({
+      return this.capacity.finish({
         launchId: params.input.launchId,
         planHash: params.planHash,
         supervisor: params.supervisor,
@@ -465,7 +497,7 @@ class NodeWorkerSupervisor {
       adapter.kill("SIGKILL");
       await adapter.wait().catch(() => undefined);
       adapter.dispose();
-      return this.store.finish({
+      return this.capacity.finish({
         launchId: params.input.launchId,
         planHash: params.planHash,
         supervisor: params.supervisor,
@@ -642,6 +674,9 @@ export function createNodeWorkerSupervisor(
     bundleRoot?: string;
     env?: NodeJS.ProcessEnv;
     localInstallation?: NodeWorkerInstallation;
+    capacity?: number;
+    capacityWaitMs?: number;
+    onAvailabilityChanged?: (available: boolean) => void;
   } = {},
 ): NodeWorkerSupervisor {
   return new NodeWorkerSupervisor(options);

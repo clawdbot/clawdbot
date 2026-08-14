@@ -25,6 +25,7 @@ import {
 } from "../state/openclaw-state-snapshot-sanitizer.js";
 import { resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { assertArchiveSymbolicLinkTarget } from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,
   createBackupArchivePublication,
@@ -855,9 +856,10 @@ export async function createBackupArchive(
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
     let skippedPluginSkills = false;
-    // node-tar invokes filters from async stat callbacks, so throwing inside
-    // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
+    // node-tar invokes filter/onWriteEntry from async filesystem callbacks, so
+    // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
+    let archiveSymlinkViolation: Error | undefined;
     const tarFilter = (
       entryPath: string,
       entryStat: import("node:fs").Stats | import("tar").ReadEntry,
@@ -921,6 +923,7 @@ export async function createBackupArchive(
         skippedVolatileCount = 0;
         skippedPluginSkills = false;
         unexpectedSqliteSourcePaths.length = 0;
+        archiveSymlinkViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
           createArchiveStream: (reportProgress) =>
@@ -943,12 +946,25 @@ export async function createBackupArchive(
                       reportProgress({ phase: "raw", entryPath: sourceEntryPath, bytes });
                     });
                   }
-                  entry.path = remapArchiveEntryPath({
+                  const archiveEntryPath = remapArchiveEntryPath({
                     entryPath: entry.path,
                     manifestPath,
                     archiveRoot,
                     sourcePathRemaps,
                   });
+                  if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
+                    try {
+                      assertArchiveSymbolicLinkTarget({
+                        archiveRoot,
+                        entryPath: archiveEntryPath,
+                        linkpath: entry.linkpath,
+                      });
+                    } catch (error) {
+                      archiveSymlinkViolation =
+                        error instanceof Error ? error : new Error(String(error));
+                    }
+                  }
+                  entry.path = archiveEntryPath;
                 },
               },
               [
@@ -963,13 +979,16 @@ export async function createBackupArchive(
           },
         });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
-        if (unexpectedSqliteSourcePath) {
+        const archiveValidationError = unexpectedSqliteSourcePath
+          ? new Error(
+              `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
+            )
+          : archiveSymlinkViolation;
+        if (archiveValidationError) {
           if (!removePreparedBackupArchive(prepared)) {
             publication.pendingCleanupArchives.push(prepared);
           }
-          throw new Error(
-            `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
-          );
+          throw archiveValidationError;
         }
         return prepared;
       },

@@ -526,6 +526,11 @@ describe("incrementCompactionCount", () => {
       compactionKind: "native-harness" as const,
       expectedIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
     },
+    {
+      action: "preserves",
+      compactionKind: "server-endpoint" as const,
+      expectedIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
+    },
   ])("$action CLI bindings after $compactionKind compaction", async (testCase) => {
     const entry = {
       sessionId: "s1",
@@ -558,7 +563,7 @@ describe("incrementCompactionCount", () => {
         : undefined,
     );
     expect(stored.claudeCliSessionId).toBe(
-      testCase.compactionKind === "native-harness" ? "claude-session" : undefined,
+      testCase.compactionKind === "context-engine" ? undefined : "claude-session",
     );
   });
 

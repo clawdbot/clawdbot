@@ -1,4 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
+import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-config.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -348,7 +349,6 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     return true;
   }
   const { readConfigFileSnapshot } = await loadConfigModule();
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
     return true;
@@ -360,8 +360,10 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
   }
-  const defaultAgentId = resolveDefaultAgentId(config ?? {});
-  return normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
+  const defaultAgentId =
+    config?.agents?.defaults?.systemAgent?.agentId?.trim() ??
+    (config ? tryResolveLegacyCompatibilityAgentId(config) : undefined);
+  return !defaultAgentId || normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
 }
 
 export async function assertConfigWriteDoesNotBypassInferenceVerification(
@@ -562,11 +564,11 @@ export async function executeSetDefaultModel(
       const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
         await import("./setup-apply.js");
       const targetAgentId = operation.agentId;
+      const snapshot = await readConfigFileSnapshot();
       // Route projection and the live probes below all take the same optional
       // agent scope, so a per-agent selection is verified against that agent's
       // route with the exact rigor the default route gets.
       const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
-      const snapshot = await readConfigFileSnapshot();
       const stagedConfig = await applySystemAgentModelSelection({
         config: snapshot.sourceConfig,
         model: operation.model,

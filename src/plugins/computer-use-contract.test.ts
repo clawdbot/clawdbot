@@ -7,26 +7,8 @@ import {
   parseScreenSnapshotResult,
   registerComputerUseProvider,
   type ComputerUseProvider,
-  ComputerActResultSchema,
 } from "./computer-use-contract.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.js";
-
-type SchemaNode = { [key: string]: SchemaNode } & { maxItems?: number; maxProperties?: number };
-const resultSchema = ComputerActResultSchema as unknown as SchemaNode;
-const resultElementCap = () => {
-  const cap = resultSchema.properties?.observation?.properties?.elements?.maxItems;
-  if (typeof cap !== "number") {
-    throw new Error("elements maxItems missing from result schema");
-  }
-  return cap;
-};
-const resultDetailKeyCap = () => {
-  const cap = resultSchema.properties?.details?.maxProperties;
-  if (typeof cap !== "number") {
-    throw new Error("details maxProperties missing from result schema");
-  }
-  return cap;
-};
 
 describe("Computer Use wire contract", () => {
   it("validates the canonical computer.act payload", () => {
@@ -74,9 +56,48 @@ describe("Computer Use wire contract", () => {
   });
 
   it("owns the complete v2 action-name union", () => {
-    expect(COMPUTER_USE_V2_ACTION_NAMES).toHaveLength(40);
-    expect(new Set(COMPUTER_USE_V2_ACTION_NAMES).size).toBe(40);
-    expect(COMPUTER_USE_V2_ACTION_NAMES).toContain("invoke_menu");
+    expect(COMPUTER_USE_V2_ACTION_NAMES).toEqual([
+      "screenshot",
+      "left_click",
+      "right_click",
+      "middle_click",
+      "double_click",
+      "triple_click",
+      "mouse_move",
+      "left_click_drag",
+      "left_mouse_down",
+      "left_mouse_up",
+      "scroll",
+      "type",
+      "key",
+      "hold_key",
+      "wait",
+      "list_apps",
+      "list_windows",
+      "get_accessibility_tree",
+      "get_cursor_position",
+      "get_window_state",
+      "launch_app",
+      "kill_app",
+      "bring_to_front",
+      "set_value",
+      "zoom",
+      "get_browser_state",
+      "browser_prepare",
+      "browser_navigate",
+      "browser_click",
+      "browser_type",
+      "browser_dialog",
+      "browser_set_input_files",
+      "browser_download",
+      "browser_pointer",
+      "escalate_scope",
+      "get_recording_state",
+      "start_recording",
+      "stop_recording",
+      "replay_trajectory",
+      "invoke_menu",
+    ]);
   });
 
   it("validates closed v2 action families without turning params into an optional bag", () => {
@@ -110,7 +131,14 @@ describe("Computer Use wire contract", () => {
     expect(
       parseComputerActResult({
         ok: true,
-        observation: { kind: "window", observationId: "observation-1", elements: [element] },
+        observation: {
+          kind: "window",
+          observationId: "observation-1",
+          elements: Array.from({ length: 2_000 }, () => element),
+        },
+        details: Object.fromEntries(
+          Array.from({ length: 64 }, (_, index) => [`key-${index}`, index]),
+        ),
       }),
     ).toMatchObject({ ok: true });
     expect(() =>
@@ -118,7 +146,7 @@ describe("Computer Use wire contract", () => {
         ok: true,
         observation: {
           kind: "window",
-          elements: Array.from({ length: resultElementCap() + 1 }, () => element),
+          elements: Array.from({ length: 2_001 }, () => element),
         },
       }),
     ).toThrow("COMPUTER_CONTRACT_MISMATCH");
@@ -126,7 +154,7 @@ describe("Computer Use wire contract", () => {
       parseComputerActResult({
         ok: true,
         details: Object.fromEntries(
-          Array.from({ length: resultDetailKeyCap() + 1 }, (_, index) => [`key-${index}`, index]),
+          Array.from({ length: 65 }, (_, index) => [`key-${index}`, index]),
         ),
       }),
     ).toThrow("COMPUTER_CONTRACT_MISMATCH");

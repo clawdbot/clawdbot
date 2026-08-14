@@ -1,5 +1,6 @@
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -17,6 +18,7 @@ import {
   parseWorkerConnectionEndpoint,
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
+import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import {
   parseNodeWorkerCancelInput,
   parseNodeWorkerLaunchInput,
@@ -37,7 +39,11 @@ type NodeWorkerSupervisorCommandResult =
   | {
       handled: true;
       ok: false;
-      code: "INVALID_REQUEST" | "UNAVAILABLE" | typeof NODE_WORKSPACE_TRANSFER_ERROR_CODE;
+      code:
+        | "INVALID_REQUEST"
+        | "UNAVAILABLE"
+        | typeof NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
+        | typeof NODE_WORKSPACE_TRANSFER_ERROR_CODE;
       message: string;
     };
 
@@ -126,6 +132,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         ? await params.supervisor!.launch(
             parseNodeWorkerLaunchInput(params.paramsJSON),
             resolveWorkerConnectionEndpoint(params),
+            params.signal,
           )
         : params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND
           ? await params.supervisor!.status(parseNodeWorkerLookupInput(params.paramsJSON).launchId)
@@ -137,16 +144,22 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     };
   } catch (error) {
     const invalid = error instanceof Error && error.message.startsWith("INVALID_REQUEST:");
+    const capacityFailure = error instanceof NodeWorkerCapacityExhaustedError;
     const transferFailure = error instanceof NodeWorkerWorkspaceTransferError;
     return {
       handled: true,
       ok: false,
       code: invalid
         ? "INVALID_REQUEST"
-        : transferFailure
-          ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
-          : "UNAVAILABLE",
-      message: invalid || transferFailure ? error.message : "node worker supervisor command failed",
+        : capacityFailure
+          ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
+          : transferFailure
+            ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
+            : "UNAVAILABLE",
+      message:
+        invalid || capacityFailure || transferFailure
+          ? error.message
+          : "node worker supervisor command failed",
     };
   }
 }

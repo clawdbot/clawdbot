@@ -43,6 +43,7 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
@@ -376,12 +377,13 @@ export async function runReplyAgent(
   });
   const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
-    ? async (phase: CompactionNoticePhase) => {
+    ? async (phase: CompactionNoticePhase, text?: string) => {
         if (!opts?.onBlockReply) {
           return;
         }
         const noticePayload = createCompactionNoticePayload({
           phase,
+          text,
           currentMessageId: compactionNoticeMessageId,
           applyReplyToMode,
         });
@@ -609,7 +611,11 @@ export async function runReplyAgent(
       typingSignals,
     });
   } catch (error) {
-    recordReplyOperationAgentTurn(replyOperationRunState, "failed");
+    recordReplyOperationAgentTurn(
+      replyOperationRunState,
+      isReplyOperationSuperseded(replyOperation) ? "superseded" : "failed",
+      replyOperation,
+    );
     return await handleReplyAgentRunError(error, {
       blockReplyPipeline,
       cfg,

@@ -4,11 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  listExtensionTestFilesForRoots,
-  MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
-  TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT,
-} from "../../scripts/lib/extension-test-plan.mts";
+import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -45,8 +41,8 @@ import {
 } from "../vitest/vitest.contracts-shared.ts";
 
 const normalizeRepoPath = toRepoPath;
-const MATRIX_TEST_PROCESS_FILE_LIMIT = MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT;
-const TELEGRAM_TEST_PROCESS_FILE_LIMIT = TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT;
+const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
+const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 1;
 
 function expectedMatrixTestProcessCount() {
   const testFileCount = listExtensionTestFilesForRoots(["extensions/matrix"]).length;
@@ -2150,36 +2146,6 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("splits an externally scoped Telegram include file across process lifetimes", () => {
-    const config = "test/vitest/vitest.extension-telegram.config.ts";
-    const files = listExtensionTestFilesForRoots(["extensions/telegram"]).slice(
-      0,
-      TELEGRAM_TEST_PROCESS_FILE_LIMIT + 4,
-    );
-    expect(files.length).toBeGreaterThan(TELEGRAM_TEST_PROCESS_FILE_LIMIT);
-
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-include-scope-"));
-    try {
-      const includeFile = path.join(tempDir, "ci-shard.json");
-      fs.writeFileSync(includeFile, JSON.stringify(files));
-      const plans = buildVitestRunPlans([config], process.cwd(), () => [], {
-        env: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
-      });
-
-      expect(plans).toHaveLength(files.length);
-      expect(
-        plans.every(
-          (plan) =>
-            plan.config === config &&
-            (plan.includePatterns?.length ?? 0) === TELEGRAM_TEST_PROCESS_FILE_LIMIT,
-        ),
-      ).toBe(true);
-      expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(files);
-    } finally {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
   it("turns a five-file Telegram include file into five one-file run specs", () => {
     const config = "test/vitest/vitest.extension-telegram.config.ts";
     const files = listExtensionTestFilesForRoots(["extensions/telegram"]).slice(0, 5);
@@ -3778,12 +3744,15 @@ describe("scripts/test-projects Vitest cache isolation", () => {
       },
     ];
 
-    expect(
-      applyDefaultMultiSpecVitestCachePaths(specs, {
-        cwd: "/repo",
-        env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
-      }),
-    ).toBe(specs);
+    const configured = applyDefaultMultiSpecVitestCachePaths(specs, {
+      cwd: "/repo",
+      env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
+    });
+
+    expect(configured.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
+      "/tmp/cache",
+      "/tmp/cache",
+    ]);
   });
 
   it("assigns isolated fs-module caches to multi-spec non-watch runs", () => {

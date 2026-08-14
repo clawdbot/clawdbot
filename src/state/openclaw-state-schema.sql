@@ -946,6 +946,10 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
   )
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
+  ON node_worker_launches(completed_at_ms, launch_id)
+  WHERE completed_at_ms IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,
   position INTEGER NOT NULL,
@@ -2057,6 +2061,9 @@ CREATE TABLE IF NOT EXISTS worker_environments (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_worker_environments_terminal_changed
+  ON worker_environments(state_changed_at_ms, environment_id);
 
 -- Provider-advertised fallback ports preserve stable retry order separately
 -- from the downgrade-sensitive canonical worker environment row.

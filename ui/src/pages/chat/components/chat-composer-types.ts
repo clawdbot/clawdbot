@@ -91,6 +91,7 @@ export type ChatComposerProps = {
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
+  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
   pendingAttachmentReads?: number;

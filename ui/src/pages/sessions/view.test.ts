@@ -1200,7 +1200,7 @@ describe("sessions view", () => {
 
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
-    expect(tokenCell?.textContent?.trim()).toBe("123k / 200k");
+    expect(tokenCell?.textContent?.trim()).toBe("123.5k / 200k");
   });
 
   it("renders the checkpoint count on the details disclosure", async () => {

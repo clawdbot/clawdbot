@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
   return {
     closeMcp,
     closeWorkerSupervisor: vi.fn(async () => undefined),
+    initializeWorkerSupervisor: vi.fn(async () => undefined),
     handleInvoke: vi.fn(async () => undefined),
     progressStartHeartbeats: vi.fn(),
     progressWrite: vi.fn(async () => undefined),
@@ -45,7 +46,10 @@ vi.mock("./node-invoke-progress.js", () => ({
 }));
 
 vi.mock("./node-worker-supervisor.js", () => ({
-  createNodeWorkerSupervisor: vi.fn(() => ({ close: mocks.closeWorkerSupervisor })),
+  createNodeWorkerSupervisor: vi.fn(() => ({
+    initialize: mocks.initializeWorkerSupervisor,
+    close: mocks.closeWorkerSupervisor,
+  })),
 }));
 
 vi.mock("./node-worker-build.js", () => ({
@@ -93,6 +97,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.closeMcp.mockResolvedValue(undefined);
   mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
+  mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
 });
 
 async function startRuntime() {

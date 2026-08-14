@@ -114,15 +114,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   {
-    commandPath: ["delivery"],
-    policy: {
-      configGuard: "skip",
-      loadPlugins: "never",
-      ensureCliPath: false,
-      networkProxy: "bypass",
-    },
-  },
-  {
     commandPath: ["crestodian"], // hidden alias
     policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
   },

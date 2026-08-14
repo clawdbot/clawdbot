@@ -665,7 +665,6 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         preserveStart: Bool = false,
         notifyUnexpectedExit: Bool = false) -> Task<Void, Never>?
     {
-        if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
         let wasReady = self.manifest != nil
         self.startTimer?.cancel()
         self.startTimer = nil
@@ -677,6 +676,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         if !preserveStart {
             self.finishStartLocked(.failure(WorkerError.unavailable(reason)))
         }
+        if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
         let pending = self.invokeContinuations
         self.invokeContinuations.removeAll()
         self.pendingInvokeControls.removeAll()

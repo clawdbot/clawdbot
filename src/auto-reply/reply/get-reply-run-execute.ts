@@ -16,6 +16,7 @@ import {
   attachToolAllowlistIntersection,
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy.js";
+import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
@@ -340,6 +341,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
     currentInboundAudio: hasInboundAudio(sessionCtx),
+    channelAdmissionEvidence:
+      readChannelContextAdmissionEvidence(ctx) ?? readChannelContextAdmissionEvidence(sessionCtx),
     currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),

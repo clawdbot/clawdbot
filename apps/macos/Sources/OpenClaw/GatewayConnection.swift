@@ -1067,7 +1067,7 @@ extension GatewayConnection {
     }
 
     static func activationBindingKey(
-        launchPolicy: AppLaunchPresentationPolicy,
+        launchPolicy: AppLaunchRuntimePlan,
         loadOrCreate: () -> SymmetricKey?) -> SymmetricKey?
     {
         guard launchPolicy.allowsGatewayUIKeychainAccess else { return nil }

@@ -10,7 +10,6 @@ import {
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT } from "../../scripts/lib/extension-test-plan.mts";
 import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
@@ -310,12 +309,12 @@ describe("CI changed Node test plan", () => {
         (shard) =>
           shard.configs[0] === "test/vitest/vitest.extension-telegram.config.ts" &&
           (shard.includePatterns?.length ?? 0) > 0 &&
-          (shard.includePatterns?.length ?? 0) <= TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT,
+          (shard.includePatterns?.length ?? 0) <= 10,
       ),
     ).toBe(true);
-    expect(targets.length).toBeGreaterThan(TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT);
+    expect(targets.length).toBeGreaterThan(10);
     expect(new Set(targets).size).toBe(targets.length);
-    expect(shards).toHaveLength(Math.ceil(targets.length / TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT));
+    expect(shards).toHaveLength(Math.ceil(targets.length / 10));
   });
 
   it("preserves Matrix process bounds in mixed package fallbacks", () => {

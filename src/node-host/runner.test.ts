@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
+  fakeRuntimeWorkerRuns: false,
+  runnerAvailabilityChanged: undefined as ((available: boolean) => void) | undefined,
   nodeHostCommands: [] as string[],
   nodeHostCaps: [] as string[],
   availabilityOnWatch: undefined as { caps: string[]; commands: string[] } | undefined,
@@ -191,10 +193,18 @@ vi.mock("./runtime.js", async (importOriginal) => {
         return await actual.prepareNodeHostRuntime(...args);
       }
       return {
-        manifest: { caps: [], commands: [], pathEnv: process.env.PATH ?? "" },
+        manifest: {
+          caps: [],
+          commands: [],
+          pathEnv: process.env.PATH ?? "",
+          ...(mocks.fakeRuntimeWorkerRuns
+            ? { workerRuns: structuredClone(mocks.nodeWorkerBuild) }
+            : {}),
+        },
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {
           mocks.runtimeClient = params.client;
+          mocks.runnerAvailabilityChanged = params.onRunnerAvailabilityChanged;
           return mocks.activeRuntime;
         },
       };
@@ -226,6 +236,8 @@ describe("runNodeHost", () => {
     mocks.nodeSkillDescriptors = [];
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
+    mocks.fakeRuntimeWorkerRuns = false;
+    mocks.runnerAvailabilityChanged = undefined;
     mocks.nodeHostCommands = [];
     mocks.nodeHostCaps = [];
     mocks.availabilityOnWatch = undefined;
@@ -696,6 +708,45 @@ describe("runNodeHost", () => {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
       workerRuns: mocks.nodeWorkerBuild,
     });
+  });
+
+  it("withdraws and restores worker launch eligibility without reconnecting", async () => {
+    mocks.useFakeRuntime = true;
+    mocks.fakeRuntimeWorkerRuns = true;
+    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+      "event loop readiness timeout",
+    );
+    const options = mocks.capturedGatewayClientOptions[0];
+    const client = mocks.capturedGatewayClients[0];
+    expect(options?.workerRuns).toEqual(mocks.nodeWorkerBuild);
+
+    mocks.runnerAvailabilityChanged?.(true);
+    options?.onHelloOk?.({
+      protocol: 4,
+      features: { methods: [], events: [] },
+    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+    await vi.waitFor(() => {
+      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerRuns: mocks.nodeWorkerBuild,
+      });
+    });
+
+    mocks.runnerAvailabilityChanged?.(false);
+    await vi.waitFor(() => {
+      expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      });
+    });
+
+    mocks.runnerAvailabilityChanged?.(true);
+    await vi.waitFor(() => {
+      expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerRuns: mocks.nodeWorkerBuild,
+      });
+    });
+    expect(client?.updateNodeManifest).not.toHaveBeenCalled();
   });
 
   it("clears gateway plugin tools when the final node-hosted tool disappears", async () => {

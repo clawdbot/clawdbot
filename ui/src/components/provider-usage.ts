@@ -4,7 +4,7 @@
 import { html, nothing } from "lit";
 import type { ProviderUsageSnapshot } from "../../../src/infra/provider-usage.types.js";
 import { t } from "../i18n/index.ts";
-import { formatTokens } from "../lib/format.ts";
+import { formatCompactTokenCount } from "../lib/format.ts";
 
 function formatProviderAmount(amount: number, unit: string): string {
   const normalizedUnit = unit.trim().toUpperCase();
@@ -81,6 +81,9 @@ function renderProviderCostHistory(snapshot: ProviderUsageSnapshot) {
     }),
     { requests: 0, input: 0, cache: 0, output: 0 },
   );
+  const inputCount = formatCompactTokenCount(totals.input);
+  const cacheCount = formatCompactTokenCount(totals.cache);
+  const outputCount = formatCompactTokenCount(totals.output);
   const windows = [
     [t("usage.providerUsage.today"), providerHistoryAmount(snapshot, 1)],
     [t("usage.providerUsage.last7Days"), providerHistoryAmount(snapshot, 7)],
@@ -121,11 +124,9 @@ function renderProviderCostHistory(snapshot: ProviderUsageSnapshot) {
               })}</span
             >`
           : nothing}
-        <span>${t("usage.providerUsage.inputTokens", { count: formatTokens(totals.input) })}</span>
-        <span>${t("usage.providerUsage.cacheTokens", { count: formatTokens(totals.cache) })}</span>
-        <span
-          >${t("usage.providerUsage.outputTokens", { count: formatTokens(totals.output) })}</span
-        >
+        <span>${t("usage.providerUsage.inputTokens", { count: inputCount })}</span>
+        <span>${t("usage.providerUsage.cacheTokens", { count: cacheCount })}</span>
+        <span>${t("usage.providerUsage.outputTokens", { count: outputCount })}</span>
       </div>
       ${history.models.length > 0 || history.categories.length > 0
         ? html`
@@ -142,7 +143,7 @@ function renderProviderCostHistory(snapshot: ProviderUsageSnapshot) {
                           (model) => html`
                             <div>
                               <span>${model.name}</span
-                              ><strong>${formatTokens(model.totalTokens)}</strong>
+                              ><strong>${formatCompactTokenCount(model.totalTokens)}</strong>
                             </div>
                           `,
                         )}
