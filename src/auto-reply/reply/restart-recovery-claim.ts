@@ -17,9 +17,9 @@ import {
   sessionMatchesExpectedTranscriptTurn,
 } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
+import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -64,6 +64,11 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
   sourceTurnId: string;
   storePath: string;
 }): Promise<SessionEntry | undefined> {
+  // updateSessionEntry returns a non-null clone even when the updater declines
+  // (returns null), so a truthy result does not prove a cleanup committed.
+  // Track an explicit sentinel that is set only inside the updater when it
+  // actually produces a cleanup patch.
+  let didRetire = false;
   const retired = await updateSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (current) => {
@@ -75,6 +80,7 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
       ) {
         return null;
       }
+      didRetire = true;
       return {
         ...buildRestartRecoveryClaimCleanupPatch({
           entry: current,
@@ -86,13 +92,14 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
     },
     { skipMaintenance: true, takeCacheOwnership: true },
   );
-  if (retired) {
+  if (didRetire) {
     diag.warn("retired stale terminal restart-recovery claim", {
       sessionKey: params.sessionKey,
       sourceTurnId: params.sourceTurnId,
     });
+    return retired ?? undefined;
   }
-  return retired ?? undefined;
+  return undefined;
 }
 
 export function createReplyRestartRecoveryClaimController(params: {
