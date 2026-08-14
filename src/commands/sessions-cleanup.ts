@@ -174,6 +174,15 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
+  if (params.summary.archiveCleanup?.skipReason) {
+    params.runtime.log(
+      "Skipped deleted/reset archive cleanup: directory is shared with unselected agents; use --all-agents.",
+    );
+  } else if (params.summary.archiveCleanup?.scannedFiles) {
+    params.runtime.log(
+      `Would prune deleted/reset archives: ${params.summary.archiveCleanup.removedFiles}`,
+    );
+  }
   if (params.summary.unreferencedArtifacts?.scannedFiles) {
     params.runtime.log(
       `Would prune unreferenced artifacts: ${params.summary.unreferencedArtifacts.removedFiles}`,
@@ -232,6 +241,13 @@ function renderAppliedSummaries(params: {
       : summary.storePath;
     params.runtime.log(`Session store: ${storePath}`);
     params.runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
+    if (summary.archiveCleanup?.skipReason) {
+      params.runtime.log(
+        "Skipped deleted/reset archive cleanup: directory is shared with unselected agents; use --all-agents.",
+      );
+    } else if (summary.archiveCleanup?.removedFiles) {
+      params.runtime.log(`Pruned deleted/reset archives: ${summary.archiveCleanup.removedFiles}`);
+    }
     if (summary.unreferencedArtifacts?.removedFiles) {
       params.runtime.log(
         `Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`,

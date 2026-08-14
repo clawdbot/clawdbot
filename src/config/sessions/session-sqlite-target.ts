@@ -343,6 +343,19 @@ export function listDurableSqliteTargetPathsForSessionStorePath(storePath: strin
   );
 }
 
+/** Resolves the filesystem directory that owns archived transcripts for a store target. */
+export function resolveSessionTranscriptArchiveDirectoryFromStorePath(
+  storePath: string,
+  options: { agentId?: string } = {},
+): string {
+  const resolvedStorePath = path.resolve(storePath);
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(resolvedStorePath, options).path;
+  if (sqlitePath && path.basename(path.dirname(sqlitePath)) === "agent") {
+    return path.join(path.dirname(path.dirname(sqlitePath)), "sessions");
+  }
+  return path.dirname(resolvedStorePath);
+}
+
 /** Extracts the agent id from the canonical per-agent SQLite database path. */
 function resolveAgentIdFromSqliteDatabasePath(databasePath: string): string | undefined {
   if (path.basename(databasePath) !== "openclaw-agent.sqlite") {

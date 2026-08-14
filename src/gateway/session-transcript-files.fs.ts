@@ -16,33 +16,22 @@ import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
-import { hasErrnoCode } from "../infra/errors.js";
+import {
+  cacheSessionResetArchiveCandidates,
+  clearSessionResetArchiveDiscoveryCache,
+  cleanupSessionArchivedTranscriptFiles,
+  readCachedSessionResetArchiveCandidates,
+  type SessionResetArchiveCandidate,
+} from "../config/sessions/session-archive-retention.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
-type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
 export type ArchivedSessionTranscript = {
   sourcePath: string;
   archivedPath: string;
 };
-
-const MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES = 2048;
-const MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT = 128;
-
-const resetArchiveDiscoveryCache = new Map<
-  string,
-  {
-    dirMtimeMs: number;
-    dirSize: number;
-    archives: ResetArchiveCandidate[];
-  }
->();
-function clearSessionTranscriptResetArchiveDiscoveryCache(): void {
-  resetArchiveDiscoveryCache.clear();
-}
 
 function classifySessionTranscriptCandidate(
   sessionId: string,
@@ -171,7 +160,7 @@ async function resetArchiveHeaderMatchesSessionId(
 
 async function listResetArchiveCandidatesForTranscriptAsync(
   transcriptPath: string,
-): Promise<ResetArchiveCandidate[] | undefined> {
+): Promise<SessionResetArchiveCandidate[] | undefined> {
   const base = path.basename(transcriptPath);
   if (!base.endsWith(".jsonl")) {
     return undefined;
@@ -182,14 +171,16 @@ async function listResetArchiveCandidatesForTranscriptAsync(
     return undefined;
   }
   const cacheKey = `${dir}\0${base}`;
-  const cached = resetArchiveDiscoveryCache.get(cacheKey);
-  if (cached && cached.dirMtimeMs === dirStat.mtimeMs && cached.dirSize === dirStat.size) {
-    resetArchiveDiscoveryCache.delete(cacheKey);
-    resetArchiveDiscoveryCache.set(cacheKey, cached);
-    return cached.archives;
+  const cached = readCachedSessionResetArchiveCandidates({
+    cacheKey,
+    dirMtimeMs: dirStat.mtimeMs,
+    dirSize: dirStat.size,
+  });
+  if (cached) {
+    return cached;
   }
 
-  const archives: ResetArchiveCandidate[] = [];
+  const archives: SessionResetArchiveCandidate[] = [];
   try {
     for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.startsWith(`${base}.reset.`)) {
@@ -207,21 +198,19 @@ async function listResetArchiveCandidatesForTranscriptAsync(
   archives.sort(
     (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
   );
-  const boundedArchives = archives.slice(0, MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT);
-  resetArchiveDiscoveryCache.set(cacheKey, {
+  return cacheSessionResetArchiveCandidates({
+    cacheKey,
     dirMtimeMs: dirStat.mtimeMs,
     dirSize: dirStat.size,
-    archives: boundedArchives,
+    archives,
   });
-  pruneMapToMaxSize(resetArchiveDiscoveryCache, MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES);
-  return boundedArchives;
 }
 
 async function resolveLatestResetArchiveForTranscriptAsync(
   sessionId: string,
   transcriptPath: string,
   opts?: { requireSessionHeader?: boolean },
-): Promise<ResetArchiveCandidate | undefined> {
+): Promise<SessionResetArchiveCandidate | undefined> {
   const archives = await listResetArchiveCandidatesForTranscriptAsync(transcriptPath);
   if (!archives) {
     return undefined;
@@ -300,7 +289,6 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
-  clearSessionTranscriptResetArchiveDiscoveryCache();
   // Notify the session transcript subscribers (memory index, sessions-history
   // HTTP, etc.) that a mutation landed on a session-owned path. Without this
   // emit the memory sync's incremental path never learns the new archive
@@ -310,8 +298,16 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   // chat inject, command execution) already emit here; archive was the sole
   // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
   // files only surfaced in the index after a full reindex.
-  emitSessionTranscriptUpdate({ sessionFile: archived });
+  emitSessionTranscriptArchiveMutation(archived, filePath);
   return archived;
+}
+
+function emitSessionTranscriptArchiveMutation(sessionFile: string, sourceFile?: string): void {
+  clearSessionResetArchiveDiscoveryCache();
+  emitSessionTranscriptUpdate({ sessionFile });
+  if (sourceFile && sourceFile !== sessionFile) {
+    emitSessionTranscriptUpdate({ sessionFile: sourceFile });
+  }
 }
 
 export function archiveSessionTranscriptPaths(opts: {
@@ -443,63 +439,13 @@ type SessionArchiveCleanupRule = {
   olderThanMs: number;
 };
 
-async function ignoreMissingArchivePath<T>(operation: () => Promise<T>, fallback: T): Promise<T> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return fallback;
-    }
-    throw error;
-  }
-}
-
-// Archive-retention sweeps share one directory listing across all rules. A
-// listing per reason would multiply READDIR load on networked filesystems.
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   rules: SessionArchiveCleanupRule[];
   nowMs?: number;
+  dryRun?: boolean;
+  excludeCanonicalPaths?: ReadonlySet<string>;
+  onRemoveFile?: (canonicalPath: string) => void;
 }): Promise<{ removed: number; scanned: number }> {
-  const rules = opts.rules.filter(
-    (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
-  );
-  if (rules.length === 0) {
-    return { removed: 0, scanned: 0 };
-  }
-  const now = opts.nowMs ?? Date.now();
-  const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
-  let removed = 0;
-  let scanned = 0;
-
-  for (const dir of directories) {
-    const entries = await ignoreMissingArchivePath(() => fs.promises.readdir(dir), []);
-    for (const entry of entries) {
-      for (const rule of rules) {
-        const timestamp = parseSessionArchiveTimestamp(entry, rule.reason);
-        if (timestamp == null) {
-          continue;
-        }
-        scanned += 1;
-        if (now - timestamp > rule.olderThanMs) {
-          const fullPath = path.join(dir, entry);
-          const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
-          if (stat?.isFile()) {
-            const removedFile = await ignoreMissingArchivePath(async () => {
-              await fs.promises.rm(fullPath);
-              return true;
-            }, false);
-            if (removedFile) {
-              removed += 1;
-            }
-          }
-        }
-        // An archive name carries exactly one `.{reason}.{timestamp}` suffix,
-        // so the first matching rule owns the entry.
-        break;
-      }
-    }
-  }
-
-  return { removed, scanned };
+  return await cleanupSessionArchivedTranscriptFiles(opts);
 }

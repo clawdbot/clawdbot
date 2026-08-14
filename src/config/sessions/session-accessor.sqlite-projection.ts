@@ -70,17 +70,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { cleanupSessionArchivedTranscriptFiles } from "./session-archive-retention.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
-
-type SessionArchiveRuntime = typeof import("../../gateway/session-archive.runtime.js");
-let sessionArchiveRuntimePromise: Promise<SessionArchiveRuntime> | undefined;
-
-function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
-}
 
 export async function applySessionEntryReplacements<T>(params: {
   activeSessionKey?: string;
@@ -433,8 +426,7 @@ export async function applySessionEntryLifecycleMutation(params: {
   ).toSorted();
   if (archivedTranscriptDirectories.length > 0 && params.cleanupArchivedTranscripts) {
     try {
-      const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
-      await cleanupArchivedSessionTranscripts({
+      await cleanupSessionArchivedTranscriptFiles({
         directories: archivedTranscriptDirectories,
         rules: params.cleanupArchivedTranscripts.rules,
         nowMs: params.cleanupArchivedTranscripts.nowMs,

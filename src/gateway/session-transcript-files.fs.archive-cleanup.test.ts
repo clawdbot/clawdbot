@@ -5,7 +5,11 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupArchivedSessionTranscripts } from "./session-transcript-files.fs.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  cleanupArchivedSessionTranscripts,
+  resolveSessionTranscriptResetArchiveCandidatesAsync,
+} from "./session-transcript-files.fs.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW_MS = Date.parse("2026-06-02T00:00:00.000Z");
@@ -59,6 +63,139 @@ describe("cleanupArchivedSessionTranscripts", () => {
     expect(readdirSpy).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ removed: 2, scanned: 3 });
     expect(await remaining()).toEqual([`c.jsonl.reset.${FRESH_STAMP}`, "live.jsonl"]);
+  });
+
+  it("counts stale archives during dry-run without deleting them", async () => {
+    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [
+        { reason: "deleted", olderThanMs: 30 * DAY_MS },
+        { reason: "reset", olderThanMs: 30 * DAY_MS },
+      ],
+      nowMs: NOW_MS,
+      dryRun: true,
+    });
+
+    expect(result).toEqual({ removed: 2, scanned: 2 });
+    expect(await remaining()).toEqual([
+      `a.jsonl.deleted.${OLD_STAMP}`,
+      `b.jsonl.reset.${OLD_STAMP}`,
+    ]);
+  });
+
+  it("notifies transcript subscribers only when retention deletes an archive", async () => {
+    const archiveName = `a.jsonl.reset.${OLD_STAMP}`;
+    const archivePath = path.join(dir, archiveName);
+    const sourcePath = path.join(dir, "a.jsonl");
+    await seed([archiveName]);
+    const updates: string[] = [];
+    const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
+      if (update.sessionFile) {
+        updates.push(update.sessionFile);
+      }
+    });
+
+    try {
+      await cleanupArchivedSessionTranscripts({
+        directories: [dir],
+        rules: [{ reason: "reset", olderThanMs: 30 * DAY_MS }],
+        nowMs: NOW_MS,
+        dryRun: true,
+      });
+      expect(updates).toEqual([]);
+
+      await cleanupArchivedSessionTranscripts({
+        directories: [dir],
+        rules: [{ reason: "reset", olderThanMs: 30 * DAY_MS }],
+        nowMs: NOW_MS,
+      });
+      expect(updates).toEqual([archivePath, sourcePath]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("invalidates reset archive discovery after retention deletion", async () => {
+    const sessionId = "cache-session";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    const archivePath = `${transcriptPath}.reset.${OLD_STAMP}`;
+    await fsPromises.writeFile(
+      archivePath,
+      `${JSON.stringify({ type: "session", id: sessionId })}\n`,
+    );
+    const canonicalArchivePath = await fsPromises.realpath(archivePath);
+    const realStat = fsPromises.stat.bind(fsPromises);
+    const stableDirectoryStat = await realStat(dir);
+    vi.spyOn(fsPromises, "stat").mockImplementation(async (target) => {
+      return path.resolve(String(target)) === path.resolve(dir)
+        ? stableDirectoryStat
+        : await realStat(target);
+    });
+
+    await expect(
+      resolveSessionTranscriptResetArchiveCandidatesAsync(
+        sessionId,
+        path.join(dir, "sessions.json"),
+        transcriptPath,
+      ),
+    ).resolves.toContain(canonicalArchivePath);
+
+    await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [{ reason: "reset", olderThanMs: 30 * DAY_MS }],
+      nowMs: NOW_MS,
+    });
+
+    await expect(
+      resolveSessionTranscriptResetArchiveCandidatesAsync(
+        sessionId,
+        path.join(dir, "sessions.json"),
+        transcriptPath,
+      ),
+    ).resolves.not.toContain(canonicalArchivePath);
+  });
+
+  it("reports only archives deleted successfully when one disappears during cleanup", async () => {
+    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.deleted.${OLD_STAMP}`]);
+    const onRemoveFile = vi.fn();
+    vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(filesystemError("ENOENT"));
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [{ reason: "deleted", olderThanMs: 30 * DAY_MS }],
+      nowMs: NOW_MS,
+      onRemoveFile,
+    });
+
+    expect(result).toEqual({ removed: 1, scanned: 2 });
+    expect(onRemoveFile).toHaveBeenCalledTimes(1);
+    const remainingFiles = await remaining();
+    expect(remainingFiles).toHaveLength(1);
+    expect(onRemoveFile.mock.calls[0]?.[0]).not.toContain(remainingFiles[0]);
+  });
+
+  it("skips excluded archive paths during dry-run", async () => {
+    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
+    const excludedPath = await fsPromises.realpath(path.join(dir, `a.jsonl.deleted.${OLD_STAMP}`));
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [
+        { reason: "deleted", olderThanMs: 30 * DAY_MS },
+        { reason: "reset", olderThanMs: 30 * DAY_MS },
+      ],
+      nowMs: NOW_MS,
+      dryRun: true,
+      excludeCanonicalPaths: new Set([excludedPath]),
+    });
+
+    expect(result).toEqual({ removed: 1, scanned: 1 });
+    expect(await remaining()).toEqual([
+      `a.jsonl.deleted.${OLD_STAMP}`,
+      `b.jsonl.reset.${OLD_STAMP}`,
+    ]);
   });
 
   it("applies each rule's age threshold independently", async () => {

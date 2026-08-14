@@ -531,6 +531,7 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
 function areSameAgentDatabasePathIdentities(
   leftIdentity: AgentDatabasePathIdentity,
   rightIdentity: AgentDatabasePathIdentity,
+  options: { probeMissingSuffixAliases: boolean },
 ): boolean {
   if (leftIdentity.lexicalPath === rightIdentity.lexicalPath) {
     return true;
@@ -548,6 +549,7 @@ function areSameAgentDatabasePathIdentities(
   const sameMissingSuffix =
     leftIdentity.unresolvedSuffix === rightIdentity.unresolvedSuffix ||
     (sameMissingParent &&
+      options.probeMissingSuffixAliases &&
       parentDevice !== undefined &&
       parentInode !== undefined &&
       leftIdentity.parentRealPath !== undefined &&
@@ -568,7 +570,9 @@ function areSameAgentDatabasePathIdentities(
 }
 
 /** Create a synchronous-operation matcher that prepares each exact locator once. */
-export function createOpenClawAgentDatabasePathMatcher(): (left: string, right: string) => boolean {
+export function createOpenClawAgentDatabasePathMatcher(
+  options: { readOnly?: boolean } = {},
+): (left: string, right: string) => boolean {
   const identities = new Map<string, AgentDatabasePathIdentity>();
   const resolveIdentity = (pathname: string): AgentDatabasePathIdentity => {
     const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
@@ -582,7 +586,9 @@ export function createOpenClawAgentDatabasePathMatcher(): (left: string, right: 
     return identity;
   };
   return (left, right) =>
-    areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right));
+    areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right), {
+      probeMissingSuffixAliases: options.readOnly !== true,
+    });
 }
 
 /** Compare two database locators by canonical filesystem identity when available. */
@@ -590,6 +596,7 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
   return areSameAgentDatabasePathIdentities(
     resolveAgentDatabasePathIdentity(left),
     resolveAgentDatabasePathIdentity(right),
+    { probeMissingSuffixAliases: true },
   );
 }
 
