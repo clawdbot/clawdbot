@@ -394,11 +394,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const compactStartedAt = Date.now();
           const serverResult = await attemptServerEndpointCompaction({
             trigger,
+            streamFn: session.agent.streamFn,
             model: effectiveModel,
             context: { systemPrompt: systemPromptText, messages: session.messages },
             sessionManager,
+            extraParams: effectiveExtraParams,
             requestOptions: {
-              ...effectiveExtraParams,
               apiKey: transportApiKey,
               sessionId: params.sessionId,
               authProfileId: runtimePlan.auth.forwardedAuthProfileId,

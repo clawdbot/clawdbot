@@ -365,7 +365,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       result: { tokensBefore: 1_000, tokensAfter: 200 },
     });
     expect(result.result).not.toHaveProperty("summary");
-    expect(attemptServerEndpointCompactionMock).toHaveBeenCalledOnce();
+    expect(attemptServerEndpointCompactionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        streamFn: expect.any(Function),
+        requestOptions: expect.objectContaining({ apiKey: "test" }),
+      }),
+    );
     expect(sessionManualCompactionMock).not.toHaveBeenCalled();
   });
 

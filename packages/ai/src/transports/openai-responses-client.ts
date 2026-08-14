@@ -160,32 +160,41 @@ export function createOpenAIResponsesClient(
 type OpenAIResponsesCompactEndpointResult = {
   item: { type: "compaction"; id?: string; encrypted_content: string };
   usage: Record<string, unknown> & { input_tokens: number; output_tokens: number };
+  model: Model;
+  replayMetadata: ReturnType<typeof buildOpenAIResponsesReasoningReplayMetadata>;
 };
 
-/** POST one normal Responses input to the provider's manual compact endpoint. */
-export async function requestOpenAIResponsesCompaction(
-  model: Model,
-  context: Context,
-  options: OpenAIResponsesOptions,
-): Promise<OpenAIResponsesCompactEndpointResult> {
-  const apiKey = options.apiKey || getEnvApiKey(model.provider) || "";
-  let params = buildOpenAIResponsesParams(model, context, options);
-  params = ((await options.onPayload?.(params, model)) as typeof params | undefined) ?? params;
-  params = sanitizeResponsesImagePayload(params as Record<string, unknown>) as typeof params;
-  const client = createOpenAIResponsesClient(
-    model,
-    context,
-    getAiTransportHost().resolveSecretSentinel(apiKey),
-    options.headers,
-    undefined,
-    options.sessionId,
-  );
-  const response = await client.post<unknown>("/responses/compact", {
-    ...buildOpenAISdkRequestOptions(model, options.signal, {
-      timeoutMs: options.timeoutMs,
-      maxRetries: options.maxRetries,
+type ResponsesCompactRequestController = {
+  claimed: boolean;
+  resolve(result: OpenAIResponsesCompactEndpointResult): void;
+  reject(error: unknown): void;
+};
+
+const COMPACT_REQUEST = Symbol("openaiResponsesCompactRequest");
+
+function claimResponsesCompactRequest(options: object | undefined) {
+  const controller = options
+    ? (Reflect.get(options, COMPACT_REQUEST) as ResponsesCompactRequestController | undefined)
+    : undefined;
+  if (controller?.claimed === false) {
+    controller.claimed = true;
+    return controller;
+  }
+  return undefined;
+}
+
+async function postOpenAIResponsesCompaction(params: {
+  client: ReturnType<typeof createOpenAIResponsesClient>;
+  model: Model;
+  request: ReturnType<typeof buildOpenAIResponsesParams>;
+  options: OpenAIResponsesOptions | undefined;
+}): Promise<OpenAIResponsesCompactEndpointResult> {
+  const response = await params.client.post<unknown>("/responses/compact", {
+    ...buildOpenAISdkRequestOptions(params.model, params.options?.signal, {
+      timeoutMs: params.options?.timeoutMs,
+      maxRetries: params.options?.maxRetries,
     }),
-    body: { model: model.id, input: params.input },
+    body: { model: params.request.model, input: params.request.input },
   });
   const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
   const item = output[0];
@@ -204,7 +213,44 @@ export async function requestOpenAIResponsesCompaction(
   ) {
     throw new Error("Responses compact endpoint did not return exactly one compaction item");
   }
-  return { item, usage } as OpenAIResponsesCompactEndpointResult;
+  return {
+    item,
+    usage,
+    model: params.model,
+    replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {
+      authProfileId: params.options?.authProfileId,
+      sessionId: params.options?.sessionId,
+    }),
+  } as OpenAIResponsesCompactEndpointResult;
+}
+
+/** Run a compact-endpoint request through the session's prepared stream stack. */
+export async function requestPreparedOpenAIResponsesCompaction(
+  streamFn: StreamFn,
+  model: Model,
+  context: Context,
+  options: OpenAIResponsesOptions,
+): Promise<OpenAIResponsesCompactEndpointResult> {
+  const preparedOptions = { ...options };
+  let resolveResult!: (result: OpenAIResponsesCompactEndpointResult) => void;
+  let rejectResult!: (error: unknown) => void;
+  const result = new Promise<OpenAIResponsesCompactEndpointResult>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  const controller = { claimed: false, resolve: resolveResult, reject: rejectResult };
+  Reflect.set(preparedOptions, COMPACT_REQUEST, controller);
+  const stream = await Promise.resolve(
+    streamFn(model, context, preparedOptions as Parameters<StreamFn>[2]),
+  );
+  if (!controller.claimed) {
+    throw new Error("Prepared stream did not reach an OpenAI Responses transport");
+  }
+  try {
+    return await result;
+  } finally {
+    await stream.result().catch(() => undefined);
+  }
 }
 
 type ResponsesPricingOptions = Pick<
@@ -242,6 +288,7 @@ type ResponsesTransportExecutorOptions = {
 function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
+    const compactRequest = claimResponsesCompactRequest(responsesOptions);
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
@@ -328,6 +375,25 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           return params;
         };
         const params = await buildRequest("checkpoint");
+        if (compactRequest) {
+          const compacted = await postOpenAIResponsesCompaction({
+            client,
+            model,
+            request: params,
+            options: responsesOptions,
+          });
+          output.usage.input = compacted.usage.input_tokens;
+          output.usage.output = compacted.usage.output_tokens;
+          output.usage.totalTokens = compacted.usage.input_tokens + compacted.usage.output_tokens;
+          compactRequest.resolve(compacted);
+          stream.push({
+            type: "done",
+            reason: output.stopReason as never,
+            message: output as never,
+          });
+          stream.end();
+          return;
+        }
         const sessionId = options?.sessionId;
         const httpContinuationEligible =
           config.httpContinuation &&
@@ -564,6 +630,17 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
+        if (compactRequest) {
+          compactRequest.reject(error);
+          Object.assign(output, projectProviderError(error, options?.signal));
+          stream.push({
+            type: "error",
+            reason: output.stopReason as never,
+            error: output as never,
+          });
+          stream.end();
+          return;
+        }
         if (error instanceof ResponsesStreamFailure && error.observation) {
           logResponsesFailedNoDetails(error.observation);
         }

@@ -42,7 +42,7 @@ export {
   createOpenAIResponsesTransportStreamFn,
   buildOpenAIResponsesReasoningReplayMetadata,
 };
-export { requestOpenAIResponsesCompaction } from "./openai-responses-client.js";
+export { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-client.js";
 export { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 
 const responsesTesting = {

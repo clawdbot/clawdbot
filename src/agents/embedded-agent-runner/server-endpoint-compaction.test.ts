@@ -3,15 +3,16 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requestCompactionMock } = vi.hoisted(() => ({
-  requestCompactionMock: vi.fn(),
+const { requestPreparedCompactionMock } = vi.hoisted(() => ({
+  requestPreparedCompactionMock: vi.fn(),
 }));
 
 vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/ai/transports")>()),
-  requestOpenAIResponsesCompaction: requestCompactionMock,
+  requestPreparedOpenAIResponsesCompaction: requestPreparedCompactionMock,
 }));
 
+import { buildOpenAIResponsesReasoningReplayMetadata } from "@openclaw/ai/transports";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
 const model = {
@@ -60,9 +61,11 @@ function attempt(overrides: Partial<Parameters<typeof attemptServerEndpointCompa
     session,
     result: attemptServerEndpointCompaction({
       trigger: "manual",
+      streamFn: vi.fn(),
       model,
       context: { systemPrompt: "system", messages: session.messages },
       sessionManager: session.sessionManager,
+      extraParams: {},
       requestOptions: { apiKey: "test", sessionId: "session-1", timeoutMs: 1_000 },
       ...overrides,
     }),
@@ -70,10 +73,14 @@ function attempt(overrides: Partial<Parameters<typeof attemptServerEndpointCompa
 }
 
 beforeEach(() => {
-  requestCompactionMock.mockReset();
-  requestCompactionMock.mockResolvedValue({
+  requestPreparedCompactionMock.mockReset();
+  requestPreparedCompactionMock.mockResolvedValue({
     item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
     usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
+    model,
+    replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+      sessionId: "session-1",
+    }),
   });
 });
 
@@ -81,7 +88,7 @@ describe("attemptServerEndpointCompaction", () => {
   it("persists a summaryless checkpoint through the SessionManager rewrite owner", async () => {
     const { session, result } = attempt();
 
-    await expect(result).resolves.toEqual({
+    await expect(result).resolves.toMatchObject({
       item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
       usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
     });
@@ -102,8 +109,13 @@ describe("attemptServerEndpointCompaction", () => {
 
   it("aborts a pending endpoint request at the compaction timeout", async () => {
     let requestAborted = false;
-    requestCompactionMock.mockImplementationOnce(
-      async (_model: unknown, _context: unknown, options: { signal?: AbortSignal }) =>
+    requestPreparedCompactionMock.mockImplementationOnce(
+      async (
+        _streamFn: unknown,
+        _model: unknown,
+        _context: unknown,
+        options: { signal?: AbortSignal },
+      ) =>
         await new Promise((_resolve, reject) => {
           options.signal?.addEventListener(
             "abort",
@@ -130,6 +142,6 @@ describe("attemptServerEndpointCompaction", () => {
     const { result } = attempt({ trigger: "overflow" });
 
     await expect(result).resolves.toBeUndefined();
-    expect(requestCompactionMock).not.toHaveBeenCalled();
+    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
   });
 });

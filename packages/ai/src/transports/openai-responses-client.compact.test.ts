@@ -18,7 +18,10 @@ vi.mock("openai", () => {
 });
 
 import { resolveOpenAIResponsesCompactEndpointPlan } from "./openai-responses-payload-policy.js";
-import { requestOpenAIResponsesCompaction } from "./openai-responses-transport.js";
+import {
+  createOpenAIResponsesTransportStreamFn,
+  requestPreparedOpenAIResponsesCompaction,
+} from "./openai-responses-transport.js";
 
 const model = {
   id: "grok-4.5",
@@ -51,10 +54,12 @@ describe("responses compact endpoint", () => {
       usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
     });
 
-    const result = await requestOpenAIResponsesCompaction(model, context, {
-      apiKey: "test-key",
-      sessionId: "session-1",
-    });
+    const result = await requestPreparedOpenAIResponsesCompaction(
+      createOpenAIResponsesTransportStreamFn(),
+      model,
+      context,
+      { apiKey: "test-key", sessionId: "session-1" },
+    );
 
     expect(sdkState.clients[0]).toMatchObject({
       apiKey: "test-key",
@@ -72,9 +77,15 @@ describe("responses compact endpoint", () => {
         },
       }),
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       item: { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
       usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
+      model,
+      replayMetadata: {
+        source: "openai-responses",
+        provider: "xai",
+        model: "grok-4.5",
+      },
     });
   });
 
@@ -82,7 +93,12 @@ describe("responses compact endpoint", () => {
     sdkState.post.mockResolvedValue({ object: "response.compaction", output: [], usage: {} });
 
     await expect(
-      requestOpenAIResponsesCompaction(model, context, { apiKey: "test-key" }),
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        model,
+        context,
+        { apiKey: "test-key" },
+      ),
     ).rejects.toThrow("exactly one compaction item");
   });
 

@@ -1,7 +1,6 @@
 import {
-  buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
-  requestOpenAIResponsesCompaction,
+  requestPreparedOpenAIResponsesCompaction,
   resolveOpenAIResponsesCompactEndpointPlan,
 } from "@openclaw/ai/transports";
 import type { Message } from "@openclaw/llm-core";
@@ -15,22 +14,23 @@ type SessionManagerLike = Parameters<
   typeof rewriteTranscriptEntriesInSessionManager
 >[0]["sessionManager"];
 
-type ServerEndpointCompactionResult = Awaited<ReturnType<typeof requestOpenAIResponsesCompaction>>;
+type ServerEndpointCompactionResult = Awaited<
+  ReturnType<typeof requestPreparedOpenAIResponsesCompaction>
+>;
 
 /** Try provider-owned compaction and persist its replay checkpoint on the session owner. */
 export async function attemptServerEndpointCompaction(params: {
   trigger: "budget" | "overflow" | "manual";
-  model: Parameters<typeof requestOpenAIResponsesCompaction>[0];
+  streamFn: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[0];
+  model: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[1];
   context: { systemPrompt: string; messages: readonly AgentMessage[] };
   sessionManager: SessionManagerLike;
-  requestOptions: Parameters<typeof requestOpenAIResponsesCompaction>[2];
+  extraParams: Record<string, unknown>;
+  requestOptions: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[3];
 }): Promise<ServerEndpointCompactionResult | undefined> {
   if (
     params.trigger === "overflow" ||
-    !resolveOpenAIResponsesCompactEndpointPlan(
-      params.model,
-      params.requestOptions as Record<string, unknown>,
-    ).enabled
+    !resolveOpenAIResponsesCompactEndpointPlan(params.model, params.extraParams).enabled
   ) {
     return undefined;
   }
@@ -47,7 +47,8 @@ export async function attemptServerEndpointCompaction(params: {
     }
     const compacted = await compactWithSafetyTimeout(
       (signal) =>
-        requestOpenAIResponsesCompaction(
+        requestPreparedOpenAIResponsesCompaction(
+          params.streamFn,
           params.model,
           { systemPrompt: params.context.systemPrompt, messages },
           { ...params.requestOptions, signal },
@@ -60,11 +61,8 @@ export async function attemptServerEndpointCompaction(params: {
       replacement,
       compacted.item,
       replacement.content.length,
-      params.model,
-      buildOpenAIResponsesReasoningReplayMetadata(params.model, {
-        sessionId: params.requestOptions.sessionId,
-        authProfileId: params.requestOptions.authProfileId,
-      }),
+      compacted.model,
+      compacted.replayMetadata,
     );
     const rewritten = rewriteTranscriptEntriesInSessionManager({
       sessionManager: params.sessionManager,
