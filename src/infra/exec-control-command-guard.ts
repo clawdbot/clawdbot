@@ -41,6 +41,13 @@ const SQLITE_OPTIONS_WITH_VALUES = new Map<string, number>([
   ["vfs", 1],
 ]);
 
+const SQLITE_OPEN_OPTIONS_WITH_VALUES = new Map<string, number>([
+  ["hexkey", 1],
+  ["key", 1],
+  ["maxsize", 1],
+  ["textkey", 1],
+]);
+
 function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
   const normalized = raw.trimStart();
   const match = normalized.match(
@@ -120,12 +127,13 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   );
 }
 
-function parseSqliteDatabaseToken(argv: string[]): string | null {
-  if (normalizeCommandBaseName(argv[0]) !== "sqlite3") {
+function parseSqliteOpenCommandDatabaseToken(command: string): string | null {
+  const argv = splitShellArgs(command);
+  if (!argv || !/^\.op(?:e(?:n)?)?$/u.test(argv[0] ?? "")) {
     return null;
   }
   for (let index = 1; index < argv.length; index += 1) {
-    const token = expectDefined(argv[index], "sqlite3 argv entry");
+    const token = expectDefined(argv[index], "sqlite3 .open argv entry");
     if (token === "--") {
       return argv[index + 1] ?? null;
     }
@@ -134,10 +142,53 @@ function parseSqliteDatabaseToken(argv: string[]): string | null {
     }
     const optionName = token.replace(/^-+/u, "").split("=", 1)[0]?.toLowerCase() ?? "";
     if (!token.includes("=")) {
-      index += SQLITE_OPTIONS_WITH_VALUES.get(optionName) ?? 0;
+      index += SQLITE_OPEN_OPTIONS_WITH_VALUES.get(optionName) ?? 0;
     }
   }
   return null;
+}
+
+function parseSqliteDatabaseTokens(argv: string[]): string[] {
+  if (normalizeCommandBaseName(argv[0]) !== "sqlite3") {
+    return [];
+  }
+  const databaseTokens: string[] = [];
+  const commandTokens: string[] = [];
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = expectDefined(argv[index], "sqlite3 argv entry");
+    if (token === "--") {
+      const databaseToken = argv[index + 1];
+      if (databaseToken) {
+        databaseTokens.push(databaseToken);
+      }
+      commandTokens.push(...argv.slice(index + 2));
+      break;
+    }
+    if (token === "-" || !token.startsWith("-")) {
+      databaseTokens.push(token);
+      commandTokens.push(...argv.slice(index + 1));
+      break;
+    }
+    const optionName = token.replace(/^-+/u, "").split("=", 1)[0]?.toLowerCase() ?? "";
+    if (optionName === "cmd") {
+      const commandToken = token.includes("=")
+        ? token.slice(token.indexOf("=") + 1)
+        : argv[index + 1];
+      if (commandToken) {
+        commandTokens.push(commandToken);
+      }
+    }
+    if (!token.includes("=")) {
+      index += SQLITE_OPTIONS_WITH_VALUES.get(optionName) ?? 0;
+    }
+  }
+  for (const commandToken of commandTokens) {
+    const databaseToken = parseSqliteOpenCommandDatabaseToken(commandToken);
+    if (databaseToken) {
+      databaseTokens.push(databaseToken);
+    }
+  }
+  return databaseTokens;
 }
 
 function expandSqliteDatabaseToken(token: string, stateDir: string): string | null {
@@ -184,22 +235,22 @@ function targetsLiveStateSqliteDatabase(
   if (!stateDir) {
     return false;
   }
-  const databaseToken = parseSqliteDatabaseToken(argv);
-  if (!databaseToken) {
-    return false;
-  }
-  const expandedTarget = expandSqliteDatabaseToken(databaseToken, stateDir);
-  if (!expandedTarget) {
-    return false;
-  }
-  const targetPath = path.isAbsolute(expandedTarget)
-    ? expandedTarget
-    : path.resolve(context.workdir ?? process.cwd(), expandedTarget);
   // External SQLite clients bypass OpenClaw's runtime/version guard and can join the live WAL.
   // Resolve existing ancestors so an alias outside the state root cannot hide that ownership.
   const canonicalStateDir = resolvePathViaExistingAncestorSync(stateDir);
-  const canonicalTarget = resolvePathViaExistingAncestorSync(targetPath);
-  return canonicalTarget === canonicalStateDir || isPathInside(canonicalStateDir, canonicalTarget);
+  return parseSqliteDatabaseTokens(argv).some((databaseToken) => {
+    const expandedTarget = expandSqliteDatabaseToken(databaseToken, stateDir);
+    if (!expandedTarget) {
+      return false;
+    }
+    const targetPath = path.isAbsolute(expandedTarget)
+      ? expandedTarget
+      : path.resolve(context.workdir ?? process.cwd(), expandedTarget);
+    const canonicalTarget = resolvePathViaExistingAncestorSync(targetPath);
+    return (
+      canonicalTarget === canonicalStateDir || isPathInside(canonicalStateDir, canonicalTarget)
+    );
+  });
 }
 
 export async function detectUnsafeExecControlShellCommand(

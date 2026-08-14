@@ -53,6 +53,24 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
           context,
         ),
       ).resolves.toBe("live-state-sqlite");
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 :memory: ${quote(`.open ${quote(databasePath)}`)}`,
+          context,
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 :memory: ${quote(`.op ${quote(databasePath)}`)}`,
+          context,
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 -cmd ${quote(`.open --readonly ${quote(databasePath)}`)} :memory:`,
+          context,
+        ),
+      ).resolves.toBe("live-state-sqlite");
     });
   });
 
@@ -92,6 +110,18 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
         }),
       ).resolves.toBeNull();
       await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 :memory: ${quote(`.open ${quote(copiedDatabasePath)}`)}`,
+          { stateDir, workdir: root },
+        ),
+      ).resolves.toBeNull();
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 -cmd ${quote(`.open --readonly ${quote(copiedDatabasePath)}`)} :memory:`,
+          { stateDir, workdir: root },
+        ),
+      ).resolves.toBeNull();
+      await expect(
         detectUnsafeExecControlShellCommand(`cat ${quote(path.join(stateDir, "state.sqlite"))}`, {
           stateDir,
           workdir: root,
@@ -127,7 +157,7 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
           });
           await expect(
             tool.execute("call-live-sqlite", {
-              command: `${quote(sqlitePath)} ${quote(databasePath)}`,
+              command: `${quote(sqlitePath)} :memory: ${quote(`.open ${quote(databasePath)}`)}`,
               workdir: root,
             }),
           ).rejects.toThrow(
