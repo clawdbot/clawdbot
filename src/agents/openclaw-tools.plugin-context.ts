@@ -34,6 +34,8 @@ export type OpenClawPluginToolOptions = {
   modelProvider?: string;
   modelId?: string;
   requesterSenderId?: string | null;
+  currentMessageId?: string | number;
+  currentMessageText?: string;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
@@ -113,6 +115,8 @@ export function resolveOpenClawPluginToolInputs(params: {
       deliveryContext,
       nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      currentMessageId: options?.currentMessageId,
+      currentMessageText: options?.currentMessageText,
       senderIsOwner: options?.senderIsOwner,
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         options?.conversationReadOrigin,

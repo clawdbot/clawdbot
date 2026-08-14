@@ -285,6 +285,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           currentMessagingTarget: attempt.currentMessagingTarget,
           currentThreadTs: attempt.currentThreadTs,
           currentMessageId: attempt.currentMessageId,
+          currentMessageText: attempt.prompt,
           currentInboundAudio: attempt.currentInboundAudio,
           ...(attempt.replyOperation
             ? {

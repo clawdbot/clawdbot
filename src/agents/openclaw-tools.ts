@@ -148,6 +148,8 @@ export function createOpenClawTools(
     currentThreadTs?: string;
     /** Current inbound message id for action fallbacks. */
     currentMessageId?: string | number;
+    /** Trusted text of the current inbound message for plugin tool factories. */
+    currentMessageText?: string;
     /** True when the current inbound turn carried audio media. */
     currentInboundAudio?: boolean;
     /** Dynamic audio state for runs that can accept steered input after tool creation. */
