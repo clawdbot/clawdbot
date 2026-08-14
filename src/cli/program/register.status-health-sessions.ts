@@ -721,6 +721,25 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     });
 
   tasksCmd
+    .command("follow")
+    .description("Follow one background task until execution and delivery finish")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .option("--json", "Output JSON Lines", false)
+    .action(async (lookup, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksFollowCommand } = await loadTasksCommands();
+        await tasksFollowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
     .command("notify")
     .description("Set task notify policy")
     .argument("<lookup>", "Task id, run id, or session key")

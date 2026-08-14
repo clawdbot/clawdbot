@@ -20,6 +20,8 @@ openclaw tasks list
 openclaw tasks list --runtime acp
 openclaw tasks list --status running
 openclaw tasks show <lookup>
+openclaw tasks follow <lookup>
+openclaw tasks follow <lookup> --json
 openclaw tasks notify <lookup> state_changes
 openclaw tasks cancel <lookup>
 openclaw tasks retry <lookup> [lookup...]
@@ -57,6 +59,18 @@ openclaw tasks show <lookup> [--json]
 ```
 
 Shows one task by task ID, run ID, or session key.
+
+### `follow`
+
+```bash
+openclaw tasks follow <lookup> [--json]
+```
+
+Prints a bounded task snapshot and recent visible child-session messages, then follows live task updates until both execution and completion delivery finish. The lookup accepts the same task ID, run ID, or session key as `tasks show`.
+
+The default output is human-readable. `--json` emits one JSON object per line with a deterministic `id` and `cursor`, timestamp, task ID, runtime, event kind, and bounded state. A reconnect or Gateway restart replays durable task state and recent session history; deterministic IDs let consumers discard replayed duplicates.
+
+Press Ctrl-C to stop the local viewer. It does not cancel the task or change its notification or delivery state.
 
 ### `notify`
 
@@ -149,3 +163,4 @@ Inspects or cancels durable Task Flow state under the task ledger.
 
 - [CLI reference](/cli)
 - [Background tasks](/automation/tasks)
+- [Control UI](/web/control-ui)

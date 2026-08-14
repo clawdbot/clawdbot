@@ -53,7 +53,11 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
     ```bash
     # Show details for a specific task (by task ID, run ID, or session key)
     openclaw tasks show <lookup>
+
+    # Follow live progress until execution and delivery finish
+    openclaw tasks follow <lookup>
     ```
+
   </Tab>
   <Tab title="Cancel and notify">
     ```bash
@@ -219,6 +223,18 @@ openclaw tasks notify <lookup> state_changes
     ```
 
     The lookup token accepts a task ID, run ID, or session key. Shows the full record including timing, delivery state, error, and terminal summary.
+
+  </Accordion>
+  <Accordion title="tasks follow">
+    ```bash
+    openclaw tasks follow <lookup> [--json]
+    ```
+
+    Follows one task by task ID, run ID, or session key. The command prints a bounded current snapshot, recent visible messages from a child session when one exists, live task and tool activity, the execution outcome, and the separate completion-delivery state. JSON mode is JSON Lines and gives every item a deterministic identifier for reconnect deduplication.
+
+    The viewer reconnects and replays durable state after a transient disconnect or Gateway restart. Pressing Ctrl-C closes only the viewer. It does not cancel the task or change notifications or delivery.
+
+    Use `tasks show` for one point-in-time record, `tasks follow` for one terminal-friendly live stream, the Control UI Tasks page for visual inspection and actions, and `openclaw logs --follow` for gateway-wide diagnostics rather than a task-scoped view.
 
   </Accordion>
   <Accordion title="tasks cancel">

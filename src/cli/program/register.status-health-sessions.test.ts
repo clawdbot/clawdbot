@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   tasksAuditCommand: vi.fn(),
   tasksMaintenanceCommand: vi.fn(),
   tasksShowCommand: vi.fn(),
+  tasksFollowCommand: vi.fn(),
   tasksNotifyCommand: vi.fn(),
   tasksCancelCommand: vi.fn(),
   flowsListCommand: vi.fn(),
@@ -44,6 +45,7 @@ const tasksListCommand = mocks.tasksListCommand;
 const tasksAuditCommand = mocks.tasksAuditCommand;
 const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
 const tasksShowCommand = mocks.tasksShowCommand;
+const tasksFollowCommand = mocks.tasksFollowCommand;
 const tasksNotifyCommand = mocks.tasksNotifyCommand;
 const tasksCancelCommand = mocks.tasksCancelCommand;
 const flowsListCommand = mocks.flowsListCommand;
@@ -111,6 +113,7 @@ vi.mock("../../commands/tasks.js", () => ({
   tasksAuditCommand: mocks.tasksAuditCommand,
   tasksMaintenanceCommand: mocks.tasksMaintenanceCommand,
   tasksShowCommand: mocks.tasksShowCommand,
+  tasksFollowCommand: mocks.tasksFollowCommand,
   tasksNotifyCommand: mocks.tasksNotifyCommand,
   tasksCancelCommand: mocks.tasksCancelCommand,
 }));
@@ -600,6 +603,15 @@ describe("registerStatusHealthSessionsCommands", () => {
     await runCli(["tasks", "show", "run-123", "--json"]);
 
     expectCommandOptions(tasksShowCommand, {
+      lookup: "run-123",
+      json: true,
+    });
+  });
+
+  it("runs tasks follow subcommand with lookup and JSON Lines forwarding", async () => {
+    await runCli(["tasks", "follow", "run-123", "--json"]);
+
+    expectCommandOptions(tasksFollowCommand, {
       lookup: "run-123",
       json: true,
     });
