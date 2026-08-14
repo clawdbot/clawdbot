@@ -150,6 +150,85 @@ function getSparkleBuildHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getPeekabooSourceCommitHelperBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("resolve_peekaboo_source_commit() {");
+  const end = script.indexOf("sparkle_canonical_build_from_version()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function runPeekabooSourceCommitHarness(packageResolved: string) {
+  const root = tempDirs.make("openclaw-package-peekaboo-source-");
+  const resolvedFile = path.join(root, "apps", "macos", "Package.resolved");
+  mkdirSync(path.dirname(resolvedFile), { recursive: true });
+  writeFileSync(resolvedFile, packageResolved, "utf8");
+
+  return runHelper(`
+    set -euo pipefail
+    ROOT_DIR=${JSON.stringify(root)}
+    ${getPeekabooSourceCommitHelperBlock()}
+    resolve_peekaboo_source_commit
+  `);
+}
+
+function getSourceProvenanceStampBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf(
+    'plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp',
+  );
+  const end = script.indexOf(
+    'plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL',
+    start,
+  );
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function runSourceProvenanceStampHarness(corruptKey?: string) {
+  const openClawCommit = "a".repeat(40);
+  const peekabooCommit = "b".repeat(40);
+  const corruptCommit = "c".repeat(40);
+  const result = runHelper(`
+    set -euo pipefail
+    stamped_openclaw=
+    stamped_peekaboo=
+    plist_set_string_required() {
+      case "$2" in
+        OpenClawGitCommit) stamped_openclaw="$3" ;;
+        PeekabooSourceCommit) stamped_peekaboo="$3" ;;
+      esac
+    }
+    plist_print_required() {
+      local value
+      case "$2" in
+        OpenClawGitCommit) value="$stamped_openclaw" ;;
+        PeekabooSourceCommit) value="$stamped_peekaboo" ;;
+        *) return 1 ;;
+      esac
+      if [[ "$2" == ${JSON.stringify(corruptKey ?? "")} ]]; then
+        value=${JSON.stringify(corruptCommit)}
+      fi
+      printf '%s' "$value"
+    }
+    APP_ROOT=/tmp/OpenClaw.app
+    BUILD_TS=2026-08-13T00:00:00.000Z
+    BUILD_GIT_COMMIT=${JSON.stringify(openClawCommit)}
+    PEEKABOO_SOURCE_COMMIT=${JSON.stringify(peekabooCommit)}
+    BUILD_CONFIG=release
+    ${getSourceProvenanceStampBlock()}
+    printf '%s\n%s\n' "$stamped_openclaw" "$stamped_peekaboo"
+  `);
+
+  return { result, openClawCommit, peekabooCommit };
+}
+
 function getMLXTTSHelperBuildBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("build_mlx_tts_helper() {");
@@ -576,9 +655,63 @@ describe("package-mac-app plist stamping", () => {
     expect(bridgeSourceRead).toBeGreaterThan(sourceCheck);
     expect(bridgeSourceRead).toBeLessThan(signing);
     expect(script).toContain(
+      'plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$PEEKABOO_SOURCE_COMMIT"',
+    );
+    expect(script).not.toContain(
       'plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$BUILD_GIT_COMMIT"',
     );
-    expect(script).toContain("Release app source mismatch");
+  });
+
+  it("stamps and validates independent OpenClaw and Peekaboo source revisions", () => {
+    const { result, openClawCommit, peekabooCommit } = runSourceProvenanceStampHarness();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`${openClawCommit}\n${peekabooCommit}\n`);
+    expect(result.stderr).toBe("");
+  });
+
+  it.each([
+    { key: "OpenClawGitCommit", diagnostic: "Release app OpenClaw source mismatch" },
+    { key: "PeekabooSourceCommit", diagnostic: "Release app Peekaboo source mismatch" },
+  ])("fails release validation independently for a wrong $key", ({ key, diagnostic }) => {
+    const { result } = runSourceProvenanceStampHarness(key);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(diagnostic);
+  });
+
+  it("resolves the exact pinned Peekaboo source revision from Package.resolved", () => {
+    const expectedRevision = "a2fb16764a7d1c53bf696127c287ba32703f614f";
+    const packageResolved = readFileSync("apps/macos/Package.resolved", "utf8");
+    const result = runPeekabooSourceCommitHarness(packageResolved);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(expectedRevision);
+    expect(result.stderr).toBe("");
+  });
+
+  it.each([
+    {
+      title: "is missing",
+      packageResolved: '{"pins":[]}',
+      diagnostic: "exactly one 'peekaboo' pin",
+    },
+    {
+      title: "has a malformed revision",
+      packageResolved:
+        '{"pins":[{"identity":"peekaboo","state":{"revision":"A2FB16764A7D1C53BF696127C287BA32703F614F"}}]}',
+      diagnostic: "40-character lowercase hexadecimal revision",
+    },
+    {
+      title: "is invalid JSON",
+      packageResolved: "not-json",
+      diagnostic: "Could not parse Peekaboo source revision",
+    },
+  ])("fails closed when the Peekaboo package pin $title", ({ packageResolved, diagnostic }) => {
+    const result = runPeekabooSourceCommitHarness(packageResolved);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(diagnostic);
   });
 
   it("keeps dependency installation lockfile-safe", () => {

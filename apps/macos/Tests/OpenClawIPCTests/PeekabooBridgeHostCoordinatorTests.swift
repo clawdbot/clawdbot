@@ -7,8 +7,11 @@ import Testing
 @MainActor
 struct PeekabooBridgeHostCoordinatorTests {
     @Test
-    func `production authorization is limited to the Foundation Peekaboo CLI`() {
-        #expect(PeekabooBridgeHostCoordinator.allowedClientTeamIDs == ["FWJYW4S8P8"])
+    func `production authorization uses the canonical Peekaboo CLI release signers`() {
+        #expect(
+            PeekabooBridgeHostCoordinator.allowedClientTeamIDs ==
+                PeekabooBridgeConstants.trustedReleaseTeamIDs)
+        #expect(PeekabooBridgeHostCoordinator.allowedClientTeamIDs == ["Y5PE65HELJ", "FWJYW4S8P8"])
         #expect(PeekabooBridgeHostCoordinator.allowedClientBundleIDs == ["boo.peekaboo.peekaboo"])
     }
 

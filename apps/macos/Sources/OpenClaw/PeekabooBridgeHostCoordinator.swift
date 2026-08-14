@@ -68,7 +68,7 @@ final class PeekabooBridgeHostCoordinator {
 
     static let shared = PeekabooBridgeHostCoordinator()
 
-    static let allowedClientTeamIDs: Set<String> = ["FWJYW4S8P8"]
+    static let allowedClientTeamIDs = PeekabooBridgeConstants.trustedReleaseTeamIDs
     static let allowedClientBundleIDs: Set<String> = ["boo.peekaboo.peekaboo"]
 
     private static let legacySocketDirectoryNames = ["clawdbot", "clawdis", "moltbot"]
