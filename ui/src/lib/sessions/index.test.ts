@@ -107,6 +107,43 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("coalesces concurrent group catalog loads until the catalog is hydrated", async () => {
+    const listed = createDeferred<{
+      groups: Array<{ name: string }>;
+      sectionOrder: string[];
+    }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        return await listed.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
+    const sessions = createSessionCapability(gateway);
+
+    const first = sessions.groupsLoad();
+    const second = sessions.groupsLoad();
+    let secondSettled = false;
+    void second.then(() => {
+      secondSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(secondSettled).toBe(false);
+
+    listed.resolve({
+      groups: [{ name: "Research" }],
+      sectionOrder: ["category:Research", "ungrouped"],
+    });
+    await Promise.all([first, second]);
+
+    expect(sessions.state.groups).toEqual(["Research"]);
+    expect(sessions.state.sectionOrder).toEqual(["category:Research", "ungrouped"]);
+    sessions.dispose();
+  });
+
   it("automatically retries an explicitly retryable group catalog failure", async () => {
     let groupsCalls = 0;
     const request = vi.fn(async (method: string) => {

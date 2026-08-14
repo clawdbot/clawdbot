@@ -26,6 +26,23 @@ export type SidebarCustomizerItem = {
   sessionKey?: string;
 };
 
+export function mergeSidebarCustomizerEntries(
+  current: readonly string[],
+  snapshot: readonly string[],
+  customizable: readonly string[],
+): string[] {
+  const customizableEntries = new Set(customizable);
+  const remaining = [...snapshot];
+  const merged = current.flatMap((entry) => {
+    if (!customizableEntries.has(entry)) {
+      return [entry];
+    }
+    const replacement = remaining.shift();
+    return replacement ? [replacement] : [];
+  });
+  return [...merged, ...remaining];
+}
+
 export function buildSidebarCustomizerEntries(params: {
   canonical: readonly string[];
   enabledRouteIds?: readonly NavigationRouteId[];

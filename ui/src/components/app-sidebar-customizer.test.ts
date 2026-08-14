@@ -2,10 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   buildSidebarCustomizerEntries,
   buildSidebarCustomizerSections,
+  mergeSidebarCustomizerEntries,
 } from "./app-sidebar-customizer.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-navigation-logic.ts";
 
 describe("sidebar customizer model", () => {
+  it("restores customizable entries without replacing other current entries", () => {
+    expect(
+      mergeSidebarCustomizerEntries(
+        ["fixed:current", "route:tasks"],
+        ["route:cron", "route:plugins"],
+        ["route:cron", "route:plugins", "route:tasks"],
+      ),
+    ).toEqual(["fixed:current", "route:cron", "route:plugins"]);
+  });
+
   it("keeps Home fixed and orders visible pages before hidden pages", () => {
     const items = buildSidebarCustomizerEntries({
       canonical: ["route:tasks", "route:cron"],

@@ -17,13 +17,14 @@ import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { writeSessionDragData } from "../lib/sessions/drag.ts";
+import { readSidebarSectionDragData, writeSessionDragData } from "../lib/sessions/drag.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import {
   buildSidebarCustomizerEntries,
   buildSidebarCustomizerSections,
+  mergeSidebarCustomizerEntries,
   renderSidebarCustomizer,
   type SidebarCustomizerItem,
 } from "./app-sidebar-customizer.ts";
@@ -90,8 +91,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   @state() private sidebarCustomizerError: string | null = null;
 
   private sidebarCustomizerReturnFocus: HTMLElement | null = null;
+  private sidebarCustomizerDraggedEntry: string | null = null;
   private sidebarCustomizerSnapshot: {
     sidebarEntries: readonly string[];
+    customizableSidebarEntries: readonly string[];
     hiddenCatalogIds: ReadonlySet<string>;
     groups: readonly string[];
     sectionOrder: readonly string[];
@@ -453,8 +456,28 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   openSidebarCustomizer(trigger: HTMLElement | null = null): void {
     this.sidebarMenus.dismissTransientMenus();
     this.sidebarCustomizerReturnFocus = trigger;
+    void this.openSidebarCustomizerAfterGroupLoad();
+  }
+
+  private async openSidebarCustomizerAfterGroupLoad(): Promise<void> {
+    const sessions = this.context?.sessions;
+    const outcome = await sessions?.groupsLoad();
+    if (outcome && outcome !== "completed") {
+      this.reportSidebarCustomizerError("nav.customizeMutationError");
+      return;
+    }
+    if (sessions !== this.context?.sessions) {
+      this.reportSidebarCustomizerError("nav.customizeMutationError");
+      return;
+    }
+    const sidebarCustomizerEntries = this.sidebarCustomizerEntries();
     this.sidebarCustomizerSnapshot = {
-      sidebarEntries: [...this.reconciledSidebarZone().sidebarEntries],
+      sidebarEntries: sidebarCustomizerEntries.flatMap((item) =>
+        item.entry && item.visible ? [item.entry] : [],
+      ),
+      customizableSidebarEntries: sidebarCustomizerEntries.flatMap((item) =>
+        item.entry ? [item.entry] : [],
+      ),
       hiddenCatalogIds: new Set(this.hiddenSessionCatalogIds),
       groups: [...(this.context?.sessions.state.groups ?? [])],
       sectionOrder: this.knownSectionOrder(),
@@ -500,7 +523,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const updateSidebarEntries = this.onUpdateSidebarEntries;
     try {
       if (updateSidebarEntries) {
-        updateSidebarEntries([...snapshot.sidebarEntries]);
+        updateSidebarEntries(
+          mergeSidebarCustomizerEntries(
+            this.reconciledSidebarZone().sidebarEntries,
+            snapshot.sidebarEntries,
+            snapshot.customizableSidebarEntries,
+          ),
+        );
       } else {
         failed = true;
       }
@@ -518,7 +547,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const sessions = this.context?.sessions;
     if (sessions) {
       try {
-        await sessions.groupsPut([...snapshot.groups], [...snapshot.sectionOrder]);
+        const outcome = await sessions.groupsPut([...snapshot.groups], [...snapshot.sectionOrder]);
+        if (outcome !== "completed") {
+          failed = true;
+        }
       } catch {
         failed = true;
       }
@@ -605,6 +637,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       onDone: () => this.closeSidebarCustomizer(),
       onBack: () => void this.discardSidebarCustomizerChanges(),
       onEntryDragStart: (event, item) => {
+        this.sidebarCustomizerDraggedEntry = item.entry ?? null;
         const entry = item.entry ? parseSidebarEntry(item.entry) : null;
         if (entry?.type === "route") {
           this.sessionOrganizer.startSidebarRouteDrag(event, entry.route);
@@ -622,8 +655,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         this.sessionOrganizer.handleSidebarZoneDragOver(event, entry),
       onEntryDragLeave: (event) => this.sessionOrganizer.handleSidebarZoneDragLeave(event),
       onEntryDrop: (event, entry) => {
-        this.markSidebarCustomizerDirty();
+        const draggedEntry = this.sidebarCustomizerDraggedEntry;
         this.sessionOrganizer.handleSidebarZoneDrop(event, entry);
+        this.sidebarCustomizerDraggedEntry = null;
+        if (draggedEntry && draggedEntry !== entry) {
+          this.markSidebarCustomizerDirty();
+        }
       },
       onSectionDragStart: (sectionId) => this.startSidebarSectionDrag(sectionId),
       onSectionDragOver: (event, sectionId, category) =>
@@ -631,13 +668,17 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       onSectionDragLeave: (event, sectionId, category) =>
         this.sectionDragLeave(event, sectionId, category),
       onSectionDrop: (event, sectionId, category) => {
-        this.markSidebarCustomizerDirty();
-        this.sectionDrop(event, sectionId, category);
+        const sourceSectionId = readSidebarSectionDragData(event.dataTransfer);
+        this.sessionOrganizer.sectionDrop(event, sectionId, category);
+        if (sourceSectionId && sourceSectionId !== sectionId) {
+          this.markSidebarCustomizerDirty();
+        }
       },
       onDragEnd: (kind) => {
         if (kind === "section") {
           this.finishSidebarSectionDrag();
         } else {
+          this.sidebarCustomizerDraggedEntry = null;
           this.sessionOrganizer.finishSidebarEntryDrag();
         }
       },

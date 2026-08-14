@@ -202,7 +202,7 @@ suite.define(() => {
     const video = page.video();
     const gateway = await installMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
-      featureMethods: ["sessions.catalog.list"],
+      featureMethods: ["sessions.catalog.list", "sessions.groups.list", "sessions.groups.put"],
       methodResponses: {
         "sessions.catalog.list": {
           catalogs: [

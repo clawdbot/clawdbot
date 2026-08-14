@@ -41,6 +41,7 @@ export type SessionState = {
 };
 
 export type SessionGroupMutationResult = "completed" | "stale";
+export type SessionGroupLoadResult = SessionGroupMutationResult | "failed";
 
 export type SessionListOptions = {
   agentId?: string;
@@ -245,7 +246,7 @@ export type SessionCapability = {
     options?: { agentId?: string | null },
   ) => Promise<SessionsBranchesSwitchResult>;
   /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
-  groupsLoad: () => Promise<void>;
+  groupsLoad: () => Promise<SessionGroupLoadResult>;
   /** Replaces the group catalog; stale means the initiating connection retired. */
   groupsPut: (
     names: readonly string[],

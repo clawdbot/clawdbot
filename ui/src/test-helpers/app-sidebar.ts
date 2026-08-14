@@ -312,7 +312,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
         listener(state);
       }
     },
-    groupsLoad: () => Promise.resolve(),
+    groupsLoad: () => Promise.resolve("completed"),
     groupsPut,
     groupsRename,
     groupsDelete,

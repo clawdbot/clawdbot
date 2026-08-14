@@ -6,6 +6,7 @@ import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionGateway,
+  SessionGroupLoadResult,
   SessionGroupMutationResult,
   SessionState,
 } from "./session-capability.ts";
@@ -44,6 +45,9 @@ function readLegacyStoredGroups(): string[] {
 export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   let loadedEpoch = -1;
   let loadGeneration = 0;
+  // Consumers joining the current load must wait for the same catalog snapshot;
+  // an epoch marker alone would let them observe pre-hydration empty state.
+  let activeLoad: { epoch: number; promise: Promise<SessionGroupLoadResult> } | null = null;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   const clearRetry = () => {
@@ -56,6 +60,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   const invalidate = () => {
     loadedEpoch = -1;
     loadGeneration += 1;
+    activeLoad = null;
     clearRetry();
   };
 
@@ -84,11 +89,11 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     scope: SessionConnectionScope,
     generation: number,
     advertised: boolean | null,
-  ) => {
+  ): Promise<SessionGroupLoadResult> => {
     try {
       const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
       if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
-        return;
+        return "stale";
       }
       let names = readSessionCustomGroupNames(listed);
       let sectionOrder = readSidebarSectionOrder(listed);
@@ -101,7 +106,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       if (names.length === 0 && legacy.length > 0 && legacyMigrationAccess.allowed) {
         const put = await scope.client.request("sessions.groups.put", { names: legacy });
         if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
-          return;
+          return "stale";
         }
         names = readSessionCustomGroupNames(put);
         sectionOrder = readSidebarSectionOrder(put);
@@ -114,6 +119,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         }
       }
       publishCatalog(names, sectionOrder);
+      return "completed";
     } catch (error) {
       if (
         !host.connection.isCurrent(scope) ||
@@ -121,12 +127,12 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         advertised !== true
       ) {
         // Gateways without feature metadata retain the legacy one-shot probe.
-        return;
+        return host.connection.isCurrent(scope) ? "completed" : "stale";
       }
       loadedEpoch = -1;
       const delay = host.retryDelayMs(error);
       if (delay === null) {
-        return;
+        return "failed";
       }
       // An older rejection cannot revive retries after a newer catalog load wins.
       retryTimer = globalThis.setTimeout(() => {
@@ -135,14 +141,22 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
           void load();
         }
       }, delay);
+      return "failed";
     }
   };
 
   /** Group consumers may probe once per connection; explicitly absent features never probe. */
   const load = async () => {
     const scope = host.connection.capture();
-    if (!scope || loadedEpoch === scope.epoch) {
-      return;
+    if (!scope) {
+      return "stale" as const;
+    }
+    const inFlight = activeLoad;
+    if (inFlight?.epoch === scope.epoch) {
+      return await inFlight.promise;
+    }
+    if (loadedEpoch === scope.epoch) {
+      return "completed" as const;
     }
     const advertised = isGatewayMethodAdvertised(host.snapshot(), GROUPS_LIST_METHOD);
     clearRetry();
@@ -150,9 +164,20 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     loadedEpoch = scope.epoch;
     if (advertised === false) {
       publishCatalog([], []);
-      return;
+      return "completed" as const;
     }
-    await loadAttempt(scope, generation, advertised);
+    const pending = {
+      epoch: scope.epoch,
+      promise: loadAttempt(scope, generation, advertised),
+    };
+    activeLoad = pending;
+    try {
+      return await pending.promise;
+    } finally {
+      if (activeLoad === pending) {
+        activeLoad = null;
+      }
+    }
   };
 
   const put = async (
