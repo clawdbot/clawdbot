@@ -560,7 +560,7 @@ Narrow, explicit allowlists are fastest and least flaky:
 - Tool calling across several providers:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna,anthropic/claude-opus-4-6,google/gemini-3.5-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
-- Z.AI Coding Plan GLM-5.2 direct smoke:
+- Z.AI Coding Plan GLM-5.3 direct smoke:
   - `ZAI_CODING_LIVE_TEST=1 pnpm test:live src/agents/zai.live.test.ts`
 
 - Google focus:

@@ -13,6 +13,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
+import { testing as startupTesting } from "./server-startup-post-attach.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -542,6 +543,114 @@ describe("gateway server models + voicewake", () => {
         });
       },
     );
+  });
+
+  test("prepared model RPCs reuse both explicit startup owners without live fallback", async () => {
+    const modelConfig = {
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            apiKey: "test-fixture-key",
+            baseUrl: "https://fixture.example.com/v1",
+            models: [
+              { id: "alpha-model", name: "Alpha Model" },
+              { id: "beta-model", name: "Beta Model" },
+            ],
+          },
+        },
+      },
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: {
+            model: { primary: "fixture/alpha-model" },
+            modelPolicy: { allow: ["fixture/alpha-model"] },
+          },
+          beta: {
+            model: { primary: "fixture/beta-model" },
+            modelPolicy: { allow: ["fixture/beta-model"] },
+          },
+        },
+      },
+    };
+
+    await withModelsConfig(modelConfig, async () => {
+      await resetPreparedModelCatalogStateForTest();
+      agentDiscoveryMock.enabled = true;
+      const startupModels = [
+        { id: "alpha-model", name: "Alpha Model", provider: "fixture" },
+        { id: "beta-model", name: "Beta Model", provider: "fixture" },
+      ];
+      agentDiscoveryMock.models = startupModels;
+      const { getRuntimeConfig } = await import("../config/io.js");
+      await startupTesting.publishStartupModelRuntime({
+        cfg: getRuntimeConfig(),
+        log: { warn: () => {} },
+      });
+      const discoveryCallsAfterStartup = agentDiscoveryMock.discoverCalls;
+
+      let blockedRequestFallback = false;
+      agentDiscoveryMock.models = [
+        {
+          id: "request-time-fallback",
+          name: "Request-time fallback",
+          get provider() {
+            if (!blockedRequestFallback) {
+              blockedRequestFallback = true;
+              // A prepared-only miss used to run synchronous catalog discovery on the Gateway
+              // thread. Make that operator-visible as event-loop starvation, not only a call count.
+              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 750);
+            }
+            return "fixture";
+          },
+        },
+      ];
+      try {
+        const [alphaModels, betaModels, alphaAuth, betaAuth, health] = await Promise.all([
+          rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
+            agentId: "alpha",
+            view: "configured",
+            preparedOnly: true,
+          }),
+          rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
+            agentId: "beta",
+            view: "configured",
+            preparedOnly: true,
+          }),
+          rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
+            agentId: "alpha",
+          }),
+          rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
+            agentId: "beta",
+          }),
+          rpcReq<Record<string, unknown>>(ws, "health", { probe: true }),
+        ]);
+
+        expect(alphaModels.ok, JSON.stringify(alphaModels)).toBe(true);
+        expect(betaModels.ok, JSON.stringify(betaModels)).toBe(true);
+        expect(alphaModels.payload?.models).toContainEqual(
+          expect.objectContaining({ id: "alpha-model", provider: "fixture" }),
+        );
+        expect(betaModels.payload?.models).toContainEqual(
+          expect.objectContaining({ id: "beta-model", provider: "fixture" }),
+        );
+        expect(alphaAuth.ok, JSON.stringify(alphaAuth)).toBe(true);
+        expect(betaAuth.ok, JSON.stringify(betaAuth)).toBe(true);
+        expect(alphaAuth.payload?.providers).toContainEqual(
+          expect.objectContaining({ provider: "fixture" }),
+        );
+        expect(betaAuth.payload?.providers).toContainEqual(
+          expect.objectContaining({ provider: "fixture" }),
+        );
+        expect(health.ok, JSON.stringify(health)).toBe(true);
+      } finally {
+        agentDiscoveryMock.models = startupModels;
+      }
+
+      expect(agentDiscoveryMock.discoverCalls).toBe(discoveryCallsAfterStartup);
+      expect(blockedRequestFallback).toBe(false);
+    });
   });
 
   test("models.list configured view uses models.providers when no allowlist is configured", async () => {

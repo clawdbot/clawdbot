@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -362,7 +363,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     !emptyAssistantReplyIsSilent &&
     !settledTurnFinalizationAttempted &&
     (input.attemptCompactionCount > 0 ||
-      attempt.currentAttemptAssistant?.providerReplay?.type === "openai-responses-compaction") &&
+      isCompactionReplayCheckpoint(attempt.currentAttemptAssistant?.providerReplay)) &&
     payloadCount === 0 &&
     !terminalInterrupted &&
     !promptError &&

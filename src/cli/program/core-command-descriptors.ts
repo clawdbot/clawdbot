@@ -122,6 +122,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "delivery",
+    description: "Inspect and maintain durable delivery state",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "sessions",
     description: "List stored conversation sessions",
     hasSubcommands: true,

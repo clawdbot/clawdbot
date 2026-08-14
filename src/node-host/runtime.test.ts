@@ -51,6 +51,7 @@ vi.mock("./node-worker-supervisor.js", () => ({
 vi.mock("./node-worker-build.js", () => ({
   resolveNodeWorkerInstallation: vi.fn(async () => ({
     packageRoot: "/tmp/openclaw-node-worker",
+    revalidateBuild: vi.fn(async () => true),
     build: {
       bundleHash: "a".repeat(64),
       openclawVersion: "2026.8.1",

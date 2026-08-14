@@ -42,6 +42,7 @@ import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 type CliPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
@@ -178,6 +179,8 @@ export async function runCliFallbackCandidate(params: {
   const bridgeCliDurableCommentary =
     Boolean(params.presentation.blockReplyHandler) &&
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
+  const toolAuthorityRoute = { provider: params.provider, model: params.model };
+  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnAdmission(
       {
@@ -437,6 +440,10 @@ export async function runCliFallbackCandidate(params: {
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             disableTools: turn.opts?.disableTools,
+            toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
+              turn.followupRun,
+              toolAuthorityRoute,
+            ),
             abortSignal: params.runAbortSignal,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
-import { resolveNodeWorkerBuild } from "../../node-host/node-worker-build.js";
+import { resolveNodeWorkerInstallation } from "../../node-host/node-worker-build.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
@@ -83,11 +83,13 @@ describe("worker bundle producer", () => {
         cacheDir: path.join(root, "cache-b"),
         openclawVersion: "1.2.3",
       }).prepare();
-      const nodeBuild = await resolveNodeWorkerBuild({
-        packageRoot: packageA,
-        openclawVersion: "1.2.3",
-        protocolFeatures: [],
-      });
+      const nodeBuild = (
+        await resolveNodeWorkerInstallation({
+          packageRoot: packageA,
+          openclawVersion: "1.2.3",
+          protocolFeatures: [],
+        })
+      ).build;
 
       expect(first.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(second.bundleHash).toBe(first.bundleHash);

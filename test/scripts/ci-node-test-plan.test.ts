@@ -288,6 +288,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compactMode: "pull-request",
       runnerBackend: "github",
     });
+    const hybridCompact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "push",
+      runnerBackend: "hybrid",
+    });
+    const hybridPullRequestCompact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+    });
     const pushExcludedShardNames = new Set([
       "core-runtime-tui-pty",
       "core-tooling-1",
@@ -302,6 +312,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(pullRequestCompact).toHaveLength(31);
     expect(githubCompact).toHaveLength(46);
     expect(githubPullRequestCompact).toHaveLength(54);
+    expect(hybridCompact).toEqual(githubCompact);
+    expect(hybridPullRequestCompact).toEqual(githubPullRequestCompact);
     expect(githubPullRequestCompact.length).toBeLessThanOrEqual(64);
     expect(Math.max(...githubCompact.map((shard) => shard.predictedSeconds ?? Infinity))).toBe(209);
     expect(

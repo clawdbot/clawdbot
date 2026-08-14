@@ -48,6 +48,8 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     MessageThreadId: queued.originatingThreadId,
     ReplyToId: queued.originatingReplyToId,
     SenderId: run.senderId,
+    MemberRoleIds: run.memberRoleIds,
+    ChannelContext: run.channelContext,
     SenderName: run.senderName,
     SenderUsername: run.senderUsername,
     SenderE164: run.senderE164,
@@ -179,6 +181,10 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
+    // Queue callbacks are refreshed per session, but authority belongs to the
+    // queued turn. Never let a later callback widen or narrow an older item.
+    toolsAllow: turn.queued.toolsAllow,
+    disableTools: turn.queued.disableTools,
     runId: turn.runId,
     onAgentRunStart: (runId) => {
       params.onExecutionStarted?.();
