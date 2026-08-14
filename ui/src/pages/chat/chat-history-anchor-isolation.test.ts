@@ -652,4 +652,106 @@ describe("historical transcript anchor isolation", () => {
     expect(state.chatHistoryAnchorActive).toBe(false);
     expect(state.chatMessages).toEqual([current, final]);
   });
+
+  it("keeps a delayed prior-run assistant persist out of the historical projection", async () => {
+    const current = message("user", "current prompt", "current-prompt", 9);
+    const historical = message("user", "historical hit", "historical-hit", 1);
+    const priorFinal = {
+      ...message("assistant", "prior delayed reply", "prior-final", 10),
+      __openclaw: { id: "prior-final", idempotencyKey: "prior-run", seq: 10 },
+    };
+    const currentFinal = {
+      ...message("assistant", "current reply", "current-final", 11),
+      __openclaw: { id: "current-final", idempotencyKey: "current-run", seq: 11 },
+    };
+    let resolveCurrentHistory: (result: ChatHistoryResult) => void = () => undefined;
+    const currentHistory = new Promise<ChatHistoryResult>((resolve) => {
+      resolveCurrentHistory = resolve;
+    });
+    let historyRequest = 0;
+    const request = vi.fn((method: string) => {
+      if (method !== "chat.history") {
+        return Promise.resolve(undefined);
+      }
+      historyRequest += 1;
+      return historyRequest === 1
+        ? Promise.resolve({ messages: [historical], sessionId: "session-history" })
+        : currentHistory;
+    });
+    const state = createHistoryState(request) as ChatPageHost;
+    state.sessions = {
+      reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+      reconcileRunTerminal: vi.fn(),
+      refresh: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ChatPageHost["sessions"];
+    state.requestUpdate = vi.fn();
+    state.chatMessages = [current];
+    state.chatRunId = "current-run";
+    state.chatStream = "current reply";
+    state.chatStreamStartedAt = 100;
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession ?? new Map(),
+      state,
+      { sessionKey: state.sessionKey },
+      {
+        messages: [current],
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "session-current",
+      },
+    );
+
+    await loadChatHistory(state, {
+      historyAnchor: { sessionId: "session-history", messageId: "historical-hit" },
+    });
+    expect(state.chatMessages).toEqual([historical]);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "prior-run",
+        hasActiveRun: true,
+        message: priorFinal,
+      },
+    });
+
+    expect(state.chatMessages).toEqual([historical]);
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
+        sessionKey: state.sessionKey,
+      }),
+    ).toEqual([current]);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "current-run",
+        state: "final",
+        message: currentFinal,
+      },
+    });
+
+    const completion = completeChatHistoryAnchorVisibility(state, {
+      sessionId: "session-history",
+      messageId: "historical-hit",
+    });
+    expect(completion?.shouldRefresh).toBe(true);
+    const refresh = completion?.shouldRefresh
+      ? loadChatHistory(state, completion.refreshOptions)
+      : Promise.resolve(undefined);
+    await vi.waitFor(() => expect(historyRequest).toBe(2));
+
+    resolveCurrentHistory({
+      messages: [current, priorFinal, currentFinal],
+      sessionId: "session-current",
+    });
+    const refreshed = await refresh;
+    completion?.completeRefresh(refreshed);
+
+    expect(state.chatHistoryAnchorActive).toBe(false);
+    expect(state.chatMessages).toEqual([current, priorFinal, currentFinal]);
+  });
 });
