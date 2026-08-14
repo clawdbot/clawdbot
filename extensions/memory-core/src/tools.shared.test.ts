@@ -3,7 +3,7 @@ import {
   registerMemoryCorpusSupplement,
   type MemoryCorpusSearchResult,
   type MemoryCorpusSupplement,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+} from "openclaw/plugin-sdk/memory-host-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { searchMemoryCorpusSupplements } from "./tools.shared.js";
 
