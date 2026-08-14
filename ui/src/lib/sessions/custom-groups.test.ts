@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+  mergeSessionGroupDefaults,
   readSessionCustomGroupNames,
   readSessionCustomGroups,
   readSidebarSectionOrder,
@@ -16,12 +17,24 @@ describe("session group catalog readers", () => {
     expect(readSessionCustomGroupNames(null)).toEqual([]);
   });
 
-  it("reads New Session defaults without trusting malformed fields", () => {
+  it("keeps the catalog path-free and merges validated New Session defaults", () => {
+    const groups = readSessionCustomGroups({
+      groups: [
+        { name: " Client ", position: 4, cwd: " /leaked/client ", worktree: false },
+        { name: "Local", position: "bad", cwd: "/leaked/local", worktree: true },
+      ],
+    });
+    expect(groups).toEqual([
+      { name: "Client", position: 4 },
+      { name: "Local", position: 1 },
+    ]);
     expect(
-      readSessionCustomGroups({
-        groups: [
-          { name: " Client ", position: 4, cwd: " /repos/client ", worktree: true },
-          { name: "Local", position: "bad", cwd: 42, worktree: false },
+      mergeSessionGroupDefaults(groups, {
+        defaults: [
+          { name: " Client ", cwd: " /repos/client ", worktree: true },
+          { name: "Local", cwd: 42, worktree: false },
+          { name: "Missing", cwd: "/repos/missing", worktree: true },
+          null,
         ],
       }),
     ).toEqual([
