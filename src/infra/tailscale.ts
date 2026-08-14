@@ -213,7 +213,7 @@ async function getTailscaleBinary(): Promise<string> {
   return cachedTailscaleBinary ?? "tailscale";
 }
 
-export type TailscaleRouteClaim = {
+type TailscaleRouteClaim = {
   exited: Promise<void>;
   isActive: () => boolean;
   stop: () => Promise<void>;
