@@ -106,6 +106,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
     provider,
     isAvailable,
     launchNodeWorker: launchAdapter.launch,
+    getNodeTransport: () => nodeTransport,
     // Provisioning reads the node-advertised local-install build through the
     // runtime so node lookups keep one owner; absent means not connected or
     // not session-capable, and the caller fails provisioning closed.
