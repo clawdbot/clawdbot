@@ -1,9 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
-import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
+import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
 import { createMergePatch } from "../config/merge-patch.js";
@@ -37,6 +38,7 @@ import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.mod
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   hasQuickstartGatewayOverrides,
+  formatQuickstartGatewaySummary,
   readSetupConfigFileSnapshot,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
@@ -291,6 +293,14 @@ async function runSetupWizardOnce(
     flow = "quickstart";
     break;
   }
+  const importSuppliedRoster = usedImportFlow && listAgentEntries(baseConfig).length > 0;
+  if (importSuppliedRoster && opts.agentName !== undefined) {
+    runtime.error(
+      "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
+    );
+    runtime.exit(1);
+    return;
+  }
   const wizardFlow: WizardFlow = flow === "advanced" ? "advanced" : "quickstart";
   const hasExplicitQuickstartGatewayOverrides =
     wizardFlow === "quickstart" && hasQuickstartGatewayOverrides(opts);
@@ -301,52 +311,13 @@ async function runSetupWizardOnce(
   );
 
   if (flow === "quickstart") {
-    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
-      if (value === "loopback") {
-        return t("wizard.gateway.bindLoopback");
-      }
-      if (value === "lan") {
-        return t("wizard.gateway.bindLan");
-      }
-      if (value === "custom") {
-        return t("wizard.gateway.bindCustom");
-      }
-      if (value === "tailnet") {
-        return t("wizard.gateway.bindTailnet");
-      }
-      return t("wizard.gateway.bindAuto");
-    };
-    const formatAuth = (value: GatewayAuthChoice) => {
-      if (value === "token") {
-        return t("wizard.setup.quickstartAuthTokenDefault");
-      }
-      return t("common.password");
-    };
-    const formatTailscale = (value: "off" | "serve" | "funnel") => {
-      return t(`wizard.gatewayTailscale.${value}`);
-    };
-    const quickstartLines = [
-      ...(quickstartGateway.hasExisting && !hasExplicitQuickstartGatewayOverrides
-        ? [t("wizard.setup.quickstartKeepSettings")]
-        : []),
-      t("wizard.setup.quickstartGatewayPort", { port: quickstartGateway.port }),
-      t("wizard.setup.quickstartGatewayBind", { bind: formatBind(quickstartGateway.bind) }),
-      ...(quickstartGateway.bind === "custom" && quickstartGateway.customBindHost
-        ? [
-            t("wizard.setup.quickstartGatewayCustomIp", {
-              host: quickstartGateway.customBindHost,
-            }),
-          ]
-        : []),
-      t("wizard.setup.quickstartGatewayAuth", {
-        auth: formatAuth(quickstartGateway.authMode),
-      }),
-      t("wizard.setup.quickstartTailscaleExposure", {
-        exposure: formatTailscale(quickstartGateway.tailscaleMode),
-      }),
-      t("wizard.setup.quickstartDirectChannels"),
-    ];
-    await prompter.note(quickstartLines.join("\n"), "QuickStart");
+    await prompter.note(
+      formatQuickstartGatewaySummary(
+        quickstartGateway,
+        quickstartGateway.hasExisting && !hasExplicitQuickstartGatewayOverrides,
+      ),
+      "QuickStart",
+    );
   }
 
   const localPort = quickstartGateway.port;
@@ -515,7 +486,8 @@ async function runSetupWizardOnce(
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(currentSetupSnapshot);
+  const hasAuthoredRoster =
+    importSuppliedRoster || hasResolvedRosterBeforeMigrations(currentSetupSnapshot);
   const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,

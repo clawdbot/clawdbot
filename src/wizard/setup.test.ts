@@ -1602,6 +1602,45 @@ describe("runSetupWizard", () => {
     expect(acknowledgePromotion).toHaveBeenCalledOnce();
   });
 
+  it("reports an explicit agent name that conflicts with an imported roster", async () => {
+    const importedConfig: OpenClawConfig = {
+      agents: { entries: { imported: { name: "Imported" } } },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot({}, false)).mockResolvedValue({
+      ...configSnapshot(importedConfig),
+      sourceConfigBeforeMigrations: {},
+    });
+    const runtime = createRuntime();
+    const prompter = buildWizardPrompter();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        importFrom: "hermes",
+        agentName: "robby",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(prompter.text).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "What should we call your first agent?" }),
+    );
+    expect(ensureOnboardingConfig).not.toHaveBeenCalled();
+  });
+
   it("consumes a verified imported model without testing it twice", async () => {
     const workspaceDir = await makeCaseDir("verified-import-flow-");
     runSetupMigrationImport.mockResolvedValueOnce({
