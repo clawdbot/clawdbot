@@ -159,6 +159,26 @@ describe("AppSidebar live narration", () => {
     expect(sessions.subscribeMessages.mock.calls.at(-1)?.[0]).toBe(keys[0]);
   });
 
+  it("keeps six background subscriptions when the open session is also running", async () => {
+    const keys = Array.from({ length: 7 }, (_, index) => `agent:main:run-${index + 1}`);
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", keys);
+    sessions.publishList({
+      result: sessionsResult(keys.map((key, index) => runningRow(key, index + 1))),
+      agentId: "main",
+    });
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = keys[0]!;
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7));
+    expect(sessions.subscribeMessages.mock.calls.map(([key]) => key)).toEqual(
+      expect.arrayContaining(keys),
+    );
+  });
+
   it("stays inert when the synced preference is off", async () => {
     const key = "agent:main:quiet";
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -214,11 +234,11 @@ describe("AppSidebar live narration", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(4));
-    expect(sessions.subscribeMessages).toHaveBeenNthCalledWith(3, backgroundKey, {
-      agentId: undefined,
-    });
-    expect(sessions.subscribeMessages).toHaveBeenNthCalledWith(4, openKey, {
-      agentId: undefined,
-    });
+    expect(sessions.subscribeMessages.mock.calls.slice(2)).toEqual(
+      expect.arrayContaining([
+        [backgroundKey, { agentId: undefined }],
+        [openKey, { agentId: undefined }],
+      ]),
+    );
   });
 });
