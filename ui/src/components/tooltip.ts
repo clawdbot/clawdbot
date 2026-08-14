@@ -124,22 +124,25 @@ class Tooltip extends OpenClawLitElement {
 
     wa-tooltip {
       --max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
-      --wa-tooltip-arrow-size: 6px;
-      --wa-tooltip-background-color: color-mix(in srgb, var(--card) 94%, black 6%);
-      --wa-tooltip-border-color: color-mix(in srgb, var(--border-strong) 84%, transparent);
+      --wa-tooltip-arrow-size: 0px;
+      --wa-tooltip-background-color: var(
+        --openclaw-tooltip-background-color,
+        color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
+      );
+      --wa-tooltip-border-color: var(--openclaw-tooltip-border-color, var(--overlay-border));
       --wa-tooltip-border-width: 1px;
       --wa-tooltip-border-style: solid;
       --wa-tooltip-content-color: var(--text);
-      --wa-tooltip-border-radius: var(--radius-md);
+      --wa-tooltip-border-radius: var(--openclaw-tooltip-border-radius, var(--radius-md));
       font-family: var(--font-body);
     }
 
     wa-tooltip::part(body) {
-      padding: 7px 9px;
-      box-shadow: var(--shadow-md);
-      font-size: 12px;
+      padding: var(--openclaw-tooltip-padding, 5px 7px);
+      box-shadow: var(--openclaw-tooltip-shadow, var(--overlay-shadow));
+      font-size: 11px;
       font-weight: 500;
-      line-height: 1.35;
+      line-height: 1.25;
       overflow-wrap: anywhere;
     }
 

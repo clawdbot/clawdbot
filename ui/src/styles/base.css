@@ -209,6 +209,11 @@
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
+  /* Transient surfaces use one edge and elevation treatment. Persistent
+     panels and dialogs keep their independent elevation hierarchy. */
+  --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
+  --overlay-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 8px 24px rgb(0 0 0 / 0.24);
+
   /* Spacing scale. Settings surfaces use these (see
      ui/docs/design-system/settings-design.md); elsewhere raw px padding/gap is
      grandfathered — adopt the scale when rewriting a rule, don't mass-migrate. */
@@ -234,12 +239,12 @@
   --radius-full: 9999px;
   --radius: 10px;
 
-  /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
-     = panel radius 10. Shared knobs keep transient menus from drifting again. */
-  --menu-radius: var(--radius-md);
+  /* Context-menu geometry stays consistent across native and Web Awesome
+     surfaces while coarse pointers retain the larger touch target below. */
+  --menu-radius: 12px;
   --menu-item-radius: var(--radius-sm);
-  --menu-item-height: 28px;
-  --menu-padding: 4px;
+  --menu-item-height: 36px;
+  --menu-padding: 6px;
 
   /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -387,6 +392,8 @@
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
   --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
   --shadow-glow: 0 0 20px var(--accent-glow);
+  --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
+  --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
 
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
@@ -900,7 +907,7 @@ wa-dropdown-item {
 }
 
 wa-dropdown-item[disabled] {
-  cursor: not-allowed;
+  cursor: default;
 }
 
 /* Keep Web Awesome's checkbox rail trailing so it cannot shift menu icons and labels. */
@@ -916,6 +923,15 @@ wa-dropdown-item[type="checkbox"]::part(checkmark) {
 wa-dropdown-item[type="checkbox"] {
   display: flex;
   align-items: center;
+}
+
+/* Web Awesome owns these popup panels in shadow DOM, so shared tokens enter
+   through exported parts; feature styles continue to own content geometry. */
+wa-dropdown::part(menu),
+wa-popover::part(body),
+wa-select::part(listbox) {
+  border-color: var(--overlay-border);
+  box-shadow: var(--overlay-shadow);
 }
 
 button,

@@ -2534,14 +2534,14 @@ body.update-dialog-open .sidebar-update-card__status {
   position: fixed;
   z-index: 120;
   min-width: 224px;
-  max-width: 264px;
+  max-width: 232px;
   max-height: 420px;
   overflow-y: auto;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   animation: menu-in 140ms var(--ease-out);
 }
 
@@ -2552,14 +2552,14 @@ wa-dropdown.sidebar-customize-menu {
 
 wa-dropdown.sidebar-customize-menu::part(menu) {
   min-width: 224px;
-  max-width: 264px;
+  max-width: 232px;
   max-height: 420px;
   overflow-y: auto;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-customize-menu__title {
@@ -2594,7 +2594,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 .sidebar-customize-menu__item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   min-height: var(--menu-item-height);
   padding: 0 8px;
@@ -2634,7 +2634,7 @@ wa-dropdown-item.sidebar-customize-menu__item {
 .sidebar-customize-menu__item > a {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   color: inherit;
   text-decoration: none;
@@ -2655,7 +2655,7 @@ wa-dropdown-item.sidebar-customize-menu__item {
 }
 
 .sidebar-customize-menu__separator {
-  margin: 6px 4px;
+  margin: 6px 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
@@ -2673,12 +2673,12 @@ wa-dropdown-item.sidebar-customize-menu__item {
   position: fixed;
   z-index: 121;
   min-width: 224px;
-  max-width: 264px;
+  max-width: 232px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   animation: menu-in 140ms var(--ease-out);
 }
 
@@ -2689,12 +2689,12 @@ wa-dropdown.session-menu {
 
 wa-dropdown.session-menu::part(menu) {
   min-width: 224px;
-  max-width: 264px;
+  max-width: 232px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 /* Popover hosts live in the top layer so menus escape in-page stacking
@@ -2718,10 +2718,10 @@ openclaw-session-menu[popover] {
   min-width: 176px;
   max-width: 220px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   animation: menu-in 140ms var(--ease-out);
 }
 
@@ -2734,10 +2734,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 176px;
   max-width: 220px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-session-sort-menu__title {
@@ -2754,7 +2754,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-session-sort-menu__item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   min-height: var(--menu-item-height);
   padding: 0 8px;
@@ -2791,7 +2791,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
-.session-menu__item:focus-visible,
+.session-menu__item:focus-visible:not(:disabled):not([aria-disabled="true"]),
 .sidebar-session-sort-menu__item:hover,
 .sidebar-session-sort-menu__item:focus-visible {
   background: var(--bg-hover);
@@ -2800,11 +2800,20 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .session-menu__item:disabled,
 .session-menu__item[aria-disabled="true"] {
   opacity: 0.42;
-  cursor: not-allowed;
+  cursor: default;
 }
 
 .session-menu__item--destructive {
   color: var(--danger);
+}
+
+.session-menu__item--destructive:hover:not(:disabled):not([aria-disabled="true"]),
+.session-menu__item--destructive:focus-visible {
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.session-menu__item--destructive .session-menu__icon {
+  color: inherit;
 }
 
 /* Web Awesome renders checkbox marks before the label. Selection state in this
@@ -2833,8 +2842,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .session-menu__icon svg,
 .session-menu__check svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.7px;
@@ -2865,11 +2874,19 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
    one rail beside the labels. */
 .session-menu__shortcut,
 .chat-controls__model-option-action kbd {
+  display: inline-flex;
   flex: 0 0 auto;
-  min-width: 12px;
+  min-width: 24px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   text-align: center;
@@ -2883,7 +2900,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .session-menu__separator {
-  margin: 4px 8px;
+  margin: 6px 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 

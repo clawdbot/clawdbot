@@ -141,7 +141,7 @@ suite.define(() => {
           page,
           [sidebarSurface],
           `iconography-${variant}-group-controls.png`,
-          { preserveHover: true },
+          { animations: "allow" },
         );
         await groupAction.click();
         const groupMenu = sidebar.locator("wa-dropdown.sidebar-session-group-menu");

@@ -205,10 +205,10 @@
   max-height: min(420px, 58dvh);
   overflow-y: auto;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   color: var(--text);
 }
 

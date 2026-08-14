@@ -52,7 +52,7 @@ export async function captureSidebarUiUnionProof(
   page: Page,
   locators: Locator[],
   fileName: string,
-  options: { preserveHover?: boolean } = {},
+  options: { animations?: "allow" | "disabled" } = {},
 ): Promise<void> {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
@@ -80,7 +80,7 @@ export async function captureSidebarUiUnionProof(
   );
   await mkdir(sidebarProofArtifactDir, { recursive: true });
   await page.screenshot({
-    animations: options.preserveHover ? "allow" : "disabled",
+    animations: options.animations ?? "disabled",
     clip: { x: left, y: top, width: right - left, height: bottom - top },
     path: path.join(sidebarProofArtifactDir, fileName),
   });

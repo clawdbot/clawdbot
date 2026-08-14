@@ -260,7 +260,7 @@ class SessionMenu extends OpenClawLightDomElement {
   }
 
   override render() {
-    const menuWidth = 240;
+    const menuWidth = 232;
     const menuMaxHeight = 460;
     const clampedX = Math.max(8, Math.min(this.anchor.x, window.innerWidth - menuWidth - 8));
     const clampedY = Math.max(8, Math.min(this.anchor.y, window.innerHeight - menuMaxHeight - 8));
