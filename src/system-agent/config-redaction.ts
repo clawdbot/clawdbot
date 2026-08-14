@@ -110,8 +110,9 @@ function isUnknownDynamicOwnerPath(
   path: readonly string[],
   metadata: SystemAgentConfigRedactionMetadata,
 ): boolean {
-  if (path[0] === "plugins" && path[1] === "entries" && path[2] && path[3] === "config") {
-    return !metadata.pluginIds.has(normalizePluginPolicyId(path[2]));
+  const pluginId = path[2];
+  if (path[0] === "plugins" && path[1] === "entries" && pluginId && path[3] === "config") {
+    return !metadata.pluginIds.has(normalizePluginPolicyId(pluginId));
   }
   return path[0] === "channels" && Boolean(path[1]) && !metadata.channelIds.has(path[1]);
 }
