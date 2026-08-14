@@ -1526,14 +1526,6 @@ body.update-dialog-open .sidebar-update-card__status {
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
-.sidebar-recent-sessions__head--draggable {
-  cursor: grab;
-}
-
-.sidebar-recent-sessions__head--draggable:active {
-  cursor: grabbing;
-}
-
 .sidebar-session-group-toggle {
   display: flex;
   align-items: center;
@@ -1682,8 +1674,9 @@ body.update-dialog-open .sidebar-update-card__status {
   height: 16px;
 }
 
-.sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
-.sidebar-recent-sessions__head--draggable:has(:focus-visible) .sidebar-session-group-drag-handle {
+.sidebar-recent-sessions__head:hover .sidebar-session-group-drag-handle[draggable="true"],
+.sidebar-recent-sessions__head:has(:focus-visible)
+  .sidebar-session-group-drag-handle[draggable="true"] {
   opacity: 0.55;
 }
 
@@ -1737,8 +1730,8 @@ body.update-dialog-open .sidebar-update-card__status {
   stroke-linejoin: round;
 }
 
-/* Group header kebab: hidden until hover/keyboard focus like row actions, but always
-   reachable on touch pointers where hover does not exist. */
+/* Keep the reserved action slot hit-testable while hidden so pointer entry can
+   establish header hover and reveal it before the click. */
 .sidebar-session-group-actions {
   display: inline-flex;
   align-items: center;
@@ -1751,7 +1744,6 @@ body.update-dialog-open .sidebar-update-card__status {
   background: transparent;
   color: var(--muted);
   opacity: 0;
-  pointer-events: none;
   transition:
     opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -1763,7 +1755,6 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
   opacity: 1;
-  pointer-events: auto;
 }
 
 .sidebar-session-group-actions:hover,

@@ -13,9 +13,7 @@ export function renderSidebarSessionSectionHeader(params: {
 }) {
   return html`
     <div
-      class="sidebar-recent-sessions__head ${params.disabledReason
-        ? ""
-        : "sidebar-recent-sessions__head--draggable"}"
+      class="sidebar-recent-sessions__head"
       title=${params.disabledReason ?? nothing}
       @contextmenu=${params.onContextMenu ?? nothing}
     >
