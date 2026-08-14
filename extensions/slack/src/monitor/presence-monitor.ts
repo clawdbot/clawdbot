@@ -20,7 +20,9 @@ const DEFAULT_SLACK_PRESENCE_EVENT_PROMPT = [
   "Send at most one short, natural greeting in this Slack conversation. Do not reveal private memory. If no greeting is appropriate, stay silent.",
 ];
 
-type SlackPresenceEventsConfig = NonNullable<SlackAccountConfig["presenceEvents"]>;
+type SlackPresenceEventsConfig = NonNullable<SlackAccountConfig["presenceEvents"]> & {
+  prompt?: string;
+};
 type SlackPresenceEventsMode = NonNullable<SlackPresenceEventsConfig["mode"]>;
 type PresenceObservation = { presence: "active" } | { presence: "away"; firstObservedAtMs: number };
 
