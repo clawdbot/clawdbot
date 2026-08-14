@@ -346,7 +346,13 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
     }
   }
-  if (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey)) {
+  // Non-user steering must install its transcript listener synchronously; an
+  // unnecessary await here lets callers emit before subscribe() runs.
+  if (
+    isInboundUserMessage &&
+    isPlainTextAnswer &&
+    (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey))
+  ) {
     options?.onQueueAccepted?.(true);
     return;
   }

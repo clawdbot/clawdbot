@@ -65,7 +65,7 @@ function sessionMessageMatchesChat(
   return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
 }
 
-function applyLiveUserMessage(
+function applyLiveSessionMessage(
   state: ChatPageHost,
   payload: unknown,
   runActive: boolean | undefined,
@@ -81,7 +81,17 @@ function applyLiveUserMessage(
   };
   const sourceMessage = event.message;
   const incoming = readSessionMessageIdentity(sourceMessage, event);
-  if (incoming?.role !== "user") {
+  if (!incoming) {
+    return;
+  }
+  const isPreviousRunAssistant = Boolean(
+    incoming.role === "assistant" &&
+    incoming.sequence !== null &&
+    incoming.runId &&
+    state.chatRunId &&
+    incoming.runId !== state.chatRunId,
+  );
+  if (incoming.role !== "user" && !isPreviousRunAssistant) {
     return;
   }
   // Partial import provenance cannot turn an envelope position into durable
@@ -183,7 +193,10 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
   if (matchesChat) {
-    applyLiveUserMessage(state, payload, event.hasActiveRun ?? undefined);
+    // A previous run can persist its final after the next local run starts.
+    // Admit that sequenced row now so the later unsequenced chat.final replay
+    // replaces it in place instead of appending below the newer user turn.
+    applyLiveSessionMessage(state, payload, event.hasActiveRun ?? undefined);
     void loadChatBranches(state);
   }
   if (matchesChat && event.archived !== null) {
