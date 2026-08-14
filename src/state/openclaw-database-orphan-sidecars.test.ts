@@ -136,17 +136,21 @@ describe("orphan SQLite sidecar admission", () => {
           expect(database.db.isOpen).toBe(true);
           expect(fs.existsSync(databasePath)).toBe(true);
           expect(quarantinePaths).toHaveLength(1);
-          expect(fs.readFileSync(quarantinePaths[0])).toEqual(testCase.contents);
+          const quarantinePath = quarantinePaths.at(0);
+          if (!quarantinePath) {
+            throw new Error(`missing quarantine for ${sourcePath}`);
+          }
+          expect(fs.readFileSync(quarantinePath)).toEqual(testCase.contents);
           if (fs.existsSync(sourcePath)) {
             // A successful WAL-mode open may create a new sidecar at the canonical path.
             expect(fs.readFileSync(sourcePath)).not.toEqual(testCase.contents);
           }
           expect(loggerMocks.warn).toHaveBeenCalledOnce();
           expect(loggerMocks.warn).toHaveBeenCalledWith(
-            expect.stringContaining(quarantinePaths[0]),
+            expect.stringContaining(quarantinePath),
             expect.objectContaining({
               databasePath,
-              quarantinedSidecars: [{ quarantinePath: quarantinePaths[0], sourcePath }],
+              quarantinedSidecars: [{ quarantinePath, sourcePath }],
             }),
           );
           expect(String(loggerMocks.warn.mock.calls[0]?.[0])).toContain(
