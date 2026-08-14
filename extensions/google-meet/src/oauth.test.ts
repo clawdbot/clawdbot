@@ -244,4 +244,59 @@ describe("Google Meet OAuth", () => {
     ).rejects.toThrow(/timeout/i);
     expect(promptInput).not.toHaveBeenCalled();
   });
+
+  it("rejects a null OAuth token response as malformed", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("null", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      resolveGoogleMeetAccessToken({
+        clientId: "client-id",
+        refreshToken: "refresh-token",
+      }),
+    ).rejects.toThrow("Google OAuth token response was malformed");
+  });
+
+  it("rejects a primitive string OAuth token response as malformed", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('"not-an-object"', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      resolveGoogleMeetAccessToken({
+        clientId: "client-id",
+        refreshToken: "refresh-token",
+      }),
+    ).rejects.toThrow("Google OAuth token response was malformed");
+  });
+
+  it("rejects an OAuth token response missing access_token", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ expires_in: 3600 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      resolveGoogleMeetAccessToken({
+        clientId: "client-id",
+        refreshToken: "refresh-token",
+      }),
+    ).rejects.toThrow("Google OAuth token response was missing access_token");
+  });
 });
+
