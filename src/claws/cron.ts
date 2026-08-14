@@ -317,10 +317,9 @@ export async function installClawCronJobs(
       message: details.message,
       ...(details.delivery ? { delivery: details.delivery } : {}),
     };
-    let pending = persistPendingRef(plan, job, options);
+    const pending = persistPendingRef(plan, job, options);
     refs.push(pending);
     let result: { id: string } | undefined;
-    let listed = false;
     if (pending.status === "complete" && pending.schedulerJobId) {
       if (!options.gateway.list) {
         continue;
@@ -333,7 +332,6 @@ export async function installClawCronJobs(
         await options.gateway.list(plan.agent.finalId),
         pending.declarationKey,
       );
-      listed = true;
       if (listedJob) {
         if (!clawCronGatewayJobMatchesRef(plan.agent.finalId, pending, listedJob)) {
           throw new ClawCronInstallError(
@@ -352,15 +350,18 @@ export async function installClawCronJobs(
         }
         continue;
       }
-      pending = updateRef(pending, { status: "pending" }, options);
-      refs[refs.length - 1] = pending;
+      throw new ClawCronInstallError(
+        "cron_reconcile_conflict",
+        `Cron declaration ${JSON.stringify(pending.manifestId)} is missing; remove and add the Claw again to recreate it safely.`,
+        refs,
+      );
     }
     try {
       if (!agentAvailable) {
         await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
         agentAvailable = true;
       }
-      if (options.gateway.list && !listed) {
+      if (options.gateway.list) {
         const listedJob = schedulerJobByDeclarationKey(
           await options.gateway.list(plan.agent.finalId),
           pending.declarationKey,

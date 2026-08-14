@@ -144,23 +144,27 @@ describe("installClawCronJobs", () => {
     expect(add).not.toHaveBeenCalled();
   });
 
-  it("repairs complete ownership when the scheduler job disappeared", async () => {
+  it("fails closed when a complete scheduler job disappeared", async () => {
     const current = await fixture();
     await installClawCronJobs(current.plan, {
       env: current.env,
       gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
     });
     const list = vi.fn().mockResolvedValue({ jobs: [] });
-    const add = vi.fn().mockResolvedValue({ id: "scheduler-recreated" });
+    const add = vi.fn();
 
-    const refs = await installClawCronJobs(current.plan, {
-      env: current.env,
-      gateway: { add, list },
-    });
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add, list },
+      }),
+    ).rejects.toMatchObject({ code: "cron_reconcile_conflict" });
 
     expect(list).toHaveBeenCalledOnce();
-    expect(add).toHaveBeenCalledOnce();
-    expect(refs).toMatchObject([{ schedulerJobId: "scheduler-recreated", status: "complete" }]);
+    expect(add).not.toHaveBeenCalled();
+    expect(readClawCronRefs("worker-two", { env: current.env })).toMatchObject([
+      { schedulerJobId: "scheduler-123", status: "complete" },
+    ]);
   });
 
   it("rejects a same-key scheduler job whose declaration drifted", async () => {
