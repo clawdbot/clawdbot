@@ -1040,6 +1040,45 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).toContain("- User: recent ask");
   });
 
+  it("bounds aggregate preserved tool results while retaining the newest complete messages", () => {
+    const toolCalls = Array.from({ length: 30 }, (_, index) => ({
+      type: "toolCall",
+      id: `call_${index}`,
+      name: "read",
+      arguments: {},
+    }));
+    const split = splitPreservedRecentTurns({
+      messages: [
+        { role: "user", content: "recent ask", timestamp: 1 },
+        { role: "assistant", content: toolCalls, timestamp: 2 } as unknown as AgentMessage,
+        ...toolCalls.map(
+          (toolCall, index) =>
+            ({
+              role: "toolResult",
+              toolCallId: toolCall.id,
+              toolName: "read",
+              content: [
+                {
+                  type: "text",
+                  text: `paired-result-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
+                },
+              ],
+              timestamp: index + 3,
+            }) as unknown as AgentMessage,
+        ),
+      ],
+      recentTurnsPreserve: 1,
+    });
+
+    const section = formatPreservedTurnsSection(split.preservedMessages) as string;
+
+    expect(section.length).toBeLessThanOrEqual(MAX_SPLIT_TURN_CONTEXT_CHARS);
+    expect(section).toContain("[Earlier preserved messages truncated]");
+    expect(section).not.toContain("paired-result-00-");
+    expect(section).toContain("paired-result-29-");
+    expect(section.split("\n").some((line) => line.startsWith("x"))).toBe(false);
+  });
+
   it("formats preserved non-text messages with placeholders", () => {
     const section = formatPreservedTurnsSection([
       {
@@ -2986,6 +3025,53 @@ describe("compaction-safeguard recent-turn preservation", () => {
       "Compaction safeguard: finalized artifact truncated; loss=split-turn-head,suffix-head",
     );
     expect(warning).not.toContain(sensitiveSentinel);
+  });
+
+  it("starts a finally trimmed raw split-turn suffix at a complete message boundary", async () => {
+    const providerBody = `BODY-START${"b".repeat(6_760)}BODY-END`;
+    const providerSummarize = vi.fn().mockResolvedValue(providerBody);
+    registerCompactionProvider({
+      id: "boundary-provider",
+      label: "Boundary Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "boundary-provider",
+      recentTurnsPreserve: 3,
+    });
+    const messagesToSummarize = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `preserved-${index}-${"p".repeat(700)}`,
+      timestamp: index + 1,
+    })) as AgentMessage[];
+    const turnPrefixMessages = Array.from({ length: 20 }, (_, index) => ({
+      role: "user" as const,
+      content: `raw-prefix-${String(index).padStart(2, "0")}-${"r".repeat(700)}`,
+      timestamp: index + 100,
+    }));
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 20_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    const retainedSuffix = summary.split(CONTEXT_TRUNCATED_MARKER)[1] ?? "";
+    const firstRetainedLine = retainedSuffix.split("\n").find((line) => line.length > 0);
+    expect(firstRetainedLine).toMatch(/^- User: raw-prefix-\d{2}-/);
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain("## Recent turns preserved verbatim");
   });
 });
 
