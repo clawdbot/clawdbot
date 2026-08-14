@@ -34,6 +34,7 @@ struct GatewayLaunchAgentManagerTests {
         let command = await CommandResolver.openclawCommand(
             subcommand: "gateway",
             extraArgs: ["status", "--json"],
+            configRoot: ["gateway": ["mode": "local"]],
             projectRoot: root,
             profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]))
 
