@@ -733,6 +733,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
           currentStop = store.stops.get(id);
         }
+        if (currentStop?.status === "stopping") {
+          return;
+        }
         const existingTask = store.tasks.get(id);
         const existingAbort = store.aborts.get(id);
         const abortedTask = existingAbort?.signal.aborted === true;

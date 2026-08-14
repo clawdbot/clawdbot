@@ -1425,6 +1425,47 @@ describe("server-channels auto restart", () => {
     expect(account?.lifecycle).toBe("recovering");
   });
 
+  it("does not start a replacement while a queued stop owns the settled fence", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const firstStopTimedOut = expect(firstStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStopTimedOut;
+    await flushMicrotasks();
+
+    const startWhileFenceIsPending = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    const queuedManualStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+
+    releaseStopAccount.resolve();
+    await Promise.all([startWhileFenceIsPending, queuedManualStop]);
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+  });
+
   it("marks a late successful stopAccount timeout as stopped after task teardown", async () => {
     const releaseStopAccount = createDeferred();
     const stopAccount = vi.fn(async () => {
