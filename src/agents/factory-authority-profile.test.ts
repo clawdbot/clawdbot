@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertFactoryNativeAuthorityProof,
   assertFactoryNativeLaunchAuthority,
   buildFactoryNativeLaunchAuthority,
   buildFactoryNativeProofHash,
   buildFactoryNativeRuntimePolicyHash,
+  canonicalizeFactoryNativeAuthorityManifest,
   FACTORY_NATIVE_BASE_PATH_ENTRIES,
 } from "./factory-authority-profile.js";
 import {
@@ -99,6 +103,49 @@ describe("factory native authority profile", () => {
         worktreeOwnershipGeneration: 1,
       }),
     ).toThrow("system read root is outside the approved toolchain area");
+  });
+
+  it("allows only descendants of the owner-controlled factory input root", async () => {
+    const fakeHome = mkdtempSync("/private/tmp/openclaw-factory-input-test-");
+    const stateRoot = path.join(fakeHome, "Library", "Application Support", "OpenClawFactory");
+    const inputRoot = path.join(stateRoot, "control", "inputs", "recognition-corpus");
+    const siblingRoot = path.join(stateRoot, "control", "secrets");
+    mkdirSync(inputRoot, { recursive: true });
+    mkdirSync(siblingRoot, { recursive: true });
+    const homeSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    try {
+      const manifest = await canonicalizeFactoryNativeAuthorityManifest({
+        readableRoots: ["/Library/Developer/CommandLineTools", "/opt/homebrew", inputRoot],
+        pathEntries: ["/usr/bin"],
+        environment: {},
+        factoryStateRoot: stateRoot,
+      });
+      expect(manifest.readableRoots).toContain(inputRoot);
+
+      await expect(
+        canonicalizeFactoryNativeAuthorityManifest({
+          readableRoots: ["/Library/Developer/CommandLineTools", "/opt/homebrew", siblingRoot],
+          pathEntries: ["/usr/bin"],
+          environment: {},
+          factoryStateRoot: stateRoot,
+        }),
+      ).rejects.toThrow("user read root is outside the approved toolchain area");
+      await expect(
+        canonicalizeFactoryNativeAuthorityManifest({
+          readableRoots: [
+            "/Library/Developer/CommandLineTools",
+            "/opt/homebrew",
+            path.join(stateRoot, "control"),
+          ],
+          pathEntries: ["/usr/bin"],
+          environment: {},
+          factoryStateRoot: stateRoot,
+        }),
+      ).rejects.toThrow("user read root is outside the approved toolchain area");
+    } finally {
+      homeSpy.mockRestore();
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 
   it("rejects persisted launch-authority drift", () => {

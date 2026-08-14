@@ -197,11 +197,15 @@ function assertFactoryReadableRootsSafe(params: {
     "/private/tmp",
     "/var/tmp",
   ];
+  const approvedFactoryInputsRoot = path.resolve(params.factoryStateRoot, "control", "inputs");
   for (const root of params.roots) {
     if (forbidden.some((candidate) => root === candidate || isPathInside(root, candidate))) {
       throw new Error(`factory native readable root is too broad or sensitive: ${root}`);
     }
     if (root.startsWith(`${home}${path.sep}`)) {
+      if (isPathInside(approvedFactoryInputsRoot, root)) {
+        continue;
+      }
       const approvedLocalShare = path.join(home, ".local", "share");
       const relative = path.relative(approvedLocalShare, root);
       if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
