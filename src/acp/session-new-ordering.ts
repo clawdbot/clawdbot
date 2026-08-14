@@ -9,21 +9,31 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 const SESSION_ESTABLISHING_METHODS = new Set(["session/load", "session/resume"]);
 
 /**
- * Buffered state is driven by the peer, so every collection is bounded. Overflow
- * fails open — the update is written in arrival order — because dropping an update
- * loses session content, while emitting one early only restores the pre-fix ordering.
+ * Every collection here is filled by the peer, so every one is bounded and every
+ * overflow fails open by writing the update through in arrival order. Dropping an
+ * update loses session content permanently, while emitting one early only restores
+ * the ordering that existed before this boundary.
  */
 const MAX_BUFFERED_SESSIONS = 64;
 const MAX_BUFFERED_UPDATES_PER_SESSION = 256;
 const MAX_PENDING_NEW_SESSION_REQUESTS = 64;
+const MAX_ESTABLISHED_SESSIONS = 1024;
 
 /** Keeps initial session updates behind the response that introduces their session ID. */
 export class AcpSessionNewOrdering {
   /** Session IDs the protocol established, either by client assertion or by a `session/new` result. */
   private readonly establishedSessionIds = new Set<string>();
+  /**
+   * Set once a session could not be recorded. Established and not-yet-established
+   * are no longer distinguishable, so buffering stops rather than holding updates
+   * that might never be released.
+   */
+  private establishedTrackingSaturated = false;
   private readonly bufferedSessionUpdates = new Map<string, AnyMessage[]>();
   /** JSON-RPC IDs of in-flight `session/new` requests, used to correlate the establishing response. */
   private readonly pendingNewSessionRequestIds = new Set<string>();
+  /** In-flight `session/new` requests beyond the correlation cap; see `observeInbound`. */
+  private untrackedNewSessionRequests = 0;
   /**
    * Updates released by an inbound message, which has no transform controller to
    * write to. The next outbound message drains them, so they are never dropped.
@@ -39,10 +49,19 @@ export class AcpSessionNewOrdering {
 
     if (method === "session/new") {
       const requestId = readRequestId(messageObject?.id);
-      if (requestId !== undefined) {
-        evictOldest(this.pendingNewSessionRequestIds, MAX_PENDING_NEW_SESSION_REQUESTS);
-        this.pendingNewSessionRequestIds.add(requestId);
+      if (requestId === undefined) {
+        return;
       }
+      if (this.pendingNewSessionRequestIds.size >= MAX_PENDING_NEW_SESSION_REQUESTS) {
+        // A correlation is never evicted: its response is the only thing that can
+        // release the updates already buffered for that session, so discarding it
+        // would recreate the stall this boundary exists to prevent. Past the cap we
+        // stop correlating and fall back to trusting the session ID carried by the
+        // response itself, which is our own outbound payload rather than peer input.
+        this.untrackedNewSessionRequests += 1;
+        return;
+      }
+      this.pendingNewSessionRequestIds.add(requestId);
       return;
     }
 
@@ -55,15 +74,16 @@ export class AcpSessionNewOrdering {
     // not exist. The translator rejects those, so recording them here would let a
     // peer grow this set for the lifetime of the process.
     if (SESSION_ESTABLISHING_METHODS.has(method)) {
-      this.establishedSessionIds.add(sessionId);
+      this.establish(sessionId);
       this.flushBufferedUpdates(sessionId);
       return;
     }
 
     if (method === "session/close") {
-      // The session can never be introduced again, so anything still buffered for it
-      // would be stranded. Release it and keep the ID established: a late update must
-      // reach the wire rather than re-entering the buffer.
+      // The session is over, so release both its ID and anything still buffered for
+      // it. Retaining the ID is what would let a long-lived bridge grow this set
+      // without bound; a late update now passes through on the rule below instead.
+      this.establishedSessionIds.delete(sessionId);
       this.flushBufferedUpdates(sessionId);
     }
   }
@@ -81,29 +101,63 @@ export class AcpSessionNewOrdering {
     }
 
     const responseId = readRequestId(messageObject?.id);
-    if (responseId !== undefined && this.pendingNewSessionRequestIds.delete(responseId)) {
-      // The response to `session/new` always goes out first; it is what introduces
-      // the session ID to the client. A failed creation carries no ID to establish.
-      controller.enqueue(message);
-      const establishedSessionId = readSessionId(messageObject?.result);
-      if (establishedSessionId) {
-        this.establishedSessionIds.add(establishedSessionId);
-        this.drainBufferedUpdates(establishedSessionId, controller);
+    if (responseId !== undefined) {
+      const correlated = this.pendingNewSessionRequestIds.delete(responseId);
+      const sessionIdFromResult = readSessionId(messageObject?.result);
+      // Past the correlation cap the request was never recorded, so a response that
+      // carries a session ID is matched by count instead of by ID.
+      const uncorrelatedNewSession =
+        !correlated && sessionIdFromResult !== undefined && this.untrackedNewSessionRequests > 0;
+      if (uncorrelatedNewSession) {
+        this.untrackedNewSessionRequests -= 1;
       }
-      return;
+      if (correlated || uncorrelatedNewSession) {
+        // The response to `session/new` always goes out first; it is what introduces
+        // the session ID to the client. A failed creation carries no ID to establish.
+        controller.enqueue(message);
+        if (sessionIdFromResult) {
+          this.establish(sessionIdFromResult);
+          this.drainBufferedUpdates(sessionIdFromResult, controller);
+        }
+        this.releaseUnreachableUpdates(controller);
+        return;
+      }
     }
 
     const sessionId = readSessionId(messageObject?.params);
     if (
       messageObject?.method === "session/update" &&
       sessionId &&
-      !this.establishedSessionIds.has(sessionId) &&
+      this.shouldBuffer(sessionId) &&
       this.bufferUpdate(sessionId, message)
     ) {
       return;
     }
 
     controller.enqueue(message);
+  }
+
+  /**
+   * An update may only be held while some `session/new` response can still release
+   * it. Nothing else introduces a session ID to the client, so buffering outside
+   * that window would strand the update for the life of the process.
+   */
+  private shouldBuffer(sessionId: string): boolean {
+    if (this.establishedTrackingSaturated || this.establishedSessionIds.has(sessionId)) {
+      return false;
+    }
+    return this.pendingNewSessionRequestIds.size > 0 || this.untrackedNewSessionRequests > 0;
+  }
+
+  private establish(sessionId: string): void {
+    if (
+      !this.establishedSessionIds.has(sessionId) &&
+      this.establishedSessionIds.size >= MAX_ESTABLISHED_SESSIONS
+    ) {
+      this.establishedTrackingSaturated = true;
+      return;
+    }
+    this.establishedSessionIds.add(sessionId);
   }
 
   /** @returns false when the buffer is full and the caller must write the message through. */
@@ -138,6 +192,25 @@ export class AcpSessionNewOrdering {
   }
 
   /**
+   * With no `session/new` correlation left in flight, nothing can introduce the
+   * session IDs still buffered here, so they are written through in arrival order
+   * rather than held for the life of the process.
+   */
+  private releaseUnreachableUpdates(
+    controller: TransformStreamDefaultController<AnyMessage>,
+  ): void {
+    if (this.pendingNewSessionRequestIds.size > 0 || this.untrackedNewSessionRequests > 0) {
+      return;
+    }
+    for (const buffered of this.bufferedSessionUpdates.values()) {
+      for (const message of buffered) {
+        controller.enqueue(message);
+      }
+    }
+    this.bufferedSessionUpdates.clear();
+  }
+
+  /**
    * Releases buffered updates from an inbound callback, where no controller exists.
    * They move to `releasedUpdates` rather than being discarded, and the next outbound
    * message drains them; FIFO order within the session is preserved throughout.
@@ -149,16 +222,6 @@ export class AcpSessionNewOrdering {
     }
     this.bufferedSessionUpdates.delete(sessionId);
     this.releasedUpdates.push(...buffered);
-  }
-}
-
-function evictOldest(ids: Set<string>, limit: number): void {
-  if (ids.size < limit) {
-    return;
-  }
-  const oldest = ids.values().next();
-  if (!oldest.done) {
-    ids.delete(oldest.value);
   }
 }
 

@@ -109,9 +109,13 @@ describe("AcpSessionNewOrdering", () => {
 
   it("does not establish a session ID named by a request the protocol has not accepted", async () => {
     const ordering = new AcpSessionNewOrdering();
+    const prompted = sessionUpdate("never-created");
+    const result = newSessionResponse(2, "other-session");
 
     // `session/prompt` is valid-shaped but the translator rejects an unknown session.
     // Recording it here would let any peer grow the set for the process lifetime.
+    // With a `session/new` in flight the difference is observable: an established ID
+    // would go straight out, while this one waits for the response.
     await expect(
       runSteps(ordering, [
         {
@@ -122,9 +126,11 @@ describe("AcpSessionNewOrdering", () => {
             params: { sessionId: "never-created", prompt: [] },
           } as AnyMessage,
         },
-        { outbound: sessionUpdate("never-created") },
+        { inbound: newSessionRequest(2) },
+        { outbound: prompted },
+        { outbound: result },
       ]),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual([result, prompted]);
   });
 
   it("only establishes a session from the response correlated to its own request", async () => {
@@ -193,11 +199,76 @@ describe("AcpSessionNewOrdering", () => {
     const overflow = sessionUpdate("unbounded", "overflow");
 
     const output = await runSteps(ordering, [
+      { inbound: newSessionRequest(1) },
       ...buffered.map((outbound) => ({ outbound })),
       { outbound: overflow },
     ]);
 
     // Failing open preserves the update; only its ordering degrades to pre-fix behavior.
     expect(output).toEqual([overflow]);
+  });
+
+  it("keeps a correlation past the request cap instead of evicting it", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const steps: Step[] = [];
+    for (let id = 1; id <= 65; id += 1) {
+      steps.push({ inbound: newSessionRequest(id) });
+    }
+    const update = sessionUpdate("session-1");
+    const result = newSessionResponse(1, "session-1");
+    steps.push({ outbound: update }, { outbound: result });
+
+    // Evicting the oldest correlation to make room for the 65th left this session's
+    // result unable to reach the drain branch, so its initial update never shipped —
+    // the same silent stall this boundary exists to fix.
+    await expect(runSteps(ordering, steps)).resolves.toEqual([result, update]);
+  });
+
+  it("releases an established session ID when the session closes", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const created = newSessionResponse(2, "closing-session");
+    const afterClose = sessionUpdate("closing-session", "after close");
+    const other = newSessionResponse(3, "other-session");
+
+    const output = await runSteps(ordering, [
+      { inbound: newSessionRequest(2) },
+      { outbound: created },
+      {
+        inbound: {
+          jsonrpc: "2.0",
+          id: 9,
+          method: "session/close",
+          params: { sessionId: "closing-session" },
+        } as AnyMessage,
+      },
+      { inbound: newSessionRequest(3) },
+      { outbound: afterClose },
+      { outbound: other },
+    ]);
+
+    // The ID was released on close, so a late update is held behind the in-flight
+    // response rather than passing straight through as an established session would.
+    // Retaining it is what let the set grow for the lifetime of a long-lived bridge.
+    expect(output).toEqual([created, other, afterClose]);
+  });
+
+  it("stops buffering once established tracking is saturated", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const steps: Step[] = [];
+    for (let id = 1; id <= 1025; id += 1) {
+      steps.push(
+        { inbound: newSessionRequest(id) },
+        { outbound: newSessionResponse(id, `s${id}`) },
+      );
+    }
+    const late = sessionUpdate("late-session");
+    const lateResult = newSessionResponse(5000, "late-session");
+    steps.push({ inbound: newSessionRequest(5000) }, { outbound: late }, { outbound: lateResult });
+
+    const output = await runSteps(ordering, steps);
+
+    // Past the bound the boundary can no longer tell established from pending, so it
+    // fails open in arrival order rather than holding an update it may never release.
+    expect(output.slice(-2)).toEqual([late, lateResult]);
   });
 });
