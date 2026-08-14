@@ -18,7 +18,12 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   retainedCount: 0,
 }));
 const pruneExpiredDeliveryQueueTombstonesMock = vi.fn();
+const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
 const pruneOrphanedDeliveryQueueMediaMock = vi.fn(async () => undefined);
+
+vi.mock("../infra/device-bootstrap.js", () => ({
+  pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
+}));
 
 vi.mock("../infra/delivery-queue-sqlite.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/delivery-queue-sqlite.js")>(
@@ -70,7 +75,6 @@ function createMaintenanceTimerDeps() {
     logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
-    runDevicePairSetupCompletionGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
 }
@@ -167,6 +171,7 @@ describe("startGatewayMaintenanceTimers", () => {
     vi.clearAllMocks();
     cleanOldMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
+    pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue({
       deletedRecordCount: 0,
       deletedFileCount: 0,
@@ -232,7 +237,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs managed worktree and setup-outcome cleanup on their schedules", async () => {
+  it("runs managed worktree cleanup at startup and hourly", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
@@ -240,10 +245,38 @@ describe("startGatewayMaintenanceTimers", () => {
 
     await Promise.resolve();
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(1);
-    expect(deps.runDevicePairSetupCompletionGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
-    expect(deps.runDevicePairSetupCompletionGc).toHaveBeenCalledTimes(61);
+
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    let resolvePrune = (_deletedCount: number) => {};
+    pruneExpiredDevicePairSetupCompletionsMock.mockImplementationOnce(
+      () =>
+        new Promise<number>((resolve) => {
+          resolvePrune = resolve;
+        }),
+    );
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+
+    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledWith({
+      nowMs: Date.now(),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(1);
+
+    resolvePrune(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenLastCalledWith({
+      nowMs: Date.now(),
+    });
+    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);
   });
