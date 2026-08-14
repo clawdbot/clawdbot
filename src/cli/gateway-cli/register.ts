@@ -25,6 +25,7 @@ import { formatHelpExamples } from "../help-format.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
+import { addGatewayPreflightCommand } from "./register-preflight.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
@@ -548,6 +549,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
   addGatewayServiceCommands(gateway, {
     statusDescription: "Show gateway service status + probe connectivity/capability",
   });
+  addGatewayPreflightCommand(gateway);
   addGatewayRestartHandoffCommands(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
 

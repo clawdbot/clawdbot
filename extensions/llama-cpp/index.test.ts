@@ -165,6 +165,59 @@ describe("llama.cpp provider plugin", () => {
     });
   });
 
+  it("reports missing managed setup without downloading models or starting a server", async () => {
+    expect(
+      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.({
+        config: {},
+        provider: "local",
+        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      }),
+    ).toEqual({
+      status: "blocked",
+      issues: [
+        {
+          code: "managed-server-config-missing",
+          message: expect.stringContaining(
+            "Local embeddings need the managed llama.cpp server config",
+          ),
+          remediation: [
+            "Run `openclaw configure` and choose llama.cpp once.",
+            "Retry `openclaw memory status --deep` after setup completes.",
+          ],
+        },
+      ],
+    });
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+    expect(mocks.genericCreate).not.toHaveBeenCalled();
+  });
+
+  it("accepts configured managed setup without touching models or services", async () => {
+    expect(
+      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(configuredOptions()),
+    ).toEqual({ status: "ready" });
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+    expect(mocks.genericCreate).not.toHaveBeenCalled();
+  });
+
+  it("reports an invalid managed base URL as a deterministic blocker", async () => {
+    const options = configuredOptions();
+    options.config.models.providers[LLAMA_CPP_PROVIDER_ID].baseUrl = "not-a-url";
+
+    expect(await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(options)).toEqual({
+      status: "blocked",
+      issues: [
+        expect.objectContaining({
+          code: "managed-server-base-url-invalid",
+          message: "Managed llama.cpp provider baseUrl must be a valid URL.",
+        }),
+      ],
+    });
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+  });
+
   it("routes embeddings through the managed server and reports endpoint facts", async () => {
     const result = await llamaCppEmbeddingProviderAdapter.create(configuredOptions());
     const provider = expectDefined(result.provider, "local embedding provider");

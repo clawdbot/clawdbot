@@ -16,9 +16,14 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./load-context.js";
 
-export type PluginRegistryScope = "configured-channels" | "channels" | "memory" | "all";
+export type PluginRegistryScope =
+  | "configured-channels"
+  | "channels"
+  | "memory"
+  | "memory-embedding-providers"
+  | "all";
 
-function resolveMemoryPluginIds(
+function resolveMemoryEmbeddingProviderPluginIds(
   context: ReturnType<typeof resolvePluginRuntimeLoadContext>,
 ): string[] {
   const configuredProviderIds = [
@@ -34,6 +39,13 @@ function resolveMemoryPluginIds(
       pluginIds.add(providerId);
     }
   }
+  return [...pluginIds].toSorted();
+}
+
+function resolveMemoryPluginIds(
+  context: ReturnType<typeof resolvePluginRuntimeLoadContext>,
+): string[] {
+  const pluginIds = new Set(resolveMemoryEmbeddingProviderPluginIds(context));
   const memoryPluginId = normalizePluginsConfig(context.config.plugins).slots.memory?.trim();
   if (memoryPluginId) {
     pluginIds.add(memoryPluginId);
@@ -64,6 +76,9 @@ function resolveScopePluginIds(params: {
     // Memory CLI commands must use the same backend and embedding adapters as
     // Gateway, without activating unrelated explicitly enabled plugins.
     return resolveMemoryPluginIds(params.context);
+  }
+  if (params.scope === "memory-embedding-providers") {
+    return resolveMemoryEmbeddingProviderPluginIds(params.context);
   }
   return resolveEffectivePluginIds({
     config: params.context.rawConfig,
@@ -99,6 +114,7 @@ export function ensurePluginRegistryLoaded(options?: {
         throwOnLoadError: true,
         ...(scope === "configured-channels" ||
         scope === "memory" ||
+        scope === "memory-embedding-providers" ||
         scope === "all" ||
         hasNonEmptyPluginIdScope(pluginIds)
           ? { onlyPluginIds: pluginIds }

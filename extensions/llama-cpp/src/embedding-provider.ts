@@ -39,6 +39,21 @@ type LlamaCppModelIdentity = {
   aliases: Array<{ model: string; cacheKeyData: Record<string, unknown> }>;
 };
 
+const LLAMA_CPP_SETUP_REMEDIATION = [
+  "Run `openclaw configure` and choose llama.cpp once.",
+  "Retry `openclaw memory status --deep` after setup completes.",
+] as const;
+
+class LlamaCppStartupPrerequisiteError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "LlamaCppStartupPrerequisiteError";
+  }
+}
+
 function readLocalOptions(options: { local?: unknown }): LlamaCppLocalOptions {
   return (options.local as LlamaCppLocalOptions | undefined) ?? {};
 }
@@ -100,7 +115,8 @@ function resolveModelIdentity(
 function resolveConfiguredProvider(options: EmbeddingProviderCreateOptions): ModelProviderConfig {
   const provider = options.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   if (!provider?.localService || !provider.baseUrl) {
-    throw new Error(
+    throw new LlamaCppStartupPrerequisiteError(
+      "managed-server-config-missing",
       "Local embeddings need the managed llama.cpp server config. Run `openclaw configure`, choose llama.cpp once, then retry `openclaw memory status --deep`.",
     );
   }
@@ -108,18 +124,28 @@ function resolveConfiguredProvider(options: EmbeddingProviderCreateOptions): Mod
 }
 
 function resolveProviderPort(provider: ModelProviderConfig): number {
-  const port = Number(new URL(provider.baseUrl ?? "").port);
+  let port: number;
+  try {
+    port = Number(new URL(provider.baseUrl ?? "").port);
+  } catch {
+    throw new LlamaCppStartupPrerequisiteError(
+      "managed-server-base-url-invalid",
+      "Managed llama.cpp provider baseUrl must be a valid URL.",
+    );
+  }
   if (!Number.isInteger(port) || port <= 0) {
-    throw new Error("Managed llama.cpp provider baseUrl must include a loopback port.");
+    throw new LlamaCppStartupPrerequisiteError(
+      "managed-server-port-missing",
+      "Managed llama.cpp provider baseUrl must include a loopback port.",
+    );
   }
   return port;
 }
 
-async function prepareEmbeddingServer(
+function resolveChatModel(
   options: EmbeddingProviderCreateOptions,
-  embeddingSource: string,
-): Promise<void> {
-  const provider = resolveConfiguredProvider(options);
+  provider: ModelProviderConfig,
+): ModelProviderConfig["models"][number] {
   const configuredPrimary = options.config.agents?.defaults?.model;
   const primaryRef =
     typeof configuredPrimary === "string" ? configuredPrimary : configuredPrimary?.primary;
@@ -131,8 +157,20 @@ async function prepareEmbeddingServer(
     provider.models.find((model) => model.id !== DEFAULT_LLAMA_CPP_MODEL_ID) ??
     provider.models[0];
   if (!chatModel) {
-    throw new Error("Managed llama.cpp provider has no chat model preset.");
+    throw new LlamaCppStartupPrerequisiteError(
+      "chat-model-preset-missing",
+      "Managed llama.cpp provider has no chat model preset.",
+    );
   }
+  return chatModel;
+}
+
+async function prepareEmbeddingServer(
+  options: EmbeddingProviderCreateOptions,
+  embeddingSource: string,
+): Promise<void> {
+  const provider = resolveConfiguredProvider(options);
+  const chatModel = resolveChatModel(options, provider);
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
   const key = JSON.stringify([provider.baseUrl, chatModel.id, embeddingSource, cacheDir]);
   const pending =
@@ -226,6 +264,31 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
     const local = readLocalOptions(options);
     const modelPath = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
     return resolveModelIdentity(local, modelPath, options.dimensions);
+  },
+  inspectStartupPrerequisites: (options) => {
+    try {
+      const provider = resolveConfiguredProvider(options);
+      resolveProviderPort(provider);
+      resolveChatModel(options, provider);
+      return { status: "ready" };
+    } catch (error) {
+      if (error instanceof LlamaCppStartupPrerequisiteError) {
+        return {
+          status: "blocked",
+          issues: [
+            {
+              code: error.code,
+              message: error.message,
+              remediation: LLAMA_CPP_SETUP_REMEDIATION,
+            },
+          ],
+        };
+      }
+      return {
+        status: "indeterminate",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   },
   create: async (options) => {
     const local = readLocalOptions(options);

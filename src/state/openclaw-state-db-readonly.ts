@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -23,6 +25,10 @@ type OpenClawStateReadOnlyDatabase = {
 };
 
 type ReusedOpenClawStateReadOnlyDatabase<T> = { reused: false } | { reused: true; value: T };
+
+type PreparedReadOnlyLocation = ReturnType<typeof prepareSqliteReadOnlyLocationSync>;
+
+const inspectionSnapshots = new AsyncLocalStorage<Map<string, PreparedReadOnlyLocation>>();
 
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
@@ -80,7 +86,13 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   pathname: string,
 ): T {
   assertOpenClawStateDatabaseFreshOpenAllowed(options);
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const snapshots = inspectionSnapshots.getStore();
+  let prepared = snapshots?.get(pathname);
+  if (snapshots && !prepared) {
+    prepared = prepareSqliteReadOnlyLocationSync(pathname);
+    snapshots.set(pathname, prepared);
+  }
+  const db = openNodeSqliteDatabase(prepared?.location ?? pathname, { readOnly: true });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
@@ -102,6 +114,9 @@ export function withOpenClawStateDatabaseReadOnly<T>(
   options: OpenClawStateDatabaseOptions = {},
 ): T {
   const pathname = resolveReadOnlyPath(options);
+  if (inspectionSnapshots.getStore()) {
+    return withFreshOpenClawStateDatabaseReadOnly(operation, options, pathname);
+  }
   // Reusing a handle this process already holds keeps row loops cheap: opening
   // and closing a connection per call made shared-state reads scale with row
   // count. An in-flight transaction is skipped so callers never observe
@@ -119,6 +134,16 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
   options: OpenClawStateDatabaseOptions = {},
 ): T | undefined {
   const pathname = resolveReadOnlyPath(options);
+  if (inspectionSnapshots.getStore()) {
+    const existingPath = existingPathOrUndefined(pathname);
+    return existingPath === undefined
+      ? undefined
+      : withFreshOpenClawStateDatabaseReadOnly(
+          operation,
+          { ...options, path: existingPath },
+          existingPath,
+        );
+  }
   const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, options, pathname);
   if (reused.reused) {
     return reused.value;
@@ -131,4 +156,28 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
         { ...options, path: existingPath },
         existingPath,
       );
+}
+
+/**
+ * Read shared state from stable private snapshots for a non-mutating inspection.
+ *
+ * The snapshots preserve committed WAL contents without joining the source
+ * database's locking lifecycle or touching its shared-memory sidecar.
+ */
+export async function withOpenClawStateDatabaseInspectionSnapshots<T>(
+  operation: () => Promise<T> | T,
+): Promise<T> {
+  if (inspectionSnapshots.getStore()) {
+    return await operation();
+  }
+  const snapshots = new Map<string, PreparedReadOnlyLocation>();
+  return await inspectionSnapshots.run(snapshots, async () => {
+    try {
+      return await operation();
+    } finally {
+      for (const prepared of [...snapshots.values()].toReversed()) {
+        prepared.cleanup();
+      }
+    }
+  });
 }

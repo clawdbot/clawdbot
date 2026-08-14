@@ -10,6 +10,19 @@ import { vectorIndexProviderDiagnosticTesting } from "./doctor-vector-index-prov
 
 const roots = new Set<string>();
 
+async function createSemanticIndex(stateDir: string, model = "text-embedding-3-small") {
+  const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  await fs.mkdir(path.dirname(agentPath), { recursive: true });
+  const db = new DatabaseSync(agentPath);
+  db.exec("CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT");
+  db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+    "memory_index_meta_v1",
+    JSON.stringify({ model, vectorDims: 1536 }),
+  );
+  db.close();
+  return agentPath;
+}
+
 afterEach(async () => {
   vectorIndexProviderDiagnosticTesting.reset();
   await Promise.all([...roots].map((root) => fs.rm(root, { recursive: true, force: true })));
@@ -76,5 +89,180 @@ describe("memory vector index provider doctor diagnostic", () => {
         },
       }),
     ).resolves.toBeNull();
+  });
+
+  it("preflights missing local managed setup without changing config or state", async () => {
+    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => ({
+      status: "blocked",
+      issues: [
+        {
+          provider: "local",
+          code: "managed-server-config-missing",
+          message: "Local embeddings need the managed llama.cpp server config.",
+          remediation: ["Run `openclaw configure` and choose llama.cpp once."],
+        },
+      ],
+    }));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-preflight-"));
+    roots.add(stateDir);
+    const agentPath = await createSemanticIndex(stateDir, "embeddinggemma-300m");
+    const config = {
+      memory: {
+        search: {
+          provider: "local",
+          fallback: "none",
+          model: "embeddinggemma-300m",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const configBefore = JSON.stringify(config);
+    const stateBefore = await fs.readFile(agentPath);
+
+    await expect(
+      vectorIndexProviderDiagnostic.preflightStartup?.({
+        config,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+      }),
+    ).resolves.toEqual({
+      status: "blocked",
+      findings: [
+        {
+          id: "main/local/managed-server-config-missing",
+          code: "managed-server-config-missing",
+          message: expect.stringContaining(
+            "Local embeddings need the managed llama.cpp server config",
+          ),
+          remediation: ["Run `openclaw configure` and choose llama.cpp once."],
+          agentId: "main",
+          provider: "local",
+          model: "embeddinggemma-300m",
+          configPath: "memory.search",
+        },
+      ],
+    });
+    expect(JSON.stringify(config)).toBe(configBefore);
+    await expect(fs.readFile(agentPath)).resolves.toEqual(stateBefore);
+  });
+
+  it("reports ready when the selected provider prerequisite is configured", async () => {
+    let calls = 0;
+    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => {
+      calls += 1;
+      return { status: "ready" };
+    });
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-ready-"));
+    roots.add(stateDir);
+    await createSemanticIndex(stateDir);
+
+    await expect(
+      vectorIndexProviderDiagnostic.preflightStartup?.({
+        config: { memory: { search: { provider: "local", fallback: "none" } } },
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+      }),
+    ).resolves.toEqual({ status: "ready" });
+    expect(calls).toBe(1);
+  });
+
+  it.each(["missing", "fts-only"] as const)(
+    "does not inspect a provider for a %s semantic index",
+    async (indexMode) => {
+      let calls = 0;
+      vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => {
+        calls += 1;
+        return { status: "ready" };
+      });
+      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-negative-"));
+      roots.add(stateDir);
+      if (indexMode === "fts-only") {
+        await createSemanticIndex(stateDir, "fts-only");
+      }
+
+      await expect(
+        vectorIndexProviderDiagnostic.preflightStartup?.({
+          config: { memory: { search: { provider: "local", fallback: "none" } } },
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          stateDir,
+          oauthDir: path.join(stateDir, "credentials"),
+        }),
+      ).resolves.toEqual({ status: "ready" });
+      expect(calls).toBe(0);
+    },
+  );
+
+  it("preserves the startup migration SecretRef deferral", async () => {
+    let calls = 0;
+    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => {
+      calls += 1;
+      return { status: "indeterminate", reason: "must not inspect" };
+    });
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-secret-ref-"));
+    roots.add(stateDir);
+    await createSemanticIndex(stateDir);
+
+    await expect(
+      vectorIndexProviderDiagnostic.preflightStartup?.({
+        config: {
+          memory: {
+            search: {
+              provider: "openai",
+              remote: {
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              },
+            },
+          },
+        },
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+      }),
+    ).resolves.toEqual({ status: "ready" });
+    expect(calls).toBe(0);
+  });
+
+  it("keeps a non-local provider indeterminate without reporting a llama.cpp blocker", async () => {
+    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderStartupForTest(async () => ({
+      status: "indeterminate",
+      reason: 'Embedding provider "openai" does not expose startup prerequisite inspection.',
+    }));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-remote-"));
+    roots.add(stateDir);
+    await createSemanticIndex(stateDir);
+
+    const result = await vectorIndexProviderDiagnostic.preflightStartup?.({
+      config: { memory: { search: { provider: "openai", fallback: "none" } } },
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      stateDir,
+      oauthDir: path.join(stateDir, "credentials"),
+    });
+
+    expect(result).toEqual({
+      status: "indeterminate",
+      reason: expect.stringContaining('Embedding provider "openai"'),
+    });
+    expect(JSON.stringify(result)).not.toContain("llama.cpp");
+  });
+
+  it("returns indeterminate when the protected index cannot be read exactly", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-invalid-"));
+    roots.add(stateDir);
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(agentPath), { recursive: true });
+    await fs.writeFile(agentPath, "not sqlite");
+
+    await expect(
+      vectorIndexProviderDiagnostic.preflightStartup?.({
+        config: { memory: { search: { provider: "local", fallback: "none" } } },
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+      }),
+    ).resolves.toEqual({
+      status: "indeterminate",
+      reason: expect.stringContaining("Could not inspect the memory index for agent main"),
+    });
   });
 });

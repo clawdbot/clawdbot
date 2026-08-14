@@ -260,6 +260,7 @@ openclaw [--dev] [--profile <name>] <command>
     flow list|show|cancel
   gateway
     call
+    preflight
     usage-cost
     health
     stability

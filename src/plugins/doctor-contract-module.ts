@@ -22,11 +22,45 @@ export type PluginDoctorStateMigrationContext = {
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
 };
 
+export type PluginStartupPreflightFinding = {
+  id: string;
+  code: string;
+  message: string;
+  remediation?: readonly string[];
+  agentId?: string;
+  provider?: string;
+  model?: string;
+  configPath?: string;
+};
+
+export type PluginStartupPreflightResult =
+  | { status: "ready" }
+  | { status: "blocked"; findings: readonly PluginStartupPreflightFinding[] }
+  | {
+      status: "indeterminate";
+      reason: string;
+      findings?: readonly PluginStartupPreflightFinding[];
+    };
+
+export type PluginStartupPreflightParams = {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
+  /**
+   * Inspect deterministic startup prerequisites without repair context, writes,
+   * credential resolution, network requests, downloads, or service startup.
+   */
+  preflightStartup?: (
+    params: PluginStartupPreflightParams,
+  ) => Promise<PluginStartupPreflightResult> | PluginStartupPreflightResult;
   detectLegacyState: (params: {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -103,6 +137,7 @@ function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStat
   const candidate = value as {
     id?: unknown;
     label?: unknown;
+    preflightStartup?: unknown;
     detectLegacyState?: unknown;
     migrateLegacyState?: unknown;
   };
@@ -124,6 +159,8 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
     id: migration.id.trim(),
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
+    preflightStartup:
+      typeof migration.preflightStartup === "function" ? migration.preflightStartup : undefined,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));

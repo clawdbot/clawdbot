@@ -1,7 +1,10 @@
 // Detects path-local filesystem case semantics with a cleaned probe for empty directories.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+const readOnlyProbeContext = new AsyncLocalStorage<Set<string>>();
 
 function swapAsciiCase(value: string): string {
   return value.replace(/[A-Za-z]/g, (char) => {
@@ -79,7 +82,31 @@ function platformDefault(): boolean {
 }
 
 function probeDirectory(dir: string): boolean | undefined {
-  return probeDirectoryContents(dir) ?? probeDirectoryWithTemporaryEntry(dir);
+  const contentsResult = probeDirectoryContents(dir);
+  if (contentsResult !== undefined) {
+    return contentsResult;
+  }
+  const unresolvedDirectories = readOnlyProbeContext.getStore();
+  if (unresolvedDirectories) {
+    unresolvedDirectories.add(path.resolve(dir));
+    return undefined;
+  }
+  return probeDirectoryWithTemporaryEntry(dir);
+}
+
+/**
+ * Prevent temporary filesystem entries while resolving path case semantics.
+ * Callers can fail closed when `unresolvedDirectories` is non-empty.
+ */
+export async function withReadOnlyPathCaseProbe<T>(
+  run: () => Promise<T> | T,
+): Promise<{ value: T; unresolvedDirectories: string[] }> {
+  const unresolvedDirectories = new Set<string>();
+  const value = await readOnlyProbeContext.run(unresolvedDirectories, run);
+  return {
+    value,
+    unresolvedDirectories: [...unresolvedDirectories].toSorted(),
+  };
 }
 
 /** Resolves path-local case semantics, or undefined when the filesystem cannot be probed. */

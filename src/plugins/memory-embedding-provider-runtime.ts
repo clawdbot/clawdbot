@@ -87,12 +87,19 @@ function adaptEmbeddingProviderAdapter(
       : {}),
   });
   const resolveIndexIdentity = adapter.resolveIndexIdentity;
+  const inspectStartupPrerequisites = adapter.inspectStartupPrerequisites;
 
   return {
     ...adapter,
     ...(resolveIndexIdentity
       ? {
           resolveIndexIdentity: (options) => resolveIndexIdentity(genericOptions(options)),
+        }
+      : {}),
+    ...(inspectStartupPrerequisites
+      ? {
+          inspectStartupPrerequisites: (options) =>
+            inspectStartupPrerequisites(genericOptions(options)),
         }
       : {}),
     create: async (options) => {

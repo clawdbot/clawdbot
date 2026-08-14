@@ -54,6 +54,9 @@ export type {
 export type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
+  PluginStartupPreflightFinding,
+  PluginStartupPreflightParams,
+  PluginStartupPreflightResult,
 } from "../plugins/doctor-contract-module.js";
 export {
   archiveLegacyStateSource,

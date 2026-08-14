@@ -243,6 +243,23 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
+  it("loads only configured memory embedding provider owners for startup inspection", () => {
+    const config = {
+      memory: { search: { provider: "local" } },
+      plugins: { slots: { memory: "memory-core" } },
+    };
+    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["local"]));
+    useMemoryProviderOwner({
+      adapterId: "local",
+      contract: "embeddingProviders",
+      pluginId: "llama-cpp",
+    });
+
+    ensurePluginRegistryLoaded({ scope: "memory-embedding-providers", config });
+
+    expect(requireLoadOptions().onlyPluginIds).toEqual(["llama-cpp"]);
+  });
+
   it("keeps a denied memory provider owner denied", () => {
     const config = {
       memory: { search: { provider: "gemini" } },

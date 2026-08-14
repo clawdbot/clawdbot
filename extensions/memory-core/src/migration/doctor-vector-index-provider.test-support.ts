@@ -10,6 +10,26 @@ type TestApi = {
       agentDatabasePath: string;
     }) => Promise<{ provider: string; reason: string } | null>,
   ): void;
+  setInspectConfiguredProviderStartupForTest(
+    inspect: (params: {
+      config: OpenClawConfig;
+      agentId: string;
+      env: NodeJS.ProcessEnv;
+      agentDatabasePath: string;
+    }) => Promise<
+      | { status: "ready" }
+      | {
+          status: "blocked";
+          issues: Array<{
+            provider: string;
+            code: string;
+            message: string;
+            remediation?: readonly string[];
+          }>;
+        }
+      | { status: "indeterminate"; reason: string }
+    >,
+  ): void;
   reset(): void;
 };
 
@@ -24,6 +44,11 @@ export const vectorIndexProviderDiagnosticTesting = {
     inspect: Parameters<TestApi["setInspectConfiguredProviderForTest"]>[0],
   ): void {
     getTestApi().setInspectConfiguredProviderForTest(inspect);
+  },
+  setInspectConfiguredProviderStartupForTest(
+    inspect: Parameters<TestApi["setInspectConfiguredProviderStartupForTest"]>[0],
+  ): void {
+    getTestApi().setInspectConfiguredProviderStartupForTest(inspect);
   },
   reset(): void {
     getTestApi().reset();
