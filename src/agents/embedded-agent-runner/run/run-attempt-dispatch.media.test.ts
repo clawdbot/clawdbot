@@ -220,6 +220,73 @@ describe("plugin harness prompt media", () => {
     }
   });
 
+  it("hydrates a named agent's workspace staging without widening sibling access", async () => {
+    // Regression for the embedded sibling of #122684 (#123273): without
+    // agent-scoped roots, workspaceOnly=false fell back to default roots and
+    // rejected named-agent workspace-<id> staging paths.
+    const stateDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-agent-media-")),
+    );
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
+    const image = Buffer.from(TINY_PNG_BASE64, "base64");
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
+    await fs.writeFile(imagePath, image);
+    await fs.writeFile(siblingImagePath, image);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const config = {
+      agents: {
+        defaults: { sandbox: { mode: "off" } },
+        entries: {
+          arthur: { default: true, workspace: workspaceDir },
+          merlin: { workspace: siblingWorkspaceDir },
+        },
+      },
+    };
+
+    try {
+      const result = await preparePluginHarnessPromptImages({
+        runParams: {
+          agentId: "arthur",
+          config,
+          media: [{ path: imagePath, contentType: "image/png" }],
+          sessionId: "session-agent-media",
+        },
+        runtime: {
+          model: { input: ["text", "image"] },
+          sessionId: "session-agent-media",
+          workspaceDir,
+        },
+        pluginHarnessOwnsTransport: true,
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+      expect(result.images ?? []).toHaveLength(1);
+
+      await expect(
+        preparePluginHarnessPromptImages({
+          runParams: {
+            agentId: "arthur",
+            config,
+            media: [{ path: siblingImagePath, contentType: "image/png" }],
+            sessionId: "session-agent-media",
+          },
+          runtime: {
+            model: { input: ["text", "image"] },
+            sessionId: "session-agent-media",
+            workspaceDir,
+          },
+          pluginHarnessOwnsTransport: true,
+        } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
+      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("delivers readable images when an unresolved attachment is hydration-suppressed", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-mixed-media-"));
     const imagePath = path.join(workspaceDir, "present.png");

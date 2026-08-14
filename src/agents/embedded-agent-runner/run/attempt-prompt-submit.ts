@@ -5,7 +5,9 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { readPersistedMediaFacts } from "../../../media/media-facts.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -290,6 +292,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
 /** Prepares prompt-lock ownership and prompt-local images for submission. */
 type PromptExecutionAttempt = Pick<
   EmbeddedRunAttemptParams,
+  | "agentId"
   | "config"
   | "imageOrder"
   | "images"
@@ -337,6 +340,14 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     (await attempt.userTurnTranscriptRecorder?.resolveMessage());
   const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
 
+  // Mirror the CLI runner (cli-runner/execute.ts): scope media roots to the
+  // owning agent so named-agent `workspace-<id>` staging hydrates when
+  // workspaceOnly is off, while sibling agent workspaces stay rejected.
+  // workspaceOnly keeps its stricter workspace-dir-only fallback in images.ts.
+  const mediaOwnerAgentId = parseAgentSessionKey(attempt.sessionKey)?.agentId || attempt.agentId;
+  const agentScopedLocalRoots = input.effectiveFsWorkspaceOnly
+    ? undefined
+    : getAgentScopedMediaLocalRoots(attempt.config ?? {}, mediaOwnerAgentId);
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
@@ -350,6 +361,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
     workspaceOnly: input.effectiveFsWorkspaceOnly,
+    localRoots: agentScopedLocalRoots,
     sandbox:
       input.sandbox?.enabled && input.sandbox.fsBridge
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
