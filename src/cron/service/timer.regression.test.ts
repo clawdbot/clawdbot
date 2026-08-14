@@ -2822,7 +2822,7 @@ describe("cron service timer regressions", () => {
       outcome: "skip",
       status: "skipped",
       error: "agent skipped after removal",
-      taskStatus: "succeeded",
+      taskStatus: "failed",
     },
   ] as const)(
     "finalizes a removed job's $outcome outcome in operator history",
