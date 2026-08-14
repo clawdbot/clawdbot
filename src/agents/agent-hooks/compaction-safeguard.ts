@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
@@ -318,7 +319,7 @@ async function summarizeViaLLM(params: Parameters<typeof summarizeInStages>[0]):
  */
 type ContextSection = {
   text: string;
-  messageStarts: number[];
+  segmentStarts: number[];
   // Keep producer loss attached to the bounded artifact so every finalizer path
   // emits the same redacted diagnostic when the section already dropped context.
   truncatedLoss?: CompactionLoss;
@@ -326,9 +327,9 @@ type ContextSection = {
 
 type CompactionSuffix = {
   text: string;
-  // Keep producer message boundaries after later suffix sections are appended;
-  // otherwise the final tail cap can expose a raw mid-message fragment.
-  contextRanges: Array<{ start: number; end: number; messageStarts: number[] }>;
+  // Keep producer segment boundaries after later suffix sections are appended;
+  // otherwise the final tail cap can split an assistant tool-call/result group.
+  contextRanges: Array<{ start: number; end: number; segmentStarts: number[] }>;
 };
 
 function assembleSuffix(parts: {
@@ -353,9 +354,9 @@ function assembleSuffix(parts: {
       contextRanges.push({
         start,
         end: start + appended.length,
-        messageStarts: part.messageStarts
-          .filter((messageStart) => messageStart >= leadingTrim)
-          .map((messageStart) => start + messageStart - leadingTrim),
+        segmentStarts: part.segmentStarts
+          .filter((segmentStart) => segmentStart >= leadingTrim)
+          .map((segmentStart) => start + segmentStart - leadingTrim),
       });
     }
   }
@@ -366,7 +367,7 @@ function assembleSuffix(parts: {
     for (const range of contextRanges) {
       range.start += 2;
       range.end += 2;
-      range.messageStarts = range.messageStarts.map((messageStart) => messageStart + 2);
+      range.segmentStarts = range.segmentStarts.map((segmentStart) => segmentStart + 2);
     }
   }
   return { text, contextRanges };
@@ -643,7 +644,7 @@ function resolveSuffixTailStart(suffix: CompactionSuffix, tailBudget: number): n
     return desiredStart;
   }
   return (
-    containingRange.messageStarts.find((messageStart) => messageStart >= desiredStart) ??
+    containingRange.segmentStarts.find((segmentStart) => segmentStart >= desiredStart) ??
     containingRange.end
   );
 }
@@ -828,37 +829,61 @@ function splitPreservedRecentTurns(params: {
   };
 }
 
-function formatContextMessages(messages: AgentMessage[]): string[] {
-  return messages
-    .map((message) => {
-      let roleLabel: string;
-      if (message.role === "assistant") {
-        roleLabel = "Assistant";
-      } else if (message.role === "user") {
-        roleLabel = "User";
-      } else if (message.role === "toolResult") {
-        const toolName = (message as { toolName?: unknown }).toolName;
-        const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
-        roleLabel = `Tool result (${safeToolName})`;
-      } else {
-        return null;
-      }
-      const rendered = [
-        extractMessageText(message),
-        formatNonTextPlaceholder((message as { content?: unknown }).content),
-      ]
-        .filter(Boolean)
-        .join("\n");
-      if (!rendered) {
-        return null;
-      }
-      const trimmed =
-        rendered.length > MAX_RECENT_TURN_TEXT_CHARS
-          ? `${truncateUtf16Safe(rendered, MAX_RECENT_TURN_TEXT_CHARS)}...`
-          : rendered;
-      return `- ${roleLabel}: ${trimmed}`;
-    })
-    .filter((line): line is string => Boolean(line));
+function formatContextMessage(message: AgentMessage): string | null {
+  let roleLabel: string;
+  if (message.role === "assistant") {
+    roleLabel = "Assistant";
+  } else if (message.role === "user") {
+    roleLabel = "User";
+  } else if (message.role === "toolResult") {
+    const toolName = (message as { toolName?: unknown }).toolName;
+    const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
+    roleLabel = `Tool result (${safeToolName})`;
+  } else {
+    return null;
+  }
+  const rendered = [
+    extractMessageText(message),
+    formatNonTextPlaceholder((message as { content?: unknown }).content),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  if (!rendered) {
+    return null;
+  }
+  const trimmed =
+    rendered.length > MAX_RECENT_TURN_TEXT_CHARS
+      ? `${truncateUtf16Safe(rendered, MAX_RECENT_TURN_TEXT_CHARS)}...`
+      : rendered;
+  return `- ${roleLabel}: ${trimmed}`;
+}
+
+function formatContextSegments(messages: AgentMessage[]): string[] {
+  const pairing = classifyToolUseResultPairing(messages);
+  // A call-bearing assistant and all occurrence-matched results are one context
+  // atom; keeping remainder messages separate lets later terminal text survive.
+  const toolSegments = new Map<AgentMessage, AgentMessage[]>(
+    pairing.frames.map((frame) => [
+      frame.assistant,
+      [
+        frame.assistant,
+        ...frame.occurrences.flatMap((occurrence) =>
+          occurrence.sourceResult ? [occurrence.sourceResult] : [],
+        ),
+      ],
+    ]),
+  );
+  return messages.flatMap((message) => {
+    if (message.role === "toolResult") {
+      // Paired results render with their assistant message; unclaimed results
+      // are unsafe context because their owning call is absent or ambiguous.
+      return [];
+    }
+    const lines = (toolSegments.get(message) ?? [message])
+      .map(formatContextMessage)
+      .filter((line): line is string => Boolean(line));
+    return lines.length > 0 ? [lines.join("\n")] : [];
+  });
 }
 
 function formatBoundedContextSection(params: {
@@ -869,20 +894,20 @@ function formatBoundedContextSection(params: {
   truncatedLoss: CompactionLoss;
   onTruncated?: () => void;
 }): ContextSection {
-  const lines = formatContextMessages(params.messages);
-  if (lines.length === 0) {
-    return { text: "", messageStarts: [] };
+  const segments = formatContextSegments(params.messages);
+  if (segments.length === 0) {
+    return { text: "", segmentStarts: [] };
   }
 
   const completePrefix = `${params.heading}\n`;
-  const complete = `${completePrefix}${lines.join("\n")}`;
+  const complete = `${completePrefix}${segments.join("\n")}`;
   if (complete.length <= params.maxChars) {
     let offset = completePrefix.length;
     return {
       text: complete,
-      messageStarts: lines.map((line) => {
+      segmentStarts: segments.map((segment) => {
         const start = offset;
-        offset += line.length + 1;
+        offset += segment.length + 1;
         return start;
       }),
     };
@@ -891,21 +916,21 @@ function formatBoundedContextSection(params: {
   const prefix = `${completePrefix}${params.truncatedMarker}`;
   const retained: string[] = [];
   let usedChars = prefix.length;
-  for (const line of lines.toReversed()) {
-    const lineChars = line.length + (retained.length > 0 ? 1 : 0);
-    if (usedChars + lineChars > params.maxChars) {
+  for (const segment of segments.toReversed()) {
+    const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
+    if (usedChars + segmentChars > params.maxChars) {
       break;
     }
-    retained.unshift(line);
-    usedChars += lineChars;
+    retained.unshift(segment);
+    usedChars += segmentChars;
   }
   params.onTruncated?.();
   let offset = prefix.length;
   return {
     text: `${prefix}${retained.join("\n")}`,
-    messageStarts: retained.map((line) => {
+    segmentStarts: retained.map((segment) => {
       const start = offset;
-      offset += line.length + 1;
+      offset += segment.length + 1;
       return start;
     }),
     truncatedLoss: params.truncatedLoss,

@@ -1040,7 +1040,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).toContain("- User: recent ask");
   });
 
-  it("bounds aggregate preserved tool results while retaining the newest complete messages", () => {
+  it("drops an oversized preserved tool interaction as one atomic group", () => {
     const toolCalls = Array.from({ length: 30 }, (_, index) => ({
       type: "toolCall",
       id: `call_${index}`,
@@ -1066,6 +1066,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
               timestamp: index + 3,
             }) as unknown as AgentMessage,
         ),
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "terminal answer survives" }],
+          timestamp: 33,
+        } as unknown as AgentMessage,
       ],
       recentTurnsPreserve: 1,
     });
@@ -1075,7 +1080,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section.length).toBeLessThanOrEqual(MAX_SPLIT_TURN_CONTEXT_CHARS);
     expect(section).toContain("[Earlier preserved messages truncated]");
     expect(section).not.toContain("paired-result-00-");
-    expect(section).toContain("paired-result-29-");
+    expect(section).not.toContain("paired-result-29-");
+    expect(section).not.toContain("- Tool result (read):");
+    expect(section).toContain("- Assistant: terminal answer survives");
     expect(section.split("\n").some((line) => line.startsWith("x"))).toBe(false);
   });
 
@@ -3116,6 +3123,81 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const firstRetainedLine = retainedSuffix.split("\n").find((line) => line.length > 0);
     expect(firstRetainedLine).toMatch(/^- User: raw-prefix-\d{2}-/);
     expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain("## Recent turns preserved verbatim");
+  });
+
+  it("finally trims a raw tool interaction only at its atomic boundary", async () => {
+    const providerSummarize = vi.fn().mockResolvedValue(`BODY-START${"b".repeat(9_000)}BODY-END`);
+    registerCompactionProvider({
+      id: "tool-boundary-provider",
+      label: "Tool Boundary Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "tool-boundary-provider",
+      recentTurnsPreserve: 3,
+    });
+    const messagesToSummarize = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `preserved-${index}-${"p".repeat(600)}`,
+      timestamp: index + 1,
+    })) as AgentMessage[];
+    const toolCalls = Array.from({ length: 12 }, (_, index) => ({
+      type: "toolCall",
+      id: `finalizer_call_${index}`,
+      name: "read",
+      arguments: {},
+    }));
+    const turnPrefixMessages = [
+      { role: "user" as const, content: "raw tool request", timestamp: 100 },
+      {
+        role: "assistant" as const,
+        content: toolCalls,
+        timestamp: 101,
+      } as unknown as AgentMessage,
+      ...toolCalls.map(
+        (toolCall, index) =>
+          ({
+            role: "toolResult",
+            toolCallId: toolCall.id,
+            toolName: "read",
+            content: [
+              {
+                type: "text",
+                text: `finalizer-tool-output-${index}-${"r".repeat(600)}`,
+              },
+            ],
+            timestamp: index + 102,
+          }) as unknown as AgentMessage,
+      ),
+      {
+        role: "assistant" as const,
+        content: [{ type: "text", text: "raw terminal answer survives" }],
+        timestamp: 114,
+      } as unknown as AgentMessage,
+    ];
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 20_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain("raw terminal answer survives");
+    expect(summary).not.toContain("finalizer-tool-output-");
+    expect(summary).not.toContain("- Tool result (read):");
     expect(summary).toContain("## Recent turns preserved verbatim");
   });
 });
