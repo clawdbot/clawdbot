@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
@@ -249,13 +250,53 @@ describe("channel account config mutations", () => {
     expect(prepareAccountConfigInput).not.toHaveBeenCalled();
   });
 
+  it("preserves account-owner validation when shared setup name is present", async () => {
+    const prepareAccountConfigInput = vi.fn(() => {
+      throw new Error("prepare should stay lazy when validation rejects input");
+    });
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "env-owner-named-chat" }),
+      setupContract: defineChannelSetupContract({
+        fields: {
+          useEnv: {
+            kind: "boolean",
+            cli: { flags: "--use-env", description: "Use environment credentials" },
+            envVars: ["ENV_OWNER_NAMED_CHAT_TOKEN"],
+          },
+        },
+        adapter: {
+          prepareAccountConfigInput,
+          validateInput: ({ accountId }) =>
+            accountId === "default" ? null : "--use-env only supports the default account",
+          applyAccountConfig: ({ cfg }) => cfg,
+        },
+      }),
+    } as ChannelPlugin;
+
+    const prepared = await prepareChannelAccountConfiguration({
+      cfg: {},
+      plugin,
+      requestedAccountId: "work",
+      resolveInput: () => ({ name: "Work", useEnv: true }),
+      runtime,
+    });
+
+    expect(prepared).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid-input",
+        message: "--use-env only supports the default account",
+      },
+    });
+    expect(prepareAccountConfigInput).not.toHaveBeenCalled();
+  });
+
   it("reports missing setup env vars before raw alias validation", async () => {
-    const prepareAccountConfigInput = vi.fn(({ input }: { input: Record<string, unknown> }) => ({
-      ...input,
-      baseUrl: input.url,
-    }));
-    const validateInput = vi.fn(({ input }: { input: Record<string, unknown> }) =>
-      typeof input.baseUrl === "string" ? null : "--base-url is required",
+    const prepareAccountConfigInput = vi.fn(() => {
+      throw new Error("prepare should stay lazy when env metadata already rejects input");
+    });
+    const validateInput = vi.fn(({ input }: { input: unknown }) =>
+      isRecord(input) && typeof input.baseUrl === "string" ? null : "--base-url is required",
     );
     const plugin = {
       ...createChannelTestPluginBase({ id: "env-alias-chat" }),

@@ -56,7 +56,7 @@ function canValidateRawInputBeforeMissingEnv(input: unknown): boolean {
   if (!isRecord(input)) {
     return true;
   }
-  return Object.keys(input).every((key) => key === "useEnv");
+  return Object.keys(input).every((key) => key === "useEnv" || key === "name");
 }
 
 export async function prepareChannelAccountConfiguration(params: {
