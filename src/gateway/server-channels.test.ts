@@ -1333,6 +1333,93 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toBeNull();
   });
 
+  it("uses a queued manual stop policy when a timed-out stopAccount settles late", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const firstStopTimedOut = expect(firstStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStopTimedOut;
+
+    const queuedManualStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    const queuedManualStopTimedOut =
+      expect(queuedManualStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await queuedManualStopTimedOut;
+
+    releaseStopAccount.resolve();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected late successful stopAccount timeout to honor queued manual stop policy",
+    );
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+  });
+
+  it("uses a queued recovery stop policy when a timed-out stopAccount settles late", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+    });
+    const firstStopTimedOut = expect(firstStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStopTimedOut;
+
+    const queuedRecoveryStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    const queuedRecoveryStopTimedOut =
+      expect(queuedRecoveryStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await queuedRecoveryStopTimedOut;
+
+    releaseStopAccount.resolve();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected late successful stopAccount timeout to honor queued recovery stop policy",
+    );
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
+  });
+
   it("marks a late successful stopAccount timeout as stopped after task teardown", async () => {
     const releaseStopAccount = createDeferred();
     const stopAccount = vi.fn(async () => {
