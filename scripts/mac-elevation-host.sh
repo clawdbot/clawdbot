@@ -92,7 +92,27 @@ require_tool() {
   command -v "$1" >/dev/null 2>&1 || fail "required tool not found: $1"
 }
 
-for tool in codesign ditto file jq launchctl lipo plutil shasum spctl xcrun; do
+case "$COMMAND" in
+  package)
+    required_tools=(codesign ditto file git jq lipo plutil shasum spctl xcrun)
+    ;;
+  install)
+    required_tools=(codesign ditto file jq launchctl lipo plutil shasum spctl xcrun)
+    ;;
+  status)
+    required_tools=(codesign file jq launchctl lipo plutil spctl xcrun)
+    ;;
+  recover)
+    required_tools=(jq launchctl plutil)
+    ;;
+  uninstall)
+    required_tools=(launchctl)
+    ;;
+  print-plist)
+    required_tools=(jq plutil)
+    ;;
+esac
+for tool in "${required_tools[@]}"; do
   require_tool "$tool"
 done
 
@@ -427,7 +447,9 @@ install_host() {
   write_receipt "$source_commit" "$peekaboo_commit" "$backup_path" "$previous_plist" \
     "$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
   printf 'Elevation host installed: pid=%s source=%s\n' "$ready_pid" "$source_commit"
-  tcc_summary || return $?
+  # Installation commits once the exact launchd-owned process is Bridge-ready. Missing TCC is
+  # degraded capability, not a failed cutover; `status` remains the readiness gate for callers.
+  tcc_summary || true
 }
 
 recover_install() {

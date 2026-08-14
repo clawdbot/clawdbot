@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 // Mac Elevation Host tests protect the unattended launchd and artifact contracts.
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -38,6 +38,42 @@ describe("mac elevation host command contract", () => {
     expect(script).toContain('[$executable,"--elevation-host"]');
     expect(script).toContain("previous installation restored");
     expect(script).not.toContain("osascript");
+  });
+
+  it("scopes prerequisites to each lifecycle command", () => {
+    const tempRoot = tempDirs.make("openclaw-elevation-uninstall-");
+    const binDir = path.join(tempRoot, "bin");
+    mkdirSync(binDir);
+    const launchctl = path.join(binDir, "launchctl");
+    writeFileSync(launchctl, "#!/bin/sh\nexit 0\n", "utf8");
+    chmodSync(launchctl, 0o755);
+
+    const result = spawnSync("/bin/bash", [scriptPath, "uninstall"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        HOME: tempRoot,
+        PATH: `${binDir}:/usr/bin:/bin`,
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Elevation launch agent removed");
+  });
+
+  it("treats missing TCC after a Bridge-ready install as degraded capability", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const installBody = script.slice(
+      script.indexOf("install_host()"),
+      script.indexOf("recover_install()"),
+    );
+    const statusBody = script.slice(
+      script.indexOf("status_host()"),
+      script.indexOf("recover_host()"),
+    );
+
+    expect(installBody).toContain("tcc_summary || true");
+    expect(statusBody).toContain("tcc_summary || return $?");
   });
 
   it("builds an immutable source-addressed notarized ZIP and receipt", () => {
