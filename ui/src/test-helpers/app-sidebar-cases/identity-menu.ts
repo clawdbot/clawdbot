@@ -20,7 +20,12 @@ describe("AppSidebar footer identity menu", () => {
       presence: [
         {
           instanceId: "self-instance",
-          user: { id: "self", name: "Ada", email: "ada@example.test" },
+          user: {
+            id: "self",
+            name: "Ada",
+            email: "ada.with.a.deliberately.long.address@example.test",
+            avatarUrl: "/api/users/self/avatar?v=1",
+          },
         },
       ],
     });
@@ -51,8 +56,22 @@ describe("AppSidebar footer identity menu", () => {
       "command:apps",
       "command:help",
     ]);
-    expect(menu?.querySelector(".sidebar-identity-menu__header")?.textContent?.trim()).toBe(
-      "ada@example.test",
+    expect(menu?.querySelector(".sidebar-identity-menu__name")?.textContent?.trim()).toBe("Ada");
+    const menuEmail = menu?.querySelector(".sidebar-identity-menu__email");
+    expect(menuEmail?.textContent?.trim()).toBe(
+      "ada.with.a.deliberately.long.address@example.test",
+    );
+    expect(menuEmail?.getAttribute("title")).toBe(
+      "ada.with.a.deliberately.long.address@example.test",
+    );
+    expect(menu?.querySelector(".sidebar-identity-menu__avatar")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(menu?.querySelector('[data-viewer-id="self"] img')?.getAttribute("src")).toBe(
+      "/api/users/self/avatar?v=1",
+    );
+    expect(identity?.querySelector('[data-viewer-id="self"] img')?.getAttribute("src")).toBe(
+      "/api/users/self/avatar?v=1",
     );
     expect(
       menu
@@ -62,7 +81,14 @@ describe("AppSidebar footer identity menu", () => {
     expect(menu?.style.getPropertyValue("--sidebar-identity-menu-min-width")).toBe("212px");
     expect(menu?.querySelector(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
+    expect(
+      (menu?.querySelector("openclaw-sidebar-build-chip") as { variant?: string } | null)?.variant,
+    ).toBe("identity");
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
+    expect(menu?.textContent).not.toContain("Recent activity");
+    expect(menu?.querySelectorAll(':scope > [role="separator"]')).toHaveLength(4);
+    expect(identity?.querySelector(".sidebar-identity-card__more svg")).not.toBeNull();
+    expect(identity?.querySelector(".sidebar-identity-card__chevron")).toBeNull();
 
     const helpRow = menu?.querySelector<HTMLElement>(".sidebar-identity-menu__help");
     await (helpRow as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)?.updateComplete;

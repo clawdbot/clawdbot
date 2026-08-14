@@ -207,7 +207,7 @@ describe("AppSidebar viewer presence", () => {
     expect(footer?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
     expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
-      "openclaw-tooltip",
+      "button",
       "span",
     ]);
     gatewayHarness.gateway.updateSelfUser?.({

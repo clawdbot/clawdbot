@@ -266,52 +266,46 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       : buildSubtitle;
   return html`
     <div class="sidebar-footer-bar">
-      <openclaw-tooltip .content=${selfLabel}>
-        <button
-          type="button"
-          class="sidebar-identity-card"
-          aria-haspopup="menu"
-          aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-          aria-label=${identityDetail
-            ? `${identityMenuLabel}: ${identityDetail}`
-            : identityMenuLabel}
-          @click=${(event: MouseEvent) =>
-            host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
-        >
-          <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
-          <span class="sidebar-identity-card__text">
-            <span class="sidebar-identity-card__name">${selfLabel}</span>
-            ${host.offline
-              ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
-                  >${t("connection.reconnecting")}</span
-                >`
-              : gateway
-                ? html`<span
-                    class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway"
-                    aria-hidden="true"
-                  >
-                    <span
-                      class="sidebar-identity-card__gateway-health"
-                      data-health=${gateway.health}
-                    ></span>
-                    <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
-                    ${gatewayPrimaryTag
-                      ? html`<span class="sidebar-identity-card__gateway-primary"
-                          >· ${gatewayPrimaryTag}</span
-                        >`
-                      : nothing}
-                  </span>`
-                : buildSubtitle
-                  ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
-                      >${buildSubtitle}</span
-                    >`
-                  : nothing}
-          </span>
-          <span class="sidebar-identity-card__chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </button>
-      </openclaw-tooltip>
+      <button
+        type="button"
+        class="sidebar-identity-card"
+        aria-haspopup="menu"
+        aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
+        aria-label=${identityDetail ? `${identityMenuLabel}: ${identityDetail}` : identityMenuLabel}
+        @click=${(event: MouseEvent) =>
+          host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
+      >
+        <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
+        <span class="sidebar-identity-card__text">
+          <span class="sidebar-identity-card__name">${selfLabel}</span>
+          ${host.offline
+            ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
+                >${t("connection.reconnecting")}</span
+              >`
+            : gateway
+              ? html`<span
+                  class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway"
+                  aria-hidden="true"
+                >
+                  <span
+                    class="sidebar-identity-card__gateway-health"
+                    data-health=${gateway.health}
+                  ></span>
+                  <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
+                  ${gatewayPrimaryTag
+                    ? html`<span class="sidebar-identity-card__gateway-primary"
+                        >· ${gatewayPrimaryTag}</span
+                      >`
+                    : nothing}
+                </span>`
+              : buildSubtitle
+                ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
+                    >${buildSubtitle}</span
+                  >`
+                : nothing}
+        </span>
+        <span class="sidebar-identity-card__more" aria-hidden="true">${icons.moreHorizontal}</span>
+      </button>
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span
       >
