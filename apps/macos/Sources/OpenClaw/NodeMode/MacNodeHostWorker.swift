@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import OpenClawKit
 import OSLog
+import Subprocess
 
 extension Notification.Name {
     static let openclawNodeHostWorkerFailed = Notification.Name("openclaw.node-host-worker.failed")
@@ -66,7 +67,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private let session: GatewayNodeSession
     private let startupTimeout: TimeInterval
     private let onUnexpectedExit: @Sendable () -> Void
-    private var process: Process?
+    private var process: ManagedProcess?
+    private var processCleanupTask: Task<Void, Never>?
     private var stdinPipe: Pipe?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
@@ -87,7 +89,6 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private var eventDeliveryTask: Task<Void, Never>?
     private var inventoryPublicationTask: Task<Void, Never>?
     private var inventoryPublicationGeneration: UInt64 = 0
-    private var stopping = false
 
     init(
         session: GatewayNodeSession,
@@ -287,12 +288,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func stop() async {
-        await withCheckedContinuation { continuation in
+        let cleanup: Task<Void, Never>? = await withCheckedContinuation { continuation in
             self.queue.async {
-                self.stopLocked(reason: "worker stopped")
-                continuation.resume()
+                continuation.resume(returning: self.stopLocked(reason: "worker stopped"))
             }
         }
+        await cleanup?.value
     }
 
     private func startLocked(launch: MacNodeHostWorkerLaunch) {
@@ -301,10 +302,17 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             self.finishStartLocked(.failure(WorkerError.unavailable("node-host worker command missing")))
             return
         }
-        self.stopLocked(reason: "worker restarted", preserveStart: true)
-        self.stopping = false
-
-        let process = Process()
+        if self.process != nil {
+            let cleanup = self.stopLocked(reason: "worker restarted", preserveStart: true)
+            Task { [weak self] in
+                await cleanup?.value
+                self?.queue.async { [weak self] in
+                    guard let self, self.startContinuation != nil else { return }
+                    self.startLocked(launch: launch)
+                }
+            }
+            return
+        }
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -312,34 +320,16 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
             return
         }
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = Array(command.dropFirst())
-        process.currentDirectoryURL = launch.currentDirectoryURL
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
         environment["OPENCLAW_NODE_EXEC_FALLBACK"] = "0"
-        process.environment = environment
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        self.process = process
         self.launchedWorker = launch
         self.stdinPipe = stdinPipe
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
         let processGeneration = UUID()
         self.processGeneration = processGeneration
-
-        process.terminationHandler = { [weak self] process in
-            guard let self else { return }
-            self.queue.async {
-                guard self.process === process else { return }
-                self.stopLocked(
-                    reason: "worker exited with status \(process.terminationStatus)",
-                    notifyUnexpectedExit: true)
-            }
-        }
 
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
         // Cold config and plugin discovery can exceed the old 20-second bound.
@@ -355,52 +345,87 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.startTimer = timer
         timer.resume()
 
-        do {
-            try process.run()
-            let stdoutSource = DispatchSource.makeReadSource(
-                fileDescriptor: stdoutPipe.fileHandleForReading.fileDescriptor,
-                queue: self.queue)
-            stdoutSource.setEventHandler { [weak self] in
-                guard let self, self.processGeneration == processGeneration else { return }
-                let data = Self.readAvailable(
-                    fileDescriptor: stdoutPipe.fileHandleForReading.fileDescriptor,
-                    byteCount: stdoutSource.data)
-                if data.isEmpty {
-                    self.stdoutSource?.cancel()
-                } else {
-                    self.consumeStdoutLocked(data)
-                }
+        let configuration = Subprocess.Configuration(
+            .path(.init(executable)),
+            arguments: Arguments(Array(command.dropFirst())),
+            environment: ManagedProcess.environment(from: environment),
+            workingDirectory: launch.currentDirectoryURL.map { .init($0.path) })
+        let process = ManagedProcess.launch(
+            configuration: configuration,
+            stdin: stdinPipe.fileHandleForReading,
+            stdout: stdoutPipe.fileHandleForWriting,
+            stderr: stderrPipe.fileHandleForWriting)
+        self.process = process
+        Task { [weak self] in
+            let started = await (try? process.waitUntilStarted()) != nil
+            self?.queue.async { [weak self] in
+                self?.finishProcessLaunch(started: started, generation: processGeneration)
             }
-            self.stdoutSource = stdoutSource
-            stdoutSource.resume()
+        }
+    }
 
-            let stderrSource = DispatchSource.makeReadSource(
-                fileDescriptor: stderrPipe.fileHandleForReading.fileDescriptor,
-                queue: self.queue)
-            stderrSource.setEventHandler { [weak self] in
-                guard let self, self.processGeneration == processGeneration else { return }
-                let data = Self.readAvailable(
-                    fileDescriptor: stderrPipe.fileHandleForReading.fileDescriptor,
-                    byteCount: stderrSource.data)
-                guard !data.isEmpty else {
-                    self.stderrSource?.cancel()
-                    return
-                }
-                if let message = String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                    !message.isEmpty
-                {
-                    self.logger.error("node-host worker stderr: \(message, privacy: .private)")
-                }
-            }
-            self.stderrSource = stderrSource
-            stderrSource.resume()
-            try? stdinPipe.fileHandleForReading.close()
-            try? stdoutPipe.fileHandleForWriting.close()
-            try? stderrPipe.fileHandleForWriting.close()
-        } catch {
-            self.finishStartLocked(.failure(WorkerError.unavailable("node-host worker launch failed")))
+    private func finishProcessLaunch(
+        started: Bool,
+        generation: UUID)
+    {
+        guard self.processGeneration == generation, self.processCleanupTask == nil else { return }
+        guard started,
+              let process = self.process,
+              let stdoutPipe = self.stdoutPipe,
+              let stderrPipe = self.stderrPipe
+        else {
             self.stopLocked(reason: "worker launch failed")
+            return
+        }
+        let stdoutSource = DispatchSource.makeReadSource(
+            fileDescriptor: stdoutPipe.fileHandleForReading.fileDescriptor,
+            queue: self.queue)
+        stdoutSource.setEventHandler { [weak self] in
+            guard let self, self.processGeneration == generation else { return }
+            let data = Self.readAvailable(
+                fileDescriptor: stdoutPipe.fileHandleForReading.fileDescriptor,
+                byteCount: stdoutSource.data)
+            if data.isEmpty {
+                self.stdoutSource?.cancel()
+            } else {
+                self.consumeStdoutLocked(data)
+            }
+        }
+        self.stdoutSource = stdoutSource
+        stdoutSource.resume()
+
+        let stderrSource = DispatchSource.makeReadSource(
+            fileDescriptor: stderrPipe.fileHandleForReading.fileDescriptor,
+            queue: self.queue)
+        stderrSource.setEventHandler { [weak self] in
+            guard let self, self.processGeneration == generation else { return }
+            let data = Self.readAvailable(
+                fileDescriptor: stderrPipe.fileHandleForReading.fileDescriptor,
+                byteCount: stderrSource.data)
+            guard !data.isEmpty else {
+                self.stderrSource?.cancel()
+                return
+            }
+            if let message = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                !message.isEmpty
+            {
+                self.logger.error("node-host worker stderr: \(message, privacy: .private)")
+            }
+        }
+        self.stderrSource = stderrSource
+        stderrSource.resume()
+        Task { [weak self, completionTask = process.completionTask] in
+            let status = await completionTask.value
+            self?.queue.async { [weak self] in
+                guard let self,
+                      self.processGeneration == generation,
+                      self.processCleanupTask == nil
+                else { return }
+                self.stopLocked(
+                    reason: "worker exited with status \(String(describing: status))",
+                    notifyUnexpectedExit: true)
+            }
         }
     }
 
@@ -634,35 +659,17 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         continuation.resume(with: result)
     }
 
+    @discardableResult
     private func stopLocked(
         reason: String,
         preserveStart: Bool = false,
-        notifyUnexpectedExit: Bool = false)
+        notifyUnexpectedExit: Bool = false) -> Task<Void, Never>?
     {
-        guard !self.stopping else { return }
+        if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
         let wasReady = self.manifest != nil
-        self.stopping = true
         self.startTimer?.cancel()
         self.startTimer = nil
-        self.stdoutSource?.cancel()
-        self.stdoutSource = nil
-        self.stderrSource?.cancel()
-        self.stderrSource = nil
-        try? self.stdinPipe?.fileHandleForWriting.close()
-        try? self.stdinPipe?.fileHandleForReading.close()
-        try? self.stdoutPipe?.fileHandleForReading.close()
-        try? self.stdoutPipe?.fileHandleForWriting.close()
-        try? self.stderrPipe?.fileHandleForReading.close()
-        try? self.stderrPipe?.fileHandleForWriting.close()
-        if self.process?.isRunning == true {
-            self.process?.terminate()
-        }
-        self.process = nil
         self.launchedWorker = nil
-        self.stdinPipe = nil
-        self.stdoutPipe = nil
-        self.stderrPipe = nil
-        self.processGeneration = nil
         self.stdoutBuffer.removeAll(keepingCapacity: false)
         self.manifest = nil
         self.inventoryData = nil
@@ -680,6 +687,36 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         if notifyUnexpectedExit, wasReady {
             self.onUnexpectedExit()
         }
+        guard let process = self.process else {
+            return nil
+        }
+        let cleanupTask = Task { [weak self] in
+            await process.terminate()
+            await withCheckedContinuation { continuation in
+                guard let self else {
+                    continuation.resume()
+                    return
+                }
+                self.queue.async {
+                    self.stdoutSource?.cancel()
+                    self.stdoutSource = nil
+                    self.stderrSource?.cancel()
+                    self.stderrSource = nil
+                    try? self.stdinPipe?.fileHandleForWriting.close()
+                    try? self.stdoutPipe?.fileHandleForReading.close()
+                    try? self.stderrPipe?.fileHandleForReading.close()
+                    self.process = nil
+                    self.processCleanupTask = nil
+                    self.stdinPipe = nil
+                    self.stdoutPipe = nil
+                    self.stderrPipe = nil
+                    self.processGeneration = nil
+                    continuation.resume()
+                }
+            }
+        }
+        self.processCleanupTask = cleanupTask
+        return cleanupTask
     }
 
     private static func decodeInvokeResponse(_ result: [String: Any], id: String) -> BridgeInvokeResponse {

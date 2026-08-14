@@ -244,12 +244,18 @@ export function renderApplicationShell(host: ShellViewHost) {
     mobileNavLayout,
   });
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
-  // Mirror the sidebar brand action: the open new-session route target wins
-  // over persisted selection so the collapsed cluster "+" uses the same agent.
-  const selectedAgentId = normalizeAgentId(
-    host.newSessionRouteAgentId() ||
-      (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
-  );
+  // A route query is navigation input, not an owner record. Let it override the
+  // live selection only after the roster proves that agent exists.
+  const requestedRouteAgentId = host.newSessionRouteAgentId();
+  const routeAgentId = requestedRouteAgentId ? normalizeAgentId(requestedRouteAgentId) : null;
+  const routeAgentIsKnown =
+    routeAgentId !== null &&
+    context.agents.state.agentsList?.agents.some(
+      (agent) => normalizeAgentId(agent.id) === routeAgentId,
+    ) === true;
+  const selectedAgentId = routeAgentIsKnown
+    ? routeAgentId
+    : normalizeAgentId(context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId);
   const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
     method: "sessions.create",
     params: {},

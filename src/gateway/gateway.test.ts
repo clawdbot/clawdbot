@@ -192,6 +192,7 @@ describe("gateway e2e", () => {
   it("pairs the local CLI before a runtime-token loopback gateway becomes ready", async () => {
     const { envSnapshot, tempHome } = await setupGatewayTempHome({
       prefix: "openclaw-gw-runtime-token-cli-pairing-",
+      minimalGateway: true,
     });
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     try {
