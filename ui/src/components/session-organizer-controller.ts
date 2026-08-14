@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ReactiveControllerHost } from "lit";
 import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
   parseSidebarEntry,
@@ -72,7 +72,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
 }
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
-export class SessionOrganizerController implements ReactiveController {
+export class SessionOrganizerController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
   draggingSidebarSection: string | null = null;
@@ -86,9 +86,7 @@ export class SessionOrganizerController implements ReactiveController {
   sessionListRemovalDrop = false;
   private operationsLoad: Promise<SessionOrganizerOperations> | null = null;
 
-  constructor(private readonly host: SessionOrganizerControllerHost) {
-    host.addController(this);
-  }
+  constructor(private readonly host: SessionOrganizerControllerHost) {}
 
   private async loadOperations(
     scope: SidebarSessionMutationScope,

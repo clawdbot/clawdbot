@@ -228,16 +228,13 @@ describe("session group catalog loading", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const { gateway, publish } = createGatewayHarness(
-      (method: string, params?: unknown) => request(method, params),
-      ["operator.write"],
-    );
-    const sessions = createSessionCapability(gateway);
+    const harness = createGatewayHarness(request, ["operator.write"]);
+    const sessions = createSessionCapability(harness.gateway);
 
     const staleLoad = sessions.groupsLoad();
     await vi.waitFor(() => expect(calls).toBe(1));
-    publish(false);
-    publish(true);
+    harness.publish(false);
+    harness.publish(true);
     const currentLoad = sessions.groupsLoad();
     await vi.waitFor(() => expect(calls).toBe(2));
 
