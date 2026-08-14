@@ -883,6 +883,26 @@ openclaw-settings-save-indicator {
    Navigation Sidebar
    =========================================== */
 
+:root {
+  --sidebar-type-page-size: calc(13px * var(--control-ui-text-scale));
+  --sidebar-type-page-line-height: 20px;
+  --sidebar-type-page-weight: 500;
+  --sidebar-type-section-size: var(--control-ui-text-xs);
+  --sidebar-type-section-line-height: 1;
+  --sidebar-type-section-weight: 650;
+  --sidebar-type-section-tracking: 0.04em;
+  --sidebar-type-session-size: calc(13px * var(--control-ui-text-scale));
+  --sidebar-type-session-line-height: 20px;
+  --sidebar-type-session-weight: 500;
+  --sidebar-type-session-unread-weight: 650;
+  --sidebar-type-subtitle-size: var(--control-ui-text-xs);
+  --sidebar-type-subtitle-line-height: 16px;
+  --sidebar-type-menu-size: calc(13px * var(--control-ui-text-scale));
+  --sidebar-type-menu-line-height: 20px;
+  --sidebar-type-footer-size: var(--control-ui-text-xs);
+  --sidebar-type-footer-line-height: 1.2;
+}
+
 .shell-nav {
   grid-area: nav;
   position: relative;
@@ -1807,11 +1827,12 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-recent-sessions__label-text,
 .sidebar-session-catalog-host__label {
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+  font-size: var(--sidebar-type-section-size);
+  font-weight: var(--sidebar-type-section-weight);
+  letter-spacing: var(--sidebar-type-section-tracking);
+  line-height: var(--sidebar-type-section-line-height);
   text-transform: uppercase;
-  color: var(--muted);
 }
 
 .sidebar-session-group-toggle
@@ -2304,9 +2325,17 @@ body.update-dialog-open .sidebar-update-card__status {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
+  font-family: inherit;
+  font-size: var(--sidebar-type-session-size);
+  font-style: normal;
+  font-weight: var(--sidebar-type-session-weight);
+  letter-spacing: normal;
+  line-height: var(--sidebar-type-session-line-height);
   color: var(--text);
+}
+
+.sidebar-recent-session[data-session-unread="true"] .sidebar-recent-session__name {
+  font-weight: var(--sidebar-type-session-unread-weight);
 }
 
 .sidebar-recent-session--child {
@@ -2323,10 +2352,6 @@ body.update-dialog-open .sidebar-update-card__status {
   .sidebar-recent-session__link
   > :not(.sidebar-session-indicator):not(.sidebar-recent-session__text) {
   margin-left: 6px;
-}
-
-.sidebar-recent-session--child .sidebar-recent-session__name {
-  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-recent-session--child .session-row-trail {
@@ -2359,7 +2384,6 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
-  font-weight: 500;
   color: var(--text-strong);
 }
 
@@ -2540,11 +2564,12 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 
 .sidebar-customize-menu__title {
   padding: 6px 8px 8px;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.07em;
+  font-size: var(--sidebar-type-section-size);
+  font-weight: var(--sidebar-type-section-weight);
+  letter-spacing: var(--sidebar-type-section-tracking);
+  line-height: var(--sidebar-type-section-line-height);
   text-transform: uppercase;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
 }
 
 .sidebar-customize-menu__provenance {
@@ -2558,10 +2583,11 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   margin: 6px 0 2px;
   padding: 7px 8px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+  font-size: var(--sidebar-type-section-size);
+  font-weight: var(--sidebar-type-section-weight);
+  letter-spacing: var(--sidebar-type-section-tracking);
+  line-height: var(--sidebar-type-section-line-height);
   text-transform: uppercase;
 }
 
@@ -2577,7 +2603,9 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: var(--sidebar-type-page-size);
+  font-weight: var(--sidebar-type-page-weight);
+  line-height: var(--sidebar-type-page-line-height);
   text-align: left;
   /* More-menu route rows are anchors acting as chrome (see base.css cursor policy). */
   cursor: var(--cursor-action);
@@ -2715,9 +2743,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-session-sort-menu__title {
   padding: 4px 8px 2px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.05em;
+  font-size: var(--sidebar-type-section-size);
+  font-weight: var(--sidebar-type-section-weight);
+  letter-spacing: var(--sidebar-type-section-tracking);
+  line-height: var(--sidebar-type-section-line-height);
   text-transform: uppercase;
 }
 
@@ -2734,7 +2763,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: var(--sidebar-type-menu-size);
+  line-height: var(--sidebar-type-menu-line-height);
   text-align: left;
 }
 
@@ -2840,6 +2870,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   color: var(--muted);
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
   line-height: 1;
   text-align: center;
 }
@@ -2848,6 +2879,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   padding: 4px 8px 6px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .session-menu__separator {
@@ -2934,8 +2966,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .nav-item__text {
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
+  font-size: var(--sidebar-type-page-size);
+  font-weight: var(--sidebar-type-page-weight);
+  line-height: var(--sidebar-type-page-line-height);
   white-space: nowrap;
 }
 
@@ -2986,8 +3019,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-zone-entry .sidebar-recent-session__name {
   color: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
 }
 
 .sidebar-zone-entry .sidebar-recent-session:hover {
@@ -3102,8 +3133,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-agent-card__subtitle {
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.2;
+  font-size: var(--sidebar-type-footer-size);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--sidebar-type-footer-line-height);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3258,8 +3290,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-identity-card__subtitle {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.2;
+  font-size: var(--sidebar-type-footer-size);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--sidebar-type-footer-line-height);
 }
 
 .sidebar-identity-card__subtitle--gateway {
@@ -3331,8 +3364,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   width: min(320px, calc(100vw - 44px));
   max-width: 100%;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.35;
+  font-size: var(--sidebar-type-menu-size);
+  line-height: var(--sidebar-type-menu-line-height);
   text-align: left;
 }
 
@@ -3343,10 +3376,11 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-hover-card__heading {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+  font-size: var(--sidebar-type-section-size);
+  font-weight: var(--sidebar-type-section-weight);
+  letter-spacing: var(--sidebar-type-section-tracking);
+  line-height: var(--sidebar-type-section-line-height);
   text-transform: uppercase;
 }
 
@@ -3442,6 +3476,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .sidebar-hover-card__metadata-value--mono {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar-footer-bar__status {
@@ -3520,8 +3555,9 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-height: 24px;
   padding: 0 8px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--sidebar-type-menu-size);
   font-weight: 500;
+  line-height: var(--sidebar-type-menu-line-height);
 }
 
 .sidebar-agent-menu__filter {
@@ -3565,7 +3601,9 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--sidebar-type-footer-size);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--sidebar-type-footer-line-height);
   text-overflow: ellipsis;
   white-space: nowrap;
   text-decoration: none;
@@ -4026,7 +4064,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--sidebar-type-subtitle-size);
+  letter-spacing: normal;
+  line-height: var(--sidebar-type-subtitle-line-height);
+  margin-block-start: 1px;
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
 }
 
