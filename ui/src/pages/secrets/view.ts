@@ -41,6 +41,7 @@ type SecretsStoreViewProps = {
   onCloseDialog: () => void;
   onDraftNameChange: (name: string) => void;
   onDraftValueChange: (value: string) => void;
+  onDraftAllowedHostsChange: (allowedHosts: string) => void;
   onDraftSecretChange: (secret: boolean) => void;
   onSubmitDraft: () => void;
   onOpenBulk: () => void;
@@ -120,6 +121,7 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
           <tr>
             <th scope="col">${t("secretsStore.name")}</th>
             <th scope="col">${t("secretsStore.value")}</th>
+            <th scope="col">${t("secretsStore.allowedHosts")}</th>
             <th scope="col">${t("secretsStore.updated")}</th>
             <th scope="col" class="secrets-store__actions-heading">
               <span class="settings-control__sr-label">${t("secretsStore.actions")}</span>
@@ -141,6 +143,13 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
                     title=${entry.kind === "env" ? entry.value : nothing}
                     >${entry.kind === "env" ? entry.value : SECRET_MASK}</span
                   >
+                </td>
+                <td>
+                  <span class="secrets-store__hosts">
+                    ${entry.kind === "secret" && (entry.allowedHosts?.length ?? 0) > 0
+                      ? entry.allowedHosts?.join(", ")
+                      : t("secretsStore.noAllowedHosts")}
+                  </span>
                 </td>
                 <td>
                   <time
@@ -226,6 +235,27 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
             <small>${t("secretsStore.hint")}</small>
           </span>
         </label>
+        ${props.draft.kind === "secret"
+          ? html`
+              <label class="secrets-store-field">
+                <span>${t("secretsStore.allowedHosts")}</span>
+                <textarea
+                  class="settings-input secrets-store-dialog__hosts mono"
+                  name="allowed-hosts"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder=${t("secretsStore.allowedHostsPlaceholder")}
+                  ?disabled=${props.busy}
+                  .value=${props.draft.allowedHosts}
+                  @input=${(event: Event) =>
+                    props.onDraftAllowedHostsChange(
+                      (event.currentTarget as HTMLTextAreaElement).value,
+                    )}
+                ></textarea>
+                <small>${t("secretsStore.allowedHostsHint")}</small>
+              </label>
+            `
+          : nothing}
         ${props.formError
           ? html`<div class="callout danger" role="alert">${props.formError}</div>`
           : nothing}

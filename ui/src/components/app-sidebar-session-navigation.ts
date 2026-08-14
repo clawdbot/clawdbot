@@ -628,10 +628,13 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const lineageAgentId = normalizeAgentId(
       parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
     );
+    // Adopted catalog keys render as live rows inside the Coding catalog;
+    // re-inserting one here would show the selected session twice.
     const selectedFallback = navigationState.visibleSessionRows.find(
       (session) =>
         (selected === routeAgentId || lineageAgentId === selected) &&
         session.key === navigationState.activeRowKey &&
+        !adopted.has(session.key) &&
         !areUiSessionKeysEquivalent(session.key, mainSessionKey),
     );
     const mainSessionKeys = new Set<string>([mainSessionKey]);

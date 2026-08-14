@@ -126,6 +126,7 @@
     "!dist/plugin-sdk/migration.d.ts",
     "!dist/plugin-sdk/migration-runtime.d.ts",
     "!dist/plugin-sdk/music-generation.d.ts",
+    "!dist/plugin-sdk/native-hook-relay-runtime.d.ts",
     "!dist/plugin-sdk/node-host.d.ts",
     "!dist/plugin-sdk/number-runtime.d.ts",
     "!dist/plugin-sdk/outbound-media.d.ts",
@@ -772,6 +773,9 @@
     },
     "./plugin-sdk/codex-mcp-projection": {
       "default": "./dist/plugin-sdk/codex-mcp-projection.js"
+    },
+    "./plugin-sdk/native-hook-relay-runtime": {
+      "default": "./dist/plugin-sdk/native-hook-relay-runtime.js"
     },
     "./plugin-sdk/codex-session-transcript-runtime": {
       "default": "./dist/plugin-sdk/codex-session-transcript-runtime.js"

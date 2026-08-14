@@ -12,6 +12,7 @@ import {
   noteActiveCronJobScheduleMutation,
   noteActiveCronJobTriggerMutation,
   onCronJobInactive,
+  requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -202,6 +203,9 @@ async function persistUpdatedJob(params: {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
     noteActiveCronJobScheduleMutation(nextJob.id);
+  }
+  if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+    requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
   }
   if (
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||

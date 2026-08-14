@@ -30,6 +30,7 @@ import {
 } from "./run-admission.js";
 import {
   cronRunReceiptPersistHooks,
+  resolveCronRunReceiptTerminalStatus,
   type CronRunReceiptSettlementDisposition,
 } from "./run-receipts.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
@@ -224,6 +225,20 @@ async function finishPreparedManualRun(
         },
       );
     };
+    if (prepared.activeJobMarker?.jobRemoved === true) {
+      finishCronRunReceipt({
+        handle: prepared.runReceipt,
+        status: resolveCronRunReceiptTerminalStatus(
+          triggerSkipped ? "skipped" : coreResult.status,
+          coreResult.triggerEval?.fired,
+        ),
+        finishedAtMs: endedAt,
+        error: coreResult.error,
+      });
+      finalized = true;
+      emitMissingQueuedTerminal();
+      return;
+    }
     if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
       emitMissingQueuedTerminal();
       return;
