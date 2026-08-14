@@ -1945,6 +1945,7 @@ export const en: TranslationMap = {
     attachFailed: "Could not attach terminal session",
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",
+    refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
     tabLabel: "shell {n}",
     tabHint: "{agent} · {cwd}",
     agentOwnedBadge: "agent",
