@@ -309,12 +309,12 @@ describe("CI changed Node test plan", () => {
         (shard) =>
           shard.configs[0] === "test/vitest/vitest.extension-telegram.config.ts" &&
           (shard.includePatterns?.length ?? 0) > 0 &&
-          (shard.includePatterns?.length ?? 0) <= 5,
+          (shard.includePatterns?.length ?? 0) <= 10,
       ),
     ).toBe(true);
-    expect(targets.length).toBeGreaterThan(5);
+    expect(targets.length).toBeGreaterThan(10);
     expect(new Set(targets).size).toBe(targets.length);
-    expect(shards).toHaveLength(Math.ceil(targets.length / 5));
+    expect(shards).toHaveLength(Math.ceil(targets.length / 10));
   });
 
   it("preserves Matrix process bounds in mixed package fallbacks", () => {
