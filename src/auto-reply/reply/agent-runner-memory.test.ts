@@ -81,6 +81,7 @@ function createReplyOperation(): TestReplyOperation {
   return {
     key: "test",
     sessionId: "session",
+    turnKind: "visible",
     abortSignal: new AbortController().signal,
     staleExpiryReason: undefined,
     resetTriggered: false,
@@ -111,6 +112,7 @@ function createReplyOperation(): TestReplyOperation {
     fail: vi.fn(),
     abortByUser: vi.fn(() => true),
     abortForRestart: vi.fn(() => true),
+    supersede: vi.fn(() => true),
     markTerminalRecovery: vi.fn(),
     markAcceptedSteeredInboundAudio: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),

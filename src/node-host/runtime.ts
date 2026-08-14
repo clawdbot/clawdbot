@@ -61,6 +61,7 @@ type PreparedNodeHostRuntime = {
     client: NodeHostClient;
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
     onManifestChanged?: (manifest: NodeHostManifest) => void;
+    onRunnerAvailabilityChanged?: (available: boolean) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -321,14 +322,23 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     initialInventory,
-    start({ client, onInventoryChanged, onManifestChanged }) {
+    start({ client, onInventoryChanged, onManifestChanged, onRunnerAvailabilityChanged }) {
       const mcpAbort = new AbortController();
       const workerSupervisor = workerInstallation
-        ? createNodeWorkerSupervisor({ env, localInstallation: workerInstallation })
+        ? createNodeWorkerSupervisor({
+            env,
+            localInstallation: workerInstallation,
+            onAvailabilityChanged: onRunnerAvailabilityChanged,
+          })
         : undefined;
       const workerWorkspace = workerInstallation
         ? new NodeWorkerWorkspaceRuntime({ env })
         : undefined;
+      if (workerSupervisor) {
+        void workerSupervisor.initialize().catch((error: unknown) => {
+          logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
+        });
+      }
       const skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {

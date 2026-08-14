@@ -8,7 +8,7 @@ import { t } from "../i18n/index.ts";
 import "../components/tooltip.ts";
 import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
-import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import type { ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
@@ -460,7 +460,11 @@ export function renderJsonTextareaControl(params: {
         const previous = jsonTextareaState.get(element);
         if (
           previous &&
-          (!Object.is(previous.sourceValue, params.sourceValue) ||
+          // Content equality for the value: an autosave ack clones the form,
+          // so identity churn with identical bytes must not erase in-progress
+          // (possibly not-yet-valid) JSON the operator is typing.
+          ((!Object.is(previous.sourceValue, params.sourceValue) &&
+            !configValuesEqual(previous.sourceValue, params.sourceValue)) ||
             !Object.is(previous.rowIdentity, params.rowIdentity) ||
             previous.fallback !== renderedFallback ||
             previous.pathKey !== pathKey)
