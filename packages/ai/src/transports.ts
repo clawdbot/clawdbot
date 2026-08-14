@@ -12,7 +12,6 @@ export * from "./transports/openai-completions-compat.js";
 export * from "./transports/openai-completions-string-content.js";
 export * from "./transports/openai-completions-transport.js";
 export * from "./transports/openai-reasoning-compat.js";
-export { OPENAI_RESPONSES_APIS } from "./transports/openai-responses-contracts.js";
 export * from "./transports/openai-responses-payload-policy.js";
 export * from "./transports/openai-responses-replay.js";
 export * from "./transports/openai-responses-transport.js";
