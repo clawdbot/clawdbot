@@ -327,7 +327,16 @@ describe("exec approvals CLI", () => {
     await runApprovalsCommand(["approvals", "get"]);
 
     const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
-    expect(output).not.toMatch(/[\u0007\u0008\u001b\u007f-\u009f]/u);
+    const hasUnsafeControl = Array.from(output).some((char) => {
+      const codePoint = char.codePointAt(0) ?? -1;
+      return (
+        codePoint === 0x07 ||
+        codePoint === 0x08 ||
+        codePoint === 0x1b ||
+        (codePoint >= 0x7f && codePoint <= 0x9f)
+      );
+    });
+    expect(hasUnsafeControl).toBe(false);
     expect(output).toContain("safered\\nnext\\trow\\rbackspace🦞");
 
     defaultRuntime.writeJson.mockClear();
