@@ -17,7 +17,7 @@ import {
   getTuiSessionProjection,
   hasDisplayableTuiSessionFinal,
   isIdentityOnlyTuiSessionInvalidation,
-  isReplayableTuiSessionMessage,
+  projectTuiSessionMessage,
   projectTuiSessionFinal,
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
@@ -324,10 +324,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!suppressEmptyExternalPlaceholder) {
         projectTuiSessionFinal(state, evt, finalText, hasStreamedText);
       }
-      // Skip the history reload when the final event produced displayable
-      // output. loadHistory() does clearAll() + rebuild from server data,
-      // but the server may not have persisted this message yet — causing
-      // the just-rendered final message to vanish (#87922).
+      // Skip history reload for displayable output: loadHistory() rebuilds from
+      // server data that may not contain the final yet, making it vanish (#87922).
       maybeRefreshHistoryForRun(evt.runId, {
         hasDisplayableFinal: !suppressEmptyExternalPlaceholder,
         wasPendingChatRun: isPendingChatRun,
@@ -509,13 +507,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
 
-    if (isReplayableTuiSessionMessage(evt)) {
-      reduceTuiSessionProjection(state, {
-        type: "messagePersisted",
-        message: evt.message,
-        envelope: evt,
-        scope: readTuiSessionProjectionScope(state),
-      });
+    const unboundDisplayedRunIds = [...finalizedRunsWithDisplay.keys()].filter(
+      (runId) => !persistedTerminalRunIds.has(runId),
+    );
+    const authoritativeRunId = projectTuiSessionMessage(state, evt, unboundDisplayedRunIds);
+    if (authoritativeRunId) {
+      runCoordinator.notePersistedRun(authoritativeRunId);
     }
     const liveUserMessage = readTuiSessionUserMessage(evt);
     if (liveUserMessage) {
@@ -541,11 +538,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
 
-    if (runCoordinator.deferSessionMessageRefresh()) {
+    if (runCoordinator.routeSessionMessageRefresh(Boolean(liveUserMessage || authoritativeRunId))) {
       void refreshSessionInfo?.();
-      return;
     }
-    flushPendingHistoryRefreshIfIdle();
   };
 
   const handleAgentEvent = (payload: unknown) => {
