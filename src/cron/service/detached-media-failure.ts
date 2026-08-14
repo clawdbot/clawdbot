@@ -11,7 +11,7 @@ import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import type { CronEvent, CronServiceState, DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult, armTimer } from "./timer.js";
 
@@ -29,7 +29,7 @@ export async function recordDetachedMediaFailure(
       toolName: request.toolName,
     });
     const postPersistNotifications: DeferredCronNotifications = [];
-    const committedJob = commitCronRuntimeRows({
+    const committed = commitCronRuntimeRows({
       state,
       jobIds: [receipt.jobId],
       operationLabel: "cron.detached-media-failure",
@@ -80,29 +80,31 @@ export async function recordDetachedMediaFailure(
           },
           { scheduleMode: "preserve", deferredNotifications: postPersistNotifications },
         );
-        emitCronRunFinished(state, {
-          jobId: job.id,
+        const committedJob = structuredClone(job);
+        const event: CronEvent & { action: "finished" } = {
+          jobId: committedJob.id,
           action: "finished",
-          job,
+          job: committedJob,
           status: "error",
           error: request.error,
           diagnostics,
           runId: request.cronTaskRunId ?? request.runId,
           sessionKey: request.requesterSessionKey,
           runAtMs: receipt.startedAtMs,
-          durationMs: job.state.lastDurationMs,
-          nextRunAtMs: job.state.nextRunAtMs,
-          deliveryStatus: job.state.lastDeliveryStatus,
-          failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-        });
-        return { upsertJobIds: [job.id], value: job };
+          durationMs: committedJob.state.lastDurationMs,
+          nextRunAtMs: committedJob.state.nextRunAtMs,
+          deliveryStatus: committedJob.state.lastDeliveryStatus,
+          failureNotificationDelivery: failureNotificationDeliveryFromJobState(committedJob),
+        };
+        return { upsertJobIds: [job.id], value: { event, job: committedJob } };
       },
     });
-    if (!committedJob) {
+    if (!committed) {
       return false;
     }
+    applyCronRuntimeRowsToState(state, [committed.job]);
+    emitCronRunFinished(state, committed.event);
     runPostPersistCronNotifications(state, postPersistNotifications);
-    applyCronRuntimeRowsToState(state, [committedJob]);
     armTimer(state);
     return true;
   });

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as taskExecutor from "../tasks/task-executor.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { loadCronStore } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.js";
 import type { CronJobCreate } from "./types.js";
 
@@ -88,6 +92,62 @@ describe("detached media cron failure ownership", () => {
         consecutiveErrors: 1,
       });
     } finally {
+      cron.stop();
+    }
+  });
+
+  it("does not finalize the task or emit when detached failure persistence rolls back", async () => {
+    const { storePath } = await makeStorePath();
+    const runDone = createDeferred<{ status: "ok"; summary: string }>();
+    const onEvent = vi.fn();
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => await runDone.promise),
+      onEvent,
+    });
+    await cron.start();
+    const database = openOpenClawStateDatabase().db;
+    const finalizeTaskRun = vi.spyOn(taskExecutor, "finalizeTaskRunByRunIdCore");
+    try {
+      const job = await cron.add(detachedMediaJob("detached-media-rollback"));
+      const receipt = await runAndCaptureReceipt({ cron, storePath, jobId: job.id, runDone });
+      onEvent.mockClear();
+      finalizeTaskRun.mockClear();
+      database.exec(`
+        CREATE TEMP TRIGGER reject_detached_media_failure_write
+        BEFORE UPDATE ON cron_jobs
+        WHEN NEW.store_key = '${cronStoreKey(storePath)}' AND NEW.job_id = '${job.id}'
+        BEGIN
+          SELECT RAISE(ABORT, 'detached failure write failed');
+        END;
+      `);
+
+      await expect(
+        cron.recordDetachedMediaFailure({
+          cronRunReceipt: receipt,
+          cronTaskRunId: "cron-task-run-rollback",
+          requesterSessionKey:
+            "agent:main:cron:detached-media-rollback:run:550e8400-e29b-41d4-a716-446655440099",
+          taskId: "media-task-rollback",
+          runId: "tool:music_generate:rollback",
+          toolName: "music_generate",
+          error: "Detached music_generate failed: provider rollback",
+        }),
+      ).rejects.toThrow("detached failure write failed");
+
+      expect(finalizeTaskRun).not.toHaveBeenCalled();
+      expect(onEvent).not.toHaveBeenCalled();
+      expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+        lastRunAtMs: receipt.startedAtMs,
+        lastRunStatus: "ok",
+      });
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS reject_detached_media_failure_write");
+      finalizeTaskRun.mockRestore();
       cron.stop();
     }
   });
