@@ -1,4 +1,5 @@
 /** Sanitizes replayed tool calls and provider-specific transcript structure. */
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { hasNonEmptyString as replayToolCallNonEmptyString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -223,7 +224,7 @@ function sanitizeReplayToolCallInputs(
     if (messageChanged) {
       changed = true;
       if (nextContent.length > 0) {
-        const nextMessage = { ...message, content: nextContent };
+        const nextMessage = replaceCompactionReplayOwnerContent(message, nextContent);
         for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
           priorToolCallIds.add(toolCall.id);
         }

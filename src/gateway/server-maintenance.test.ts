@@ -1005,6 +1005,27 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("evicts an expired non-abortable active run instead of retrying forever", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-unabortable";
+    const wedged = createActiveRun("main");
+    wedged.expiresAtMs = Date.now() - 1;
+    // Owner cleanup lost after a direct controller.abort: the entry is no
+    // longer abortable, so the timeout abort returns { aborted: false } and
+    // pre-fix the entry survived every sweep as a phantom active run.
+    wedged.controller.abort();
+    deps.chatAbortControllers.set(runId, wedged);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    await stopMaintenanceTimers(timers);
+  });
+
   it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
     const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
     const runId = "exec-approval-followup:req-active:nonce:retry-1";

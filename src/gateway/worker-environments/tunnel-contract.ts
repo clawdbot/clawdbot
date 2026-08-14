@@ -15,6 +15,17 @@ export class WorkerTunnelOwnerDisconnectedError extends Error {
   }
 }
 
+export class WorkerRunnerUnavailableError extends Error {
+  readonly code = "runner-offline";
+
+  constructor() {
+    super(
+      "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+    );
+    this.name = "WorkerRunnerUnavailableError";
+  }
+}
+
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
@@ -23,6 +34,7 @@ export type WorkerTunnelRequest = {
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
   transportRetry: "idempotent" | "never";
+  onDispatchReady?: () => void;
   input?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -80,6 +92,7 @@ type WorkerTurnLaunchRequest = {
   placementGeneration: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onDispatchReady?: () => void;
 };
 
 export type WorkerTunnelHandle = {

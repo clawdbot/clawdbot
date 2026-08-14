@@ -337,11 +337,17 @@ export function startGatewayMaintenanceTimers(params: {
         removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
         continue;
       }
-      abortChatRunById(params, {
+      const aborted = abortChatRunById(params, {
         runId,
         sessionKey: entry.sessionKey,
         stopReason: "timeout",
       });
+      // A non-abortable expired entry (signal already aborted, frozen reply
+      // op) whose owner cleanup was lost would otherwise survive every sweep:
+      // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
+      if (!aborted.aborted) {
+        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+      }
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;

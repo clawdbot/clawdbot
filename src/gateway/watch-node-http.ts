@@ -62,7 +62,10 @@ import {
 } from "./http-common.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { isLoopbackAddress, resolveRequestClientIp } from "./net.js";
-import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
+import {
+  reconcileNodePairingOnConnect,
+  resolveEffectiveComputerUseDescriptor,
+} from "./node-connect-reconcile.js";
 import type { NodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import type {
   NodeConnectivityResult,
@@ -862,6 +865,10 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       registeredConnect.declaredPermissions = reconciliation.declaredPermissions;
       registeredConnect.caps = reconciliation.effectiveCaps;
       registeredConnect.commands = reconciliation.effectiveCommands;
+      registeredConnect.computerUse = resolveEffectiveComputerUseDescriptor({
+        commands: reconciliation.effectiveCommands,
+        declared: reconciliation.declaredComputerUse,
+      });
       registeredConnect.permissions = reconciliation.effectivePermissions;
 
       let session: WatchNodeSession | undefined;

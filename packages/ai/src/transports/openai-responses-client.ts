@@ -342,6 +342,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
           initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
+          initialRejectedCompaction?: ResponsesStreamParams["initialRejectedCompaction"],
         ): Promise<AsyncIterable<unknown>> => {
           const {
             stream: rawResponseStream,
@@ -354,12 +355,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             model,
             observePrompt,
             initialAttemptKind,
+            initialRejectedCompaction,
             buildFullHistoryRequest: () => buildRequest("full-history"),
-            onCompactionRejected: () =>
-              suppressOpenAIResponsesCompaction(output, model, {
-                sessionId: options?.sessionId,
-                authProfileId: responsesOptions?.authProfileId,
-              }),
+            onCompactionRejected: (checkpoint) =>
+              suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
           });
           if (continuationClaim) {
             continuationBaseline = attempt.request.previous_response_id
@@ -455,6 +454,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                     yield* await createSseStream(
                       recovery?.request ?? (await buildRequest("full-history")),
                       recovery?.kind ?? "continuation-rejected",
+                      recovery?.rejectedCompaction,
                     );
                     return;
                   }

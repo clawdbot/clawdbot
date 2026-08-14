@@ -732,6 +732,66 @@ describe("gateway server chat", () => {
   );
 
   test.each(["chat.history", "chat.startup"] as const)(
+    "%s adopts the in-flight run for a non-default agent alias key",
+    async (method) => {
+      const { sessionDir } = openDirectChatSession();
+      try {
+        // Per-agent stores: bare keys then carry no persisted fixed-store
+        // owner, so an explicit non-default agentId is a valid pairing.
+        testState.sessionConfig = {
+          store: path.join(sessionDir, "sessions-{agentId}.json"),
+        };
+        await writeGatewayConfig({
+          agents: { entries: { main: { default: true }, writer: {} } },
+        });
+        await writeSessionStore({
+          agentId: "writer",
+          storePath: path.join(sessionDir, "sessions-writer.json"),
+          entries: { "agent:writer:notes": { sessionId: "sess-writer", updatedAt: Date.now() } },
+        });
+        const writerConfig = {
+          agents: { entries: { main: { default: true }, writer: {} } },
+          session: { store: path.join(sessionDir, "sessions-{agentId}.json") },
+        };
+        const context = createDirectChatContext({
+          getRuntimeConfig: () => writerConfig,
+        });
+        const controller = new AbortController();
+        // chat.send registers the agent-scoped canonical key; the handler's
+        // in-flight adoption must resolve the same scoped key for the bare
+        // alias request or the streaming run renders idle on switch-back.
+        context.chatAbortControllers.set("run-writer", {
+          controller,
+          sessionId: "sess-writer",
+          sessionKey: "agent:writer:notes",
+          agentId: "writer",
+          startedAtMs: 1_000,
+          expiresAtMs: Date.now() + 60_000,
+          projectSessionActive: true,
+        });
+        context.chatRunState.getOrCreate("run-writer").buffer = "writer partial";
+        const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+        await callDirectChat(method, {
+          id: method,
+          params: { sessionKey: "notes", agentId: "writer" },
+          respond: captureChatResponse(responses),
+          context,
+        });
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
+        expect(
+          (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
+        ).toMatchObject({ runId: "run-writer", text: "writer partial" });
+      } finally {
+        testState.sessionConfig = undefined;
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+      }
+    },
+  );
+
+  test.each(["chat.history", "chat.startup"] as const)(
     "%s replays bounded active progress events in inFlightRun",
     async (method) => {
       const {
