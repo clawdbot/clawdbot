@@ -2,10 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   close: vi.fn(),
+  callTool: vi.fn(async () => ({})),
   create: vi.fn(),
   createConfigured: vi.fn(),
   createTrustedSession: vi.fn(),
   endSession: vi.fn(async () => ({})),
+  escalateSession: vi.fn(async () => ({
+    session: "openclaw-test",
+    captureScope: "desktop",
+    effectiveScope: "desktop",
+    desktopUnlocked: true,
+  })),
   getDesktopState: vi.fn(async () => ({})),
   isAvailable: vi.fn(() => true),
   startSession: vi.fn(async () => ({})),
@@ -13,10 +20,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const sdk = {
-  CaptureScope: { Desktop: "desktop" },
+  CaptureScope: { Window: "window", Desktop: "desktop" },
   ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
   DesktopScope: { Desktop: 0 },
+  EscalationReason: { Other: "other" },
   ScrollBy: { Line: 0 },
   ScrollDirection: { Up: 0, Down: 1, Left: 2, Right: 3 },
   SessionPermissionMode: { Unrestricted: "unrestricted" },
@@ -42,7 +50,9 @@ describe("CUA Driver direct session", () => {
     });
     mocks.createTrustedSession.mockReturnValue({
       close: mocks.close,
+      callTool: mocks.callTool,
       endSession: mocks.endSession,
+      escalateSession: mocks.escalateSession,
       getDesktopState: mocks.getDesktopState,
       startSession: mocks.startSession,
     });
@@ -107,6 +117,33 @@ describe("CUA Driver direct session", () => {
 
     await driver.dispose();
     expect(mocks.endSession).toHaveBeenCalledWith({ session: sessionOptions.publicSession });
+  });
+
+  it("starts window-scoped generic tools and widens only for an explicit desktop call", async () => {
+    const driver = createCuaDriver({ loadSdk: () => sdk as never });
+
+    await driver.callTool("list_windows", {});
+    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
+    expect(mocks.startSession).toHaveBeenCalledWith(
+      { session: sessionOptions.publicSession, captureScope: "window" },
+      undefined,
+    );
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      "list_windows",
+      JSON.stringify({ session: sessionOptions.publicSession }),
+      undefined,
+    );
+
+    await driver.getDesktopState();
+    expect(mocks.escalateSession).toHaveBeenCalledWith(
+      {
+        session: sessionOptions.publicSession,
+        reason: "other",
+        detail: "explicit desktop-scope OpenClaw action",
+      },
+      undefined,
+    );
+    await driver.dispose();
   });
 
   it("keeps a missing native desktop library behind command availability", async () => {
