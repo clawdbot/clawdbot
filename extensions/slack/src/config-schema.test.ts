@@ -178,6 +178,13 @@ describe("slack config schema", () => {
     }
   });
 
+  it("accepts non-negative typing indicator delays", () => {
+    expectSlackConfigValid({ typingIndicatorDelayMs: 16_000 });
+    expectSlackConfigValid({ accounts: { ops: { typingIndicatorDelayMs: 0 } } });
+    expectSlackConfigIssue({ typingIndicatorDelayMs: -1 }, "typingIndicatorDelayMs");
+    expectSlackConfigIssue({ typingIndicatorDelayMs: 1.5 }, "typingIndicatorDelayMs");
+  });
+
   it("rejects Slack Web API URL config overrides", () => {
     const res = SlackConfigSchema.safeParse({
       apiUrl: "http://127.0.0.1:49152/api/",

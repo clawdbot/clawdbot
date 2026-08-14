@@ -396,6 +396,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
+  const typingIndicatorDelayMs = slackCfg.typingIndicatorDelayMs ?? 0;
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const slackDispatcher = resolveSlackProxyDispatcher();
   const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
@@ -621,6 +622,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     textLimit,
     ackReactionScope,
     typingReaction,
+    typingIndicatorDelayMs,
     mediaMaxBytes,
   });
   monitorContextRef.current = ctx;

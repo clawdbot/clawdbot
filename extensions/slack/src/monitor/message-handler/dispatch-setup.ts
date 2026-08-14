@@ -103,7 +103,8 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     ctx: prepared.ctxPayload,
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-  const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
+  const suppressRoomEventTyping =
+    prepared.ctxPayload.InboundEventKind === "room_event" && ctx.typingIndicatorDelayMs === 0;
 
   // Shared context for the `message_sent` plugin hook emitted on each delivered
   // reply (both the `deliverReplies` paths and the native-streaming finalizer).
@@ -204,6 +205,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       return payload;
     },
     typing: {
+      initialDelayMs: ctx.typingIndicatorDelayMs,
       start: async () => {
         if (!threadStatusGate.hasVisibleOutput()) {
           didSetStatus = true;

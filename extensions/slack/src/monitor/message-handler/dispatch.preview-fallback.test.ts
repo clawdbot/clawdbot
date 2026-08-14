@@ -67,6 +67,7 @@ let capturedTyping:
       stop?: () => Promise<void>;
       onStartError: (err: unknown) => void;
       onStopError?: (err: unknown) => void;
+      initialDelayMs?: number;
     }
   | undefined;
 type TestReplyDispatchKind = "tool" | "block" | "final";
@@ -346,6 +347,7 @@ function createPreparedSlackMessage(params?: {
     loadingMessages?: string[];
   }) => Promise<void>;
   typingReaction?: string;
+  typingIndicatorDelayMs?: number;
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
   relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
@@ -378,6 +380,7 @@ function createPreparedSlackMessage(params?: {
       botId: "B_OPENCLAW",
       textLimit: 4000,
       typingReaction: params?.typingReaction ?? "",
+      typingIndicatorDelayMs: params?.typingIndicatorDelayMs ?? 0,
       historyLimit: 0,
       channelHistories: new Map(),
       allowFrom: [],
@@ -499,6 +502,7 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         stop?: () => Promise<void>;
         onStartError: (err: unknown) => void;
         onStopError?: (err: unknown) => void;
+        initialDelayMs?: number;
       };
     }) => {
       capturedTyping = params.typing;
@@ -2058,6 +2062,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(capturedReplyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(capturedReplyOptions?.suppressTyping).toBe(true);
+  });
+
+  it("keeps delayed Slack typing enabled for ambient room events", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        ctxPayload: { ChatType: "channel", InboundEventKind: "room_event" },
+        typingIndicatorDelayMs: 16_000,
+      }),
+    );
+
+    expect(capturedReplyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(capturedReplyOptions?.suppressTyping).toBeUndefined();
+    expect(capturedTyping?.initialDelayMs).toBe(16_000);
   });
 
   it("leaves Slack typing unsuppressed for normal channel turns", async () => {

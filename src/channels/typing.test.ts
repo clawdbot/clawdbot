@@ -66,6 +66,7 @@ function createTypingHarness(overrides: TypingHarnessOptions = {}) {
     ...(overrides.keepaliveIntervalMs !== undefined
       ? { keepaliveIntervalMs: overrides.keepaliveIntervalMs }
       : {}),
+    ...(overrides.initialDelayMs !== undefined ? { initialDelayMs: overrides.initialDelayMs } : {}),
     ...(overrides.maxDurationMs !== undefined
       ? { maxDurationMs: overrides.maxDurationMs }
       : overrides.useDefaultMaxDuration
@@ -131,6 +132,48 @@ describe("createTypingCallbacks", () => {
     } finally {
       callbacks.onCleanup?.();
     }
+  });
+
+  it("delays the initial typing indicator", async () => {
+    await withFakeTimers(async () => {
+      const { start, callbacks } = createTypingHarness({ initialDelayMs: 16_000 });
+
+      await callbacks.onReplyStart();
+      expect(start).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(15_999);
+      expect(start).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(start).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("cancels the delayed indicator when the run finishes first", async () => {
+    await withFakeTimers(async () => {
+      const { start, stop, callbacks } = createTypingHarness({ initialDelayMs: 16_000 });
+
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(12_000);
+      callbacks.onCleanup?.();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps the original delay deadline across repeated reply starts", async () => {
+    await withFakeTimers(async () => {
+      const { start, callbacks } = createTypingHarness({ initialDelayMs: 16_000 });
+
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(start).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("invokes stop on idle and reports stop errors", async () => {

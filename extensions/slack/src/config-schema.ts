@@ -139,6 +139,7 @@ const SlackAccountSchema = z
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     typingReaction: z.string().optional(),
+    typingIndicatorDelayMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 

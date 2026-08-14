@@ -175,6 +175,8 @@ export type SlackAccountConfig = Omit<
     channels?: Record<string, SlackChannelConfig>;
     /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
     typingReaction?: string;
+    /** Delay before Slack typing indicators appear. Runs that finish sooner never show an indicator. Default: 0. */
+    typingIndicatorDelayMs?: number;
   };
 
 export type SlackConfig = {

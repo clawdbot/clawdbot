@@ -18,6 +18,8 @@ export type CreateTypingCallbacksParams = {
   stop?: () => Promise<void>;
   onStartError: (err: unknown) => void;
   onStopError?: (err: unknown) => void;
+  /** Wait this long before starting the indicator. Cleanup during the delay cancels it. */
+  initialDelayMs?: number;
   keepaliveIntervalMs?: number;
   /** Stop keepalive after this many consecutive start() failures. Default: 2 */
   maxConsecutiveFailures?: number;
@@ -48,8 +50,11 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES,
   );
   const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000);
+  const initialDelayMs = resolveDurationMsOption(params.initialDelayMs, 0);
   let stopSent = false;
   let closed = false;
+  let startSent = false;
+  let startDelayTimer: ReturnType<typeof setTimeout> | undefined;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
   const startGuard = createTypingStartGuard({
@@ -91,13 +96,18 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     }
   };
 
-  const onReplyStart = async () => {
+  const clearStartDelayTimer = () => {
+    if (startDelayTimer) {
+      clearTimeout(startDelayTimer);
+      startDelayTimer = undefined;
+    }
+  };
+
+  const startTyping = () => {
     if (closed) {
       return;
     }
-    stopSent = false;
-    startGuard.reset();
-    clearTtlTimer();
+    startSent = true;
     const startPromise = fireStart();
     void startPromise.then(() => {
       if (closed || startGuard.isTripped()) {
@@ -109,12 +119,34 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       keepaliveLoop.start();
       startTtlTimer();
     });
+  };
+
+  const onReplyStart = async () => {
+    if (closed) {
+      return;
+    }
+    stopSent = false;
+    startGuard.reset();
+    clearTtlTimer();
+    if (!startSent && initialDelayMs > 0) {
+      if (!startDelayTimer) {
+        startDelayTimer = setTimeout(() => {
+          startDelayTimer = undefined;
+          startTyping();
+        }, initialDelayMs);
+        startDelayTimer.unref?.();
+      }
+      await Promise.resolve();
+      return;
+    }
+    startTyping();
     await Promise.resolve();
   };
 
   const fireStop = () => {
     closed = true;
     keepaliveLoop.stop();
+    clearStartDelayTimer();
     clearTtlTimer();
     if (!stop || stopSent) {
       return;
