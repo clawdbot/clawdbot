@@ -44,6 +44,17 @@ require_positive_decimal() {
   fi
 }
 
+require_positive_duration() {
+  local label="$1"
+  local value="$2"
+  local number="${value%[smhd]}"
+  # GNU timeout treats a 0 duration as disabling the timeout, so a non-positive or
+  # malformed override would silently restore an unbounded request.
+  if [[ ! "$number" =~ ^[0-9]+(\.[0-9]+)?$ || ! "$number" =~ [1-9] ]]; then
+    fail "$label must be a positive GNU timeout duration (for example 30s)."
+  fi
+}
+
 configure_image_artifact_inputs() {
   if [[ "$#" -lt 5 ]]; then
     fail "usage: $0 <pack|load> <artifact-dir> <kind> <target-sha> <workflow-sha> <image-ref>..."
@@ -90,6 +101,8 @@ gh_api_get_with_retry() {
   local endpoint="$2"
   local not_found_policy="$3"
   local attempt error_file response_file retry_delay retry_dir
+  require_positive_duration "$label request timeout" "$gh_api_get_request_timeout"
+  require_positive_duration "$label request kill grace" "$gh_api_get_request_kill_grace"
   case "$not_found_policy" in
     fail-fast) ;;
     retry-fresh-artifact)

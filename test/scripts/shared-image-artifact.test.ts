@@ -459,6 +459,32 @@ describe("shared Docker image artifacts", () => {
     }
   });
 
+  it.each([
+    {
+      name: "a zero request timeout",
+      env: { OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "0" },
+    },
+    {
+      name: "a zero-suffixed request timeout",
+      env: { OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "0s" },
+    },
+    {
+      name: "a zero kill grace",
+      env: { OPENCLAW_GH_API_GET_REQUEST_KILL_GRACE: "0s" },
+    },
+  ])("rejects $name because GNU timeout would disable the deadline", ({ env }) => {
+    const fixture = createFixture();
+    try {
+      const failed = verifyUploadedArtifact(fixture, { env });
+      expect(failed.error).toBeUndefined();
+      expect(failed.status).toBe(1);
+      expect(failed.stderr).toContain("must be a positive GNU timeout duration");
+      expect(readFileSync(fixture.ghLog, "utf8")).toBe("");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("retries a fresh artifact metadata 404 and then succeeds", () => {
     const fixture = createFixture();
     try {
