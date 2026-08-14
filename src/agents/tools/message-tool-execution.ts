@@ -47,7 +47,6 @@ import {
   resolveMessageActionAgentRuntimeIdentityToken,
   type GatewayCallOptions,
 } from "./gateway.js";
-import { appendMessageToolVisibleReplyHint } from "./message-tool-description.js";
 import {
   buildMessageToolDescription,
   buildMessageToolSchema,
@@ -303,18 +302,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     : messageToolDiscoveryParams
       ? buildMessageToolSchema(messageToolDiscoveryParams, actions ?? [])
       : MessageToolSchema;
-  const schema = addSourceReplyFinalControl(baseSchema, sourceReplySinkDeliveryMode);
+  const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
-    ? appendMessageToolVisibleReplyHint(
-        "Send a message to the current source conversation. Supports actions: send.",
-        options.sourceReplyDeliveryMode,
-        options.requireExplicitTarget,
-      )
-    : buildMessageToolDescription(
-        actions,
-        options?.sourceReplyDeliveryMode,
-        options?.requireExplicitTarget,
-      );
+    ? "Send a message to the current source conversation. Supports actions: send."
+    : buildMessageToolDescription(actions);
 
   return {
     label: "Message",

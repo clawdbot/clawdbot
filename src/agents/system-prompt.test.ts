@@ -983,6 +983,33 @@ describe("buildAgentSystemPrompt", () => {
     expect(volatileSuffix(nextZone)).toContain("Time zone: Asia/Tokyo");
   });
 
+  it("keeps source reply delivery guidance below the prompt-cache boundary", () => {
+    const buildPrompt = (sourceReplyDeliveryMode: "automatic" | "message_tool_only") =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["message"],
+        sourceReplyDeliveryMode,
+        runtimeInfo: { channel: "telegram" },
+      });
+    const automatic = buildPrompt("automatic");
+    const messageToolOnly = buildPrompt("message_tool_only");
+    const stablePrefix = (prompt: string) =>
+      prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
+    const volatileSuffix = (prompt: string) =>
+      prompt.slice(prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
+
+    expect(stablePrefix(automatic)).toBe(stablePrefix(messageToolOnly));
+    expect(stablePrefix(automatic)).not.toContain("## Assistant Output Directives");
+    expect(stablePrefix(automatic)).not.toContain("## Silent Replies");
+    expect(volatileSuffix(automatic)).toContain(
+      "Media attachment: own line `MEDIA:<path-or-url>` per item",
+    );
+    expect(volatileSuffix(messageToolOnly)).toContain(
+      "Current source visible reply MUST use `message(action=send)`",
+    );
+    expect(volatileSuffix(messageToolOnly)).toContain("Media paths = attachments, not prose");
+  });
+
   it("includes model alias guidance when aliases are provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
