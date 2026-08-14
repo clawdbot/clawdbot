@@ -20,6 +20,7 @@ const workerUpdateVersionsStorageKey = "openclaw.control-ui-e2e.worker-update-ve
 
 const buildA = "service-worker-build-a";
 const buildB = "service-worker-build-b";
+const releaseInstallMessageType = "openclaw-control-ui-e2e-release-install";
 
 type BuildAsset = {
   path: string;
@@ -47,7 +48,7 @@ async function findBuildAsset(buildId: string, buildDir = outDir): Promise<Build
   throw new Error(`Production Control UI output did not contain build id ${buildId}`);
 }
 
-async function holdReplacementWorkerInstalling(buildDir: string, delayMs: number): Promise<void> {
+async function holdReplacementWorkerInstalling(buildDir: string): Promise<void> {
   const workerPath = path.join(buildDir, "sw.js");
   const source = await readFile(workerPath, "utf8");
   const install =
@@ -59,7 +60,7 @@ async function holdReplacementWorkerInstalling(buildDir: string, delayMs: number
     workerPath,
     source.replace(
       install,
-      `event.waitUntil(Promise.all([new Promise((resolve) => setTimeout(resolve, ${delayMs})), caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))]));`,
+      `event.waitUntil(Promise.all([new Promise((resolve) => { const release = (messageEvent) => { if (messageEvent.data?.type !== ${JSON.stringify(releaseInstallMessageType)}) return; self.removeEventListener("message", release); resolve(); }; self.addEventListener("message", release); }), caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))]));`,
     ),
   );
 }
@@ -258,7 +259,7 @@ describe("Control UI service-worker production update E2E", () => {
       const nextOutDir = `${outDir}-next`;
       const previousOutDir = `${outDir}-previous`;
       await buildProductionControlUiE2e(nextOutDir, buildB);
-      await holdReplacementWorkerInstalling(nextOutDir, 2_500);
+      await holdReplacementWorkerInstalling(nextOutDir);
       const assetB = await findBuildAsset(buildB, nextOutDir);
       expect(assetB.path).not.toBe(assetA.path);
       expect(assetB.sha256).not.toBe(assetA.sha256);
@@ -307,6 +308,10 @@ describe("Control UI service-worker production update E2E", () => {
         .toContain("thread-during-worker-refresh");
       await page.waitForTimeout(300);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      await page.evaluate(async (messageType) => {
+        const registration = await navigator.serviceWorker.getRegistration();
+        registration?.installing?.postMessage({ type: messageType });
+      }, releaseInstallMessageType);
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);
       await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildB);
