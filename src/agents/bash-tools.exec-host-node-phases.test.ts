@@ -182,4 +182,15 @@ describe("direct node run", () => {
     expect(visibleText).toBe(`${stdout}\n${stderr}\n${errorText}`);
     expect(result.details).toMatchObject({ aggregated: visibleText });
   });
+
+  it("never dispatches a direct node run after cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled before direct node dispatch");
+    controller.abort(reason);
+
+    await expect(invokeNodeSystemRunDirect(createDirectNodeRun(controller.signal))).rejects.toBe(
+      reason,
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
 });
