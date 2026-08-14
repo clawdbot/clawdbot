@@ -9,7 +9,7 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
-import { NODE_WORKER_SUPERVISOR_COMMANDS } from "../infra/node-commands.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -697,7 +697,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("reserves private worker supervisor commands from plugin registration", () => {
     useNoBundledPlugins();
-    const commands = [...NODE_WORKER_SUPERVISOR_COMMANDS];
+    const commands = [...NODE_WORKER_PRIVATE_COMMANDS];
     const plugin = writePlugin({
       id: "private-worker-controls",
       filename: "private-worker-controls.cjs",
