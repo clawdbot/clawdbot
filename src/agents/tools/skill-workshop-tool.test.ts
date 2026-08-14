@@ -2,7 +2,7 @@
 // applying generated skills to the workspace.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
@@ -500,12 +500,13 @@ describe("skill_workshop tool", () => {
     },
   );
 
-  it("preserves list limits through 50 and clamps larger requests", async () => {
+  it("reconciles a full pending page while preserving list limits through 50", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tool = createSkillWorkshopTool({
       workspaceDir,
       config: { skills: { workshop: { maxPending: 200 } } },
       agentId: "main",
+      env: testState.env,
     });
 
     for (let index = 0; index < 51; index += 1) {
@@ -516,16 +517,61 @@ describe("skill_workshop tool", () => {
         proposal_content: `# Limit Proposal ${index}\n`,
       });
     }
+    await writeWorkspaceSkills(
+      workspaceDir,
+      Array.from({ length: 51 }, (_, index) => ({
+        name: `limit-proposal-${index}`,
+        description: `Materialized proposal ${index}`,
+      })),
+    );
 
-    for (const [limit, expectedCount] of [
-      [49, 49],
-      [50, 50],
-      [51, 50],
-    ] as const) {
-      const result = await tool.execute(`call-list-${limit}`, { action: "list", limit });
-      expect((result.details as { proposals: unknown[] }).proposals).toHaveLength(expectedCount);
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(
+      workspaceDir,
+      async () => {
+        markAcquired?.();
+        await new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+      },
+      { env: testState.env },
+    );
+    await acquired;
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    const releaseTimer = setTimeout(() => releaseLock?.(), 4_600);
+
+    try {
+      for (const [limit, expectedCount] of [
+        [49, 49],
+        [50, 50],
+        [51, 50],
+      ] as const) {
+        const result = await tool.execute(`call-list-${limit}`, { action: "list", limit });
+        const proposals = (result.details as { proposals: Array<{ status: string }> }).proposals;
+        expect(proposals).toHaveLength(expectedCount);
+        expect(proposals.every((proposal) => proposal.status === "stale")).toBe(true);
+      }
+
+      await expect(
+        tool.execute("call-list-last", {
+          action: "list",
+          query: "Limit Proposal 50",
+          limit: 1,
+        }),
+      ).resolves.toMatchObject({
+        details: { proposals: [expect.objectContaining({ status: "stale" })] },
+      });
+    } finally {
+      clearTimeout(releaseTimer);
+      releaseLock?.();
+      await heldLock;
+      randomSpy.mockRestore();
     }
-  });
+  }, 15_000);
 
   it("creates pending skill proposals without applying them", async () => {
     // Creation writes reviewable proposal artifacts under state, not live skill
