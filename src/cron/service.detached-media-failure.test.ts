@@ -310,4 +310,72 @@ describe("detached media cron failure ownership", () => {
       cron.stop();
     }
   });
+
+  it("does not apply an old detached failure to a same-millisecond successor receipt", async () => {
+    const { storePath } = await makeStorePath();
+    const nowMs = Date.now();
+    const firstRunDone = createDeferred<{ status: "ok"; summary: string }>();
+    const successorRunDone = createDeferred<{ status: "ok"; summary: string }>();
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      nowMs: () => nowMs,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi
+        .fn()
+        .mockImplementationOnce(async () => await firstRunDone.promise)
+        .mockImplementationOnce(async () => await successorRunDone.promise),
+    });
+    await cron.start();
+    try {
+      const job = await cron.add(detachedMediaJob("same-millisecond-successor"));
+      const receipt = await runAndCaptureReceipt({
+        cron,
+        storePath,
+        jobId: job.id,
+        runDone: firstRunDone,
+      });
+
+      const successorRunPromise = cron.run(job.id, "force");
+      let successor = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+      await vi.waitFor(() => {
+        successor = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+        expect(successor?.receiptId).not.toBe(receipt.receiptId);
+        expect(successor?.startedAtMs).toBe(receipt.startedAtMs);
+      });
+
+      await expect(
+        cron.recordDetachedMediaFailure({
+          cronRunReceipt: receipt,
+          requesterSessionKey:
+            "agent:main:cron:same-millisecond-successor:run:550e8400-e29b-41d4-a716-446655440005",
+          taskId: "media-task-old-same-millisecond-run",
+          runId: "tool:music_generate:old-same-millisecond-run",
+          toolName: "music_generate",
+          error: "Detached music_generate failed after a same-millisecond successor started",
+        }),
+      ).resolves.toBe(false);
+      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })?.receiptId).toBe(
+        successor?.receiptId,
+      );
+      expect(cron.getJob(job.id)?.state).toMatchObject({
+        runningAtMs: receipt.startedAtMs,
+        lastRunAtMs: receipt.startedAtMs,
+        lastRunStatus: "ok",
+      });
+
+      successorRunDone.resolve({ status: "ok", summary: "successor generation started" });
+      await successorRunPromise;
+      expect(cron.getJob(job.id)?.state).toMatchObject({
+        lastRunAtMs: receipt.startedAtMs,
+        lastRunStatus: "ok",
+      });
+    } finally {
+      firstRunDone.resolve({ status: "ok", summary: "generation started" });
+      successorRunDone.resolve({ status: "ok", summary: "successor generation started" });
+      cron.stop();
+    }
+  });
 });

@@ -3,6 +3,7 @@ import type { DetachedMediaCronFailureRecordRequest } from "../detached-media-fa
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import {
   canRecordDetachedFailureForCronRunReceiptInDatabase,
+  findActiveCronRunReceiptInDatabase,
   recordDetachedFailureForCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
@@ -45,7 +46,14 @@ export async function recordDetachedMediaFailure(
       },
       mutate: ({ database, jobs }) => {
         const job = jobs.get(receipt.jobId);
-        const activeThisRun = job?.state.runningAtMs === receipt.startedAtMs;
+        const activeReceipt = findActiveCronRunReceiptInDatabase({
+          database,
+          storePath: state.deps.storePath,
+          jobId: receipt.jobId,
+        });
+        const activeThisRun =
+          job?.state.runningAtMs === receipt.startedAtMs &&
+          activeReceipt?.receiptId === receipt.receiptId;
         const completedThisRun = job?.state.lastRunAtMs === receipt.startedAtMs;
         const anotherRunActive = job?.state.runningAtMs != null && !activeThisRun;
         if (
