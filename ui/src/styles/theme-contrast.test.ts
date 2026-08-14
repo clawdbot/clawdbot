@@ -128,7 +128,7 @@ describe("Control UI theme contrast", () => {
     }
   });
 
-  it("keeps sidebar metadata on the AA-tested muted token without opacity dimming", () => {
+  it("keeps sidebar metadata on the muted token and settled section treatment", () => {
     const groupLabelRule = readRuleBody(layoutCss, ".settings-sidebar__group-label");
     const buildRule = readRuleBody(layoutCss, ".settings-sidebar__footer .sidebar-footer-build");
     const sessionLabelRule = readRuleBody(
@@ -138,7 +138,9 @@ describe("Control UI theme contrast", () => {
 
     expect(groupLabelRule).toMatch(/color:\s*var\(--muted\)/);
     expect(buildRule).toMatch(/color:\s*var\(--muted\)/);
-    expect(sessionLabelRule).toMatch(/color:\s*var\(--muted\)/);
+    expect(sessionLabelRule).toMatch(
+      /color:\s*color-mix\(in srgb, var\(--muted\) 78%, transparent\)/,
+    );
     expect(readOpacity(sessionLabelRule)).toBe(1);
 
     for (const selector of [

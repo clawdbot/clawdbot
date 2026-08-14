@@ -515,7 +515,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
 
       const baseline = await readSizes();
       expect(baseline).toMatchObject({
-        childName: 12,
+        childName: 13,
         childTrail: 10,
         coarsePointer: true,
         agentFilter: 16,
@@ -529,7 +529,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
       });
       const scaled = await readSizes();
       expect(scaled.agentFilter).toBeCloseTo(12 * 1.4, 1);
-      expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
+      expect(scaled.childName).toBeCloseTo(13 * 1.4, 1);
       expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.settingsSearch).toBeCloseTo(12.5 * 1.4, 1);
