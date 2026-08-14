@@ -22,6 +22,7 @@ import {
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
@@ -587,8 +588,15 @@ function completeEmbeddedRun(
   // a length stop whose only output is partial assistant text. A length stop that
   // also produced terminal output (tool media, a committed source reply) was
   // already complete before this fix and must not gain a misleading extra reply.
+  // Nonblank assistant text is also required: a cron turn whose only payload is
+  // the synthesized silent result of a successful tool has no partial prose to
+  // label, and appending a notice there would turn intentional silence into a
+  // visible message.
+  const hasPartialAssistantText =
+    input.attempt.assistantTexts.some((text) => text.trim().length > 0) ||
+    resolveFinalAssistantVisibleText(input.attemptAssistant) !== undefined;
   const isTruncatedPartialReply =
-    stopReason === "length" && !hasAttemptTerminalState(input.attempt);
+    stopReason === "length" && !hasAttemptTerminalState(input.attempt) && hasPartialAssistantText;
   // Existing visible payloads already avoid the silent-park symptom. The diagnostic
   // fills only an otherwise empty yielded turn and must not duplicate visible output.
   // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)

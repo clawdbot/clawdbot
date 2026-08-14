@@ -248,6 +248,40 @@ describe("terminal resolution", () => {
     expect(activateInternalPrompt).not.toHaveBeenCalled();
   });
 
+  it("keeps a length-stopped silent cron result silent", async () => {
+    // The only payload is the synthesized silent result of a successful tool and
+    // the assistant produced no prose, so there is no partial reply to label; a
+    // truncation notice here would turn intentional silence into a message.
+    const assistant = emptyAssistant({ stopReason: "length" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec" }],
+      messagesSnapshot: [
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+          details: { aggregated: SILENT_REPLY_TOKEN },
+        } as never,
+        assistant,
+      ],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: { trigger: "cron", terminalReplyExpectation: "required" },
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+  });
+
   it("completes a reply-optional side-effecting turn as intentional silence", async () => {
     const assistant = emptyAssistant();
     const attempt = makeEmbeddedRunnerAttempt({
