@@ -166,6 +166,9 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "src/plugins/provider-runtime-model.types.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
+  // doctor-repair-runtime re-exports the state migration contract into the SDK.
+  "src/state/openclaw-state-db.ts",
+  "src/state/openclaw-state-db-contract.ts",
   "packages/ai/src",
   "packages/llm-core/src",
   "packages/markdown-core/src",
