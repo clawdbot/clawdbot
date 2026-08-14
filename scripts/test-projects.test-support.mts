@@ -50,7 +50,10 @@ import {
   isProviderOpenAiExtensionRoot,
 } from "../test/vitest/vitest.extension-provider-paths.mjs";
 import { isQaExtensionRoot } from "../test/vitest/vitest.extension-qa-paths.mjs";
-import { isTelegramExtensionRoot } from "../test/vitest/vitest.extension-telegram-paths.mjs";
+import {
+  isTelegramExtensionRoot,
+  telegramExtensionTestRoots,
+} from "../test/vitest/vitest.extension-telegram-paths.mjs";
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
@@ -255,6 +258,10 @@ const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-t
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
+const EXTENSION_TEST_PROCESS_ROOTS = new Map([
+  [EXTENSION_MATRIX_VITEST_CONFIG, matrixExtensionTestRoots],
+  [EXTENSION_TELEGRAM_VITEST_CONFIG, telegramExtensionTestRoots],
+]);
 
 const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_VITEST_CONFIG, 180],
@@ -962,16 +969,15 @@ function createBroadToolingScriptPlans(params: VitestRunPlan & { cwd: string }) 
     : null;
 }
 
-function createBoundedExtensionPlans(
-  params: Omit<VitestRunPlan, "includePatterns"> & { roots: string[] },
-) {
-  const { config, forwardedArgs, roots, watchMode } = params;
-  if (watchMode) {
-    return null;
+function createBoundedExtensionPlans(plan: VitestRunPlan) {
+  const { config, forwardedArgs, watchMode } = plan;
+  const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
+  if (watchMode || !roots) {
+    return [plan];
   }
   const chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
   if (chunks.length <= 1) {
-    return null;
+    return [plan];
   }
   return chunks.map((includePatterns) => ({
     config,
@@ -3602,12 +3608,14 @@ export function buildVitestRunPlans(
         "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
       );
     }
-    return explicitConfigTargets.map((config) => ({
-      config,
-      forwardedArgs: nonTargetArgs,
-      includePatterns: null,
-      watchMode,
-    }));
+    return explicitConfigTargets.flatMap((config) =>
+      createBoundedExtensionPlans({
+        config,
+        forwardedArgs: nonTargetArgs,
+        includePatterns: null,
+        watchMode,
+      }),
+    );
   }
 
   const groupedTargets = new Map<string, string[]>();
@@ -3718,13 +3726,7 @@ export function buildVitestRunPlans(
           includePatterns: null,
           watchMode,
         };
-        const boundedPlans = createBoundedExtensionPlans({
-          config,
-          forwardedArgs: nonTargetArgs,
-          roots: matrixExtensionTestRoots,
-          watchMode,
-        });
-        plans.push(...(boundedPlans ?? [plan]));
+        plans.push(...createBoundedExtensionPlans(plan));
       }
       continue;
     }
@@ -3761,9 +3763,12 @@ export function buildVitestRunPlans(
       plans.push(...broadToolingScriptPlans);
       continue;
     }
+    const processRoots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
     const boundedExtensionRoots = grouped.flatMap((targetArg) => {
       const root = toRepoRelativeTarget(targetArg, cwd);
-      return isMatrixExtensionRoot(root) && isExistingDirectoryTarget(targetArg, cwd) ? [root] : [];
+      return processRoots?.includes(root) && isExistingDirectoryTarget(targetArg, cwd)
+        ? [root]
+        : [];
     });
     const boundedRootsCoverGroupedTargets = grouped.every((targetArg) => {
       const relativeTarget = toRepoRelativeTarget(targetArg, cwd);
@@ -3776,7 +3781,7 @@ export function buildVitestRunPlans(
         ? createBoundedExtensionPlans({
             config,
             forwardedArgs: forwardedPlanArgs,
-            roots: boundedExtensionRoots,
+            includePatterns,
             watchMode,
           })
         : null;
@@ -3856,12 +3861,11 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
             listGatewayServerTestTargets(cwd),
             GATEWAY_SERVER_TEST_PROCESS_COUNT,
           );
-        } else if (config === EXTENSION_MATRIX_VITEST_CONFIG) {
-          chunks = createExtensionTestProcessTargetChunks(
-            config,
-            matrixExtensionTestRoots,
-            forwardedArgs,
-          );
+        } else {
+          const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
+          if (roots) {
+            chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
+          }
         }
         if (chunks.length > 0) {
           return chunks.map((targets) => ({

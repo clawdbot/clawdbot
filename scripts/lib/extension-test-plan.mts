@@ -93,6 +93,11 @@ const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
   // The non-isolated Matrix suite intentionally shares module state within a process.
   // Bound its lifetime so Vite's transformed module graph cannot grow across the whole suite.
   ["test/vitest/vitest.extension-matrix.config.ts", 40],
+  [
+    "test/vitest/vitest.extension-telegram.config.ts",
+    // A 10-file serial worker reached 231s and 2.7 GiB RSS (observed 2026-08).
+    5,
+  ],
 ]);
 const EXTENSION_TEST_CONFIG_ROUTES: Array<[(root: string) => boolean, string]> = [
   [isActiveMemoryExtensionRoot, "test/vitest/vitest.extension-active-memory.config.ts"],

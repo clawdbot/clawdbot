@@ -42,26 +42,35 @@ import {
 
 const normalizeRepoPath = toRepoPath;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
+const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 5;
 
 function expectedMatrixTestProcessCount() {
   const testFileCount = listExtensionTestFilesForRoots(["extensions/matrix"]).length;
   return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
 }
 
+function expectedTelegramTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots(["extensions/telegram"]).length;
+  return Math.max(1, Math.ceil(testFileCount / TELEGRAM_TEST_PROCESS_FILE_LIMIT));
+}
+
 function listExpectedFullExtensionRunPlans() {
   const matrixConfig = "test/vitest/vitest.extension-matrix.config.ts";
-  const matrixPlans = buildVitestRunPlans(["extensions/matrix"], process.cwd());
-  return listFullExtensionVitestProjectConfigs().flatMap((config) =>
-    config === matrixConfig
-      ? matrixPlans
-      : [
-          {
-            config,
-            forwardedArgs: [],
-            includePatterns: null,
-            watchMode: false,
-          },
-        ],
+  const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
+  const boundedPlansByConfig = new Map([
+    [matrixConfig, buildVitestRunPlans(["extensions/matrix"], process.cwd())],
+    [telegramConfig, buildVitestRunPlans(["extensions/telegram"], process.cwd())],
+  ]);
+  return listFullExtensionVitestProjectConfigs().flatMap(
+    (config) =>
+      boundedPlansByConfig.get(config) ?? [
+        {
+          config,
+          forwardedArgs: [],
+          includePatterns: null,
+          watchMode: false,
+        },
+      ],
   );
 }
 
@@ -2084,12 +2093,15 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes the top-level extensions target to every extension shard", () => {
     const matrixConfig = "test/vitest/vitest.extension-matrix.config.ts";
+    const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
     const plans = buildVitestRunPlans(["extensions"], process.cwd());
     const matrixPlans = plans.filter((plan) => plan.config === matrixConfig);
+    const telegramPlans = plans.filter((plan) => plan.config === telegramConfig);
+    const boundedConfigs = new Set([matrixConfig, telegramConfig]);
 
-    expect(plans.filter((plan) => plan.config !== matrixConfig)).toEqual(
+    expect(plans.filter((plan) => !boundedConfigs.has(plan.config))).toEqual(
       listFullExtensionVitestProjectConfigs()
-        .filter((config) => config !== matrixConfig)
+        .filter((config) => !boundedConfigs.has(config))
         .map((config) => ({
           config,
           forwardedArgs: [],
@@ -2106,7 +2118,32 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(matrixPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
+    expect(telegramPlans).toHaveLength(expectedTelegramTestProcessCount());
+    expect(
+      telegramPlans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= TELEGRAM_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
+    expect(telegramPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
+      listExtensionTestFilesForRoots(["extensions/telegram"]),
+    );
     expect(plans).toEqual(listExpectedFullExtensionRunPlans());
+  });
+
+  it("bounds an explicit Telegram config target across process lifetimes", () => {
+    const config = "test/vitest/vitest.extension-telegram.config.ts";
+    const plans = buildVitestRunPlans([config], process.cwd());
+
+    expect(plans).toHaveLength(expectedTelegramTestProcessCount());
+    expect(plans.every((plan) => plan.config === config)).toBe(true);
+    expect(
+      plans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= TELEGRAM_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
+    expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
+      listExtensionTestFilesForRoots(["extensions/telegram"]),
+    );
   });
 
   it("bounds an explicit Matrix directory target across process lifetimes", () => {
