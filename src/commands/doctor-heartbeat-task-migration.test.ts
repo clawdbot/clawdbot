@@ -140,7 +140,7 @@ async function createExistingInboxJob(fixture: Awaited<ReturnType<typeof createF
       wakeMode: "next-heartbeat",
       state: { lastRunAtMs: fixture.nowMs - 10_000 },
     },
-    { enabledExplicit: true, matchesExisting: isHeartbeatTaskCronJob },
+    { enabledExplicit: true, systemOwned: true, matchesExisting: isHeartbeatTaskCronJob },
   );
   return structuredClone("job" in result ? result.job : result);
 }
