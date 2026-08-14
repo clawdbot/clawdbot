@@ -283,6 +283,22 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it.each([
+    {
+      changedPath: "extensions/browser/src/browser/cdp.helpers.test.ts",
+      config: "test/vitest/vitest.extension-browser.config.ts",
+    },
+    {
+      changedPath: "extensions/codex/src/session-upstream-marker.ts",
+      config: "test/vitest/vitest.extension-codex.config.ts",
+    },
+  ])("runs the whole owning extension config for $changedPath", ({ changedPath, config }) => {
+    const shards = createChangedNodeTestShards([changedPath]);
+
+    expect(shards).not.toBeNull();
+    expect(shards?.flatMap((shard) => shard.configs)).toContain(config);
+  });
+
   it("preserves Matrix process bounds in mixed package fallbacks", () => {
     const shards = createChangedExtensionFallbackShards([
       "packages/gateway-protocol/src/frame-guards.ts",
@@ -406,20 +422,19 @@ describe("CI changed Node test plan", () => {
     expect(new Set(targets).size).toBe(targets.length);
   });
 
-  it("serializes changed-test chunks that contain Memory Core integration tests", () => {
+  it("serializes the owning Memory Core extension config for direct changes", () => {
     const shards = createChangedNodeTestShards([
       "extensions/memory-core/src/memory/mmr.ts",
       "extensions/memory-core/src/memory/mmr.test.ts",
     ]);
     expect(shards).not.toBeNull();
-    const targetShards = shards?.filter((shard) => shard.targets) ?? [];
-    expect(targetShards.length).toBeGreaterThan(0);
-    expect(
-      targetShards
-        .filter((shard) =>
-          shard.targets?.some((target) => target.startsWith("extensions/memory-core/")),
-        )
-        .every((shard) => shard.planConcurrency === 1),
-    ).toBe(true);
+    expect(shards).toContainEqual({
+      checkName: "checks-node-changed-extensions-config",
+      configs: ["test/vitest/vitest.extension-memory.config.ts"],
+      planConcurrency: 1,
+      requiresDist: false,
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      shardName: "changed-extensions-config",
+    });
   });
 });

@@ -72,6 +72,8 @@ update_restart_seconds=""
 BASELINE_INSTALL_LOG="$ARTIFACT_ROOT/baseline-install.log"
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
 UPDATE_ERR="$ARTIFACT_ROOT/update.err"
+POST_UPDATE_VALIDATE_JSON="$ARTIFACT_ROOT/post-update-validate.json"
+POST_UPDATE_VALIDATE_ERR="$ARTIFACT_ROOT/post-update-validate.err"
 DOCTOR_LOG="$ARTIFACT_ROOT/doctor.log"
 BASELINE_DOCTOR_LOG="$ARTIFACT_ROOT/baseline-doctor.log"
 GATEWAY_LOG="$ARTIFACT_ROOT/gateway.log"
@@ -1386,11 +1388,18 @@ update_candidate() {
   if [ "$ROOT_MANAGED_VPS" != "1" ]; then
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
-  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
+  local update_status=0
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR" || update_status=$?
+  if [ "$update_status" -ne 0 ]; then
     echo "openclaw update failed" >&2
-    openclaw_e2e_print_log "$UPDATE_ERR" >&2
-    openclaw_e2e_print_log "$UPDATE_JSON" >&2
-    return 1
+    local validate_status=0
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate --json >"$POST_UPDATE_VALIDATE_JSON" 2>"$POST_UPDATE_VALIDATE_ERR" || validate_status=$?
+    echo "post-update config validation probe status=$validate_status" >&2
+    openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_ERR" >&2 || true
+    openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_JSON" >&2 || true
+    openclaw_e2e_print_log "$UPDATE_ERR" >&2 || true
+    openclaw_e2e_print_log "$UPDATE_JSON" >&2 || true
+    return "$update_status"
   fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     update_end="$(node -e "process.stdout.write(String(Date.now()))")"

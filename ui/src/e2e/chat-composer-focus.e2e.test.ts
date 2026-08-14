@@ -7,6 +7,35 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("keeps remote-control typing out of the chat composer", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      await composer.waitFor({ state: "visible" });
+
+      for (const selector of ["openclaw-browser-panel", "openclaw-desktop-panel"]) {
+        const panel = page.locator(selector);
+        await composer.blur();
+        await panel.evaluate((element) => {
+          element.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "a",
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+            }),
+          );
+        });
+        await expect
+          .poll(() => composer.evaluate((element) => document.activeElement === element))
+          .toBe(false);
+      }
+    });
+  });
+
   it("uses a visible neutral focus treatment in dark and light themes", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);

@@ -778,10 +778,12 @@ export async function createGatewaySession(params: {
       if (hasInternalHookListeners("command", "new")) {
         await triggerInternalHook(
           createInternalHookEvent("command", "new", canonicalParentSessionKey, {
+            agentId: parentAgentId,
             sessionEntry: parentEntry,
             previousSessionEntry: parentEntry,
             commandSource: params.commandSource,
             cfg: params.cfg,
+            storePath: parentSessionTarget.storePath,
             workspaceDir,
           }),
         );

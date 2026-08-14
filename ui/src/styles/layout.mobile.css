@@ -636,10 +636,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 8px 10px;
   }
 
-  .brand-title {
-    font-size: 13px;
-  }
-
   .nav-item {
     padding: 6px 8px;
     font-size: var(--control-ui-text-sm); /* was 11px */
@@ -729,10 +725,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 8px 10px;
   }
 
-  .data-table-wrapper {
-    border-radius: var(--radius-sm);
-  }
-
   .session-key-cell {
     max-width: 200px;
   }
@@ -769,8 +761,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 }
 
-/* ≤500px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
-@media (max-width: 500px) {
+/* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
+@media (max-width: 560px) {
   .data-table.sessions-table {
     min-width: 320px;
   }

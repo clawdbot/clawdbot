@@ -466,6 +466,8 @@ describe("ConfigPage session observer models", () => {
     await firstLoad;
     expect(state.sessionObserverModels).toEqual(currentModels);
     expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(1, firstClient, { preparedOnly: true });
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(2, secondClient, { preparedOnly: true });
   });
 
   it("retries a transient catalog failure on the next status refresh", async () => {
@@ -498,6 +500,7 @@ describe("ConfigPage session observer models", () => {
     expect(state.sessionObserverModels).toEqual(recoveredModels);
     expect(state.sessionObserverModelsUnavailable).toBe(false);
     expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+    expect(chatModels.loadModels).toHaveBeenLastCalledWith(client, { preparedOnly: true });
   });
 });
 

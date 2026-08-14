@@ -534,7 +534,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       for (const id of accountIds) {
         setStoppedRuntime(channelId, id, {
           restartPending: false,
-          lastError: "ambient channel credentials suppressed for dev gateway",
+          lastError:
+            "ambient channel credentials suppressed; configure the channel or start the gateway with --ambient-channels",
         });
       }
       return;

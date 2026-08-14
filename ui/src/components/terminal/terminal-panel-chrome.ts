@@ -40,7 +40,7 @@ export function renderTerminalPanelHeader(
   closeTab: (id: string) => void | Promise<void>,
   openSession: () => void,
 ): TemplateResult {
-  return html`<header class="tp-header">
+  return html`<header class="rail-header tp-header">
     ${renderTerminalPanelTabs({
       tabs,
       activeId,
