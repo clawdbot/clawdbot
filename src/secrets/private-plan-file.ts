@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import {
   buildEncodedPowerShellArgs,
+  buildPowerShellFailureCause,
   WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
 } from "../infra/windows-powershell-spawn.js";
 import { runExec } from "../process/exec.js";
@@ -324,6 +325,8 @@ export async function createPrivateWindowsPlanFile(
       (existsError as NodeJS.ErrnoException).code = "EEXIST";
       throw existsError;
     }
-    throw new Error(`Unable to create private Windows plan file: ${filePath}`, { cause: error });
+    throw new Error(`Unable to create private Windows plan file: ${filePath}`, {
+      cause: buildPowerShellFailureCause(error),
+    });
   }
 }

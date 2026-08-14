@@ -35,6 +35,7 @@ import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   buildEncodedPowerShellArgs,
+  buildPowerShellFailureCause,
   WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
 } from "../infra/windows-powershell-spawn.js";
 import { runExec } from "../process/exec.js";
@@ -1537,11 +1538,15 @@ async function runEncodedWindowsPowerShell(command: string, maxBuffer: number): 
   if (!powershell) {
     throw new Error("Unable to resolve PowerShell for Windows SQLite path security.");
   }
-  const { stdout } = await runExec(powershell, buildEncodedPowerShellArgs(command), {
-    timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
-    maxBuffer,
-  });
-  return stdout;
+  try {
+    const { stdout } = await runExec(powershell, buildEncodedPowerShellArgs(command), {
+      timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+      maxBuffer,
+    });
+    return stdout;
+  } catch (error) {
+    throw buildPowerShellFailureCause(error);
+  }
 }
 
 async function removePublishedSnapshotDirectoryIfOwned(

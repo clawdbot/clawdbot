@@ -4,11 +4,12 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSystemBin } from "./resolve-system-bin.js";
 import { decodeWindowsOutputBuffer } from "./windows-encoding.js";
 import {
   buildEncodedPowerShellArgs,
+  buildPowerShellFailureCause,
+  sanitizePowerShellOutputText,
   WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
 } from "./windows-powershell-spawn.js";
 
@@ -83,14 +84,7 @@ function failureText(value: unknown): string {
     : typeof value === "string"
       ? value
       : "";
-  return truncateUtf16Safe(
-    text
-      .split(/\r?\n/u)
-      .filter((line) => !line.toLowerCase().includes("encodedcommand"))
-      .join("\n")
-      .trim(),
-    1000,
-  );
+  return sanitizePowerShellOutputText(text);
 }
 
 function privateDirectoryError(
@@ -109,22 +103,14 @@ function privateDirectoryError(
     (existsError as NodeJS.ErrnoException).code = "EEXIST";
     return existsError;
   }
-  const status = [
-    typeof failure.status === "number" ? `status=${failure.status}` : "",
-    typeof failure.code === "number"
-      ? `exit=${failure.code}`
-      : typeof failure.code === "string"
-        ? `code=${failure.code}`
-        : "",
-    typeof failure.killed === "boolean" ? `killed=${failure.killed}` : "",
-    typeof failure.signal === "string" ? `signal=${failure.signal}` : "",
-  ].filter(Boolean);
-  const stderrText = failureText(stderr) || failureText(failure.stderr);
-  const stdoutText = failureText(stdout) || failureText(failure.stdout);
-  const detail = stderrText ? `stderr: ${stderrText}` : stdoutText ? `stdout: ${stdoutText}` : "";
-  const cause = new Error(
-    `PowerShell failed${status.length ? ` (${status.join(", ")})` : ""}${detail ? `; ${detail}` : ""}`,
-  );
+  const cause = buildPowerShellFailureCause({
+    status: failure.status,
+    code: failure.code,
+    killed: failure.killed,
+    signal: failure.signal,
+    stderr: failureText(stderr) || failureText(failure.stderr),
+    stdout: failureText(stdout) || failureText(failure.stdout),
+  });
   return new Error(`Unable to create private Windows SQLite directory: ${directoryPath}`, {
     cause,
   });
