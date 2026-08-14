@@ -1,8 +1,8 @@
 // Proxy capture CA helpers create and inspect local capture CA certificates.
 import { createHash, createPrivateKey, randomBytes, X509Certificate } from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
+import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import { type FileLockOptions, withFileLock } from "../infra/file-lock.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -167,7 +167,7 @@ function isValidLeafPair(params: { certPath: string; keyPath: string; hostname: 
   try {
     const cert = new X509Certificate(fs.readFileSync(params.certPath));
     const key = createPrivateKey(fs.readFileSync(params.keyPath));
-    const hostMatches = net.isIP(params.hostname)
+    const hostMatches = parseCanonicalIpAddress(params.hostname)
       ? cert.checkIP(params.hostname) === params.hostname
       : cert.checkHost(params.hostname) === params.hostname;
     return !cert.ca && cert.checkPrivateKey(key) && hostMatches;
@@ -199,7 +199,7 @@ async function generateLocalProxyLeafQueued(params: {
   const certPath = path.join(stagingDir, "leaf.pem");
   const extPath = path.join(stagingDir, "leaf.ext");
   try {
-    const sanKind = net.isIP(params.hostname) ? "IP" : "DNS";
+    const sanKind = parseCanonicalIpAddress(params.hostname) ? "IP" : "DNS";
     fs.writeFileSync(
       extPath,
       `subjectAltName=${sanKind}:${params.hostname}\nextendedKeyUsage=serverAuth\n`,
