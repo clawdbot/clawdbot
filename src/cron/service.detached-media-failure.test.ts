@@ -246,4 +246,68 @@ describe("detached media cron failure ownership", () => {
       cron.stop();
     }
   });
+
+  it("does not apply an old detached failure across a newer active run", async () => {
+    const { storePath } = await makeStorePath();
+    const firstRunDone = createDeferred<{ status: "ok"; summary: string }>();
+    const newerRunDone = createDeferred<{ status: "ok"; summary: string }>();
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi
+        .fn()
+        .mockImplementationOnce(async () => await firstRunDone.promise)
+        .mockImplementationOnce(async () => await newerRunDone.promise),
+    });
+    await cron.start();
+    try {
+      const job = await cron.add(detachedMediaJob("newer-active-run"));
+      const receipt = await runAndCaptureReceipt({
+        cron,
+        storePath,
+        jobId: job.id,
+        runDone: firstRunDone,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
+      const newerRunPromise = cron.run(job.id, "force");
+      let newerStartedAtMs: number | undefined;
+      await vi.waitFor(() => {
+        newerStartedAtMs = cron.getJob(job.id)?.state.runningAtMs;
+        expect(newerStartedAtMs).toBeDefined();
+        expect(newerStartedAtMs).not.toBe(receipt.startedAtMs);
+      });
+
+      await expect(
+        cron.recordDetachedMediaFailure({
+          cronRunReceipt: receipt,
+          requesterSessionKey:
+            "agent:main:cron:newer-active-run:run:550e8400-e29b-41d4-a716-446655440004",
+          taskId: "media-task-old-run",
+          runId: "tool:music_generate:old-run",
+          toolName: "music_generate",
+          error: "Detached music_generate failed after a newer run started",
+        }),
+      ).resolves.toBe(false);
+      expect(cron.getJob(job.id)?.state).toMatchObject({
+        runningAtMs: newerStartedAtMs,
+        lastRunAtMs: receipt.startedAtMs,
+        lastRunStatus: "ok",
+      });
+
+      newerRunDone.resolve({ status: "ok", summary: "newer generation started" });
+      await newerRunPromise;
+      expect(cron.getJob(job.id)?.state).toMatchObject({
+        lastRunAtMs: newerStartedAtMs,
+        lastRunStatus: "ok",
+      });
+    } finally {
+      firstRunDone.resolve({ status: "ok", summary: "generation started" });
+      newerRunDone.resolve({ status: "ok", summary: "newer generation started" });
+      cron.stop();
+    }
+  });
 });

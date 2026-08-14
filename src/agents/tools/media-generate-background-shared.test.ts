@@ -838,12 +838,16 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
   });
 
-  it("fails the media task when generation itself fails", async () => {
+  it("records the originating cron failure before a pending requester wake", async () => {
     const scheduled: Array<() => Promise<void>> = [];
     const generationError = new Error("provider returned no images");
+    const order: string[] = [];
     let releaseWake: (() => void) | undefined;
     const wakePending = new Promise<void>((resolve) => {
       releaseWake = resolve;
+    });
+    const recordCronFailure = vi.fn(async () => {
+      order.push("record-cron-failure");
     });
     const lifecycle = {
       createTaskRun: vi.fn(),
@@ -851,11 +855,12 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       completeTaskRun: vi.fn(),
       failTaskRun: vi.fn(),
       wakeTaskCompletion: vi.fn(async () => {
+        order.push("wake");
+        expect(recordCronFailure).toHaveBeenCalledOnce();
         await wakePending;
         return { status: "delivered" as const };
       }),
     };
-    const recordCronFailure = vi.fn(async () => {});
     const unregisterCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
       "store-1",
       recordCronFailure,
@@ -897,6 +902,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
       const backgroundWork = scheduled[0]?.();
       await vi.waitFor(() => expect(lifecycle.wakeTaskCompletion).toHaveBeenCalled());
+      expect(order).toEqual(["record-cron-failure", "wake"]);
       expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
       unregisterCronFailureRecorder();
       unregisterReplacementCronFailureRecorder = registerDetachedMediaCronFailureRecorder(

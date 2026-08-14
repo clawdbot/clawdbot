@@ -489,6 +489,15 @@ export function scheduleMediaGenerationTaskCompletion<
         run: params.run,
       });
     } catch (error) {
+      // Persist the originating cron failure before requester delivery can
+      // retry. A later cron run may start while that wake is pending, and the
+      // old receipt must never be applied across that newer run.
+      await markOriginatingCronRunFailedFromMediaGeneration({
+        handle: params.handle,
+        error,
+        toolName: params.toolName,
+        recorder: cronFailureRecorder,
+      });
       try {
         const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
           wake: async () =>
@@ -513,12 +522,6 @@ export function scheduleMediaGenerationTaskCompletion<
           error: wakeError,
         });
       }
-      await markOriginatingCronRunFailedFromMediaGeneration({
-        handle: params.handle,
-        error,
-        toolName: params.toolName,
-        recorder: cronFailureRecorder,
-      });
       params.lifecycle.failTaskRun({ handle: params.handle, error });
       return;
     }

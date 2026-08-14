@@ -47,9 +47,11 @@ export async function recordDetachedMediaFailure(
         const job = jobs.get(receipt.jobId);
         const activeThisRun = job?.state.runningAtMs === receipt.startedAtMs;
         const completedThisRun = job?.state.lastRunAtMs === receipt.startedAtMs;
+        const anotherRunActive = job?.state.runningAtMs != null && !activeThisRun;
         if (
           !job ||
           resolveCronJobConfigRevision(job) !== receipt.configRevision ||
+          anotherRunActive ||
           (!activeThisRun && !completedThisRun) ||
           (!activeThisRun && completedThisRun && job.state.lastRunStatus === "error") ||
           !canRecordDetachedFailureForCronRunReceiptInDatabase({ database, handle: receipt })
