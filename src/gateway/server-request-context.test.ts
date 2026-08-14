@@ -50,6 +50,7 @@ function makeContextParams(
     loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
       agentId: "main",
       agentDir: "/tmp/model-catalog-agent",
+      catalogComplete: false,
       workspaceDir: "/tmp/model-catalog-workspace",
       config,
       entries: [],

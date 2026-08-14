@@ -240,6 +240,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: false,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
         ...preparedOwnerFacts(replacementConfig),
@@ -249,6 +250,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: true,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
         ...preparedOwnerFacts(replacementConfig),
@@ -286,6 +288,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: false,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
         ...preparedOwnerFacts(replacementConfig),
@@ -295,6 +298,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "worker",
         agentDir: "/tmp/models-list-worker-agent",
+        catalogComplete: true,
         workspaceDir: "/tmp/models-list-worker-workspace",
         config: replacementConfig,
         ...preparedOwnerFacts(replacementConfig),

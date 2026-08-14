@@ -499,7 +499,7 @@ describe("gateway server models + voicewake", () => {
       const models = res1.payload?.models ?? [];
       expect(models).toEqual(expectedSortedCatalog());
 
-      expect(agentDiscoveryMock.discoverCalls).toBe(1);
+      expect(agentDiscoveryMock.discoverCalls).toBe(0);
     });
   });
 

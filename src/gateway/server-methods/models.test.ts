@@ -255,6 +255,7 @@ function requestModelsList(params: {
     return {
       ...owner,
       ...(loadParams?.agentId ? { agentId: loadParams.agentId } : {}),
+      catalogComplete: loadParams?.readOnly === false,
       entries,
       routeVariants: entries,
       authMaterializations: [],
@@ -278,6 +279,7 @@ function requestModelsList(params: {
     readPrepared: async () =>
       ({
         ...resolveOwnerFacts(),
+        catalogComplete: false,
         entries: [],
         routeVariants: [],
         authMaterializations: [],
