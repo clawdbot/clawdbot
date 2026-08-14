@@ -430,6 +430,9 @@ export class GatewayClient {
           clearInterval(this.tickTimer);
           this.tickTimer = null;
         }
+        // A reconnect may land on a different build, so capabilities must not outlive the
+        // connection that advertised them; the next hello republishes the current set.
+        this.serverCapabilities = new Set<string>();
         if (decision.notify) {
           this.opts.onClose?.(context.code, context.reason, this.closeInfo(context));
         }

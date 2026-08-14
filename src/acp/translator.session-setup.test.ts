@@ -275,13 +275,28 @@ describe("acp bridge session cwd persistence", () => {
   // adoptedCwd: undefined = new row (Gateway echoes the requested cwd back);
   // a string = adopted row that owns that directory; null = adopted row with no directory.
   function createRecordingGateway(
-    options: { adoptedCwd?: string | null; serverCapabilities?: readonly string[] } = {},
+    options: {
+      adoptedCwd?: string | null;
+      serverCapabilities?: readonly string[];
+      rowCwd?: string;
+    } = {},
   ) {
     const calls: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       calls.push({ method, params });
       if (method === "sessions.list") {
-        return { sessions: [] };
+        return {
+          sessions: options.rowCwd
+            ? [
+                {
+                  key: "agent:main:work",
+                  kind: "direct",
+                  updatedAt: 1_710_000_000_000,
+                  spawnedCwd: options.rowCwd,
+                },
+              ]
+            : [],
+        };
       }
       if (method === "sessions.create") {
         const requested = (params as { cwd?: string } | undefined)?.cwd;
@@ -403,6 +418,37 @@ describe("acp bridge session cwd persistence", () => {
       } as never),
     ).rejects.toThrow(/cannot scope a working directory to newly created sessions/i);
     expect(createCalls(calls)).toStrictEqual([]);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("reports the adopted session's directory on loadSession, not the requested one", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { gateway } = createRecordingGateway({ rowCwd: "/tmp/owner-project" });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    // loadSession attaches to a Gateway row that owns its directory; the prompt prefix and
+    // provenance receipt read this value, so claiming the requested cwd would contradict the turn.
+    await agent.loadSession(createLoadSessionRequest("agent:main:work", "/tmp/my-project"));
+
+    expect(sessionStore.getSession("agent:main:work")?.cwd).toBe("/tmp/owner-project");
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("reports the adopted session's directory on resumeSession too", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { gateway } = createRecordingGateway({ rowCwd: "/tmp/owner-project" });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await agent.resumeSession({
+      sessionId: "agent:main:work",
+      cwd: "/tmp/my-project",
+      mcpServers: [],
+      _meta: {},
+    } as never);
+
+    expect(sessionStore.getSession("agent:main:work")?.cwd).toBe("/tmp/owner-project");
 
     sessionStore.clearAllSessionsForTest();
   });
