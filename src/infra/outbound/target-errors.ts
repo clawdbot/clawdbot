@@ -18,6 +18,18 @@ export function missingTargetError(provider: string, hint?: string): Error {
   );
 }
 
+export function missingMessageActionTargetError(action: string): Error {
+  return new MessageActionDeniedError(
+    `Action ${action} requires a target.`,
+    "message_target_missing",
+    "message-target:required",
+  );
+}
+
+export function invalidMessageActionTargetError(message: string): Error {
+  return new MessageActionDeniedError(message, "message_target_invalid", "message-target:valid");
+}
+
 /**
  * Formats the user-facing error shown when a target name resolves ambiguously.
  */

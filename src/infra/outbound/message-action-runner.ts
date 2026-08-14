@@ -28,6 +28,7 @@ import type {
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
@@ -94,7 +95,11 @@ async function handleBroadcastAction(
     resolveEffectiveMessageToolsConfig({ cfg: input.cfg, agentId: input.agentId })?.broadcast
       ?.enabled !== false;
   if (!broadcastEnabled) {
-    throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
+    throw new MessageActionDeniedError(
+      "Broadcast is disabled. Set tools.message.broadcast.enabled to true.",
+      "message_broadcast_disabled",
+      "message-broadcast:enabled",
+    );
   }
   const rawTargets = readStringArrayParam(params, "targets", { required: true });
   if (rawTargets.length === 0) {

@@ -210,6 +210,15 @@ type OutboundMessageAuditLifecycle =
       deliveryKind?: never;
     };
 
+export type OutboundMessageProgressInput = MessageAuditEventInputBase &
+  OutboundMessageAuditAttribution &
+  Extract<
+    OutboundMessageAuditLifecycle,
+    { action: "message.outbound.queued" | "message.outbound.platform-started" }
+  > & {
+    direction: "outbound";
+  };
+
 /** Raw identifiers exist only on the trusted producer-to-writer boundary. */
 type InboundMessageAuditEventInput = MessageAuditEventInputBase &
   InboundMessageAuditAttribution &
@@ -234,6 +243,17 @@ export type AuditEventInput =
   | AgentRunAuditEventInput
   | ToolActionAuditEventInput
   | MessageAuditEventInput;
+
+export function isOutboundMessageProgressInput(
+  input: AuditEventInput,
+): input is OutboundMessageProgressInput {
+  return (
+    input.kind === "message" &&
+    input.direction === "outbound" &&
+    (input.action === "message.outbound.queued" ||
+      input.action === "message.outbound.platform-started")
+  );
+}
 
 type AuditEventRecordBase = {
   schemaVersion: typeof AUDIT_EVENT_SCHEMA_VERSION;

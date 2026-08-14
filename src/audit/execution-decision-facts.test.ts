@@ -25,6 +25,7 @@ import {
   type ExecutionIdentityAdmissionEnvelope,
 } from "./execution-identity-admission.js";
 import { processExecutionIdentityAdmissionWork } from "./execution-identity-context.js";
+import { recordOutboundMessageProgress } from "./message-delivery-progress-store.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -232,9 +233,25 @@ describe("execution decision facts", () => {
       },
     ];
     for (const event of events) {
-      expect(recordAuditEvent(event, database)).toBeDefined();
+      expect(
+        event.action === "message.outbound.finished"
+          ? recordAuditEvent(event, database)
+          : recordOutboundMessageProgress(event, database),
+      ).toBeDefined();
     }
-    expect(recordAuditEvent(events[0]!, database)).toBeUndefined();
+    expect(
+      recordOutboundMessageProgress(
+        {
+          ...common,
+          occurredAt: now,
+          sourceId: "queue-1:queued",
+          action: "message.outbound.queued",
+          status: "started",
+          outcome: "queued",
+        },
+        database,
+      ),
+    ).toBeUndefined();
 
     const inspect = () =>
       presentExecutionDecisionReceipts({
@@ -254,6 +271,14 @@ describe("execution decision facts", () => {
     expect(inspect().decisions.map((item) => item.enforcement.coverageState)).toEqual(
       Array.from({ length: 6 }, () => "attribution-only"),
     );
+    expect(inspect().decisions.map((item) => item.source.owner)).toEqual([
+      "outbound_message_progress",
+      "outbound_message_progress",
+      "audit_events",
+      "audit_events",
+      "audit_events",
+      "audit_events",
+    ]);
     expect(JSON.stringify(inspect())).not.toContain("raw-channel-target");
     expect(JSON.stringify(inspect())).not.toContain("raw-platform-message");
 

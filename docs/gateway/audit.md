@@ -30,9 +30,10 @@ inspection adapts their existing first-answer-wins rows directly into decision
 receipts; it does not copy approvals into the audit ledger or the generic
 decision-fact table.
 
-Shared outbound delivery is another owner-native source. Queue admission,
-platform-send start, and terminal message rows are adapted directly during run
-inspection; they are not copied into the generic decision-fact table.
+Shared outbound delivery is another owner-native source. Queue admission and
+platform-send start use a lazy progress companion, while terminal message rows
+remain in the activity ledger. Run inspection merges both sources directly;
+neither is copied into the generic decision-fact table.
 
 ## Run identity inspection
 
@@ -139,7 +140,8 @@ remain `attribution-only`; mixed or missing evidence is `unknown`. Identity and
 the corresponding decision share the existing audit-writer FIFO.
 
 For an admitted run with message auditing enabled, run inspection also adapts
-the outbound message lifecycle. It reports `queued`, `platform-started`,
+the outbound message lifecycle. It deterministically merges the lazy progress
+owner with terminal ledger rows and reports `queued`, `platform-started`,
 `delivered`, `failed`, `unknown`, and intentionally `suppressed` as distinct
 receipts. Queue and transport results are `attribution-only`: they record what
 the delivery owner observed but do not prove authorization. The existing
@@ -231,10 +233,11 @@ Message lifecycle events are opt-in and disabled by default.
 | Tool actions | `tool.action.started`, `tool.action.finished`                                      | on      |
 | Messages     | `message.inbound.processed`, `message.outbound.{queued,platform-started,finished}` | off     |
 
-Every record carries a stable event id, a monotonic ledger sequence, a
-lifecycle timestamp, actor, action, status, `schemaVersion: 1`, and
-`redaction: "metadata_only"`. See [Audit records](/cli/audit) for the full
-field reference and query filters.
+Every record carries a stable event id, a monotonic owner sequence, a lifecycle
+timestamp, actor, action, status, `schemaVersion: 1`, and
+`redaction: "metadata_only"`. The activity ledger contains terminal outbound
+rows; run inspection obtains nonterminal outbound progress from its companion.
+See [Audit records](/cli/audit) for the full field reference and query filters.
 
 ## Message lifecycle events
 
@@ -249,9 +252,9 @@ Two authoritative boundaries produce message records:
 
 - **Inbound** rows are written when an accepted message reaches core dispatch,
   including duplicate and terminal processing outcomes.
-- **Outbound** rows are written when shared durable delivery accepts queue
-  custody, starts platform delivery, and reaches a terminal outcome: sent,
-  suppressed, failed, or an explicit `unknown` for crash-ambiguous sends.
+- **Outbound** progress records are written when shared durable delivery accepts
+  queue custody and starts platform delivery. Terminal activity rows record
+  sent, suppressed, failed, or an explicit `unknown` for crash-ambiguous sends.
   Queue recovery and dead-letter outcomes are included. Stable queue-derived
   source ids prevent recovery from duplicating a lifecycle row. Each original
   logical reply payload gets one row per reached stage; chunking and adapter
@@ -271,8 +274,8 @@ fewer rows in `direct` mode than they do in `all` mode.
 
 ## Privacy model
 
-Message rows never store raw platform identifiers. Account, conversation,
-message, and target identifiers, when correlation is available, are exported
+Message activity and progress records never store raw platform identifiers.
+Account, conversation, message, and target identifiers, when correlation is available, are exported
 only as installation-local keyed pseudonyms
 (`hmac-sha256:v1:<keyId>:<digest>`):
 
@@ -331,6 +334,15 @@ written off the delivery hot path. Queries never return records older than 30
 days, and the ledger is capped at 100,000 rows; expired rows are pruned during
 startup, hourly maintenance, and later writes. Retention maintenance keeps
 running even when collection is disabled.
+
+Outbound `queued` and `platform-started` records live in the narrowly owned
+`outbound_message_progress` table. The table is created idempotently only on
+the first enabled progress write, remains absent after startup, read-only
+inspection, disabled collection, and terminal-only delivery, and does not
+change state schema version 7. Missing under read-only inspection means no
+retained progress. It is capped at 200,000 rows with the same 30-day retention.
+Terminal `message.outbound.finished` rows stay in `audit_events`, so a compatible
+older Gateway can open and use the database while ignoring the additive table.
 
 Upgrading from a Gateway with the earlier run/tool-only ledger migrates the
 schema automatically at startup (or via `openclaw doctor --fix`); existing

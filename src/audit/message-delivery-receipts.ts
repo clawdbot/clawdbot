@@ -115,7 +115,8 @@ function projectMessageDeliveryReceipt(
       contextFieldsUsed: ["runId"],
     },
     source: {
-      owner: "audit_events",
+      owner:
+        event.action === "message.outbound.finished" ? "audit_events" : "outbound_message_progress",
       recordRef: event.eventId,
       decisionBoundary: event.action,
     },

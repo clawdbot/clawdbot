@@ -14,6 +14,10 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
+import {
+  workspaceConfig,
+  workspaceTestPlugin,
+} from "../../infra/outbound/message-action-runner.test-support.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import {
   MESSAGE_TOOL_DELIVERY_HINTS,
@@ -35,6 +39,8 @@ type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
+type RunMessageAction =
+  typeof import("../../infra/outbound/message-action-runner.js").runMessageAction;
 
 const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
 const CRITICAL_THRESHOLD = 20;
@@ -49,6 +55,7 @@ let createOpenClawTools: CreateOpenClawTools;
 let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
 let setActivePluginRegistry: SetActivePluginRegistry;
 let createTestRegistry: CreateTestRegistry;
+let actualRunMessageAction: RunMessageAction;
 
 type DescribeMessageTool = NonNullable<
   NonNullable<ChannelPlugin["actions"]>["describeMessageTool"]
@@ -384,6 +391,9 @@ beforeAll(async () => {
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
   ({ createMessageTool } = await import("./message-tool-execution.js"));
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
+  ({ runMessageAction: actualRunMessageAction } = await vi.importActual(
+    "../../infra/outbound/message-action-runner.js",
+  ));
 });
 
 const mintedTurnCapabilities: string[] = [];
@@ -2823,6 +2833,79 @@ describe("message tool explicit target guard", () => {
           }),
         ),
       ).rejects.toThrow("Unknown account");
+
+      mocks.runMessageAction.mockImplementationOnce(actualRunMessageAction as never);
+      const ordinaryMissingTargetTool = createMessageTool({
+        config: {},
+        runMessageAction: mocks.runMessageAction as never,
+      });
+      await expect(
+        withGatewayToolCallerIdentity(identity, () =>
+          ordinaryMissingTargetTool.execute("ordinary-missing-target", {
+            action: "send",
+            message: "hi",
+          }),
+        ),
+      ).rejects.toThrow("requires a target");
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "workspace", source: "test", plugin: workspaceTestPlugin },
+        ]),
+      );
+      mocks.runMessageAction.mockImplementationOnce(actualRunMessageAction as never);
+      const invalidTargetTool = createMessageTool({
+        config: workspaceConfig,
+        conversationReadOrigin: "direct-operator",
+        runMessageAction: mocks.runMessageAction as never,
+      });
+      await expect(
+        withGatewayToolCallerIdentity(identity, () =>
+          invalidTargetTool.execute("invalid-target", {
+            action: "channel-info",
+            channel: "workspace",
+            channelId: "U12345678",
+          }),
+        ),
+      ).rejects.toThrow("resolved to a user target");
+
+      mocks.runMessageAction.mockImplementationOnce(actualRunMessageAction as never);
+      const disabledBroadcastTool = createMessageTool({
+        config: { tools: { message: { broadcast: { enabled: false } } } } as never,
+        runMessageAction: mocks.runMessageAction as never,
+      });
+      await expect(
+        withGatewayToolCallerIdentity(identity, () =>
+          disabledBroadcastTool.execute("disabled-broadcast", {
+            action: "broadcast",
+            targets: ["workspace:channel:C12345678"],
+            message: "hi",
+          }),
+        ),
+      ).rejects.toThrow("Broadcast is disabled");
+
+      const countBeforeOperationalFailures = receipts.length;
+      for (const [actionId, error] of [
+        ["directory-outage", new Error("directory unavailable")],
+        ["programmer-error", new TypeError("unexpected internal state")],
+      ] as const) {
+        mocks.runMessageAction.mockRejectedValueOnce(error);
+        const operationalFailureTool = createMessageTool({
+          config: workspaceConfig,
+          currentChannelProvider: "workspace",
+          runMessageAction: mocks.runMessageAction as never,
+        });
+        await expect(
+          withGatewayToolCallerIdentity(identity, () =>
+            operationalFailureTool.execute(actionId, {
+              action: "send",
+              target: "channel:C12345678",
+              message: "hi",
+            }),
+          ),
+        ).rejects.toThrow(error.message);
+      }
+      expect(receipts).toHaveLength(countBeforeOperationalFailures);
     } finally {
       clearSink();
     }
@@ -2859,6 +2942,39 @@ describe("message tool explicit target guard", () => {
         enforcement: expect.objectContaining({
           coverageState: "enforced",
           policyRefs: ["message-account:known"],
+        }),
+      }),
+      expect.objectContaining({
+        contextId: "context-message-decisions",
+        executionId: "execution-message-decisions",
+        runId: "run-message-decisions",
+        actionId: "ordinary-missing-target",
+        decision: { outcome: "denied", reasonCode: "message_target_missing" },
+        enforcement: expect.objectContaining({
+          coverageState: "enforced",
+          policyRefs: ["message-target:required"],
+        }),
+      }),
+      expect.objectContaining({
+        contextId: "context-message-decisions",
+        executionId: "execution-message-decisions",
+        runId: "run-message-decisions",
+        actionId: "invalid-target",
+        decision: { outcome: "denied", reasonCode: "message_target_invalid" },
+        enforcement: expect.objectContaining({
+          coverageState: "enforced",
+          policyRefs: ["message-target:valid"],
+        }),
+      }),
+      expect.objectContaining({
+        contextId: "context-message-decisions",
+        executionId: "execution-message-decisions",
+        runId: "run-message-decisions",
+        actionId: "disabled-broadcast",
+        decision: { outcome: "denied", reasonCode: "message_broadcast_disabled" },
+        enforcement: expect.objectContaining({
+          coverageState: "enforced",
+          policyRefs: ["message-broadcast:enabled"],
         }),
       }),
     ]);

@@ -180,14 +180,15 @@ transport progress as authorization:
 - `message_suppressed_<reason>`: the owning hook or payload normalizer
   intentionally produced no visible message.
 
-These owner-native rows are always `attribution-only`. Their keyed target
-reference and channel scope describe the destination, but they retain only a
-`runId` correlation, not an exact execution binding. Consequently they never
-claim that identity or a grant authorized delivery. Target validation, message
-policy, and active-turn capability denials are `enforced` only when their exact
+These owner-native records are always `attribution-only`. Queue and
+platform-start progress comes from the lazy `outbound_message_progress`
+companion; terminal outcomes remain in `audit_events`. Both retain only a
+`runId` correlation, not an exact execution binding, so neither can claim that
+identity or a grant authorized delivery. Target validation, message policy,
+and active-turn capability denials are `enforced` only when their exact
 context/execution/run tuple was recorded and the gate changed the outcome.
-Portable actions and early suppressions that have no durable delivery row use
-the generic decision-fact owner instead of duplicating queue or delivery state.
+Portable actions and early suppressions that have no durable delivery record
+use the generic decision-fact owner instead of duplicating delivery state.
 
 JSON output is the Gateway result without lossy reformatting. An exact result contains one
 bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
@@ -223,7 +224,7 @@ permits.
 
 ## Recorded events
 
-The Gateway projects trusted lifecycle streams into eight actions:
+The Gateway collects trusted lifecycle streams for eight actions:
 
 - `agent.run.started`
 - `agent.run.finished`
@@ -234,9 +235,13 @@ The Gateway projects trusted lifecycle streams into eight actions:
 - `message.outbound.platform-started`
 - `message.outbound.finished`
 
-Every returned record has a stable event id, a monotonically increasing ledger
-sequence, a lifecycle timestamp, actor, action, status, a
-`schemaVersion: 1` marker, source sequence, and `redaction: "metadata_only"`.
+The activity ledger returns run, tool, inbound-message, and terminal outbound
+records. Nonterminal outbound actions use the separate progress owner and are
+projected as decision receipts by `--run ... --explain`; they are not placed in
+the released-reader-compatible activity ledger. Every returned activity record
+has a stable event id, a monotonically increasing ledger sequence, a lifecycle
+timestamp, actor, action, status, a `schemaVersion: 1` marker, source sequence,
+and `redaction: "metadata_only"`.
 Agent/session/run provenance and event-specific fields are present only when
 the trusted source provides them. Message records intentionally omit
 `sessionKey` and `sessionId`, so `--session` filters run and tool records only.
@@ -253,9 +258,10 @@ optional delivery kind, failure stage, duration, result count, normalized
 reason code, and keyed account/conversation/message/target pseudonyms. The
 current inbound boundary covers accepted messages that reach core dispatch,
 including core duplicate and terminal processing outcomes. The outbound
-boundary writes replay-safe `queued` and `platform_started` lifecycle rows plus
-one terminal row per original logical reply payload that reaches shared durable
-delivery. Chunking and adapter fan-out are aggregated in terminal `resultCount`.
+boundary writes replay-safe `queued` and `platform_started` progress records to
+its lazy companion plus one terminal activity row per original logical reply
+payload that reaches shared durable delivery. Chunking and adapter fan-out are
+aggregated in terminal `resultCount`.
 A terminal is `sent`, `suppressed`, `failed`, or `unknown` after acknowledgement,
 dead letter, or reconciliation makes that outcome known.
 Plugin-local and direct-send paths that bypass those shared boundaries are not
@@ -276,7 +282,7 @@ post-render payload; suppressed and crash-ambiguous rows omit it.
 
 `audit.activity.list` requires `operator.read` and accepts the same filters. It
 returns the named V1 activity event union, including run, tool, inbound-message,
-and outbound-message records.
+and terminal outbound-message records.
 
 ```bash
 openclaw gateway call audit.activity.list --params '{"channel":"telegram","limit":50}'
@@ -303,8 +309,10 @@ accepts `executionLimit` from 1–50 and an optional `executionCursor`. A run
 with multiple retained executions returns the typed `ambiguous` identity state
 and no identity context or decisions until the caller selects an execution id.
 For one selected context, receipt paging starts with admission, then reads
-owner-native terminal approvals, owner-native outbound message lifecycle rows,
-and finally generic facts for boundaries without a native durable record.
+owner-native terminal approvals, merges outbound progress and terminal records,
+and finally reads generic facts for boundaries without a native durable record.
+The merge is deterministic across restart and rejects a cursor whose exact
+owner row has expired.
 Approval and delivery inspection never write generic duplicates. Generic fact
 writes and projections also require the full context, execution, and run tuple
 to match the immutable execution context.
