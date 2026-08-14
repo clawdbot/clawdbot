@@ -3,7 +3,11 @@ import {
   type SqliteSchemaCompatibility,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
+import {
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
 import {
   FIRST_USE_STATE_INDEXES,
   FIRST_USE_STATE_TABLES,
@@ -18,7 +22,14 @@ const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINIT
   ({ columnName, tableName }) => `${tableName}.${columnName}`,
 );
 
-const CLAW_LAZY_ADDITIVE_STATE_COLUMN_SET = new Set<string>(CLAW_LAZY_ADDITIVE_STATE_COLUMNS);
+const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS = CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+  ({ columnName, tableName }) => `${tableName}.${columnName}`,
+);
+const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+    ({ columnName, tableName }) => `${tableName}.${columnName}`,
+  ),
+);
 const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",
@@ -71,6 +82,7 @@ export function getOpenClawStateRuntimeSchema(options: {
 
 export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   allowCompatibleAdditiveColumns: true,
+  allowedMissingColumns: CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "claw_package_refs.package_integrity": [
@@ -112,7 +124,7 @@ export function isOpenClawStateStartupRepairableSchemaIssue(issue: SqliteSchemaI
     return CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET.has(issue.objectName);
   }
   if (issue.code === "missing-column") {
-    return CLAW_LAZY_ADDITIVE_STATE_COLUMN_SET.has(issue.objectName);
+    return CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET.has(issue.objectName);
   }
   return (
     issue.code === "missing-or-drifted-index" &&

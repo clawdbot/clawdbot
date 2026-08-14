@@ -26,3 +26,18 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "workspace_dir", dataType: "TEXT", tableName: "installed_plugin_index" },
   { columnName: "allowed_hosts", dataType: "TEXT", tableName: "secret_store_entries" },
 ] as const satisfies readonly LazyAdditiveStateColumnDefinition[];
+
+// Most same-version columns repair during a writable shared-state open. Setup
+// correlation is different: unrelated opens and generic bootstrap credentials
+// must leave older databases untouched until setup pairing first uses it.
+export const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS =
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.filter(
+    ({ columnName, tableName }) =>
+      tableName !== "device_bootstrap_tokens" || columnName !== "setup_id",
+  );
+
+export const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS =
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.filter(
+    ({ columnName, tableName }) =>
+      tableName === "device_bootstrap_tokens" && columnName === "setup_id",
+  );

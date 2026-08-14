@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
+import { CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -124,6 +124,11 @@ export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): v
   `);
 }
 
+/** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
+export function ensureDevicePairSetupBootstrapSchema(database: DatabaseSync): void {
+  ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
+}
+
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;
@@ -207,7 +212,11 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureWorkerSessionToolStateSchema(db);
-  for (const { columnName, dataType, tableName } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
   if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {

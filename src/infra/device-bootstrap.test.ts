@@ -11,6 +11,7 @@ import {
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
+import { tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -115,6 +116,27 @@ describe("device bootstrap tokens", () => {
     const revoked = await revokeDeviceBootstrapToken({ baseDir, token: setup.token });
     expect(revoked.record?.setupId).toBe(setup.setupId);
     expect(revoked.record).not.toHaveProperty("expiresAtMs");
+  });
+
+  it("adds setup correlation storage only on first setup issuance", async () => {
+    const baseDir = await createTempDir();
+    const databaseOptions = { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } };
+    const initial = openOpenClawStateDatabase(databaseOptions);
+    initial.db.exec("ALTER TABLE device_bootstrap_tokens DROP COLUMN setup_id;");
+    closeOpenClawStateDatabaseForTest();
+
+    await issueDeviceBootstrapToken({ baseDir });
+    const afterGenericIssue = openOpenClawStateDatabase(databaseOptions);
+    expect(tableHasColumn(afterGenericIssue.db, "device_bootstrap_tokens", "setup_id")).toBe(false);
+    closeOpenClawStateDatabaseForTest();
+
+    const setup = await issueDevicePairSetupBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const afterSetupIssue = openOpenClawStateDatabase(databaseOptions);
+    expect(tableHasColumn(afterSetupIssue.db, "device_bootstrap_tokens", "setup_id")).toBe(true);
+    expect(loadDeviceBootstrapTokenRecords(baseDir)[setup.token]?.setupId).toBe(setup.setupId);
   });
 
   // `openclaw qr --voice-node` issues through the same setup boundary. Correlation
