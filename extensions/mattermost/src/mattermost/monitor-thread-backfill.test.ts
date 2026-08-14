@@ -2,12 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import { createMattermostThreadBackfill } from "./monitor-thread-backfill.js";
-import type { HistoryEntry } from "./runtime-api.js";
+import type { ChatType, HistoryEntry } from "./runtime-api.js";
 
 const HISTORY_KEY = "agent:main:mattermost:channel:c1:thread:root-1";
 const AGENT_ID = "main";
 const THREAD_ROOT_ID = "root-1";
 const CURRENT_POST_ID = "current-post";
+const CHANNEL_ID = "c1";
+const CONVERSATION = { channelId: CHANNEL_ID, kind: "channel" } as const;
 // Mirrors the module defaults; the module keeps them private so the behavior is
 // asserted through the factory rather than through its constants.
 const PER_PAGE_MAX = 200;
@@ -40,7 +42,11 @@ function createHarness(options: {
   sessionId?: string | undefined;
   historyLimit?: number;
   channelHistories?: Map<string, HistoryEntry[]>;
-  shouldRetainSenderHistory?: (senderId: string) => boolean;
+  shouldRetainSenderHistory?: (params: {
+    senderId: string;
+    channelId: string;
+    kind: ChatType;
+  }) => boolean | Promise<boolean>;
 }) {
   const requests: { path: string; timeoutMs?: number }[] = [];
   let currentSessionId = options.sessionId ?? "session-a";
@@ -85,6 +91,7 @@ function createHarness(options: {
         threadRootId: THREAD_ROOT_ID,
         currentPostId: CURRENT_POST_ID,
         agentId: AGENT_ID,
+        ...CONVERSATION,
       }),
   };
 }
@@ -185,13 +192,61 @@ describe("createMattermostThreadBackfill", () => {
       responses: [threadResponse(3)],
       // u1 is the denied sender: the inbound path would have dropped its message
       // without recording it, so recovery must not read it back from the server.
-      shouldRetainSenderHistory: (senderId) => senderId !== "u1",
+      shouldRetainSenderHistory: ({ senderId }) => senderId !== "u1",
     });
 
     await harness.turn();
 
     const seeded = harness.channelHistories.get(HISTORY_KEY) ?? [];
     expect(seeded.map((entry) => entry.sender)).toEqual(["u0", "u2"]);
+  });
+
+  it("resolves retention asynchronously against the conversation, once per sender", async () => {
+    const asked: Array<{ senderId: string; channelId: string; kind: ChatType }> = [];
+    const harness = createHarness({
+      responses: [
+        {
+          order: ["p0", "p1", "p2"],
+          posts: {
+            p0: { id: "p0", user_id: "u0", message: "first", create_at: 10 },
+            // The same denied sender twice: the effective policy is resolved
+            // through the ingress runtime, so it must not be asked per post.
+            p1: { id: "p1", user_id: "u1", message: "denied", create_at: 20 },
+            p2: { id: "p2", user_id: "u1", message: "denied again", create_at: 30 },
+          },
+        },
+      ],
+      shouldRetainSenderHistory: async (params) => {
+        asked.push(params);
+        return params.senderId !== "u1";
+      },
+    });
+
+    await harness.turn();
+
+    expect(asked).toEqual([
+      { senderId: "u0", channelId: CHANNEL_ID, kind: "channel" },
+      { senderId: "u1", channelId: CHANNEL_ID, kind: "channel" },
+    ]);
+    expect(harness.channelHistories.get(HISTORY_KEY)?.map((entry) => entry.sender)).toEqual(["u0"]);
+  });
+
+  it("keeps the newest retained posts when the window is smaller than the thread", async () => {
+    // Retention has to be applied before the window is sliced, or dropping a
+    // denied sender would shrink the recovered window instead of admitting an
+    // older allowed post.
+    const harness = createHarness({
+      responses: [threadResponse(4)],
+      historyLimit: 2,
+      shouldRetainSenderHistory: ({ senderId }) => senderId !== "u3",
+    });
+
+    await harness.turn();
+
+    expect(harness.channelHistories.get(HISTORY_KEY)?.map((entry) => entry.sender)).toEqual([
+      "u1",
+      "u2",
+    ]);
   });
 
   it("keeps every recovered post when context visibility opts denied senders in", async () => {
@@ -395,6 +450,34 @@ describe("createMattermostThreadBackfill", () => {
     expect(harness.requests).toHaveLength(1);
   });
 
+  it("carries the seeded window across adoption so a later eviction still recovers", async () => {
+    const channelHistories = new Map<string, HistoryEntry[]>();
+    const harness = createHarness({
+      responses: [threadResponse(2), threadResponse(3)],
+      channelHistories,
+    });
+    harness.rotateSession(undefined);
+
+    // The window is recovered while the store still has no session id, so it is
+    // recorded as seeded under the pending marker.
+    await harness.turn();
+    expect(harness.requests).toHaveLength(1);
+
+    // The store settles and the marker rotates to the real session id.
+    harness.rotateSession("session-a");
+    await harness.turn();
+    expect(harness.requests).toHaveLength(1);
+
+    // Ownership of the seeded window has to rotate with the marker. If it stays
+    // behind, this eviction is unreadable as one and recovery is suppressed for
+    // the rest of the session.
+    channelHistories.delete(HISTORY_KEY);
+    await harness.turn();
+
+    expect(harness.requests).toHaveLength(2);
+    expect(channelHistories.get(HISTORY_KEY)).toHaveLength(3);
+  });
+
   it("discards a completion whose session rotated mid-flight", async () => {
     let releaseFirst: () => void = () => {};
     const firstGate = new Promise<void>((resolve) => {
@@ -425,6 +508,7 @@ describe("createMattermostThreadBackfill", () => {
         threadRootId: THREAD_ROOT_ID,
         currentPostId: CURRENT_POST_ID,
         agentId: AGENT_ID,
+        ...CONVERSATION,
       });
 
     const stale = turn();
@@ -458,6 +542,7 @@ describe("createMattermostThreadBackfill", () => {
         threadRootId: `root-${index}`,
         currentPostId: CURRENT_POST_ID,
         agentId: AGENT_ID,
+        ...CONVERSATION,
       });
     }
 
@@ -471,6 +556,7 @@ describe("createMattermostThreadBackfill", () => {
         threadRootId: `root-${index}`,
         currentPostId: CURRENT_POST_ID,
         agentId: AGENT_ID,
+        ...CONVERSATION,
       });
     }
     expect(request.mock.calls.length).toBeLessThan(40);
@@ -492,6 +578,7 @@ describe("createMattermostThreadBackfill", () => {
       threadRootId: THREAD_ROOT_ID,
       currentPostId: CURRENT_POST_ID,
       agentId: AGENT_ID,
+      ...CONVERSATION,
     });
 
     expect(client.request).not.toHaveBeenCalled();

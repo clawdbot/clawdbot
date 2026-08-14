@@ -33,7 +33,7 @@
 // per inbound message.
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRetryableError, type MattermostClient, type MattermostPost } from "./client.js";
-import { createChannelHistoryWindow, type HistoryEntry } from "./runtime-api.js";
+import { type ChatType, createChannelHistoryWindow, type HistoryEntry } from "./runtime-api.js";
 
 /** Mattermost rejects `perPage` above this; the API contract documents 200. */
 const MATTERMOST_THREAD_PER_PAGE_MAX = 200;
@@ -56,6 +56,16 @@ type RetryRecord = {
   nextAttemptAt: number;
 };
 
+/**
+ * The conversation a recovery belongs to. Sender authorization is per
+ * conversation, so the retention decision cannot be resolved once when the
+ * handler is built.
+ */
+type ThreadBackfillConversation = {
+  channelId: string;
+  kind: ChatType;
+};
+
 type MattermostThreadBackfillDeps = {
   client: MattermostClient;
   channelHistories: Map<string, HistoryEntry[]>;
@@ -64,11 +74,14 @@ type MattermostThreadBackfillDeps = {
   resolveSessionId: (params: { historyKey: string; agentId: string }) => string | undefined;
   /**
    * Whether a recovered post from this sender may be kept as history. The
-   * decision belongs to the inbound path, which owns the allowlist and the
-   * context-visibility mode; this module only applies it. Defaults to keeping
-   * everything so callers that have no allowlist stay unchanged.
+   * decision belongs to the inbound path, which owns the effective ingress
+   * policy and the context-visibility mode; this module only applies it, once
+   * per distinct sender in a recovery. Defaults to keeping everything so
+   * callers with no allowlist stay unchanged.
    */
-  shouldRetainSenderHistory?: (senderId: string) => boolean;
+  shouldRetainSenderHistory?: (
+    params: { senderId: string } & ThreadBackfillConversation,
+  ) => boolean | Promise<boolean>;
   logVerboseMessage?: (message: string) => void;
   now?: () => number;
   timeoutMs?: number;
@@ -84,7 +97,7 @@ type EnsureThreadHistoryParams = {
   currentPostId: string;
   /** Routed agent for this turn; the session store is partitioned by agent. */
   agentId: string;
-};
+} & ThreadBackfillConversation;
 
 type MattermostThreadBackfill = {
   ensureThreadHistory: (params: EnsureThreadHistoryParams) => Promise<void>;
@@ -172,10 +185,12 @@ export function createMattermostThreadBackfill(
     }
   };
 
-  const fetchThreadEntries = async (params: {
-    threadRootId: string;
-    currentPostId: string;
-  }): Promise<HistoryEntry[]> => {
+  const fetchThreadEntries = async (
+    params: {
+      threadRootId: string;
+      currentPostId: string;
+    } & ThreadBackfillConversation,
+  ): Promise<HistoryEntry[]> => {
     const perPage = resolveThreadFetchLimit(historyLimit);
     // The shared client owns request deadlines, so the inbound bound is
     // expressed as its `timeoutMs` rather than a second abort controller here.
@@ -189,24 +204,47 @@ export function createMattermostThreadBackfill(
     });
     const order = Array.isArray(thread?.order) ? thread.order : [];
     const posts = thread?.posts && typeof thread.posts === "object" ? thread.posts : {};
-    return order
+    const candidates = order
       .map((id) => posts[id])
-      .filter((post): post is MattermostPost => Boolean(post) && post?.id !== params.currentPostId)
-      // The server returns the whole thread, including senders the inbound path
-      // would have dropped without recording. Recovery must not become a way
-      // around that boundary: under a trigger allowlist their text is only
-      // history when context visibility opts in, and reading it back from the
-      // server would otherwise expose it after every restart.
-      .filter((post) => shouldRetainSenderHistory(post.user_id ?? ""))
-      .slice(-historyLimit)
-      .map((post) => ({
-        sender: post.user_id || "unknown",
-        // Attachment-only posts carry no message text; a placeholder keeps the
-        // turn ordering intact instead of silently dropping the post.
-        body: post.message || "[attachment]",
-        timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
-        messageId: post.id,
-      }));
+      .filter((post): post is MattermostPost => Boolean(post) && post?.id !== params.currentPostId);
+    // The server returns the whole thread, including senders the inbound path
+    // would have dropped without recording. Recovery must not become a way
+    // around that boundary: under a trigger allowlist their text is only
+    // history when context visibility opts in, and reading it back from the
+    // server would otherwise expose it after every restart.
+    //
+    // Authorization is resolved through the caller, which owns the effective
+    // policy, so it can be async. Memoizing per sender keeps a thread full of
+    // one person's posts to a single resolution, and the filter has to run
+    // before the window is sliced so the newest retained posts are the ones
+    // that survive.
+    const retentionBySender = new Map<string, Promise<boolean>>();
+    const retained: MattermostPost[] = [];
+    for (const post of candidates) {
+      const senderId = post.user_id ?? "";
+      let retention = retentionBySender.get(senderId);
+      if (!retention) {
+        retention = Promise.resolve(
+          shouldRetainSenderHistory({
+            senderId,
+            channelId: params.channelId,
+            kind: params.kind,
+          }),
+        );
+        retentionBySender.set(senderId, retention);
+      }
+      if (await retention) {
+        retained.push(post);
+      }
+    }
+    return retained.slice(-historyLimit).map((post) => ({
+      sender: post.user_id || "unknown",
+      // Attachment-only posts carry no message text; a placeholder keeps the
+      // turn ordering intact instead of silently dropping the post.
+      body: post.message || "[attachment]",
+      timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+      messageId: post.id,
+    }));
   };
 
   const recordFailure = (params: { historyKey: string; marker: string; error: unknown }): void => {
@@ -239,12 +277,14 @@ export function createMattermostThreadBackfill(
     );
   };
 
-  const runRecovery = async (params: {
-    historyKey: string;
-    marker: string;
-    threadRootId: string;
-    currentPostId: string;
-  }): Promise<void> => {
+  const runRecovery = async (
+    params: {
+      historyKey: string;
+      marker: string;
+      threadRootId: string;
+      currentPostId: string;
+    } & ThreadBackfillConversation,
+  ): Promise<void> => {
     try {
       const entries = await fetchThreadEntries(params);
       if (markers.get(params.historyKey) !== params.marker) {
@@ -329,6 +369,15 @@ export function createMattermostThreadBackfill(
       await settleInFlight(historyKey);
       if (markers.get(historyKey) === pendingMarker) {
         boundedSet(markers, historyKey, marker);
+        // That recovery recorded its window under the pending marker, so
+        // ownership has to move with the marker. Leaving it behind makes the
+        // eviction branch above read `seeded !== marker` forever: once the
+        // shared window drops this key, recovery is suppressed for the rest of
+        // the session and the thread reaches the agent contextless — the exact
+        // failure the marker rotation exists to avoid.
+        if (seeded.get(historyKey) === pendingMarker) {
+          boundedSet(seeded, historyKey, marker);
+        }
       }
       return;
     }
@@ -363,6 +412,8 @@ export function createMattermostThreadBackfill(
       marker,
       threadRootId: params.threadRootId,
       currentPostId: params.currentPostId,
+      channelId: params.channelId,
+      kind: params.kind,
     });
     inFlight.set(historyKey, recovery);
     try {
