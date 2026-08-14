@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
   hasLegacyRegistryWorktrees,
@@ -136,6 +137,10 @@ import {
   resolveSessionStoreOwnership,
   type SessionStoreOwnership,
 } from "./state-migrations.session-store.js";
+import {
+  detectSharedAuthStoreMigration,
+  migrateSharedAuthStore,
+} from "./state-migrations.shared-auth-store.js";
 import {
   autoMigrateLegacyStateDir,
   migrateLegacyProfileWorkspace,
@@ -524,6 +529,13 @@ export async function detectLegacyStateMigrations(params: {
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
   const apns = detectDoctorOwnedState(detectLegacyApnsRegistrations);
   const deviceAuth = detectDoctorOwnedState(detectLegacyDeviceAuth);
+  const sharedAuthStore =
+    stateSchemaMigrations.length === 0
+      ? detectDoctorOwnedState(detectSharedAuthStoreMigration)
+      : {
+          sourcePath: path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),
+          hasLegacy: false,
+        };
   const deviceIdentity = detectLegacyDeviceIdentity({
     stateDir,
     env,
@@ -686,6 +698,10 @@ export async function detectLegacyStateMigrations(params: {
     preview.push(`- Task flow sidecar: finish archive cleanup for ${flowRunsSidecarPath}`);
   }
   const stateMigrationPreviews: Array<readonly [hasLegacy: boolean, message: string]> = [
+    [
+      sharedAuthStore.hasLegacy,
+      "- Shared auth store: legacy main-agent rows → shared SQLite state",
+    ],
     [hasDeliveryQueues, "- Delivery queues: legacy JSON queue files → shared SQLite state"],
     [hasVoiceWake, "- Voice Wake settings: legacy JSON files → shared SQLite state"],
     [hasUpdateCheck, "- Update-check state: legacy JSON file → shared SQLite state"],
@@ -790,6 +806,7 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: stateSchemaMigrations.length > 0,
       preview: stateSchemaMigrations.map((migration) => migration.path),
     },
+    sharedAuthStore,
     worktrees,
     taskStateSidecars: {
       taskRunsPath: taskRunsSidecarPath,
@@ -1097,6 +1114,7 @@ function buildLegacyStateMigrationSteps(
   ];
 
   const sharedSteps: LegacyStateMigrationStep[] = [
+    ownerStep(detected.sharedAuthStore, migrateSharedAuthStore, "shared"),
     sharedStep(() => migrateLegacyPluginStateSidecar({ stateDir })),
     sharedStep(() => migrateLegacyInstalledPluginIndex({ stateDir }), true),
     ownerStep(
@@ -1496,6 +1514,7 @@ export async function autoMigrateLegacyState(params: {
     !detected.pluginInstallIndex.hasLegacy &&
     !detected.debugProxyCaptureSidecar.hasLegacy &&
     !detected.stateSchema.hasLegacy &&
+    !detected.sharedAuthStore.hasLegacy &&
     !detected.worktrees.hasLegacy &&
     detected.worktrees.pathRewrites.length === 0 &&
     !detected.taskStateSidecars.hasLegacy &&

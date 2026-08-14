@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readDraftEnvironments } from "./discovery.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
@@ -162,6 +162,120 @@ describe("Where chip state", () => {
       "custom.unknown",
     ]) {
       expect(visibleCopy).not.toContain(clutter);
+    }
+  });
+
+  it("shows offline execution devices as disabled exceptional rows", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const state = resolveWhereChip({
+        execNodes: [
+          {
+            nodeId: "online",
+            displayName: "Online",
+            connected: true,
+            canExec: true,
+            canBrowse: true,
+          },
+          {
+            nodeId: "never",
+            displayName: "Never",
+            connected: false,
+            canExec: true,
+            canBrowse: false,
+          },
+          {
+            nodeId: "lost",
+            displayName: "Lost",
+            connected: false,
+            canExec: true,
+            canBrowse: false,
+          },
+          {
+            nodeId: "legacy",
+            displayName: "Legacy",
+            connected: false,
+            canExec: true,
+            canBrowse: false,
+          },
+          {
+            nodeId: "camera",
+            displayName: "Camera only",
+            connected: false,
+            canExec: false,
+            canBrowse: false,
+          },
+        ],
+        environments: readDraftEnvironments([
+          { id: "node:online", type: "node", platform: "darwin" },
+          {
+            id: "node:never",
+            type: "node",
+            platform: "linux",
+            lastSeenAtMs: 2_000,
+            lastSeenReason: "device-token-auth",
+          },
+          {
+            id: "node:lost",
+            type: "node",
+            platform: "linux",
+            lastConnectedAtMs: 1_000,
+            lastDisconnectedAtMs: 4_000,
+            lastSeenAtMs: 3_000,
+          },
+          {
+            id: "node:legacy",
+            type: "node",
+            lastConnectedAtMs: 1_000,
+            lastSeenAtMs: 5_000,
+          },
+          { id: "node:camera", type: "node" },
+        ]),
+        cloudProfiles: [],
+        execNode: "",
+        cloudProfileId: "",
+      });
+      const container = document.createElement("div");
+      render(
+        renderWhereChip({
+          state,
+          gatewayName: "",
+          cloudProfileId: "",
+          execNode: "",
+          worktreeAvailable: true,
+          submitting: false,
+          pendingCloud: false,
+          popoverOpen: true,
+          popoverHiding: false,
+          isAdmin: true,
+          onGuardTransition: () => undefined,
+          onPopoverShow: () => undefined,
+          onPopoverHide: () => undefined,
+          onPopoverAfterHide: () => undefined,
+          onSelectExecNode: () => undefined,
+          onSelectCloudProfile: () => undefined,
+          onConnectMachine: () => undefined,
+        }),
+        container,
+      );
+
+      const row = (id: string) =>
+        container.querySelector<HTMLButtonElement>(`[data-value="node:${id}"]`);
+      const facts = (id: string) =>
+        [...(row(id)?.querySelectorAll(".new-session-page__menu-fact") ?? [])].map((entry) =>
+          entry.textContent?.trim(),
+        );
+      expect(row("online")?.disabled).toBe(false);
+      expect(facts("online")).toEqual(["macOS"]);
+      expect(row("never")?.disabled).toBe(true);
+      expect(facts("never")[0]).toBe("Never connected");
+      expect(row("lost")?.disabled).toBe(true);
+      expect(facts("lost")[0]).toMatch(/^Offline for /);
+      expect(row("legacy")?.disabled).toBe(true);
+      expect(facts("legacy")[0]).toMatch(/^Last seen /);
+      expect(row("camera")).toBeNull();
+    } finally {
+      now.mockRestore();
     }
   });
 });

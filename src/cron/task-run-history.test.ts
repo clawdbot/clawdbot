@@ -11,9 +11,11 @@ import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
 import {
+  cronQuietTriggerTaskDetail,
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronTaskRecordToRunLogEntry,
+  cronTaskRecordToTriggerEval,
   parseCronRunLogEntryObject,
 } from "./task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "./task-run-event-codec.js";
@@ -463,6 +465,26 @@ describe("cron task run history", () => {
     expect(Object.hasOwn(entry ?? {}, "triggerState")).toBe(false);
     expect(entry?.delivery).toBeUndefined();
     expect(entry?.failureNotificationDelivery).toBeUndefined();
+  });
+
+  it("keeps quiet-trigger recovery detail out of run history", () => {
+    const task = taskFromEntry(
+      { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
+      1,
+      "/internal/cron/store",
+    );
+    task.detail = cronQuietTriggerTaskDetail("/internal/cron/store", {
+      fired: false,
+      stateChanged: true,
+      state: { ready: false },
+    });
+
+    expect(cronTaskRecordToTriggerEval(task)).toEqual({
+      fired: false,
+      stateChanged: true,
+      state: { ready: false },
+    });
+    expect(cronTaskRecordToRunLogEntry(task)).toBeNull();
   });
 
   it("locks the serialized detail shape: kind first, status second", () => {

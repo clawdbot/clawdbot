@@ -154,6 +154,7 @@ const rootEntries = [
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  "src/agents/prepared-model-catalog.worker.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
@@ -660,7 +661,7 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/memory-host-sdk": {
-      entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
+      entry: ["src/*.ts!", "src/host/embeddings.types.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/*": {
@@ -827,12 +828,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
       project: ["**/*.{js,mjs,ts}!"],
-      ignoreDependencies: [
-        // The provider resolves node-llama-cpp from its own package at runtime
-        // so local embeddings use the plugin-owned native dependency.
-        "node-llama-cpp",
-        ...bundledPluginIgnoredRuntimeDependencies,
-      ],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {

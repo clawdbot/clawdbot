@@ -183,6 +183,7 @@ export function createCodexAppServerAgentHarness(options: {
         return {
           supported: false,
           reason: "Codex cannot reproduce authored request transport overrides",
+          fallbackRuntime: "openclaw",
         };
       }
       const preparedAuth = ctx.modelProvider?.preparedAuth;

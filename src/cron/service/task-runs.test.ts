@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { finalizeTaskRunByRunIdCore } from "../../tasks/task-executor.js";
@@ -18,10 +19,9 @@ import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
 import {
   getActiveCronTaskRunId,
+  findCronTaskRunRecoveryInDatabase,
   resolveMainSessionCronRunSessionKey,
   tryCreateCronTaskRun,
-  tryFindCronTaskRunIdForRecovery,
-  tryFindFinalizedCronTaskRun,
   tryFinishCronTaskRun,
   tryFinishCronTaskRunWithoutHistory,
 } from "./task-runs.js";
@@ -345,7 +345,7 @@ describe("cron task run terminal records", () => {
     );
   });
 
-  it("keeps task-registry lookup failures inside the best-effort boundary", () => {
+  it("keeps task-registry finalization failures inside the best-effort boundary", () => {
     const warn = vi.fn();
     const startedAt = 500;
     const job: CronJob = {
@@ -372,11 +372,6 @@ describe("cron task run terminal records", () => {
     vi.spyOn(taskRegistry, "findTaskByRunId").mockImplementation(() => {
       throw new Error("task store unavailable");
     });
-    vi.spyOn(taskRegistry, "listTaskRecordsUnsorted").mockImplementation(() => {
-      throw new Error("task store unavailable");
-    });
-
-    expect(tryFindFinalizedCronTaskRun(state, job.id, startedAt)).toBeUndefined();
     expect(() =>
       tryFinishCronTaskRun(state, {
         job,
@@ -390,10 +385,6 @@ describe("cron task run terminal records", () => {
         },
       }),
     ).not.toThrow();
-    expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: job.id }),
-      "cron: failed to read finalized task ledger record",
-    );
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: expect.stringMatching(new RegExp(`^cron:${job.id}:${startedAt}:`)),
@@ -940,7 +931,15 @@ describe("cron task run terminal records", () => {
           notifyPolicy: "silent",
           startedAt,
         });
-        expect(tryFindCronTaskRunIdForRecovery(state, "legacy-job", startedAt)).toBe(legacyRunId);
+        const recovery = runOpenClawStateWriteTransaction(({ db }) =>
+          findCronTaskRunRecoveryInDatabase({
+            database: db,
+            jobId: "legacy-job",
+            startedAt,
+            storeKey: cronStoreKey(state.deps.storePath),
+          }),
+        );
+        expect(recovery.taskRunId).toBe(legacyRunId);
         finalizeTaskRunByRunIdCore({
           runId: legacyRunId,
           runtime: "cron",
@@ -1011,8 +1010,18 @@ describe("cron task run terminal records", () => {
         expect(runB).toBeTruthy();
         expect(runA).not.toBe(runB);
 
-        expect(tryFindCronTaskRunIdForRecovery(stateA, job.id, startedAt)).toBe(runA);
-        expect(tryFindCronTaskRunIdForRecovery(stateB, job.id, startedAt)).toBe(runB);
+        const findRecoveryId = (state: ReturnType<typeof createCronServiceState>) =>
+          runOpenClawStateWriteTransaction(
+            ({ db }) =>
+              findCronTaskRunRecoveryInDatabase({
+                database: db,
+                jobId: job.id,
+                startedAt,
+                storeKey: cronStoreKey(state.deps.storePath),
+              }).taskRunId,
+          );
+        expect(findRecoveryId(stateA)).toBe(runA);
+        expect(findRecoveryId(stateB)).toBe(runB);
       },
     );
   });
