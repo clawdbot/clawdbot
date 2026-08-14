@@ -790,6 +790,7 @@ export interface InstalledPluginIndex {
   updated_at_ms: number;
   version: number;
   warning: string | null;
+  workspace_dir: string | null;
 }
 
 export interface MacosPortGuardianRecords {

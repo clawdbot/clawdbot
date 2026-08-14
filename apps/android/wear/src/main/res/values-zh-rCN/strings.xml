@@ -6,12 +6,12 @@
     <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"上一个 %1$s"</string>
     <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下一个 %1$s"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"控制"</string>
-    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"说话"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"对话"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手表音频失败"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"听写"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"实时"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"对话串"</string>
-    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"打开话题"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"打开会话"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← 滑动 →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"按住"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"点按"</string>
@@ -29,7 +29,7 @@
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在朗读"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在聆听"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在连接"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在思考"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"思考中"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在输入"</string>
     <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在发送"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"智能体正在工作"</string>
@@ -50,7 +50,7 @@
     <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"中止运行"</string>
     <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开通知设置"</string>
     <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"开"</string>
-    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"关"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"关闭"</string>
     <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接"</string>
     <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
     <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"安全"</string>

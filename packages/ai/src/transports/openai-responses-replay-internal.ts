@@ -281,7 +281,7 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   requestOptions: unknown;
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
-  initialAttemptKind?: "initial" | "continuation-rejected";
+  initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
   onCompactionRejected?: () => void;
   buildFullHistoryRequest?: () =>
     | OpenAIResponsesRequestParams
