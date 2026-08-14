@@ -400,41 +400,6 @@ struct GeneralSettings: View {
         }
     }
 
-    private var cookieSyncStatusTitle: String {
-        switch self.cookieSyncManager.state {
-        case .stopped: "Stopped"
-        case .running: "Running"
-        case .error: "Error"
-        }
-    }
-
-    private var cookieSyncStatusDetail: String {
-        switch self.cookieSyncManager.state {
-        case .stopped:
-            self.cookieSyncManager.lastSummary.map { "Last sync: \($0)" } ?? "Cookie sync is not active."
-        case .running:
-            self.cookieSyncManager.lastSummary ?? "Watching this Mac's browser cookie store for changes."
-        case let .error(message):
-            message
-        }
-    }
-
-    private var cookieSyncStatusIcon: String {
-        switch self.cookieSyncManager.state {
-        case .stopped: "stop.circle"
-        case .running: "checkmark.circle.fill"
-        case .error: "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var cookieSyncStatusColor: Color {
-        switch self.cookieSyncManager.state {
-        case .stopped: .secondary
-        case .running: .green
-        case .error: .orange
-        }
-    }
-
     private var connectionStatusPanel: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
@@ -904,6 +869,43 @@ struct GeneralSettings: View {
         case .ok: return .green
         case .checking: return .secondary
         case .missingNode, .missingGateway, .incompatible, .error: return .orange
+        }
+    }
+}
+
+extension GeneralSettings {
+    private var cookieSyncStatusTitle: String {
+        switch self.cookieSyncManager.state {
+        case .stopped: "Stopped"
+        case .running: "Running"
+        case .error: "Error"
+        }
+    }
+
+    private var cookieSyncStatusDetail: String {
+        switch self.cookieSyncManager.state {
+        case .stopped:
+            self.cookieSyncManager.lastSummary.map { "Last sync: \($0)" } ?? "Cookie sync is not active."
+        case .running:
+            self.cookieSyncManager.lastSummary ?? "Watching this Mac's browser cookie store for changes."
+        case let .error(message):
+            message
+        }
+    }
+
+    private var cookieSyncStatusIcon: String {
+        switch self.cookieSyncManager.state {
+        case .stopped: "stop.circle"
+        case .running: "checkmark.circle.fill"
+        case .error: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var cookieSyncStatusColor: Color {
+        switch self.cookieSyncManager.state {
+        case .stopped: .secondary
+        case .running: .green
+        case .error: .orange
         }
     }
 }

@@ -85,6 +85,8 @@ final class CookieSyncManager: NSObject {
     }
 
     func stop() {
+        // This singleton's notification lifetime follows its explicit start/stop lifecycle.
+        // swiftlint:disable:next notification_center_detachment
         NotificationCenter.default.removeObserver(self)
         self.endpointTask?.cancel()
         self.endpointTask = nil
@@ -318,6 +320,8 @@ final class CookieSyncManager: NSObject {
         while let newline = self.stdoutBuffer.firstIndex(of: 0x0A) {
             let lineData = self.stdoutBuffer.prefix(upTo: newline)
             self.stdoutBuffer.removeSubrange(...newline)
+            // Preserve lossy decoding so malformed CLI bytes do not hide the rest of a status line.
+            // swiftlint:disable:next optional_data_string_conversion
             let line = String(decoding: lineData, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty else { continue }
@@ -333,6 +337,8 @@ final class CookieSyncManager: NSObject {
             self.stderrSource = nil
             return
         }
+        // Preserve lossy decoding so malformed CLI bytes do not hide useful diagnostics.
+        // swiftlint:disable:next optional_data_string_conversion
         let message = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !message.isEmpty {
