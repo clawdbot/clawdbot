@@ -399,6 +399,7 @@ describe("createChildAdapter", () => {
     try {
       await createChildAdapter({
         argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+        exactEnv: true,
         stdinMode: "pipe-open",
       });
       expect(createServiceChildRelayAdapterMock).toHaveBeenCalledWith(
