@@ -32,6 +32,13 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
         },
       },
     },
+    sessions: {
+      state: {
+        groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
+      },
+      groupsGeneration: () => 1,
+      groupsStatus: () => "ready",
+    },
   } as unknown as ApplicationContext;
   const gateway = new DraftGatewayState(
     host,
@@ -128,6 +135,8 @@ describe("DraftGatewayState", () => {
       groupStatus: "resolved",
       groupCwd: "/workspace/client",
       groupWorktree: false,
+      groupCatalogGeneration: 1,
+      groupDefaultsStatus: "ready",
       model: "",
       catalogLabel: "",
       startTerminal: false,
