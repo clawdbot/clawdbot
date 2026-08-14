@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { assertNoOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   collectSqliteSchemaIssues,
@@ -207,6 +208,7 @@ export async function preflightOpenClawStateDatabasePath(
     ...(details.reason ? { reason: details.reason } : {}),
   });
   try {
+    assertNoOrphanedSqliteSidecars(resolvedPath);
     const inspectionPath = realpathSync.native(resolvedPath);
     const sidecars = ["-wal", "-shm", "-journal"].filter((suffix) =>
       existsSync(`${inspectionPath}${suffix}`),
