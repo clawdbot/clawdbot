@@ -46,6 +46,7 @@ import {
 } from "./app-sidebar-session-navigation-logic.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
+import { loadStoredHiddenSessionCatalogIds } from "./app-sidebar-session-types.ts";
 import {
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
@@ -122,6 +123,20 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   @state() sessionsShowSystem = loadStoredSidebarSessionsShowSystem();
   @state() sessionsStatusFilter: SidebarSessionStatusFilter =
     loadStoredSidebarSessionStatusFilter();
+  @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+
+  /** Catalogs the sidebar actually renders. Adopted-key exclusion must read
+      this same projection: excluding a key whose catalog is hidden (or whose
+      section the archived filter suppresses) deletes the session from the
+      entire sidebar with no row anywhere. */
+  visibleSessionCatalogs() {
+    if (this.sessionsStatusFilter === "archived") {
+      return [];
+    }
+    return this.sessionData.sessionCatalogs.filter(
+      (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
+    );
+  }
 
   private sessionSelectionAnchor: string | null = null;
   private collapsedActiveRouteKey: string | null = null;
@@ -163,7 +178,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   private visibleSessionPullRequestRows(): SidebarRecentSession[] {
     const rows = this.visibleSessionRowsInOrder();
-    const adopted = adoptedCatalogSessionKeys(this.sessionData.sessionCatalogs);
+    const adopted = adoptedCatalogSessionKeys(this.visibleSessionCatalogs());
     if (adopted.size === 0) {
       return rows;
     }
@@ -596,7 +611,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   protected selectedAgentSessionRows(
     navigationState: SidebarSessionNavigationState,
   ): SidebarRecentSession[] {
-    const adopted = adoptedCatalogSessionKeys(this.sessionData.sessionCatalogs);
+    const adopted = adoptedCatalogSessionKeys(this.visibleSessionCatalogs());
     const selected = this.expandedAgentId();
     const loadedAgentId = normalizeAgentId(this.sessionData.sessionsAgentId ?? "");
     const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);

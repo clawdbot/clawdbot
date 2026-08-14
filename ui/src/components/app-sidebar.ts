@@ -107,7 +107,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   );
 
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
-  @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
 
   constructor() {
     super();
@@ -416,9 +415,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
     ];
     const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
-    const catalogs = this.sessionData.sessionCatalogs.filter(
-      (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
-    );
+    const catalogs = this.visibleSessionCatalogs();
     const visibleCatalogIds = new Set(catalogs.map((catalog) => catalog.id));
     const sections = allSections.filter(
       (section) => !section.id.startsWith("catalog:") || visibleCatalogIds.has(section.id.slice(8)),

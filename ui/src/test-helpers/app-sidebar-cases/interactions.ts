@@ -711,4 +711,30 @@ describe("AppSidebar catalog session rows", () => {
       vi.useRealTimers();
     }
   });
+
+  it("returns an adopted session to the thread list when its catalog is hidden", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([
+          {
+            threadId: "thread-1",
+            name: "Release checklist",
+            sessionKey: "agent:main:adopted-codex",
+          },
+        ]),
+        ["agent:main:main", "agent:main:adopted-codex"],
+      );
+      // Hiding the catalog removes the live row; the adopted key must fall
+      // back to a regular thread row, not vanish from the entire sidebar.
+      sidebar.hiddenSessionCatalogIds = new Set(["codex"]);
+      await sidebar.updateComplete;
+
+      const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
