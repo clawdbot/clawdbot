@@ -127,6 +127,8 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   // startup; disposing MCP runtimes cannot move or create that HTTP server.
   { prefix: "mcp.apps", kind: "restart" },
   { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
+  // The proxy listener, per-start CA, and run-token registry are Gateway-owned.
+  { prefix: "secrets.egressProxy", kind: "restart" },
   { prefix: "plugins.load", kind: "restart" },
   { prefix: "plugins.installs", kind: "restart" },
 ];

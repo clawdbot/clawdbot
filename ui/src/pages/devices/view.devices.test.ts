@@ -477,7 +477,7 @@ describe("devices inventory rendering", () => {
   });
 
   it("shows token rows with rotate and revoke inside entry details", () => {
-    const rotations: Array<{ deviceId: string; role: string }> = [];
+    const rotations: Array<{ deviceId: string; name: string; role: string }> = [];
     const revocations: Array<{ deviceId: string; role: string }> = [];
     const container = renderDevicesContainer({
       devicesList: {
@@ -491,14 +491,16 @@ describe("devices inventory rendering", () => {
           },
         ],
       },
-      onDeviceRotate: (deviceId, role) => rotations.push({ deviceId, role }),
+      onDeviceRotate: (device, role) =>
+        rotations.push({ deviceId: device.id, name: device.name, role }),
       onDeviceRevoke: (deviceId, role) => revocations.push({ deviceId, role }),
     });
     const section = getInventorySection(container);
 
     expect(section.textContent).toContain("operator · active · scopes: operator.read");
     findButton(section, "Rotate").click();
-    expect(rotations).toEqual([{ deviceId: "device-1", role: "operator" }]);
+    // The rotate callback carries the row label, so the outcome dialog can name it.
+    expect(rotations).toEqual([{ deviceId: "device-1", name: "Device One", role: "operator" }]);
     findButton(section, "Revoke").click();
     expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
   });

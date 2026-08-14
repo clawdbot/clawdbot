@@ -61,6 +61,18 @@ export function isInvalidEncryptedContentError(error: unknown): boolean {
   );
 }
 
+function isOrphanedFunctionCallOutputError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as Record<string, unknown>;
+  const message = typeof record.message === "string" ? record.message : "";
+  // Server rejects a function_call_output whose function_call lives inside the
+  // encrypted compaction blob. Match by substring like the sibling classifiers:
+  // wrapped transport errors prefix the raw body ("400 ...", "HTTP 400: {json}").
+  return /No tool call found for function call output with call_id [A-Za-z0-9_-]+/.test(message);
+}
+
 function stripEncryptedReasoningContentFields(value: unknown): {
   value: unknown;
   changed: boolean;
@@ -146,10 +158,17 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   error: unknown,
   options?: { buildFullHistoryRequest?: () => TRequest | Promise<TRequest> },
 ): Promise<ResponsesEncryptedContentAttempt<TRequest> | undefined> {
-  if (!isInvalidEncryptedContentError(error) || attempt.kind === "compaction-stripped") {
+  const orphanedFunctionOutput = isOrphanedFunctionCallOutputError(error);
+  if (
+    (!isInvalidEncryptedContentError(error) && !orphanedFunctionOutput) ||
+    attempt.kind === "compaction-stripped"
+  ) {
     return undefined;
   }
-  if (attempt.kind === "initial" || attempt.kind === "continuation-rejected") {
+  if (
+    !orphanedFunctionOutput &&
+    (attempt.kind === "initial" || attempt.kind === "continuation-rejected")
+  ) {
     const reasoningStripped = stripResponsesRequestEncryptedReasoning(attempt.request);
     if (reasoningStripped !== attempt.request) {
       return { kind: "reasoning-stripped", request: reasoningStripped };

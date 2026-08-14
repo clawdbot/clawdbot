@@ -172,6 +172,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "worker_session_placements.terminal_at_ms INTEGER",
       "worktrees.run_end_cleanup_json TEXT",
       "installed_plugin_index.workspace_dir TEXT",
+      "secret_store_entries.allowed_hosts TEXT",
     ]);
 
     const database = createGlobalDatabase();

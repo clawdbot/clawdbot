@@ -4745,6 +4745,7 @@ public struct SecretStoreSecretEntry: Codable, Sendable {
     public let updatedatms: Int
     public let updatedby: String?
     public let kind: String
+    public let allowedhosts: [String]?
 
     public init(
         name: String,
@@ -4753,7 +4754,8 @@ public struct SecretStoreSecretEntry: Codable, Sendable {
         createdatms: Int,
         updatedatms: Int,
         updatedby: String? = nil,
-        kind: String)
+        kind: String,
+        allowedhosts: [String]? = nil)
     {
         self.name = name
         self.scopekind = scopekind
@@ -4762,6 +4764,7 @@ public struct SecretStoreSecretEntry: Codable, Sendable {
         self.updatedatms = updatedatms
         self.updatedby = updatedby
         self.kind = kind
+        self.allowedhosts = allowedhosts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4772,6 +4775,7 @@ public struct SecretStoreSecretEntry: Codable, Sendable {
         case updatedatms = "updatedAtMs"
         case updatedby = "updatedBy"
         case kind
+        case allowedhosts = "allowedHosts"
     }
 }
 
@@ -4837,21 +4841,25 @@ public struct SecretsStoreSetParams: Codable, Sendable {
     public let name: String
     public let value: String
     public let kind: AnyCodable
+    public let allowedhosts: [String]?
 
     public init(
         name: String,
         value: String,
-        kind: AnyCodable)
+        kind: AnyCodable,
+        allowedhosts: [String]? = nil)
     {
         self.name = name
         self.value = value
         self.kind = kind
+        self.allowedhosts = allowedhosts
     }
 
     private enum CodingKeys: String, CodingKey {
         case name
         case value
         case kind
+        case allowedhosts = "allowedHosts"
     }
 }
 
@@ -18342,6 +18350,40 @@ public struct DeviceTokenRotateParams: Codable, Sendable {
         case deviceid = "deviceId"
         case role
         case scopes
+    }
+}
+
+public struct DeviceTokenRotateResult: Codable, Sendable {
+    public let deviceid: String
+    public let role: String
+    public let token: String?
+    public let scopes: [String]
+    public let rotatedatms: Int
+    public let tokendelivery: String?
+
+    public init(
+        deviceid: String,
+        role: String,
+        token: String? = nil,
+        scopes: [String],
+        rotatedatms: Int,
+        tokendelivery: String? = nil)
+    {
+        self.deviceid = deviceid
+        self.role = role
+        self.token = token
+        self.scopes = scopes
+        self.rotatedatms = rotatedatms
+        self.tokendelivery = tokendelivery
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
+        case role
+        case token
+        case scopes
+        case rotatedatms = "rotatedAtMs"
+        case tokendelivery = "tokenDelivery"
     }
 }
 
