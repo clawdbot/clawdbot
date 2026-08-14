@@ -185,6 +185,7 @@ vi.mock("./agent-scope.js", () => ({
     preparedModelRuntimeMocks.configuredWorkspaces.get(agentId) ??
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/unused-workspace",
+  tryResolveSystemAgentWorkspaceDir: () => "/tmp/unused-workspace",
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
   resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>

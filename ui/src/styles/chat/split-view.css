@@ -641,6 +641,7 @@ openclaw-chat-pane {
 }
 
 .chat-pane__sharing-member-label {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

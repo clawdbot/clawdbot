@@ -214,8 +214,10 @@ suite.define(() => {
         modelSelect.evaluate(
           (element) => element.closest("details")?.hasAttribute("open") ?? false,
         );
+      const modelMenu = page.locator(".chat-controls__model-menu");
+      await expect.poll(() => modelMenu.isVisible()).toBe(true);
       const modelTriggerBox = await modelSelect.boundingBox();
-      const modelMenuBox = await page.locator(".chat-controls__model-menu").boundingBox();
+      const modelMenuBox = await modelMenu.boundingBox();
       expect(modelTriggerBox).not.toBeNull();
       expect(modelMenuBox).not.toBeNull();
       expect(modelMenuBox?.x ?? 0).toBeLessThanOrEqual(modelTriggerBox?.x ?? 0);
@@ -424,6 +426,7 @@ suite.define(() => {
       const effortSelect = page.locator('[data-chat-thinking-select="true"]');
       await effortSelect.click();
       const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await thinkingSlider.press("End");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
 
