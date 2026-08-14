@@ -13,7 +13,6 @@ import {
   type ReplyBackendQueueMessageOptions,
   type ReplyBackendQueueMessageResult,
   type ReplyBackendMessageInjection,
-  type ReplyTurnKind,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
@@ -39,8 +38,8 @@ export type EmbeddedAgentQueueHandle = {
   ) => Promise<boolean>;
   /** Cancels this run's pending user-input request before an image is queued as a later turn. */
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
-  /** Admission owner retained after its reply-operation registration clears. */
-  readonly turnKind?: ReplyTurnKind;
+  /** Exact heartbeat owner retained after its reply-operation registration clears. */
+  readonly preemptByVisibleTurn?: () => boolean;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,

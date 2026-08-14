@@ -165,6 +165,7 @@ function createReplyOperation(): TestReplyOperation {
     freezeAbort: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
+    abortForSupersession: vi.fn(),
     terminalRecovery: false,
     acceptedSteeredInboundAudio: false,
     markTerminalRecovery: vi.fn(),

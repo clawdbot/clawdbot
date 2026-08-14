@@ -200,7 +200,10 @@ type ReplyOperationFailureCode =
   | "run_stalled"
   | "run_failed";
 
-type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+type ReplyOperationAbortCode =
+  | "aborted_by_user"
+  | "aborted_for_restart"
+  | "aborted_for_supersession";
 
 type ReplyOperationResult =
   | { kind: "completed" }
@@ -308,6 +311,7 @@ export type ReplyOperation = {
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): boolean;
   abortForRestart(): boolean;
+  abortForSupersession(): boolean;
 };
 
 export type ReplyRunRegistry = {

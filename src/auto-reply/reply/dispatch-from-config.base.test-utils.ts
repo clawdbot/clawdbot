@@ -449,8 +449,11 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(true);
     expect(heartbeatWasAbortedBeforeReply).toBe(true);
-    expect(heartbeatOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(cancel).toHaveBeenCalledWith("user_abort");
+    expect(heartbeatOperation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_for_supersession",
+    });
+    expect(cancel).toHaveBeenCalledWith("superseded");
     expect(replyResolver).toHaveBeenCalledOnce();
   });
 

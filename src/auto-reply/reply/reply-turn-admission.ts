@@ -443,7 +443,7 @@ async function admitReplyTurnWithWaitSignal(
       if (params.kind === "visible" && activeOperation?.turnKind === "heartbeat") {
         // Background heartbeats must yield before queue policy can steer this
         // user turn into the heartbeat's model run and lose its visible reply.
-        activeOperation.abortByUser();
+        activeOperation.abortForSupersession();
       }
       if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
         continue;

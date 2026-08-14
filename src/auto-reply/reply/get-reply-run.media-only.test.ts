@@ -2266,7 +2266,10 @@ describe("runPreparedReply media-only handling", () => {
       expect(result).toEqual({ text: "ok" });
       expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
       expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-active");
-      expect(activeOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(activeOperation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_by_user",
+      });
       expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
       const call = requireRunReplyAgentCall();
       expect(call?.shouldSteer).toBe(false);

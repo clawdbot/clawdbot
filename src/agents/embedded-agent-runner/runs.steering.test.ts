@@ -28,20 +28,19 @@ describe("embedded-agent active-run steering", () => {
   });
 
   it("aborts and drains the exact heartbeat handle through session replacement", async () => {
-    const heartbeatAbort = vi.fn();
-    const finalizingHeartbeatAbort = vi.fn();
+    const heartbeatPreempt = vi.fn(() => true);
+    const finalizingHeartbeatPreempt = vi.fn(() => true);
     const visibleAbort = vi.fn();
     const heartbeatHandle: EmbeddedAgentQueueHandle = {
-      ...createEmbeddedRunHandle({ abort: heartbeatAbort }),
-      turnKind: "heartbeat",
+      ...createEmbeddedRunHandle(),
+      preemptByVisibleTurn: heartbeatPreempt,
     };
     const replacementHandle: EmbeddedAgentQueueHandle = {
       ...createEmbeddedRunHandle({ abort: visibleAbort }),
-      turnKind: "visible",
     };
     const finalizingHeartbeatHandle: EmbeddedAgentQueueHandle = {
-      ...createEmbeddedRunHandle({ abort: finalizingHeartbeatAbort, isAbortable: false }),
-      turnKind: "heartbeat",
+      ...createEmbeddedRunHandle({ isAbortable: false }),
+      preemptByVisibleTurn: finalizingHeartbeatPreempt,
     };
     setActiveEmbeddedRun("heartbeat-session", heartbeatHandle);
     setActiveEmbeddedRun("visible-session", replacementHandle);
@@ -69,9 +68,22 @@ describe("embedded-agent active-run steering", () => {
 
     await expect(heartbeatPreemption).resolves.toBe("drained");
     await expect(finalizingPreemption).resolves.toBe("drained");
-    expect(heartbeatAbort).toHaveBeenCalledOnce();
-    expect(finalizingHeartbeatAbort).not.toHaveBeenCalled();
+    expect(heartbeatPreempt).toHaveBeenCalledOnce();
+    expect(finalizingHeartbeatPreempt).not.toHaveBeenCalled();
     expect(visibleAbort).not.toHaveBeenCalled();
+  });
+
+  it("leaves a heartbeat in another session running", async () => {
+    const preemptIsolatedHeartbeat = vi.fn(() => true);
+    setActiveEmbeddedRun("base-session:heartbeat", {
+      ...createEmbeddedRunHandle(),
+      preemptByVisibleTurn: preemptIsolatedHeartbeat,
+    });
+
+    await expect(preemptAndDrainEmbeddedHeartbeatRun("base-session", 1_000)).resolves.toBe(
+      "not-heartbeat",
+    );
+    expect(preemptIsolatedHeartbeat).not.toHaveBeenCalled();
   });
 
   it("passes steering options to active embedded runs", () => {

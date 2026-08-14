@@ -108,7 +108,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
 
-  it("retains heartbeat ownership on the embedded queue handle", () => {
+  it("retains exact heartbeat preemption on the embedded queue handle", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: "session-output-schema",
@@ -118,10 +118,14 @@ describe("prepareEmbeddedAttemptStream", () => {
     try {
       const prepared = prepareCatalogExecutor([], { replyOperation: operation });
 
-      expect(prepared.queueHandle.turnKind).toBe("heartbeat");
+      expect(prepared.queueHandle.preemptByVisibleTurn?.()).toBe(true);
+      expect(operation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_for_supersession",
+      });
       expect(mocks.setActiveRun).toHaveBeenCalledWith(
         "session-output-schema",
-        expect.objectContaining({ turnKind: "heartbeat" }),
+        expect.objectContaining({ preemptByVisibleTurn: expect.any(Function) }),
         "agent:main:main",
         undefined,
       );

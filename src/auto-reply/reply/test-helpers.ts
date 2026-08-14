@@ -77,6 +77,7 @@ export function createMockReplyOperation(
     fail: failMock,
     abortByUser: vi.fn(() => true),
     abortForRestart: vi.fn(() => true),
+    abortForSupersession: vi.fn(() => true),
   };
   return {
     replyOperation,
