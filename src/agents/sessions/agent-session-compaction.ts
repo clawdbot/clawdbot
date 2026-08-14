@@ -2,7 +2,7 @@ import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
-import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
+import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   calculateContextTokens,
   compact,
@@ -12,7 +12,6 @@ import {
   type CompactionPreparation,
   type CompactionResult,
 } from "../runtime/index.js";
-import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
@@ -252,9 +251,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const sessionContext = this.sessionManager.buildSessionContext();
     // Compaction replaces the request prefix, invalidating retained usage and thinking signatures.
     // Sanitize at assignment so every continuation driver receives replay-safe history.
-    this.agent.state.messages = stripStaleThinkingSignaturesForCompactionReplay(
-      stripStaleAssistantUsageBeforeLatestCompaction(sessionContext.messages),
-    );
+    this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
 
     const savedCompactionEntry = newEntries.find(
       (e) => e.type === "compaction" && e.summary === compactionResult.summary,
