@@ -17,10 +17,7 @@ import {
   type NodeWorkspaceTransferService,
 } from "./node-workspace-transfer-service.js";
 
-export type {
-  NodeWorkspaceTransferHttpCallback,
-  NodeWorkspaceTransferHttpRoute,
-} from "./node-workspace-transfer-http-contract.js";
+export type { NodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http-contract.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
