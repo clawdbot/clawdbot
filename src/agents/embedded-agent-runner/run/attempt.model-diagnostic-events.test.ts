@@ -195,9 +195,9 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     );
 
     const events = await collectModelCallEvents(async () => {
-      await drain(wrapped({ requestTimeoutMs: 60_000 } as never, {} as never, {} as never));
-      await drain(wrapped({} as never, {} as never, {} as never));
-      await drain(wrapped({ requestTimeoutMs: 90_000 } as never, {} as never, {} as never));
+      await drain(await wrapped({ requestTimeoutMs: 60_000 } as never, {} as never, {} as never));
+      await drain(await wrapped({} as never, {} as never, {} as never));
+      await drain(await wrapped({ requestTimeoutMs: 90_000 } as never, {} as never, {} as never));
     });
 
     expect(
