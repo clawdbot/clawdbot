@@ -174,6 +174,7 @@ describe("resolveDiscordDmCommandAccess", () => {
         id: "pk-member-1",
         name: "Echo",
         tag: "Echo",
+        isPluralKit: true,
       },
       allowNameMatching: false,
       readStoreAllowFrom: async () => ["pk:pk-member-1"],
@@ -181,6 +182,39 @@ describe("resolveDiscordDmCommandAccess", () => {
 
     expect(result.senderAccess.decision).toBe("allow");
     expect(dmCommandAuthorized(result)).toBe(true);
+  });
+
+  it("distinguishes Gateway-bound Discord ids from asserted PluralKit member ids", async () => {
+    const ordinary = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["discord:123"],
+      sender,
+      allowNameMatching: false,
+      minIdentifierAuthentication: "verified",
+      readStoreAllowFrom: async () => [],
+    });
+    const pluralKit = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["pk:pk-member-1"],
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      allowNameMatching: false,
+      minIdentifierAuthentication: "verified",
+      readStoreAllowFrom: async () => [],
+    });
+    const compatiblePluralKitDefault = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["pk:pk-member-1"],
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      allowNameMatching: false,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(ordinary.senderAccess.decision).toBe("allow");
+    expect(pluralKit.senderAccess.decision).toBe("block");
+    expect(compatiblePluralKitDefault.senderAccess.decision).toBe("allow");
   });
 
   it("authorizes allowlist DMs from a Discord channel audience access group", async () => {
