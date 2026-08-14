@@ -46,7 +46,12 @@ export type AgentHarnessSupportContext = {
 
 export type AgentHarnessSupport =
   | { supported: true; priority?: number; reason?: string }
-  | { supported: false; reason?: string };
+  | {
+      supported: false;
+      reason?: string;
+      /** Lossless host fallback when this harness cannot reproduce the prepared request. */
+      fallbackRuntime?: "openclaw";
+    };
 
 type InternalEmbeddedRunAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;

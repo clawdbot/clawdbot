@@ -380,7 +380,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             <span class="sidebar-agent-card__name">Agent</span>
             <span class="settings-sidebar__item-label">Settings</span>
             <span class="sidebar-file-view__path">workspace/file.ts</span>
-            <span class="chat-workbench__dock-zone">Dock here</span>
             <span class="chat-workspace-rail__file-badge">3 files</span>
             <span class="session-menu__shortcut">⌘K</span>
             <div class="file-view__search">
@@ -412,7 +411,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         ".sidebar-agent-card__name",
         ".settings-sidebar__item-label",
         ".sidebar-file-view__path",
-        ".chat-workbench__dock-zone",
         ".chat-workspace-rail__file-badge",
         ".session-menu__shortcut",
         ".file-view__search-counter",

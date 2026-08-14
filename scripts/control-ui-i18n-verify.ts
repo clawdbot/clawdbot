@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import * as ts from "typescript";
 import {
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
@@ -11,6 +12,7 @@ import {
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
   fallbacks: Record<string, string[]>;
@@ -25,6 +27,7 @@ const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
+const CONTROL_UI_TEST_FILE_PATTERN = /\.(?:test|browser\.test|node\.test)\.tsx?$/u;
 
 function compareStringArrays(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -153,6 +156,71 @@ export function analyzeControlUiCatalogs(
   return { errors, fallbacks };
 }
 
+export function verifyControlUiReferencedKeys(
+  sourceFlat: ReadonlyMap<string, string>,
+  sourceFiles: readonly { content: string; relativeFile: string }[],
+): { literalReferences: number; templatePrefixReferences: number } {
+  const sourceKeys = [...sourceFlat.keys()];
+  const errors: string[] = [];
+  let literalReferences = 0;
+  let templatePrefixReferences = 0;
+
+  for (const { content, relativeFile } of sourceFiles) {
+    const sourceFile = ts.createSourceFile(relativeFile, content, ts.ScriptTarget.Latest, true);
+    const reportMissing = (node: ts.Node, description: string) => {
+      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+      errors.push(`${relativeFile}:${line}: ${description}`);
+    };
+    const verifyArgument = (rawArgument: ts.Expression): void => {
+      const argument = ts.isParenthesizedExpression(rawArgument)
+        ? rawArgument.expression
+        : ts.isAsExpression(rawArgument) || ts.isTypeAssertionExpression(rawArgument)
+          ? rawArgument.expression
+          : rawArgument;
+      if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) {
+        literalReferences += 1;
+        if (!sourceFlat.has(argument.text)) {
+          reportMissing(argument, `missing English catalog key ${JSON.stringify(argument.text)}`);
+        }
+      } else if (ts.isTemplateExpression(argument)) {
+        templatePrefixReferences += 1;
+        const prefix = argument.head.text;
+        if (prefix && !sourceKeys.some((key) => key.startsWith(prefix))) {
+          reportMissing(argument, `missing English catalog subtree ${JSON.stringify(prefix)}`);
+        }
+      } else if (ts.isConditionalExpression(argument)) {
+        verifyArgument(argument.whenTrue);
+        verifyArgument(argument.whenFalse);
+      }
+    };
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "t" &&
+        node.arguments[0]
+      ) {
+        verifyArgument(node.arguments[0]);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      [
+        "control-ui referenced translation key verification failed.",
+        errors.slice(0, 50).join("\n"),
+        errors.length > 50 ? `...and ${errors.length - 50} more` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  return { literalReferences, templatePrefixReferences };
+}
+
 async function buildCatalogFallbackBaseline(
   options: {
     allowCatalogDrift?: boolean;
@@ -212,7 +280,18 @@ function printCatalogFallbackSummary(baseline: CatalogFallbackBaseline) {
 async function verifyControlUiSourceCatalogShape() {
   const sourceMap = await loadSourceLocaleMap();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
-  process.stdout.write(`control-ui-i18n: source: keys=${sourceFlat.size}\n`);
+  const sourceFiles = (
+    await collectSourceFileContents({
+      ignoredDirNames: new Set(["test-helpers"]),
+      repoRoot: ROOT,
+      scanExtensions: new Set([".ts", ".tsx"]),
+      scanRoots: ["ui/src"],
+    })
+  ).filter(({ relativeFile }) => !CONTROL_UI_TEST_FILE_PATTERN.test(relativeFile));
+  const referenced = verifyControlUiReferencedKeys(sourceFlat, sourceFiles);
+  process.stdout.write(
+    `control-ui-i18n: source: keys=${sourceFlat.size} literal_references=${referenced.literalReferences} template_prefix_references=${referenced.templatePrefixReferences}\n`,
+  );
 }
 
 export async function syncControlUiCatalogFallbackBaseline(options: {

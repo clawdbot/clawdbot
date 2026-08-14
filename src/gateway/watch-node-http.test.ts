@@ -393,8 +393,16 @@ describe("watch node HTTP transport", () => {
   });
 
   it("requires an authenticated disconnect and emits one lifecycle teardown", async () => {
-    const { identity, issued, nodeRegistry, connectedNodes, disconnectedNodes, runtime, baseUrl } =
-      await createWatchNodeFixture("openclaw-watch-node-disconnect-");
+    const {
+      baseDir,
+      identity,
+      issued,
+      nodeRegistry,
+      connectedNodes,
+      disconnectedNodes,
+      runtime,
+      baseUrl,
+    } = await createWatchNodeFixture("openclaw-watch-node-disconnect-");
 
     const connectResponse = await connectWatchNode({
       baseUrl,
@@ -424,9 +432,17 @@ describe("watch node HTTP transport", () => {
     expect(disconnectResponse.status).toBe(200);
     await expect(readJson(disconnectResponse)).resolves.toEqual({ ok: true });
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-    expect(disconnectedNodes).toEqual([
-      { nodeId: identity.deviceId, reason: "watch disconnected" },
-    ]);
+    await vi.waitFor(() =>
+      expect(disconnectedNodes).toEqual([
+        { nodeId: identity.deviceId, reason: "watch disconnected" },
+      ]),
+    );
+    await vi.waitFor(async () => {
+      const paired = (await listNodePairing(baseDir)).paired.find(
+        (entry) => entry.nodeId === identity.deviceId,
+      );
+      expect(paired?.lastDisconnectedAtMs).toEqual(expect.any(Number));
+    });
 
     const repeatedDisconnect = await fetch(`${baseUrl}/disconnect`, {
       method: "POST",
@@ -499,9 +515,11 @@ describe("watch node HTTP transport", () => {
             : nodeRegistry.sendEvent(identity.deviceId, "node.invoke.request", payload);
         expect(delivered).toBe(false);
         expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-        expect(disconnectedNodes).toEqual([
-          { nodeId: identity.deviceId, reason: "event delivery failed" },
-        ]);
+        await vi.waitFor(() =>
+          expect(disconnectedNodes).toEqual([
+            { nodeId: identity.deviceId, reason: "event delivery failed" },
+          ]),
+        );
         await expect(pollFailure).resolves.toBe("ECONNRESET");
         expect(nodeRegistry.sendEvent(identity.deviceId, "node.invoke.request", payload)).toBe(
           false,
@@ -816,10 +834,12 @@ describe("watch node HTTP transport", () => {
     });
     runtime.disconnectSessionsForDevice(identity.deviceId, { role: "node" });
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-    expect(disconnectedNodes).toContainEqual({
-      nodeId: identity.deviceId,
-      reason: "device-token-revoked",
-    });
+    await vi.waitFor(() =>
+      expect(disconnectedNodes).toContainEqual({
+        nodeId: identity.deviceId,
+        reason: "device-token-revoked",
+      }),
+    );
     const invalidatedPollResponse = await fetch(`${baseUrl}/poll`, {
       method: "POST",
       headers: { authorization: `Bearer ${String(reconnected.sessionToken)}` },
@@ -875,10 +895,12 @@ describe("watch node HTTP transport", () => {
       nodeRegistry.sendEventRaw(identity.deviceId, "node.invoke.request", oversizedPayload),
     ).toBe(false);
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-    expect(disconnectedNodes).toContainEqual({
-      nodeId: identity.deviceId,
-      reason: "event payload too large",
-    });
+    await vi.waitFor(() =>
+      expect(disconnectedNodes).toContainEqual({
+        nodeId: identity.deviceId,
+        reason: "event payload too large",
+      }),
+    );
 
     runtime.close();
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();

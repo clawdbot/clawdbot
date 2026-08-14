@@ -27,6 +27,7 @@ type ModelPickerParams = {
     invalid?: boolean;
     describedBy?: string;
   };
+  onOpen?: () => void;
   onChange: (value: string) => void;
 };
 
@@ -52,6 +53,7 @@ export function renderModelPicker(params: ModelPickerParams) {
         title: params.title,
         placement: params.placement,
         className: `model-picker__select ${params.className ?? ""}`,
+        onOpen: params.onOpen,
         renderLeading: (option) =>
           option.provider
             ? renderProviderBrandIcon(option.provider, { className: "model-picker__provider-icon" })

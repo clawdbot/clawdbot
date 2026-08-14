@@ -15,12 +15,13 @@ export function resolvePlacePickerSections(params: {
     : null;
   return {
     deviceNodes: params.execNodes.filter((node) => {
-      if (!node.connected || !node.canExec) {
+      if (!node.canExec) {
         return false;
       }
       if (environmentById === null || environmentById.size === 0) {
-        // Missing and empty catalogs preserve the established live-node fallback.
-        return true;
+        // Missing and empty catalogs preserve the established live-node fallback;
+        // offline rows need lifecycle facts from the environment read model.
+        return node.connected;
       }
       const environment = environmentById.get(`node:${node.nodeId}`);
       return environment?.type === "node";
@@ -28,7 +29,9 @@ export function resolvePlacePickerSections(params: {
     deviceFacts: new Map(
       params.execNodes.map((node) => [
         node.nodeId,
-        environmentMenuFacts(environmentById?.get(`node:${node.nodeId}`)),
+        environmentMenuFacts(environmentById?.get(`node:${node.nodeId}`), {
+          connected: node.connected,
+        }),
       ]),
     ),
     cloudProfiles: [...params.cloudProfiles],

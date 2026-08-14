@@ -363,7 +363,7 @@ describe("refreshChat", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("uses explicit model discovery after startup metadata", async () => {
+  it("uses prepared models delivered with startup metadata", async () => {
     const startup = createDeferred<unknown>();
     const host = makeChatHost({
       hello: {
@@ -371,16 +371,6 @@ describe("refreshChat", () => {
       } as TestChatHost["hello"],
       requestHandlers: {
         "chat.startup": () => startup.promise,
-        "models.list": {
-          models: [
-            {
-              available: true,
-              id: "live-model",
-              name: "Live Model",
-              provider: "openai",
-            },
-          ],
-        },
       },
     });
 
@@ -412,14 +402,14 @@ describe("refreshChat", () => {
       expect(host.chatModelCatalog).toEqual([
         {
           available: true,
-          id: "live-model",
-          name: "Live Model",
+          id: "startup-model",
+          name: "Startup Model",
           provider: "openai",
         },
       ]),
     );
     expect(host.request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
-    expect(host.request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
   });
 
@@ -479,7 +469,10 @@ describe("refreshChat", () => {
       ]),
     );
     expect(SLASH_COMMANDS.some((command) => command.name === "startup-gap-command")).toBe(true);
-    expect(host.request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(host.request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      preparedOnly: true,
+    });
     expect(host.request).toHaveBeenCalledWith(
       "commands.list",
       expect.objectContaining({ includeArgs: true, scope: "text" }),

@@ -184,6 +184,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(result.status).toBe("ok");
     expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: callerConfig,
+      readOnly: true,
       allowGatewaySubagentBinding: true,
     });
     expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(
