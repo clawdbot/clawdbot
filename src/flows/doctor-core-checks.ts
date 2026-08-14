@@ -484,7 +484,11 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
+    const catalog = await loadPreparedModelCatalog({
+      config: ctx.cfg,
+      readOnly: true,
+      providerDiscoveryProviderIds: [],
+    });
     const status = getModelRefStatus({
       cfg: ctx.cfg,
       catalog,
