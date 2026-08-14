@@ -174,6 +174,96 @@ describe("createSlackMessageHandler", () => {
     expect(context.cfg).toBe(startupConfig);
   });
 
+  it.each([
+    {
+      label: "without a source snapshot",
+      includeSourceSnapshot: false,
+      messageTs: "1709000000.009004",
+    },
+    {
+      label: "with an unrelated source snapshot",
+      includeSourceSnapshot: true,
+      messageTs: "1709000000.009005",
+    },
+  ])("preserves explicit monitor config $label", async ({ includeSourceSnapshot, messageTs }) => {
+    const explicitConfig: OpenClawConfig = {
+      agents: { defaults: { thinkingDefault: "ultra" } },
+      messages: { responsePrefix: "scoped" },
+    };
+    const unrelatedRuntimeConfig: OpenClawConfig = {
+      agents: { defaults: { thinkingDefault: "low" } },
+    };
+    setRuntimeConfigSnapshot(
+      unrelatedRuntimeConfig,
+      includeSourceSnapshot ? unrelatedRuntimeConfig : undefined,
+    );
+    const context = createContext({ cfg: explicitConfig });
+    const handler = createSlackMessageHandler({
+      ctx: context,
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    setRuntimeConfigSnapshot({ agents: { defaults: { thinkingDefault: "high" } } });
+    await handler(
+      {
+        type: "message",
+        channel: "D1",
+        user: "U1",
+        ts: messageTs,
+        text: "hello",
+      } as never,
+      { source: "message" },
+    );
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    await runOnFlush([entry]);
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledWith(expect.objectContaining({ ctx: context }));
+    expect(context.cfg).toBe(explicitConfig);
+  });
+
+  it("follows runtime updates when the monitor config matches the runtime source", async () => {
+    const startupSourceConfig: OpenClawConfig = {
+      agents: { defaults: { thinkingDefault: "max" } },
+    };
+    const startupRuntimeConfig: OpenClawConfig = {
+      agents: { defaults: { thinkingDefault: "max", fastModeDefault: false } },
+    };
+    const updatedRuntimeConfig: OpenClawConfig = {
+      agents: { defaults: { thinkingDefault: "ultra", fastModeDefault: true } },
+    };
+    setRuntimeConfigSnapshot(startupRuntimeConfig, startupSourceConfig);
+    const context = createContext({ cfg: structuredClone(startupSourceConfig) });
+    const handler = createSlackMessageHandler({
+      ctx: context,
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    setRuntimeConfigSnapshot(updatedRuntimeConfig, updatedRuntimeConfig);
+    await handler(
+      {
+        type: "message",
+        channel: "D1",
+        user: "U1",
+        ts: "1709000000.009006",
+        text: "hello",
+      } as never,
+      { source: "message" },
+    );
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    await runOnFlush([entry]);
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({ cfg: updatedRuntimeConfig }),
+      }),
+    );
+    expect(context.cfg).toEqual(startupSourceConfig);
+  });
+
   it("keeps each in-flight message on its captured config snapshot", async () => {
     const startupConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "max" } } };
     const firstConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "high" } } };
