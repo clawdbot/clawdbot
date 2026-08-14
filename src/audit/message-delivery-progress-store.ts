@@ -32,7 +32,7 @@ type ProgressTable = OpenClawStateKyselyDatabase["outbound_message_progress"];
 type ProgressDatabase = Pick<OpenClawStateKyselyDatabase, "outbound_message_progress">;
 type ProgressRow = Selectable<ProgressTable>;
 
-export const OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const OUTBOUND_MESSAGE_PROGRESS_MAX_ROWS = 200_000;
 const OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS = 1_024;
 const AUDIT_HMAC_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
