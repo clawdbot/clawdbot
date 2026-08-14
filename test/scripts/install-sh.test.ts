@@ -1017,9 +1017,9 @@ NODE
     const output = result?.stdout ?? "";
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
     const mkdirParentIndex = script.indexOf('mkdir -p "$(dirname "$repo_dir")"');
-    const cloneIndex = script.indexOf(
-      'run_quiet_step "Cloning OpenClaw" git clone --filter=blob:none "$repo_url" "$repo_dir"',
-    );
+    // Ordering only. The clone flags are asserted behaviorally below, so this
+    // needle stays short enough to survive future changes to them.
+    const cloneIndex = script.indexOf('run_quiet_step "Cloning OpenClaw" git clone');
     expect(mkdirParentIndex).toBeGreaterThan(-1);
     expect(cloneIndex).toBeGreaterThan(-1);
     expect(mkdirParentIndex).toBeLessThan(cloneIndex);

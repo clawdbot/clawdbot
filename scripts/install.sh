@@ -2874,7 +2874,11 @@ install_openclaw_from_git() {
     validate_git_checkout_head "$repo_dir" || return 1
     if [[ ! -d "$repo_dir" ]]; then
         mkdir -p "$(dirname "$repo_dir")"
-        run_quiet_step "Cloning OpenClaw" git clone --filter=blob:none "$repo_url" "$repo_dir" # Git warns and falls back if filtering is unsupported.
+        # Blobless clone: the installer checks out one release tag, so full blob
+        # history is downloaded and then discarded. blob:none keeps ref metadata
+        # (unlike --depth 1) so ref switching and later updates still work, and
+        # git warns and falls back to a full clone if the server cannot filter.
+        run_quiet_step "Cloning OpenClaw" git clone --filter=blob:none "$repo_url" "$repo_dir"
     fi
 
     local git_ref
