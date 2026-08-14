@@ -79,6 +79,7 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
   const state = {
     agentsList: null,
     assistantAgentId: null,
+    chatAttachments: [],
     chatError: null,
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
@@ -715,6 +716,70 @@ describe("chat pane catalog continuation lifecycle", () => {
     });
     expect(state.sessionKey).not.toBe("agent:main:continued");
     expect(state.handleSendChat).not.toHaveBeenCalled();
+  });
+
+  it("carries staged attachments through the continuation handoff", async () => {
+    const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:continued-attachments" });
+    const { key, pane, state } = createCatalogContinuationPane(request);
+    state.chatAttachments = [
+      {
+        id: "att-1",
+        mimeType: "image/png",
+        fileName: "shot.png",
+        dataUrl: "data:image/png;base64,AAAA",
+      },
+    ];
+
+    await pane.continueCatalogSession(key);
+
+    const handoff = consumePaneSessionHandoff(
+      pane.context,
+      pane.paneId,
+      "agent:main:continued-attachments",
+    );
+    expect(handoff?.send).toBe(true);
+    expect(handoff?.attachments).toHaveLength(1);
+    expect(handoff?.attachments[0]).toMatchObject({
+      mimeType: "image/png",
+      fileName: "shot.png",
+      dataUrl: "data:image/png;base64,AAAA",
+    });
+  });
+
+  it("continues an attachment-only draft instead of silently ignoring the send", async () => {
+    const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:attachment-only" });
+    const { key, pane, state } = createCatalogContinuationPane(request);
+    state.chatMessage = "";
+    state.chatAttachments = [
+      {
+        id: "att-2",
+        mimeType: "image/png",
+        fileName: "only.png",
+        dataUrl: "data:image/png;base64,BBBB",
+      },
+    ];
+
+    await pane.continueCatalogSession(key);
+
+    expect(request).toHaveBeenCalledWith("sessions.catalog.continue", key);
+    const handoff = consumePaneSessionHandoff(
+      pane.context,
+      pane.paneId,
+      "agent:main:attachment-only",
+    );
+    expect(handoff?.send).toBe(true);
+    expect(handoff?.attachments).toHaveLength(1);
+  });
+
+  it("still ignores a continuation with no draft and no attachments", async () => {
+    const request = vi.fn();
+    const { key, pane, state } = createCatalogContinuationPane(request);
+    state.chatMessage = "   ";
+    state.chatAttachments = [];
+
+    await pane.continueCatalogSession(key);
+
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("does not stage or send a continuation rejected by its logical pane", async () => {
