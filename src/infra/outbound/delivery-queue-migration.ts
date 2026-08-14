@@ -9,6 +9,7 @@ import {
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
 import { failPendingDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import { unknownDeliveryTerminalPolicy } from "../delivery-queue-terminal-policy.js";
 import {
   collectPayloadMediaSources,
   resolveOutboundMediaAccessForSend,
@@ -269,6 +270,7 @@ async function prepareLegacyEntryCheckpoint(params: {
   }
   const checkpoint: QueuedDelivery = {
     ...canonicalRetained,
+    failureRetention: params.entry.completionRetention ?? "permanent",
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatch),
     renderedBatchPlan: createRenderedMessageBatchPlan(acceptedPayloads),
     ...(!prepareForReplay &&
@@ -311,6 +313,7 @@ async function failInterruptedLegacyPreparation(params: {
       enqueuedAt: params.entry.enqueuedAt,
       retryCount: params.entry.retryCount,
       attemptCount: params.entry.attemptCount,
+      terminalPolicy: unknownDeliveryTerminalPolicy(),
     },
     stateDir: params.stateDir,
   });
