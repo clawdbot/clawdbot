@@ -361,7 +361,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             metrics: beforeHookMetrics,
             onHookMessages: params.onCompactionHookMessages,
           });
-          const { messageCountOriginal } = beforeHookMetrics;
+          const { messageCountOriginal, tokenCountBefore: limitedTranscriptTokensBefore } =
+            beforeHookMetrics;
           const diagEnabled = log.isEnabled("debug");
           const preMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
@@ -391,22 +392,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
 
           const compactStartedAt = Date.now();
-          // Measure compactedCount from the original pre-limiting transcript so compaction
-          // lifecycle metrics represent total reduction through the compaction pipeline.
-          const messageCountCompactionInput = messageCountOriginal;
-          // Estimate all limited transcript messages before compaction. This is the
-          // same token domain as messagesAfter; result.tokensBefore can cover only the
-          // summarizable subset.
-          let limitedTranscriptTokensBefore = 0;
-          try {
-            limitedTranscriptTokensBefore = limited.reduce(
-              (sum, msg) => sum + estimateTokens(msg),
-              0,
-            );
-          } catch {
-            // If token estimation throws on a malformed message, fall back to 0 so
-            // the sanity check below becomes a no-op instead of crashing compaction.
-          }
           const serverResult = await attemptServerEndpointCompaction({
             trigger,
             model: effectiveModel,
@@ -448,11 +433,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             estimateTokensAfterCompaction({
               messagesAfter: session.messages,
               observedTokenCount,
-              fullSessionTokensBefore: limitedTranscriptTokensBefore,
+              fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
               estimateTokensFn: estimateTokens,
             });
           const messageCountAfter = session.messages.length;
-          const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
+          const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
           const activeSessionFile = formatSqliteSessionFileMarker({
             ...sessionTarget,
             sessionId: params.sessionId,
@@ -524,7 +509,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     summary: clientResult.summary,
                     firstKeptEntryId: clientResult.firstKeptEntryId,
                   }
-                : { kind: "server-endpoint" as const }),
+                : {}),
               tokensBefore: serverResult
                 ? tokensBefore
                 : (observedTokenCount ?? clientResult!.tokensBefore),

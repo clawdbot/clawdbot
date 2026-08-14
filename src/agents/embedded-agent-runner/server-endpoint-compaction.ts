@@ -80,9 +80,9 @@ export async function attemptServerEndpointCompaction(params: {
     }
     return compacted;
   } catch (err) {
-    log.debug("Responses compact endpoint failed; falling back to client compaction", {
-      errorMessage: formatErrorMessage(err),
-    });
+    log.debug(
+      `Responses compact endpoint failed; falling back to client compaction: ${formatErrorMessage(err)}`,
+    );
     return undefined;
   }
 }

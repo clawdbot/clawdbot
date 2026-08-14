@@ -3680,7 +3680,7 @@ describe("runMemoryFlushIfNeeded", () => {
       ok: true,
       compacted: true,
       compactionKind: "server-endpoint",
-      result: { kind: "server-endpoint", tokensBefore: 8_614, tokensAfter: 736 },
+      result: { tokensBefore: 8_614, tokensAfter: 736 },
     });
 
     await runPreflightCompactionIfNeeded({
