@@ -714,7 +714,7 @@ export function canRecordDetachedFailureForCronRunReceiptInDatabase(params: {
   return Boolean(
     row &&
     rowMatchesCronRunReceiptHandle(row, params.handle) &&
-    (row.status === "running" || row.status === "ok" || row.status === "error"),
+    (row.status === "running" || row.status === "ok"),
   );
 }
 
@@ -731,13 +731,17 @@ export function recordDetachedFailureForCronRunReceiptInDatabase(params: {
       "cron run receipt no longer accepts detached failure state",
     );
   }
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     params.database,
     query(params.database)
       .updateTable("cron_run_receipts")
       .set({ status: "error", finished_at_ms: params.finishedAtMs, error_text: params.error })
-      .where("receipt_id", "=", params.handle.receiptId),
+      .where("receipt_id", "=", params.handle.receiptId)
+      .where("status", "in", ["running", "ok"]),
   );
+  if (result.numAffectedRows !== 1n) {
+    throw new CronRunReceiptRevisionError(params.handle.receiptId, "receipt already failed");
+  }
 }
 
 /** Completes the exact active receipt inside its caller's cron-state transaction. */

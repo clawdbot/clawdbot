@@ -183,4 +183,67 @@ describe("detached media cron failure ownership", () => {
       cron.stop();
     }
   });
+
+  it("records only the first detached failure for one cron receipt", async () => {
+    const { storePath } = await makeStorePath();
+    const runDone = createDeferred<{ status: "ok"; summary: string }>();
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => await runDone.promise),
+    });
+    await cron.start();
+    try {
+      const job = await cron.add(detachedMediaJob("duplicate-detached-media-failure"));
+      const runPromise = cron.run(job.id, "force");
+      let receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+      await vi.waitFor(() => {
+        receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+        expect(receipt).toBeDefined();
+      });
+      if (!receipt) {
+        throw new Error("expected active cron run receipt");
+      }
+
+      const request = {
+        cronRunReceipt: receipt,
+        requesterSessionKey:
+          "agent:main:cron:duplicate-detached-media-failure:run:550e8400-e29b-41d4-a716-446655440003",
+        taskId: "media-task-first",
+        runId: "tool:music_generate:first",
+        toolName: "music_generate",
+        error: "Detached music_generate failed: first provider failure",
+      };
+      await expect(cron.recordDetachedMediaFailure(request)).resolves.toBe(true);
+      await expect(
+        cron.recordDetachedMediaFailure({
+          ...request,
+          taskId: "media-task-second",
+          runId: "tool:music_generate:second",
+          error: "Detached music_generate failed: second provider failure",
+        }),
+      ).resolves.toBe(false);
+
+      expect(cron.getJob(job.id)?.state).toMatchObject({
+        lastRunAtMs: receipt.startedAtMs,
+        lastRunStatus: "error",
+        lastError: "Detached music_generate failed: first provider failure",
+        consecutiveErrors: 1,
+      });
+
+      runDone.resolve({ status: "ok", summary: "generation started" });
+      await runPromise;
+      expect(cron.getJob(job.id)?.state).toMatchObject({
+        lastRunStatus: "error",
+        lastError: "Detached music_generate failed: first provider failure",
+        consecutiveErrors: 1,
+      });
+    } finally {
+      runDone.resolve({ status: "ok", summary: "generation started" });
+      cron.stop();
+    }
+  });
 });
