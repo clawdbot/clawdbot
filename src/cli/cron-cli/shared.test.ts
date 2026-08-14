@@ -259,7 +259,7 @@ describe("printCronList", () => {
       payload: { kind: "agentTurn", message: "test", model: injected("model") },
       state: {
         lastError: injected("last-error"),
-        lastDeliveryStatus: injected("delivery-status"),
+        lastDeliveryStatus: "not-delivered",
         lastDeliveryError: injected("delivery-error"),
         lastDiagnosticSummary: injected("diagnostic"),
       },
