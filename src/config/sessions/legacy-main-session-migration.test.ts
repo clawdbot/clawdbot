@@ -547,7 +547,7 @@ describe("legacy main session migration", () => {
     });
   });
 
-  it("uses an explicit fixed-store owner only when the multi-agent roster is unambiguous", async () => {
+  it("uses an explicit migration owner when the multi-agent roster is unambiguous", async () => {
     const resolved = createFixture({
       agents: {
         ownership: "explicit",
@@ -577,7 +577,7 @@ describe("legacy main session migration", () => {
       env: unresolved.env,
       mode: "detect",
     });
-    const perAgentNotArmed = await migrateLegacyMainSessionKeys({
+    const perAgentArmed = await migrateLegacyMainSessionKeys({
       cfg: perAgentPinned.cfg,
       env: perAgentPinned.env,
       mode: "detect",
@@ -588,11 +588,38 @@ describe("legacy main session migration", () => {
       armed: false,
       outcomes: [{ kind: "not-armed", detail: "owner-unresolved" }],
     });
-    expect(perAgentNotArmed).toMatchObject({
-      armed: false,
-      outcomes: [{ kind: "not-armed", detail: "owner-unresolved" }],
-    });
+    expect(perAgentArmed).toMatchObject({ armed: true, ownerAgentId: "ops" });
     expect(notArmed.warnings[0]).toContain("agents.defaults.sessionStore.agentId");
+  });
+
+  it("uses an explicit migration owner for retired main rows in per-agent stores", async () => {
+    const fixture = createFixture({
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    });
+    const mainPath = databasePath(fixture.stateDir, "main");
+    seedClaim({ databaseAgentId: "main", databasePath: mainPath, key: "agent:main:chat" });
+
+    const result = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "automatic",
+    });
+
+    expect(result).toMatchObject({ armed: true, complete: true, ownerAgentId: "ops" });
+    expect(
+      readClaim({ databaseAgentId: "main", databasePath: mainPath, key: "agent:main:chat" }),
+    ).toBeUndefined();
+    expect(
+      readClaim({
+        databaseAgentId: "ops",
+        databasePath: databasePath(fixture.stateDir, "ops"),
+        key: "agent:ops:chat",
+      }),
+    ).toBeDefined();
   });
 
   it("keeps automatic detection non-throwing for unreadable stores and treats ENOENT as absence", async () => {
