@@ -408,6 +408,33 @@ NODE
     expect(nodeSourceIndex).toBeGreaterThan(apkIndex);
   });
 
+  it("propagates package manager failure out of install_build_tools_linux", () => {
+    // PATH="" hides real package managers so only the stubbed function below is
+    // discoverable, keeping the selected branch identical on macOS and Linux.
+    for (const packageManager of ["apt-get", "dnf", "yum", "apk", "pacman"]) {
+      const result = runInstallShell(`
+        set -uo pipefail
+        source "${SCRIPT_PATH}"
+        PATH=""
+        require_sudo() { :; }
+        is_root() { return 0; }
+        is_arch_linux() { [[ "${packageManager}" == "pacman" ]]; }
+        is_alpine_linux() { [[ "${packageManager}" == "apk" ]]; }
+        ui_warn() { printf 'warn:%s\\n' "$*"; }
+        ${packageManager}() { :; }
+        run_quiet_step() { return 1; }
+        if install_build_tools_linux; then
+          printf 'result:success\\n'
+        else
+          printf 'result:failure\\n'
+        fi
+      `);
+
+      expect(result.stdout, packageManager).toContain("result:failure");
+      expect(result.stdout, packageManager).not.toContain("result:success");
+    }
+  });
+
   it("uses the apk Node.js installer path on Alpine", () => {
     const result = runInstallShell(`
       set -euo pipefail

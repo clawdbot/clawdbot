@@ -821,50 +821,33 @@ apt_get_install() {
 install_build_tools_linux() {
     require_sudo
 
+    # apt_get already escalates privileges itself, so it stays separate from the
+    # sudo-prefixed command list below.
     if command -v apt-get &> /dev/null; then
         run_quiet_step "Updating package index" apt_get_update
         run_quiet_step "Installing build tools" apt_get_install build-essential python3 make g++ cmake
-        return 0
+        return
     fi
 
+    local -a build_tools_cmd=()
     if command -v pacman &> /dev/null && is_arch_linux; then
-        if is_root; then
-            run_quiet_step "Installing build tools" pacman -Sy --noconfirm base-devel python make cmake gcc
-        else
-            run_quiet_step "Installing build tools" sudo pacman -Sy --noconfirm base-devel python make cmake gcc
-        fi
-        return 0
+        build_tools_cmd=(pacman -Sy --noconfirm base-devel python make cmake gcc)
+    elif command -v dnf &> /dev/null; then
+        build_tools_cmd=(dnf install -y -q gcc gcc-c++ make cmake python3)
+    elif command -v yum &> /dev/null; then
+        build_tools_cmd=(yum install -y -q gcc gcc-c++ make cmake python3)
+    elif command -v apk &> /dev/null && is_alpine_linux; then
+        build_tools_cmd=(apk add --no-cache build-base python3 cmake)
+    else
+        ui_warn "Could not detect package manager for auto-installing build tools"
+        return 1
     fi
 
-    if command -v dnf &> /dev/null; then
-        if is_root; then
-            run_quiet_step "Installing build tools" dnf install -y -q gcc gcc-c++ make cmake python3
-        else
-            run_quiet_step "Installing build tools" sudo dnf install -y -q gcc gcc-c++ make cmake python3
-        fi
-        return 0
-    fi
-
-    if command -v yum &> /dev/null; then
-        if is_root; then
-            run_quiet_step "Installing build tools" yum install -y -q gcc gcc-c++ make cmake python3
-        else
-            run_quiet_step "Installing build tools" sudo yum install -y -q gcc gcc-c++ make cmake python3
-        fi
-        return 0
-    fi
-
-    if command -v apk &> /dev/null && is_alpine_linux; then
-        if is_root; then
-            run_quiet_step "Installing build tools" apk add --no-cache build-base python3 cmake
-        else
-            run_quiet_step "Installing build tools" sudo apk add --no-cache build-base python3 cmake
-        fi
-        return 0
-    fi
-
-    ui_warn "Could not detect package manager for auto-installing build tools"
-    return 1
+    is_root || build_tools_cmd=(sudo "${build_tools_cmd[@]}")
+    # Return the package manager's status: callers choose between "Build tools
+    # installed" and the continue-without-build-tools warning based on it, so
+    # swallowing a failure here makes the installer claim success after an error.
+    run_quiet_step "Installing build tools" "${build_tools_cmd[@]}"
 }
 
 install_build_tools_macos() {
