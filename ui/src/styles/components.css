@@ -1392,6 +1392,43 @@ openclaw-github-link-hovercard-provider {
   stroke-linejoin: round;
 }
 
+.scope-upgrade-chip-row {
+  display: flex;
+  min-height: 30px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.scope-upgrade-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 11px;
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.scope-upgrade-chip:hover {
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-elevated));
+}
+
+.scope-upgrade-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.scope-upgrade-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .callout.danger {
   border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
   background: linear-gradient(

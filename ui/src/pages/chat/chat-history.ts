@@ -71,7 +71,7 @@ import {
   clearChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import { retireHistoryProvenSteeredChips } from "./steer-lifecycle.ts";
+import { retirePersistedSteeredChips } from "./steer-lifecycle.ts";
 import {
   clearToolStreamSegments,
   currentLiveToolCallIds,
@@ -1664,7 +1664,7 @@ async function loadChatHistoryUncached(
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
     }
-    retireHistoryProvenSteeredChips(state);
+    retirePersistedSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
     replaceCachedChatMessages(state, sessionKey, requestAgentId);

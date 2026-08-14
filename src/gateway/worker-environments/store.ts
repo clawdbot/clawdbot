@@ -900,6 +900,9 @@ export function createWorkerEnvironmentStore(
     getCredential: (environmentId: string) => findCredential(read(), required(environmentId, "id")),
     getTransferOwner: (environmentId: string) =>
       findTransferOwner(read(), required(environmentId, "id")),
+    revokeEnvironmentCredential(environmentId: string): void {
+      return write((db) => revokeCredential(db, required(environmentId, "id")));
+    },
     findCredentialByHash: (credentialHash: string) =>
       findCredentialByHash(read(), normalizeCredentialHash(credentialHash)),
     list: (): WorkerEnvironmentRecord[] => listRows(read(), false),

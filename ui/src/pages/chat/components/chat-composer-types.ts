@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
@@ -20,6 +20,7 @@ import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
+import type { ChatAttachmentControlsProps } from "./chat-attachments.ts";
 import type {
   ChatComposerPlusMenuProps,
   ChatComposerPlusMenuView,
@@ -61,7 +62,7 @@ type ChatComposerDisabledBannerContent = {
 export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
   ({ kind: "above-composer" } | { kind: "composer-replacement" });
 
-export type ChatComposerProps = {
+export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -91,13 +92,8 @@ export type ChatComposerProps = {
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
-  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
-  attachments?: ChatAttachment[];
-  getAttachments?: () => ChatAttachment[];
   pendingAttachmentReads?: number;
   getPendingAttachmentReads?: () => number;
-  readSignal?: AbortSignal;
-  onPendingReadsChange?: (delta: 1 | -1) => void;
   replyTarget?: {
     messageId: string;
     text: string;
@@ -120,9 +116,7 @@ export type ChatComposerProps = {
   typingActors?: readonly { id: string; label: string }[];
   onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
-  getDraft?: () => string;
   onDraftChange: (next: string) => void;
-  onRequestUpdate?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSend: () => void;
@@ -140,8 +134,6 @@ export type ChatComposerProps = {
   queuedEdit?: ChatQueuedEditProps;
   onNewSession: () => void;
   onClearReply?: () => void;
-  onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
-  onRemoveAttachment?: (attachment: ChatAttachment) => void;
   onGoalCommand?: (command: string) => void;
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;

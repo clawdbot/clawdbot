@@ -241,8 +241,21 @@ async function streamUploadFile(params: {
       throw new Error("Workspace transfer upload ended mid-file");
     }
     hash.update(chunk);
-    await params.handle.write(chunk, 0, chunk.length, offset);
-    params.assertCurrent();
+    let chunkOffset = 0;
+    while (chunkOffset < chunk.length) {
+      const { bytesWritten } = await params.handle.write(
+        chunk,
+        chunkOffset,
+        chunk.length - chunkOffset,
+        offset + chunkOffset,
+      );
+      // A short write adds another await, so each suffix retry needs its own authority fence.
+      params.assertCurrent();
+      if (bytesWritten === 0) {
+        throw new Error("Workspace transfer upload write made no progress");
+      }
+      chunkOffset += bytesWritten;
+    }
     offset += chunk.length;
   }
   if (hash.digest("hex") !== params.entry.sha256) {

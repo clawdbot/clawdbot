@@ -2399,7 +2399,9 @@ function createMockGatewayControls(
             return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
           },
           method,
-          { timeout: controlUiE2eWaitTimeoutMs },
+          // Request capture is non-rendering state. Interval polling avoids background-page
+          // requestAnimationFrame throttling when CI runs several headless pages concurrently.
+          { polling: 25, timeout: controlUiE2eWaitTimeoutMs },
         );
       } catch (error) {
         if (error instanceof Error && error.name === "TimeoutError") {

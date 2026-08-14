@@ -3668,6 +3668,10 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 20px;
 }
 
+.content > openclaw-device-scope-upgrade-banner:has(.scope-upgrade-chip-row) + * {
+  margin-top: 8px;
+}
+
 .content--chat {
   display: flex;
   flex-direction: column;
