@@ -16,8 +16,12 @@ import {
 import type { CliOutput } from "../cli-output-contracts.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "../command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
-import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
+import {
+  hasCommittedMessagingToolDeliveryEvidence,
+  resolveExplicitFinalSourceReplyDeliveryEvidence,
+} from "../embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
+import { YIELD_DIAGNOSTIC_TEXT } from "../embedded-agent-runner/run/incomplete-turn-resolution.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { coerceToFailoverError, isFailoverError } from "../failover-error.js";
@@ -521,6 +525,17 @@ export function buildCliRunResult(params: {
       : (effectiveCliSessionId ?? runParams.sessionId ?? "");
   const yielded = output.yielded === true;
   const stopReason = yielded ? "end_turn" : "completed";
+  // sessions_yield is meant to pause a turn only when a subagent/async/cron/approval
+  // completion will resume it later. CLI backends don't yet track those signals (see
+  // hasYieldContinuationEvidence for the embedded runner's fuller version), but they do
+  // track messaging-tool delivery — reuse that narrower check so a model that yields with
+  // nothing pending doesn't leave the user staring at a permanently paused turn with no
+  // indication it will never resume on its own. Appends after tool-media payloads so a
+  // yielded turn that already delivered media still gets the diagnostic when warranted.
+  const payloadsWithYieldDiagnostic =
+    yielded && !hasCommittedMessagingToolDeliveryEvidence(output)
+      ? [...(payloadsWithToolMedia ?? []), { text: YIELD_DIAGNOSTIC_TEXT }]
+      : payloadsWithToolMedia;
 
   runParams.onSuccessfulAuthBinding?.({
     ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
@@ -542,7 +557,7 @@ export function buildCliRunResult(params: {
   });
 
   return {
-    payloads: payloadsWithToolMedia,
+    payloads: payloadsWithYieldDiagnostic,
     meta: {
       durationMs: Date.now() - context.started,
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
