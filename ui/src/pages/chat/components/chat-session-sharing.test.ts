@@ -191,8 +191,16 @@ describe("chat session sharing menu", () => {
             sessionKey: "agent:main:main",
             members: [{ identityId: "alice", addedBy: "owner", addedAt: 1 }],
             identities: [
-              { type: "human", id: "alice", label: "Alice" },
-              { type: "human", id: "bob", label: "Bob" },
+              {
+                type: "human",
+                id: "alice",
+                label: "Alice with a very long selected member display name",
+              },
+              {
+                type: "human",
+                id: "bob",
+                label: "Bob with a very long available member display name",
+              },
             ],
             role: "owner",
             allowedVisibilities: ["shared", "read-only"],
@@ -217,6 +225,15 @@ describe("chat session sharing menu", () => {
     expect(
       root.querySelector('wa-dropdown-item[value="member:bob"]')?.hasAttribute("disabled"),
     ).toBe(true);
+    for (const identityId of ["alice", "bob"]) {
+      const item = root.querySelector<HTMLElement>(
+        `wa-dropdown-item[value="member:${identityId}"]`,
+      );
+      expect(item?.title).toBe("Requires write");
+      expect(item?.querySelector(".chat-pane__sharing-member-label")?.hasAttribute("title")).toBe(
+        false,
+      );
+    }
 
     dropdown?.dispatchEvent(new CustomEvent("wa-show"));
     dropdown?.dispatchEvent(

@@ -606,6 +606,11 @@ describe("plugin sdk alias helpers", () => {
       "utf-8",
     );
     fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "native-hook-relay-runtime.ts"),
+      "export const nativeHookRelayRuntime = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
       "export const qaRuntime = true;\n",
       "utf-8",
@@ -673,8 +678,12 @@ describe("plugin sdk alias helpers", () => {
       ),
     );
 
-    expect(codexSubpaths).toEqual(["codex-mcp-projection", "core"]);
-    expect(installedCodexSubpaths).toEqual(["codex-mcp-projection", "core"]);
+    expect(codexSubpaths).toEqual(["codex-mcp-projection", "core", "native-hook-relay-runtime"]);
+    expect(installedCodexSubpaths).toEqual([
+      "codex-mcp-projection",
+      "core",
+      "native-hook-relay-runtime",
+    ]);
     expect(otherSubpaths).toEqual(["core"]);
     expect(installedOtherSubpaths).toEqual(["core"]);
     expect(shadowCodexSubpaths).toEqual(["core"]);
@@ -860,6 +869,18 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-mcp-projection.js",
     );
+    const sourceNativeHookRelayRuntimePath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "native-hook-relay-runtime.ts",
+    );
+    const distNativeHookRelayRuntimePath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "native-hook-relay-runtime.js",
+    );
     const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
     fs.rmSync(
       path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
@@ -873,6 +894,16 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(
       distCodexMcpProjectionPath,
       "export const codexMcpProjection = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      sourceNativeHookRelayRuntimePath,
+      "export const nativeHookRelayRuntime = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      distNativeHookRelayRuntimePath,
+      "export const nativeHookRelayRuntime = true;\n",
       "utf-8",
     );
     fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
@@ -899,10 +930,21 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-mcp-projection.js",
     );
+    const devNativeHookRelayRuntimePath = path.join(
+      devFixture.root,
+      "dist",
+      "plugin-sdk",
+      "native-hook-relay-runtime.js",
+    );
     mkdirSafeDir(path.join(devFixture.root, "extensions"));
     fs.writeFileSync(
       devCodexMcpProjectionPath,
       "export const devCodexMcpProjection = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      devNativeHookRelayRuntimePath,
+      "export const devNativeHookRelayRuntime = true;\n",
       "utf-8",
     );
     const { packageRoot: installedCodexRoot, pluginEntry: installedCodexEntry } =
@@ -984,10 +1026,22 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(devRootAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? "")).toBe(
       fs.realpathSync(devCodexMcpProjectionPath),
     );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/native-hook-relay-runtime"] ?? "")).toBe(
+      fs.realpathSync(sourceNativeHookRelayRuntimePath),
+    );
+    expect(
+      fs.realpathSync(installedAliases["openclaw/plugin-sdk/native-hook-relay-runtime"] ?? ""),
+    ).toBe(fs.realpathSync(distNativeHookRelayRuntimePath));
+    expect(
+      fs.realpathSync(devRootAliases["openclaw/plugin-sdk/native-hook-relay-runtime"] ?? ""),
+    ).toBe(fs.realpathSync(devNativeHookRelayRuntimePath));
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
     expect(otherAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
+    expect(otherAliases["openclaw/plugin-sdk/native-hook-relay-runtime"]).toBeUndefined();
     expect(installedOtherAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
+    expect(installedOtherAliases["openclaw/plugin-sdk/native-hook-relay-runtime"]).toBeUndefined();
     expect(shadowCodexAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
+    expect(shadowCodexAliases["openclaw/plugin-sdk/native-hook-relay-runtime"]).toBeUndefined();
   });
 
   it("aliases the SSRF internal helper only for bundled local IPC owner plugins", async () => {

@@ -3812,12 +3812,8 @@ button.chat-reply-preview--message:disabled {
   .agent-chat__input .chat-controls__model-menu,
   .agent-chat__input .chat-controls__effort-menu {
     box-sizing: border-box;
-    position: fixed;
-    left: max(12px, var(--safe-area-left));
-    right: max(12px, var(--safe-area-right));
-    bottom: var(--chat-composer-popover-bottom, calc(96px + var(--safe-area-bottom)));
-    width: auto;
-    max-height: min(440px, var(--chat-composer-popover-max-height, calc(100dvh - 116px)));
+    width: calc(100vw - max(12px, var(--safe-area-left)) - max(12px, var(--safe-area-right)));
+    max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
   }
 
   .agent-chat__composer-shell {
@@ -4324,7 +4320,6 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-controls__inline-select {
-  position: relative;
   min-width: 0;
 }
 
@@ -4417,20 +4412,10 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-controls__inline-select-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 6px);
-  z-index: 80;
-  display: grid;
-  gap: 2px;
-  width: max(300%, min(300px, calc(100vw - 32px)));
-  max-height: min(280px, calc(100vh - 120px));
-  padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
   box-shadow: var(--shadow-md);
-  overflow-y: auto;
 }
 
 .chat-controls__inline-select-option {
@@ -4474,17 +4459,13 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-controls__model-menu {
-  left: auto;
-  right: 0;
   width: min(380px, calc(100vw - 24px));
-  max-height: min(440px, calc(100vh - 96px));
+  max-height: min(440px, var(--auto-size-available-height, calc(100vh - 96px)));
 }
 
 .chat-controls__effort-menu {
-  left: auto;
-  right: 0;
   width: min(330px, calc(100vw - 24px));
-  overflow: hidden;
+  max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
 }
 
 .chat-controls__model-search-wrap {

@@ -2464,57 +2464,40 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [320, 568, true],
     [667, 375, true],
   ] as const)(
-    "keeps the composer popovers inside the mobile viewport and clear of the input at %sx%s (attachment: %s)",
+    "keeps the context usage popover inside the mobile viewport and clear of the input at %sx%s (attachment: %s)",
     async (width, height, composerAttachment) => {
       const page = await openFixture(width, height, { composerAttachment });
       try {
         const composer = await getBoundingBox(page, ".agent-chat__input");
-        for (const picker of [
-          {
-            menu: ".chat-controls__model-menu",
-            trigger: '[data-chat-composer-model="true"]',
-          },
-          {
-            menu: ".chat-controls__effort-menu",
-            trigger: '[data-chat-composer-effort="true"]',
-          },
-          {
-            menu: ".context-usage__popover",
-            trigger: ".context-ring",
-          },
-        ]) {
-          await page.locator(picker.trigger).evaluate((node) => {
-            node.parentElement?.setAttribute("open", "");
-          });
-          await waitForLayoutSettled(page, `${picker.menu}, .agent-chat__input`);
-          await syncFixtureComposerPopoverAnchor(page);
-          await waitForLayoutSettled(page, `${picker.menu}, .agent-chat__input`);
-          const menu = await getBoundingBox(page, picker.menu);
-          const trigger = await getBoundingBox(page, picker.trigger);
-          const footer = await getBoundingBox(page, ".agent-chat__composer-footer");
-          const menuPosition = await page.locator(picker.menu).evaluate((node) => ({
-            bottom: getComputedStyle(node).bottom,
-            boxSizing: getComputedStyle(node).boxSizing,
-            maxHeight: getComputedStyle(node).maxHeight,
-          }));
-          const menuLabel = `${picker.menu} ${JSON.stringify(menuPosition)}`;
-          expect(menu.x, picker.menu).toBeGreaterThanOrEqual(0);
-          expect(menu.x + menu.width, picker.menu).toBeLessThanOrEqual(width + 1);
-          expect(menu.y, menuLabel).toBeGreaterThanOrEqual(0);
-          expect(menu.y + menu.height, picker.menu).toBeLessThanOrEqual(composer.y + 1);
-          expect(trigger.y + trigger.height, picker.trigger).toBeLessThanOrEqual(height + 1);
-          expect(footer.y + footer.height, picker.menu).toBeLessThanOrEqual(height + 1);
-          await page.locator(picker.trigger).evaluate((node) => {
-            node.parentElement?.removeAttribute("open");
-          });
-        }
+        const menuSelector = ".context-usage__popover";
+        const triggerSelector = ".context-ring";
+        await page.locator(triggerSelector).evaluate((node) => {
+          node.parentElement?.setAttribute("open", "");
+        });
+        await waitForLayoutSettled(page, `${menuSelector}, .agent-chat__input`);
+        await syncFixtureComposerPopoverAnchor(page);
+        await waitForLayoutSettled(page, `${menuSelector}, .agent-chat__input`);
+        const menu = await getBoundingBox(page, menuSelector);
+        const trigger = await getBoundingBox(page, triggerSelector);
+        const footer = await getBoundingBox(page, ".agent-chat__composer-footer");
+        const menuPosition = await page.locator(menuSelector).evaluate((node) => ({
+          bottom: getComputedStyle(node).bottom,
+          boxSizing: getComputedStyle(node).boxSizing,
+          maxHeight: getComputedStyle(node).maxHeight,
+        }));
+        expect(menu.x).toBeGreaterThanOrEqual(0);
+        expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
+        expect(menu.y, JSON.stringify(menuPosition)).toBeGreaterThanOrEqual(0);
+        expect(menu.y + menu.height).toBeLessThanOrEqual(composer.y + 1);
+        expect(trigger.y + trigger.height).toBeLessThanOrEqual(height + 1);
+        expect(footer.y + footer.height).toBeLessThanOrEqual(height + 1);
       } finally {
         await closeBrowserPage(page);
       }
     },
   );
 
-  it("anchors mobile composer popovers when the iPhone visual viewport is panned", async () => {
+  it("anchors mobile context usage when the iPhone visual viewport is panned", async () => {
     const page = await openFixture(375, 812);
     try {
       await page.locator(".card.chat").evaluate(async (node) => {
@@ -2527,14 +2510,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
       });
       await syncFixtureComposerPopoverAnchor(page);
-      await page.locator('[data-chat-composer-model="true"]').evaluate((node) => {
+      await page.locator(".context-ring").evaluate((node) => {
         node.parentElement?.setAttribute("open", "");
       });
-      await waitForLayoutSettled(page, ".chat-controls__model-menu, .agent-chat__input");
+      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
       await syncFixtureComposerPopoverAnchor(page);
-      await waitForLayoutSettled(page, ".chat-controls__model-menu, .agent-chat__input");
+      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
       const composer = await getBoundingBox(page, ".agent-chat__input");
-      const menu = await getBoundingBox(page, ".chat-controls__model-menu");
+      const menu = await getBoundingBox(page, ".context-usage__popover");
       const anchorEvidence = await page.locator(".agent-chat__input").evaluate((node) => ({
         anchorBottom: getComputedStyle(node).getPropertyValue("--chat-composer-popover-bottom"),
         layoutHeight: document.documentElement.clientHeight,

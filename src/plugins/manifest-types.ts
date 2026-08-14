@@ -30,7 +30,8 @@ export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
 export type PluginDiagnosticCode =
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
-  | "plugin-verification";
+  | "plugin-verification"
+  | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
