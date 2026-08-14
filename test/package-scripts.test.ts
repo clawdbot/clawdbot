@@ -26,11 +26,12 @@ function readPackageJson(): RootPackageJson {
   return JSON.parse(fs.readFileSync("package.json", "utf8")) as RootPackageJson;
 }
 
-function readWindowsCiPartScripts(): [string, string] {
+function readWindowsCiPartScripts(): [string, string, string] {
   const scripts = readPackageJson().scripts;
   return [
     expectDefined(scripts["test:windows:ci:1"], "Windows CI part 1 script"),
     expectDefined(scripts["test:windows:ci:2"], "Windows CI part 2 script"),
+    expectDefined(scripts["test:windows:ci:3"], "Windows CI part 3 script"),
   ];
 }
 
@@ -203,16 +204,24 @@ describe("package scripts", () => {
     expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
   });
 
-  it("partitions Windows CI coverage into two disjoint explicit test lists", () => {
+  it("partitions Windows CI coverage into three disjoint explicit test lists", () => {
     const scripts = readPackageJson().scripts;
     const partScripts = readWindowsCiPartScripts();
     const partTargets = partScripts.map(readWindowsCiTargets);
     const allTargets = partTargets.flat();
 
-    expect(scripts["test:windows:ci"]).toBe("pnpm test:windows:ci:1 && pnpm test:windows:ci:2");
-    expect(partTargets.map((targets) => targets.length)).toEqual([24, 41]);
+    expect(scripts["test:windows:ci"]).toBe(
+      "pnpm test:windows:ci:1 && pnpm test:windows:ci:2 && pnpm test:windows:ci:3",
+    );
+    expect(partTargets.map((targets) => targets.length)).toEqual([19, 15, 31]);
     expect(new Set(allTargets).size).toBe(65);
-    expect(partTargets[0]?.filter((target) => partTargets[1]?.includes(target))).toEqual([]);
+    for (const [partIndex, targets] of partTargets.entries()) {
+      const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
+      expect(
+        targets.filter((target) => laterTargets.has(target)),
+        `Windows CI part ${partIndex + 1} overlaps a later part`,
+      ).toEqual([]);
+    }
   });
 
   it("runs node workspace transfer coverage in Windows CI", () => {
