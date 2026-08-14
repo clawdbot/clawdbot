@@ -272,33 +272,22 @@ describe("acp session UX bridge behavior", () => {
 });
 
 describe("acp bridge session cwd persistence", () => {
-  function createRecordingGateway(existingSessionKeys: string[] = []) {
+  function createRecordingGateway() {
     const calls: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       calls.push({ method, params });
       if (method === "sessions.list") {
-        return {
-          sessions: existingSessionKeys.map((key) => ({
-            key,
-            label: key,
-            displayName: key,
-            kind: "direct",
-            updatedAt: 1_710_000_000_000,
-            thinkingLevel: "adaptive",
-            modelProvider: "openai",
-            model: "gpt-5.4",
-          })),
-        };
+        return { sessions: [] };
       }
       return { ok: true };
     }) as GatewayClient["request"];
     return { calls, gateway: createAcpGateway(request) };
   }
 
-  const createdCwds = (calls: Array<{ method: string; params: unknown }>) =>
+  const createCalls = (calls: Array<{ method: string; params: unknown }>) =>
     calls.filter((call) => call.method === "sessions.create").map((call) => call.params);
 
-  it("creates the Gateway session with the requested cwd for a bridge-minted session", async () => {
+  it("provisions a bridge-minted session with the requested cwd", async () => {
     const sessionStore = createInMemorySessionStore();
     const { calls, gateway } = createRecordingGateway();
     const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
@@ -307,39 +296,28 @@ describe("acp bridge session cwd persistence", () => {
     const sessionKey = sessionStore.getSession(result.sessionId)?.sessionKey;
 
     // The Gateway persists this as spawnedCwd, which every later prompt turn resolves.
-    expect(createdCwds(calls)).toStrictEqual([{ key: sessionKey, cwd: "/tmp/my-project" }]);
+    expect(createCalls(calls)).toStrictEqual([
+      { key: sessionKey, cwd: "/tmp/my-project", cwdOnCreateOnly: true },
+    ]);
 
     sessionStore.clearAllSessionsForTest();
   });
 
-  it("creates an explicitly routed session key that has no Gateway row yet", async () => {
+  it("provisions an explicitly routed session key, which requireExisting=false leaves unresolved", async () => {
     const sessionStore = createInMemorySessionStore();
     const { calls, gateway } = createRecordingGateway();
     const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
 
-    // requireExisting defaults to false, so this key routes through unresolved and may not exist.
     await agent.newSession({
       ...createNewSessionRequest("/tmp/my-project"),
       _meta: { sessionKey: "agent:main:work" },
     } as never);
 
-    expect(createdCwds(calls)).toStrictEqual([{ key: "agent:main:work", cwd: "/tmp/my-project" }]);
-
-    sessionStore.clearAllSessionsForTest();
-  });
-
-  it("leaves an existing operator-owned session key untouched", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const { calls, gateway } = createRecordingGateway(["agent:main:work"]);
-    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
-
-    await agent.newSession({
-      ...createNewSessionRequest("/tmp/my-project"),
-      _meta: { sessionKey: "agent:main:work" },
-    } as never);
-
-    // That row already owns its spawnedCwd; creating over it would restate operator state.
-    expect(createdCwds(calls)).toStrictEqual([]);
+    // cwdOnCreateOnly makes the Gateway settle absence inside its own mutation, so an existing
+    // operator-owned row keeps its directory without the bridge racing a check-then-create.
+    expect(createCalls(calls)).toStrictEqual([
+      { key: "agent:main:work", cwd: "/tmp/my-project", cwdOnCreateOnly: true },
+    ]);
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -352,7 +330,7 @@ describe("acp bridge session cwd persistence", () => {
     await expect(agent.newSession(createNewSessionRequest("relative/project"))).rejects.toThrow(
       /requires an absolute cwd/i,
     );
-    expect(createdCwds(calls)).toStrictEqual([]);
+    expect(createCalls(calls)).toStrictEqual([]);
 
     sessionStore.clearAllSessionsForTest();
   });

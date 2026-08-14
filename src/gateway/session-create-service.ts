@@ -297,6 +297,8 @@ export async function createGatewaySession(params: {
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  /** Apply `spawnedCwd` only to a genuinely new row, so adoption keeps the owner's directory. */
+  spawnedCwdOnCreateOnly?: boolean;
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -1095,8 +1097,12 @@ export async function createGatewaySession(params: {
               }
             : {}),
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
-          // restricted to spawned subagent and ACP lineage.
-          ...(spawnedCwd ? { spawnedCwd } : {}),
+          // restricted to spawned subagent and ACP lineage. Opt-in callers provisioning a key they
+          // may not own resolve absence here, inside the mutation, so a row created between their
+          // probe and this write keeps the cwd its owner set.
+          ...(spawnedCwd && (createdNewEntry || !params.spawnedCwdOnCreateOnly)
+            ? { spawnedCwd }
+            : {}),
           ...(sessionRoot ? { sessionRoot } : {}),
           ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),

@@ -550,6 +550,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       spawnedCwd: p.worktree === true ? undefined : sessionCwd,
       sessionRoot: p.worktree === true ? undefined : sessionRoot,
       permissionMode: p.permissionMode ?? (p.worktree === true ? "workspace" : undefined),
+      spawnedCwdOnCreateOnly: p.cwdOnCreateOnly === true,
       prepareLifecycle,
       onLifecycleCleanupError: (error) => {
         sessionLog.warn(

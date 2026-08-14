@@ -53,25 +53,16 @@ export class AcpTranslatorSessionState {
     }
   }
 
-  /** Snapshot of an already-created Gateway session, or undefined when the key has no row yet. */
-  async findExistingSnapshot(sessionKey: string): Promise<SessionSnapshot | undefined> {
+  async getExistingSnapshot(sessionKey: string): Promise<SessionSnapshot> {
     const row = await this.getGatewaySessionRow(sessionKey);
     if (!row) {
-      return undefined;
+      throw new Error(`Session ${sessionKey} not found`);
     }
     return {
       ...buildSessionPresentation({ row }),
       metadata: buildSessionMetadata({ row, sessionKey }),
       usage: buildSessionUsageSnapshot(row),
     };
-  }
-
-  async getExistingSnapshot(sessionKey: string): Promise<SessionSnapshot> {
-    const snapshot = await this.findExistingSnapshot(sessionKey);
-    if (!snapshot) {
-      throw new Error(`Session ${sessionKey} not found`);
-    }
-    return snapshot;
   }
 
   mapGatewaySession(session: GatewaySessionRow, fallbackCwd: string): SessionInfo {

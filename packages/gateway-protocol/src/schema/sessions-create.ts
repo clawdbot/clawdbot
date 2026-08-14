@@ -77,4 +77,10 @@ export const SessionsCreateParamsSchema = closedObject({
         "Absolute Gateway working directory, managed-worktree source directory, or working directory on execNode. Gateway paths outside configured agent workspaces and all execNode paths require operator.admin.",
     }),
   ),
+  cwdOnCreateOnly: Type.Optional(
+    Type.Boolean({
+      description:
+        "Apply cwd only when this call creates the session. Adopting an existing session leaves its working directory untouched, so callers that provision a key they may not own cannot overwrite it.",
+    }),
+  ),
 });
