@@ -371,6 +371,7 @@ describe("config form scalar integrity", () => {
         // Even with reveal forced on, the sentinel is not the stored value;
         // showing it editable would let a stray edit overwrite the credential.
         revealSensitive: true,
+        onToggleSensitivePath: vi.fn(),
         onPatch: vi.fn(),
         onRemove: vi.fn(),
       }),
@@ -383,7 +384,13 @@ describe("config form scalar integrity", () => {
     );
     expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
     expect(input.readOnly).toBe(true);
-    const eye = container.querySelector<HTMLButtonElement>(".settings-secret__toggle");
-    expect(eye?.disabled ?? true).toBe(true);
+    const eye = expectElement(
+      container.querySelector<HTMLButtonElement>(".settings-secret__toggle"),
+      "stored secret reveal toggle",
+    );
+    expect(eye.disabled).toBe(true);
+    expect(eye.getAttribute("aria-label")).toBe(
+      "Stored secrets are never sent to the browser; enter a new value to replace it",
+    );
   });
 });
