@@ -7,7 +7,10 @@ import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { getCanonicalSqliteNamedIndexContracts } from "../infra/sqlite-schema-contract.js";
+import {
+  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteTableNames,
+} from "../infra/sqlite-schema-contract.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
   migrateOpenClawAgentDatabaseForMaintenance,
@@ -36,6 +39,8 @@ type SessionSqliteRecoverTargetValidator = (
 const CANONICAL_AGENT_INDEX_NAMES = getCanonicalSqliteNamedIndexContracts(
   OPENCLAW_AGENT_SCHEMA_SQL,
 ).map((index) => index.name);
+
+const CANONICAL_AGENT_TABLE_NAMES = getCanonicalSqliteTableNames(OPENCLAW_AGENT_SCHEMA_SQL);
 
 /** Restores the latest failed migration run and validates only selected manifest targets. */
 export async function recoverDoctorSessionSqliteTargets(params: {
@@ -367,7 +372,14 @@ function isCanonicalAgentIndexCorruptionError(error: unknown): boolean {
   if (!(error instanceof Error) || error.name !== "SqliteIntegrityError") {
     return false;
   }
-  return CANONICAL_AGENT_INDEX_NAMES.some((indexName) => error.message.includes(indexName));
+  if (CANONICAL_AGENT_INDEX_NAMES.some((indexName) => error.message.includes(indexName))) {
+    return true;
+  }
+  // PRIMARY KEY / UNIQUE autoindexes use sqlite_autoindex_<table>_<n> and are
+  // repaired in place with table-scoped REINDEX, not DROP INDEX.
+  return CANONICAL_AGENT_TABLE_NAMES.some((tableName) =>
+    error.message.includes(`sqlite_autoindex_${tableName}_`),
+  );
 }
 
 function resolveRecoverTargets(

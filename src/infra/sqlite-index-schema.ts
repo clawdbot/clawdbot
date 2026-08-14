@@ -65,6 +65,8 @@ export function verifyAndRepairCanonicalSqliteIndexes(
 /**
  * Restore every named index when SQLite's IF NOT EXISTS semantics preserve a
  * same-name definition or b-tree that no longer matches the committed schema.
+ * Rebuild PRIMARY KEY / UNIQUE autoindex b-trees with table-scoped REINDEX when
+ * integrity_check reports missing rows; those indexes cannot be DROP INDEX'ed.
  */
 export function repairCanonicalSqliteIndexes(
   db: DatabaseSync,
@@ -76,6 +78,7 @@ export function repairCanonicalSqliteIndexes(
   const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
   const integrityFailuresByTable = new Map<string, Error>();
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
+  const reindexTables = new Set<string>();
   for (const index of indexes) {
     assertSqliteIdentifier(index.name);
     assertSqliteIdentifier(index.tableName);
@@ -96,25 +99,33 @@ export function repairCanonicalSqliteIndexes(
   assertNoUnexpectedUniqueIndexes(db, databaseLabel, schemaSql, indexesByTable);
 
   if (options.verifyPhysicalIntegrity !== false) {
-    for (const [tableName, tableIndexes] of indexesByTable) {
+    for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
+      assertSqliteIdentifier(tableName);
+      const tableExists = db
+        .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(tableName);
+      if (!tableExists) {
+        continue;
+      }
       try {
         assertSqliteTableIntegrity(db, databaseLabel, tableName);
       } catch (error) {
         if (error instanceof Error) {
           integrityFailuresByTable.set(tableName, error);
         }
-        for (const index of tableIndexes) {
-          repairIndexes.add(index);
-        }
+        // Implicit PK/UNIQUE autoindexes cannot be DROP INDEX'ed; REINDEX rebuilds
+        // them and any named indexes on the table from the committed schema.
+        reindexTables.add(tableName);
       }
     }
   }
-  if (repairIndexes.size === 0) {
+  if (repairIndexes.size === 0 && reindexTables.size === 0) {
     return [];
   }
 
   const savepoint = "repair_canonical_indexes";
   let activeIndex: CanonicalSqliteNamedIndexContract | undefined;
+  let activeReindexTable: string | undefined;
   db.exec(`SAVEPOINT ${savepoint};`);
   try {
     for (const index of repairIndexes) {
@@ -135,11 +146,26 @@ export function repairCanonicalSqliteIndexes(
       db.exec(createIndexSql(index, index.name, true));
       db.exec(`DROP INDEX main.${probeName};`);
     }
-    if (repairIndexes.size === 0) {
+    activeIndex = undefined;
+    // Definition drift is fixed above; REINDEX rebuilds PK/UNIQUE autoindexes
+    // and named indexes from the now-canonical schema for damaged tables.
+    for (const tableName of [...reindexTables].toSorted()) {
+      activeReindexTable = tableName;
+      db.exec(`REINDEX main.${tableName};`);
+    }
+    activeReindexTable = undefined;
+    if (repairIndexes.size === 0 && reindexTables.size === 0) {
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
       return [];
     }
-    for (const tableName of indexesByTable.keys()) {
+    for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
+      assertSqliteIdentifier(tableName);
+      const tableExists = db
+        .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(tableName);
+      if (!tableExists) {
+        continue;
+      }
       assertSqliteTableIntegrity(db, databaseLabel, tableName);
     }
     assertSqliteIntegrity(db, databaseLabel);
@@ -156,17 +182,29 @@ export function repairCanonicalSqliteIndexes(
     }
     const tableIntegrityFailure = activeIndex
       ? integrityFailuresByTable.get(activeIndex.tableName)
-      : undefined;
+      : activeReindexTable
+        ? integrityFailuresByTable.get(activeReindexTable)
+        : undefined;
     if (tableIntegrityFailure && isTerminalSqliteIntegrityError(tableIntegrityFailure)) {
       throw tableIntegrityFailure;
     }
     const detail = error instanceof Error ? error.message : String(error);
+    const repairLabel =
+      activeIndex?.name ??
+      (activeReindexTable ? `REINDEX ${activeReindexTable}` : undefined) ??
+      "repair";
     throw new Error(
-      `SQLite canonical index ${activeIndex?.name ?? "repair"} failed for ${databaseLabel}: ${detail}`,
-      { cause: error },
+      `SQLite canonical index ${repairLabel} failed for ${databaseLabel}: ${detail}`,
+      {
+        cause: error,
+      },
     );
   }
-  return [...repairIndexes].map((index) => index.name).toSorted();
+  const repairedNames = new Set<string>([...repairIndexes].map((index) => index.name));
+  for (const tableName of reindexTables) {
+    repairedNames.add(`REINDEX ${tableName}`);
+  }
+  return [...repairedNames].toSorted();
 }
 
 function assertNoUnexpectedUniqueIndexes(

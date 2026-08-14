@@ -976,6 +976,49 @@ describe("runDoctorSessionSqlite", () => {
     expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
   });
 
+  it("repairs PRIMARY KEY autoindex corruption in place during recovery", async () => {
+    const { sqlitePath, store } = await createImportedStoreForCompaction();
+    createCanonicalCachePrimaryKeyAutoindexDrift(sqlitePath);
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: sqlitePath,
+        reason: "cache primary key autoindex drift",
+      }),
+    ).toBe(true);
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "recover",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(0);
+    expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+    expect(fs.existsSync(sqlitePath)).toBe(true);
+    expect(
+      fs.readdirSync(path.dirname(sqlitePath)).filter((entry) => entry.includes(".corrupt-")),
+    ).toEqual([]);
+    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(
+        database
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("doctor", "pk-autoindex"),
+      ).toEqual({ value_json: '{"ok":true}' });
+    } finally {
+      database.close();
+    }
+    expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
+  });
+
   it.skipIf(process.platform === "win32")(
     "reapplies owner-only permissions after compaction",
     async () => {
@@ -3340,6 +3383,59 @@ function createCanonicalCacheIndexDrift(sqlitePath: string): void {
         (schemaVersionRow ? Object.values(schemaVersionRow)[0] : undefined),
     );
     database.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
+}
+
+function createCanonicalCachePrimaryKeyAutoindexDrift(sqlitePath: string): void {
+  const sqlite = nodeSqlite.requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
+      VALUES ('doctor', 'pk-autoindex', '{"ok":true}', 100, 1);
+      CREATE TABLE cache_entries_decoy_empty (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT,
+        blob BLOB,
+        expires_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      ) STRICT;
+    `);
+    const autoindexName = "sqlite_autoindex_cache_entries_1";
+    const decoyAutoindexName = "sqlite_autoindex_cache_entries_decoy_empty_1";
+    const tableRoot = (
+      database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?").get(autoindexName) as {
+        rootpage: number;
+      }
+    ).rootpage;
+    const decoyRoot = (
+      database
+        .prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?")
+        .get(decoyAutoindexName) as { rootpage: number }
+    ).rootpage;
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare("UPDATE sqlite_schema SET rootpage = ? WHERE name = ?")
+      .run(decoyRoot, autoindexName);
+    database
+      .prepare("UPDATE sqlite_schema SET rootpage = ? WHERE name = ?")
+      .run(tableRoot, decoyAutoindexName);
+    database.exec("PRAGMA writable_schema = OFF;");
+    const schemaVersionRow = database.prepare("PRAGMA schema_version;").get() as
+      | Record<string, unknown>
+      | undefined;
+    const schemaVersion = Number(
+      schemaVersionRow?.schema_version ??
+        (schemaVersionRow ? Object.values(schemaVersionRow)[0] : undefined),
+    );
+    database.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
+    database.exec("REINDEX main.cache_entries_decoy_empty;");
+    database.exec("DROP TABLE cache_entries_decoy_empty;");
   } finally {
     database.close();
   }

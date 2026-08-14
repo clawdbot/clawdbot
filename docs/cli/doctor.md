@@ -347,9 +347,13 @@ database is corrupt, not a database, or has journal sidecars without a main
 database, recovery copies the complete file set to a temporary inspection
 directory. SQLite can roll back a valid hot journal in that disposable copy
 before `quick_check`, `integrity_check`, and `foreign_key_check` run, while the
-original forensic files remain untouched. Failed integrity checks or orphaned
-sidecars preserve the DB, WAL, SHM, and rollback-journal files by renaming the
-whole discovered set with one `.corrupt-<timestamp>` suffix. A caught rename
+original forensic files remain untouched. Named secondary-index damage and
+PRIMARY KEY / UNIQUE autoindex btree damage (`sqlite_autoindex_<table>_*`, such
+as missing table rows from the index) are repaired in place when possible:
+doctor rebuilds the damaged indexes without quarantining the database. Failed
+integrity checks that cannot be repaired, or orphaned sidecars, preserve the
+DB, WAL, SHM, and rollback-journal files by renaming the whole discovered set
+with one `.corrupt-<timestamp>` suffix. A caught rename
 failure rolls already-moved files back before reporting failure, so a
 recoverable file set is not silently split. Stop the Gateway before recovery;
 copying or renaming an actively changing SQLite file set is unsafe and behaves

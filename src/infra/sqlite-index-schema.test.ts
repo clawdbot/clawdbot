@@ -22,10 +22,65 @@ const CANONICAL_SCHEMA = `
     ON records(active, tenant_id);
 `;
 
+const IDENTITY_SCHEMA = `
+  CREATE TABLE identities (
+    session_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    payload TEXT,
+    PRIMARY KEY (session_id, event_id)
+  );
+`;
+
 function createDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec(CANONICAL_SCHEMA);
   return db;
+}
+
+function createIdentityDatabase(): DatabaseSync {
+  const db = new DatabaseSync(":memory:");
+  db.exec(IDENTITY_SCHEMA);
+  return db;
+}
+
+/** Steal the PK autoindex btree so table rows are missing from sqlite_autoindex_*. */
+function corruptPrimaryKeyAutoindex(db: DatabaseSync, tableName: string): string {
+  const autoindexName = `sqlite_autoindex_${tableName}_1`;
+  const decoyTable = `${tableName}_decoy_empty`;
+  db.exec(`
+    CREATE TABLE ${decoyTable} (
+      session_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      payload TEXT,
+      PRIMARY KEY (session_id, event_id)
+    );
+  `);
+  const tableRoot = (
+    db.prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?").get(autoindexName) as {
+      rootpage: number;
+    }
+  ).rootpage;
+  const decoyRoot = (
+    db
+      .prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?")
+      .get(`sqlite_autoindex_${decoyTable}_1`) as { rootpage: number }
+  ).rootpage;
+  db.enableDefensive?.(false);
+  db.exec("PRAGMA writable_schema = ON;");
+  db.prepare("UPDATE sqlite_schema SET rootpage = ? WHERE name = ?").run(decoyRoot, autoindexName);
+  db.prepare("UPDATE sqlite_schema SET rootpage = ? WHERE name = ?").run(
+    tableRoot,
+    `sqlite_autoindex_${decoyTable}_1`,
+  );
+  db.exec("PRAGMA writable_schema = OFF;");
+  const schemaVersion = db.prepare("PRAGMA schema_version").get() as {
+    schema_version?: unknown;
+  };
+  db.exec(`PRAGMA schema_version = ${Number(schemaVersion.schema_version) + 1};`);
+  // Restore the decoy so only the target autoindex stays damaged, then drop it.
+  db.exec(`REINDEX main.${decoyTable};`);
+  db.exec(`DROP TABLE ${decoyTable};`);
+  return autoindexName;
 }
 
 function tracePreparedSql(database: DatabaseSync): {
@@ -391,6 +446,58 @@ describe("repairCanonicalSqliteIndexes", () => {
       ).toEqual({
         sql: "CREATE UNIQUE INDEX idx_records_identity ON temp_records(id)",
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("repairs PRIMARY KEY autoindex btree damage with table-scoped REINDEX", () => {
+    const db = createIdentityDatabase();
+    try {
+      db.exec(`
+        INSERT INTO identities VALUES
+          ('s1', 'e1', 'a'),
+          ('s1', 'e2', 'b'),
+          ('s2', 'e1', 'c');
+      `);
+      const autoindexName = corruptPrimaryKeyAutoindex(db, "identities");
+
+      expect(db.prepare("PRAGMA integrity_check('identities')").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(
+              new RegExp(`missing from index ${autoindexName}`),
+            ),
+          }),
+        ]),
+      );
+      expect(
+        db
+          .prepare(
+            `SELECT payload
+               FROM identities INDEXED BY ${autoindexName}
+              WHERE session_id = 's1' AND event_id = 'e1'`,
+          )
+          .all(),
+      ).toEqual([]);
+
+      expect(verifyAndRepairCanonicalSqliteIndexes(db, "test database", IDENTITY_SCHEMA)).toEqual([
+        "REINDEX identities",
+      ]);
+
+      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expect(
+        db
+          .prepare(
+            `SELECT payload
+               FROM identities INDEXED BY ${autoindexName}
+              WHERE session_id = 's1' AND event_id = 'e1'`,
+          )
+          .all(),
+      ).toEqual([{ payload: "a" }]);
+      expect(() => db.exec("INSERT INTO identities VALUES ('s1', 'e1', 'dup');")).toThrow(
+        /UNIQUE constraint failed/iu,
+      );
     } finally {
       db.close();
     }
