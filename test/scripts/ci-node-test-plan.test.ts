@@ -312,11 +312,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Pushes retain three lanes of headroom under the workflow's 28-worker cap.
     expect(compact).toHaveLength(25);
     expect(pullRequestCompact).toHaveLength(32);
-    expect(githubCompact).toHaveLength(55);
-    expect(githubPullRequestCompact).toHaveLength(62);
+    expect(githubCompact).toHaveLength(64);
+    expect(githubPullRequestCompact).toHaveLength(71);
     expect(hybridCompact).toEqual(githubCompact);
     expect(hybridPullRequestCompact).toEqual(githubPullRequestCompact);
-    expect(githubPullRequestCompact.length).toBeLessThanOrEqual(64);
+    expect(githubPullRequestCompact.length).toBeLessThanOrEqual(96);
     expect(Math.max(...githubCompact.map((shard) => shard.predictedSeconds ?? Infinity))).toBe(209);
     expect(
       Math.max(...githubPullRequestCompact.map((shard) => shard.predictedSeconds ?? Infinity)),
