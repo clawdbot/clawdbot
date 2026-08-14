@@ -236,14 +236,19 @@ vi.mock("../../utils/message-channel.js", async () => ({
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
 }));
 
-vi.mock("../heartbeat.js", () => ({
-  DEFAULT_HEARTBEAT_EVERY: "30m",
-  stripHeartbeatToken: (text: string) => ({
-    text,
-    didStrip: false,
-    shouldSkip: false,
-  }),
-}));
+vi.mock("../heartbeat.js", async () => {
+  const actual = await vi.importActual<typeof import("../heartbeat.js")>("../heartbeat.js");
+  return {
+    DEFAULT_HEARTBEAT_EVERY: actual.DEFAULT_HEARTBEAT_EVERY,
+    HEARTBEAT_CRON_TASK_GUIDANCE: actual.HEARTBEAT_CRON_TASK_GUIDANCE,
+    resolveHeartbeatPromptCore: actual.resolveHeartbeatPromptCore,
+    stripHeartbeatToken: (text: string) => ({
+      text,
+      didStrip: false,
+      shouldSkip: false,
+    }),
+  };
+});
 
 vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
