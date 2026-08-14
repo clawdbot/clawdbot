@@ -1074,6 +1074,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},
+      agentId: "ops",
       entry: {
         sessionId: "sess-heartbeat-no-registry",
         updatedAt: 1,
@@ -1090,6 +1091,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
       channel: "forum",
       cfg: {},
+      agentId: "ops",
       allowBootstrap: true,
     });
     expect(
@@ -1097,6 +1099,44 @@ describe("resolveSessionDeliveryTarget", () => {
         ([params]) => params.allowBootstrap === true,
       ),
     ).toHaveLength(1);
+  });
+
+  it("upgrades an owner-route setup shell with the selected agent runtime", () => {
+    const runtime = createOwnerAllowlistTargetTestPlugin({
+      id: "forum",
+      label: "Forum",
+      ownerId: "user:ops",
+      inferTargetChatType: () => "direct",
+    });
+    const setup = { ...runtime, outbound: undefined };
+    setActivePluginRegistry(createTargetsTestRegistry([setup]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({
+        channel,
+        agentId,
+        allowBootstrap,
+      }: {
+        channel: string;
+        agentId?: string;
+        allowBootstrap?: boolean;
+      }) => (channel === "forum" && agentId === "ops" && allowBootstrap === true ? runtime : setup),
+    );
+    const cfg = { channels: { forum: {} } } as OpenClawConfig;
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      agentId: "ops",
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("user:ops");
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "forum",
+      cfg,
+      agentId: "ops",
+      allowBootstrap: true,
+    });
   });
 
   it("does not bypass target policy when bootstrapping plugin-channel heartbeat routes", () => {
@@ -1202,6 +1242,12 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.channel).toBe("forum");
     expect(resolved.to).toBe("room:ops");
     expect(resolved.threadId).toBe(1008013);
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "forum",
+      cfg,
+      agentId: "main",
+      allowBootstrap: true,
+    });
   });
 
   it("bootstraps explicit external heartbeat targets before strict validation", () => {

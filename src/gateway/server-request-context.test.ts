@@ -197,6 +197,15 @@ describe("createGatewayRequestContext", () => {
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
   });
 
+  it("publishes the worker disk-space reader through the kernel bridge", () => {
+    const workerPlacementDiskSpaceReader = { read: vi.fn(), version: vi.fn(() => 1) };
+    const context = createGatewayRequestContext(
+      makeContextParams({ workerPlacementDiskSpaceReader }),
+    );
+
+    expect(context.workerPlacementDiskSpaceReader).toBe(workerPlacementDiskSpaceReader);
+  });
+
   it("routes plugin metadata changes through the kernel bridge", () => {
     const notifyPluginMetadataChanged = vi.fn();
     const context = createGatewayRequestContext(makeContextParams({ notifyPluginMetadataChanged }));

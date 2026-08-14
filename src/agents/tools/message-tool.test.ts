@@ -3808,6 +3808,13 @@ describe("message tool reasoning tag sanitization", () => {
     },
     {
       field: "message",
+      input: "<internal>private reflection</internal>Visible answer",
+      expected: "Visible answer",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "message",
       input: "Thinking\n_internal plan_\n\nVisible answer",
       expected: "Visible answer",
       target: "telegram:123",

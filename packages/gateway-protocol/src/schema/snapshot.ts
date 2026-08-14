@@ -130,6 +130,29 @@ const HealthSnapshotSchema = closedObject({
           oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
         }),
       ),
+      ingressFailed: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            count: Type.Integer({ minimum: 0 }),
+            oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+          }),
+        ),
+      ),
+      ingressPressure: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            laneCount: Type.Integer({ minimum: 0 }),
+            pendingCount: Type.Integer({ minimum: 0 }),
+            claimedCount: Type.Integer({ minimum: 0 }),
+            blockedCount: Type.Integer({ minimum: 0 }),
+            oldestReceivedAt: Type.Integer({ minimum: 0 }),
+          }),
+        ),
+      ),
     }),
   ),
   modelPricing: Type.Optional(
