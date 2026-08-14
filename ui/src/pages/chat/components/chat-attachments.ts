@@ -2,6 +2,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -37,6 +38,7 @@ export type ChatAttachmentControlsProps = {
   onRemoveAttachment?: (attachment: ChatAttachment) => void;
   onDraftChange?: (next: string) => void;
   onPendingReadsChange?: (delta: 1 | -1) => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onRequestUpdate?: () => void;
   readSignal?: AbortSignal;
 };
@@ -568,6 +570,32 @@ function removeBrowserAnnotationAttachment(
   props.onAttachmentsChange?.(next);
 }
 
+function renderAttachmentImage(
+  attachment: ChatAttachment,
+  alt: string,
+  title: string,
+  props: ChatAttachmentControlsProps,
+): ReturnType<typeof html> | typeof nothing {
+  const src = getChatAttachmentPreviewUrl(attachment);
+  if (!src) {
+    return nothing;
+  }
+  if (!props.onOpenImage) {
+    return html`<img src=${src} alt=${alt} />`;
+  }
+  const open = () => props.onOpenImage?.({ src, title });
+  return html`
+    <button
+      type="button"
+      class="chat-message-image-button chat-attachment-image-button"
+      aria-label=${t("chat.imageLightbox.open", { title })}
+      @click=${open}
+    >
+      <img src=${src} alt=${alt} />
+    </button>
+  `;
+}
+
 function renderBrowserAnnotationAttachment(
   attachment: ChatAttachment,
   annotation: BrowserAnnotationAttachment,
@@ -585,7 +613,6 @@ function renderBrowserAnnotationAttachment(
     { count: String(annotation.markedRegionCount) },
   );
   const removeLabel = t("chat.composer.removeBrowserAnnotation", { name: identity });
-  const previewUrl = getChatAttachmentPreviewUrl(attachment);
 
   return html`
     <div
@@ -595,9 +622,12 @@ function renderBrowserAnnotationAttachment(
       aria-label=${`${t("chat.composer.browserAnnotation")}: ${identity}`}
     >
       <div class="chat-browser-annotation-card__preview">
-        ${previewUrl
-          ? html`<img src=${previewUrl} alt=${t("chat.composer.browserAnnotationPreview")} />`
-          : nothing}
+        ${renderAttachmentImage(
+          attachment,
+          t("chat.composer.browserAnnotationPreview"),
+          identity,
+          props,
+        )}
       </div>
       <div class="chat-attachment-file__body chat-browser-annotation-card__body">
         <span class="chat-browser-annotation-card__label"
@@ -651,10 +681,12 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                   .join(" ")}
               >
                 ${att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
-                  ? html`<img
-                      src=${getChatAttachmentPreviewUrl(att)!}
-                      alt=${t("chat.composer.attachmentPreview")}
-                    />`
+                  ? renderAttachmentImage(
+                      att,
+                      t("chat.composer.attachmentPreview"),
+                      att.fileName?.trim() || t("chat.imageLightbox.untitled"),
+                      props,
+                    )
                   : isLargePastedTextAttachment(att)
                     ? html`
                         <div class="chat-attachment-file chat-attachment-file--pasted-text">
