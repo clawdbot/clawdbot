@@ -8,6 +8,15 @@ import { expect, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
+type LifecycleMonitorSetupParams = {
+  accountId: string;
+  dmPolicy: "open" | "pairing";
+  allowFrom?: string[];
+  webhookUrl?: string;
+  webhookSecret?: string;
+  mediaMaxMb?: number;
+};
+
 function resolveLifecycleAllowFrom(params: {
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -15,65 +24,43 @@ function resolveLifecycleAllowFrom(params: {
   return params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
 }
 
-function createLifecycleConfig(params: {
-  accountId: string;
-  dmPolicy: "open" | "pairing";
-  allowFrom?: string[];
-  webhookUrl?: string;
-  webhookSecret?: string;
-}): OpenClawConfig {
-  const webhookUrl = params.webhookUrl ?? "https://example.com/hooks/zalo";
-  const webhookSecret = params.webhookSecret ?? "supersecret";
+function createLifecycleAccountConfig(params: LifecycleMonitorSetupParams) {
   const allowFrom = resolveLifecycleAllowFrom(params);
+  return {
+    webhookUrl: params.webhookUrl ?? "https://example.com/hooks/zalo",
+    webhookSecret: params.webhookSecret ?? "supersecret", // pragma: allowlist secret
+    dmPolicy: params.dmPolicy,
+    ...(allowFrom ? { allowFrom } : {}),
+    // Kept undefined-free so cases can assert on an account config that never
+    // declared the key, which is what the resolver's unset branch expects.
+    ...(params.mediaMaxMb === undefined ? {} : { mediaMaxMb: params.mediaMaxMb }),
+  };
+}
+
+function createLifecycleConfig(params: LifecycleMonitorSetupParams): OpenClawConfig {
   return {
     channels: {
       zalo: {
         enabled: true,
         accounts: {
-          [params.accountId]: {
-            enabled: true,
-            webhookUrl,
-            webhookSecret, // pragma: allowlist secret
-            dmPolicy: params.dmPolicy,
-            ...(allowFrom ? { allowFrom } : {}),
-          },
+          [params.accountId]: { enabled: true, ...createLifecycleAccountConfig(params) },
         },
       },
     },
   } as OpenClawConfig;
 }
 
-function createLifecycleAccount(params: {
-  accountId: string;
-  dmPolicy: "open" | "pairing";
-  allowFrom?: string[];
-  webhookUrl?: string;
-  webhookSecret?: string;
-}): ResolvedZaloAccount {
-  const webhookUrl = params.webhookUrl ?? "https://example.com/hooks/zalo";
-  const webhookSecret = params.webhookSecret ?? "supersecret";
-  const allowFrom = resolveLifecycleAllowFrom(params);
+function createLifecycleAccount(params: LifecycleMonitorSetupParams): ResolvedZaloAccount {
   return {
     accountId: params.accountId,
     enabled: true,
     token: "zalo-token",
     tokenSource: "config",
-    config: {
-      webhookUrl,
-      webhookSecret, // pragma: allowlist secret
-      dmPolicy: params.dmPolicy,
-      ...(allowFrom ? { allowFrom } : {}),
-    },
+    config: createLifecycleAccountConfig(params),
   } as ResolvedZaloAccount;
 }
 
-export function createLifecycleMonitorSetup(params: {
-  accountId: string;
-  dmPolicy: "open" | "pairing";
-  allowFrom?: string[];
-  webhookUrl?: string;
-  webhookSecret?: string;
-}) {
+export function createLifecycleMonitorSetup(params: LifecycleMonitorSetupParams) {
   return {
     account: createLifecycleAccount(params),
     config: createLifecycleConfig(params),

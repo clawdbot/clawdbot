@@ -21,11 +21,8 @@ export type SessionPlacementAdmissionProvider = {
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
-type SessionPlacementResetGuard = (sessionId: string) => string | undefined;
-
 type SessionPlacementAdmissionState = {
   provider?: SessionPlacementAdmissionProvider;
-  resetGuard?: SessionPlacementResetGuard;
 };
 
 // Runtime chunks share one provider. The identity guard keeps an older gateway
@@ -44,19 +41,6 @@ export function installSessionPlacementAdmissionProvider(
       state.provider = undefined;
     }
   };
-}
-
-export function installSessionPlacementResetGuard(guard: SessionPlacementResetGuard): () => void {
-  state.resetGuard = guard;
-  return () => {
-    if (state.resetGuard === guard) {
-      state.resetGuard = undefined;
-    }
-  };
-}
-
-export function resolveSessionPlacementResetBlock(sessionId: string): string | undefined {
-  return state.resetGuard?.(sessionId);
 }
 
 export async function withSessionPlacementTurnAdmission(

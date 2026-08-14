@@ -68,7 +68,10 @@ export function createBoardHarness(
       context: {
         broadcast,
         getMcpAppSandboxPort: () => 18790,
-        getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
+        getRuntimeConfig: () => ({
+          agents: { list: [{ id: "main" }] },
+          mcp: { apps: { enabled: true } },
+        }),
         ...contextOverrides,
       } as unknown as GatewayRequestContext,
     });

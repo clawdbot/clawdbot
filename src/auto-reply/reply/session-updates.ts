@@ -5,9 +5,12 @@ import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -115,7 +118,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     const payload = buildSessionEndHookPayload({
       sessionId: params.previousEntry.sessionId,
       sessionKey: params.sessionKey,
-      cfg: params.cfg,
+      agentId,
       reason: "compaction",
       sessionFile:
         transcript.sessionFile ??
@@ -140,7 +143,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     const payload = buildSessionStartHookPayload({
       sessionId: params.nextEntry.sessionId,
       sessionKey: params.sessionKey,
-      cfg: params.cfg,
+      agentId,
       resumedFrom: params.previousEntry.sessionId,
     });
     void runWithGatewayIndependentRootWorkContinuation(async () => {
@@ -362,6 +365,7 @@ export async function incrementCompactionCount(params: {
   if (tokensAfterCompaction !== undefined) {
     updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;
+    updates.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;
@@ -369,6 +373,7 @@ export async function incrementCompactionCount(params: {
     updates.cacheWrite = undefined;
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
+    updates.totalTokensVersion = undefined;
   }
   const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
   sessionStore[sessionKey] = nextEntry;
@@ -376,7 +381,7 @@ export async function incrementCompactionCount(params: {
     ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
     : undefined;
   if (effectiveStorePath) {
-    const persistedEntry = await patchSessionEntry(
+    const persistedEntry = await patchSessionEntryCore(
       { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
       () => updates,
       { fallbackEntry: nextEntry },

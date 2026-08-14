@@ -8,6 +8,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -68,8 +69,9 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
     }
     if (hasEntryModelOverride && authProfileId) {
       fallbackRun.authProfileId = authProfileId;
-      if (params.entry?.authProfileOverrideSource) {
-        fallbackRun.authProfileIdSource = params.entry.authProfileOverrideSource;
+      const authProfileIdSource = resolveSessionAuthProfileOverrideSource(params.entry);
+      if (authProfileIdSource) {
+        fallbackRun.authProfileIdSource = authProfileIdSource;
       } else {
         delete fallbackRun.authProfileIdSource;
       }
@@ -141,9 +143,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
         return null;
       }
       const shouldClearAuthProfile =
-        persistedEntry.authProfileOverrideSource === "auto" ||
-        (persistedEntry.authProfileOverrideSource === undefined &&
-          persistedEntry.authProfileOverrideCompactionCount !== undefined);
+        resolveSessionAuthProfileOverrideSource(persistedEntry) === "auto";
       clearAutoFallbackPrimaryProbeSelection(persistedEntry);
       return {
         providerOverride: undefined,

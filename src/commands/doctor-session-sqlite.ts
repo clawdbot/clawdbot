@@ -5,8 +5,8 @@ import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveSessionFilePath } from "../config/sessions/paths.js";
-import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite.js";
+import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
@@ -56,7 +56,10 @@ import {
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
 import {
+  createDoctorSessionSqliteTotals,
+  createDoctorSessionSqliteTargetReport,
   isSessionSqliteMigrationWarning,
+  sumDoctorSessionSqliteTargets,
   type DoctorSessionSqliteIssue,
   type DoctorSessionSqliteMode,
   type DoctorSessionSqliteOptions,
@@ -295,13 +298,9 @@ async function inspectOrMigrateTarget(params: {
   const referencedTranscriptFiles = new Set(
     allRecords.flatMap((record) => (record.transcriptPath ? [record.transcriptPath] : [])),
   );
-  const report: DoctorSessionSqliteTargetReport = {
+  const report = createDoctorSessionSqliteTargetReport({
     agentId: params.target.agentId,
     archivedLegacyStoreFiles: [],
-    archivedTranscriptFiles: [],
-    archivedUnreferencedJsonlFiles: [],
-    importedEntries: 0,
-    importedTranscriptEvents: 0,
     issues,
     legacyEntries: records.length,
     referencedTranscriptFiles: referencedTranscriptFiles.size,
@@ -311,9 +310,7 @@ async function inspectOrMigrateTarget(params: {
     unreferencedJsonlFiles: listUnreferencedJsonlFiles(params.target.storePath, [
       ...referencedTranscriptFiles,
     ]),
-    validatedEntries: 0,
-    validatedTranscriptEvents: 0,
-  };
+  });
   if (params.mode === "inspect") {
     report.sqliteEntries = readSqliteEntryCount(params.target);
     appendSqliteDbStats(params.target, report);
@@ -534,7 +531,7 @@ function resolveLegacyTranscriptPath(
   if (parseSqliteSessionFileMarker(legacySessionFile)) {
     return undefined;
   }
-  const defaultPath = resolveSessionFilePath(entry.sessionId, entry, {
+  const defaultPath = resolveSessionFilePathCore(entry.sessionId, entry, {
     agentId: target.agentId,
     sessionsDir: path.dirname(target.storePath),
   });
@@ -1150,7 +1147,7 @@ function resolveActiveSqliteTranscriptFile(
 ): string | undefined {
   let transcriptPath: string;
   try {
-    transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+    transcriptPath = resolveSessionFilePathCore(entry.sessionId, entry, {
       agentId: target.agentId,
       sessionsDir: path.dirname(target.storePath),
     });
@@ -1332,6 +1329,8 @@ function summarizeDoctorSessionSqliteReport(
   targets: DoctorSessionSqliteTargetReport[],
   activeRun?: ActiveSessionSqliteMigrationRun,
 ): DoctorSessionSqliteReport {
+  const sum = (value: (target: DoctorSessionSqliteTargetReport) => number) =>
+    sumDoctorSessionSqliteTargets(targets, value);
   return {
     ...(activeRun
       ? {
@@ -1349,51 +1348,18 @@ function summarizeDoctorSessionSqliteReport(
       : {}),
     mode,
     targets,
-    totals: {
-      archivedLegacyStoreFiles: targets.reduce(
-        (total, target) => total + (target.archivedLegacyStoreFiles?.length ?? 0),
-        0,
-      ),
-      archivedTranscriptFiles: targets.reduce(
-        (total, target) => total + target.archivedTranscriptFiles.length,
-        0,
-      ),
-      archivedUnreferencedJsonlFiles: targets.reduce(
-        (total, target) => total + target.archivedUnreferencedJsonlFiles.length,
-        0,
-      ),
-      importedEntries: sumTargets(targets, "importedEntries"),
-      importedTranscriptEvents: sumTargets(targets, "importedTranscriptEvents"),
-      issues: targets.reduce((total, target) => total + target.issues.length, 0),
-      legacyEntries: sumTargets(targets, "legacyEntries"),
-      reclaimedBytes: targets.reduce(
-        (total, target) => total + (target.compact?.reclaimedBytes ?? 0),
-        0,
-      ),
-      sqliteEntries: sumTargets(targets, "sqliteEntries"),
-      targets: targets.length,
-      unreferencedJsonlFiles: targets.reduce(
-        (total, target) => total + target.unreferencedJsonlFiles.length,
-        0,
-      ),
-      validatedEntries: sumTargets(targets, "validatedEntries"),
-      validatedTranscriptEvents: sumTargets(targets, "validatedTranscriptEvents"),
-    },
+    totals: createDoctorSessionSqliteTotals(targets, {
+      archivedLegacyStoreFiles: sum((target) => target.archivedLegacyStoreFiles?.length ?? 0),
+      archivedTranscriptFiles: sum((target) => target.archivedTranscriptFiles.length),
+      archivedUnreferencedJsonlFiles: sum((target) => target.archivedUnreferencedJsonlFiles.length),
+      importedEntries: sum((target) => target.importedEntries),
+      importedTranscriptEvents: sum((target) => target.importedTranscriptEvents),
+      legacyEntries: sum((target) => target.legacyEntries),
+      reclaimedBytes: sum((target) => target.compact?.reclaimedBytes ?? 0),
+      unreferencedJsonlFiles: sum((target) => target.unreferencedJsonlFiles.length),
+      validatedEntries: sum((target) => target.validatedEntries),
+      validatedTranscriptEvents: sum((target) => target.validatedTranscriptEvents),
+    }),
   };
-}
-
-function sumTargets(
-  targets: DoctorSessionSqliteTargetReport[],
-  key: keyof Pick<
-    DoctorSessionSqliteTargetReport,
-    | "importedEntries"
-    | "importedTranscriptEvents"
-    | "legacyEntries"
-    | "sqliteEntries"
-    | "validatedEntries"
-    | "validatedTranscriptEvents"
-  >,
-): number {
-  return targets.reduce((total, target) => total + target[key], 0);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

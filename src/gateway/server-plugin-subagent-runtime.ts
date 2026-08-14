@@ -1,5 +1,10 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
+import {
+  normalizeBuiltInProviderModelId,
+  stripSelfProviderModelPrefix,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { normalizeModelRef } from "../agents/model-ref-shared.js";
+import { parseModelRef } from "../agents/model-selection-normalize.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export function normalizePluginSubagentAllowedModelRef(raw: string): string | null {
@@ -14,8 +19,13 @@ export function normalizePluginSubagentAllowedModelRef(raw: string): string | nu
   if (!parsed) {
     return null;
   }
-  const normalized = normalizeModelRef(parsed.provider, parsed.modelId);
-  return `${normalized.provider}/${normalized.model}`;
+  // Operator allowlists already name canonical targets; keep policy setup independent
+  // of plugin metadata and provider-runtime discovery.
+  const modelId = normalizeBuiltInProviderModelId(
+    parsed.provider,
+    stripSelfProviderModelPrefix(parsed.provider, parsed.modelId),
+  );
+  return `${parsed.provider}/${modelId}`;
 }
 
 export function resolvePluginSubagentRequestedModelRef(params: {

@@ -306,6 +306,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
         },
       },
       note: "Dreaming settings reset to the plugin default.",
+      canDispatch: expect.any(Function),
     });
     expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
     expect(context.runtimeConfig.save).not.toHaveBeenCalled();

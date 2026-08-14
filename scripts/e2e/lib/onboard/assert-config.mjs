@@ -44,6 +44,20 @@ switch (scenario) {
     expectEqual("wizard.lastRunCommand", cfg?.wizard?.lastRunCommand, "onboard");
     break;
   }
+  case "local-auth-refs":
+    assertLocalWizard();
+    expectEqual("gateway.auth.mode", cfg?.gateway?.auth?.mode, "token");
+    expectEqual("gateway.auth.token.source", cfg?.gateway?.auth?.token?.source, "env");
+    expectEqual("gateway.auth.token.provider", cfg?.gateway?.auth?.token?.provider, "default");
+    expectEqual("gateway.auth.token.id", cfg?.gateway?.auth?.token?.id, "OPENCLAW_GATEWAY_TOKEN");
+    break;
+  case "local-password":
+    assertLocalWizard();
+    expectEqual("gateway.auth.mode", cfg?.gateway?.auth?.mode, "password");
+    if (cfg?.gateway?.auth?.password !== "openclaw-onboard-password-e2e") {
+      errors.push("gateway.auth.password mismatch");
+    }
+    break;
   case "remote-non-interactive":
     expectEqual("gateway.mode", cfg?.gateway?.mode, "remote");
     expectEqual("gateway.remote.url", cfg?.gateway?.remote?.url, "ws://gateway.local:18789");

@@ -15,11 +15,14 @@ import {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
-  asFiniteNumber,
+  asFiniteNumberInRange,
+  asSafeIntegerInRange,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   createOpenAIRealtimeTranscriptionClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
-  trimToUndefined,
 } from "./realtime-provider-shared.js";
 
 type OpenAIRealtimeTranscriptionProviderConfig = {
@@ -47,6 +50,7 @@ type RealtimeEvent = {
   transcript?: string;
   item_id?: string;
   previous_item_id?: string | null;
+  audio_end_ms?: number;
   error?: unknown;
 };
 
@@ -74,6 +78,8 @@ const OPENAI_REALTIME_TRANSCRIPTION_URL = "wss://api.openai.com/v1/realtime?inte
 const OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 const OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS = 5;
 const OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS = 1000;
+const OPENAI_REALTIME_TRANSCRIPTION_AUDIO_BYTES_PER_MS = 8;
+const OPENAI_REALTIME_TRANSCRIPTION_MIN_COMMIT_DURATION_MS = 100;
 const OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL = "gpt-4o-transcribe";
 const OPENAI_REALTIME_TRANSCRIPTION_MAX_UNRESOLVED_ITEMS = 64;
 const OPENAI_REALTIME_TRANSCRIPTION_MAX_ITEM_ID_BYTES = 1024;
@@ -122,28 +128,20 @@ function normalizeProviderConfig(
         value: raw?.openaiApiKey,
         path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
       }),
-    language: trimToUndefined(raw?.language),
-    model: trimToUndefined(raw?.model) ?? trimToUndefined(raw?.sttModel),
-    prompt: trimToUndefined(raw?.prompt),
+    language: normalizeOptionalString(raw?.language),
+    model: normalizeOptionalString(raw?.model) ?? normalizeOptionalString(raw?.sttModel),
+    prompt: normalizeOptionalString(raw?.prompt),
     silenceDurationMs: normalizeNonNegativeInteger(raw?.silenceDurationMs),
     vadThreshold: normalizeVadThreshold(raw?.vadThreshold),
   };
 }
 
 function normalizeNonNegativeInteger(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  if (number === undefined || !Number.isSafeInteger(number) || number < 0) {
-    return undefined;
-  }
-  return number;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function normalizeVadThreshold(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  if (number === undefined || number < 0 || number > 1) {
-    return undefined;
-  }
-  return number;
+  return asFiniteNumberInRange(value, { min: 0, max: 1 });
 }
 
 function buildOpenAIRealtimeTranscriptionSessionPayload(
@@ -209,6 +207,9 @@ function createOpenAIRealtimeTranscriptionSession(
   const unkeyedTranscript = "__openclaw_unkeyed_transcript__";
   let retainedTranscriptBytes = 0;
   let settledItemIdBytes = 0;
+  let appendedAudioBytes = 0;
+  let committedAudioBytes = 0;
+  let lastVadBoundary: { itemId: string; audioEndBytes: number } | undefined;
 
   const resetTranscriptionState = () => {
     pendingTranscripts.clear();
@@ -219,6 +220,9 @@ function createOpenAIRealtimeTranscriptionSession(
     settledItemIds.clear();
     retainedTranscriptBytes = 0;
     settledItemIdBytes = 0;
+    appendedAudioBytes = 0;
+    committedAudioBytes = 0;
+    lastVadBoundary = undefined;
   };
 
   const failTerminal = (error: Error, transport: RealtimeTranscriptionWebSocketTransport) => {
@@ -375,6 +379,14 @@ function createOpenAIRealtimeTranscriptionSession(
     const partialBytes = pendingTranscripts.get(key)?.bytes ?? 0;
     pendingTranscripts.delete(key);
     retainedTranscriptBytes -= partialBytes;
+    const transcriptBytes = transcript ? Buffer.byteLength(transcript, "utf8") : 0;
+    if (
+      transcriptBytes >
+      OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES - retainedTranscriptBytes
+    ) {
+      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE), transport);
+      return false;
+    }
     if (!itemId || !committedItems.has(itemId)) {
       if (itemId) {
         if (!settleItem(itemId, transport)) {
@@ -387,14 +399,6 @@ function createOpenAIRealtimeTranscriptionSession(
         config.onTranscript?.(transcript);
       }
       return true;
-    }
-    const transcriptBytes = transcript ? Buffer.byteLength(transcript, "utf8") : 0;
-    if (
-      transcriptBytes >
-      OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES - retainedTranscriptBytes
-    ) {
-      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE), transport);
-      return false;
     }
     completedTranscripts.set(itemId, transcript);
     retainedTranscriptBytes += transcriptBytes;
@@ -412,8 +416,39 @@ function createOpenAIRealtimeTranscriptionSession(
         return;
 
       case "input_audio_buffer.committed":
+        if (
+          event.item_id &&
+          (committedItems.has(event.item_id) || settledItemIds.has(event.item_id)) &&
+          lastVadBoundary?.itemId !== event.item_id
+        ) {
+          return;
+        }
+        committedAudioBytes =
+          event.item_id && lastVadBoundary?.itemId === event.item_id
+            ? Math.max(
+                committedAudioBytes,
+                Math.min(appendedAudioBytes, lastVadBoundary.audioEndBytes),
+              )
+            : appendedAudioBytes;
+        if (event.item_id === lastVadBoundary?.itemId) {
+          lastVadBoundary = undefined;
+        }
         if (event.item_id) {
           commitItem(event.item_id, event.previous_item_id, transport);
+        }
+        return;
+
+      case "input_audio_buffer.speech_stopped":
+        if (
+          event.item_id &&
+          typeof event.audio_end_ms === "number" &&
+          Number.isFinite(event.audio_end_ms) &&
+          event.audio_end_ms >= 0
+        ) {
+          lastVadBoundary = {
+            itemId: event.item_id,
+            audioEndBytes: event.audio_end_ms * OPENAI_REALTIME_TRANSCRIPTION_AUDIO_BYTES_PER_MS,
+          };
         }
         return;
 
@@ -512,10 +547,33 @@ function createOpenAIRealtimeTranscriptionSession(
     connectClosedBeforeReadyMessage: "OpenAI realtime transcription connection closed before ready",
     reconnectLimitMessage: "OpenAI realtime transcription reconnect limit reached",
     sendAudio: (audio, transport) => {
-      transport.sendJson({
+      const sent = transport.sendJson({
         type: "input_audio_buffer.append",
         audio: audio.toString("base64"),
       });
+      if (sent) {
+        appendedAudioBytes += audio.byteLength;
+      }
+    },
+    onClose: (transport) => {
+      // Server VAD owns stopped audio before its ack; shorter manual commits are rejected.
+      const ownedAudioBytes = Math.max(committedAudioBytes, lastVadBoundary?.audioEndBytes ?? 0);
+      if (
+        appendedAudioBytes - ownedAudioBytes >=
+        OPENAI_REALTIME_TRANSCRIPTION_MIN_COMMIT_DURATION_MS *
+          OPENAI_REALTIME_TRANSCRIPTION_AUDIO_BYTES_PER_MS
+      ) {
+        if (!transport.sendJson({ type: "input_audio_buffer.commit" })) {
+          failTerminal(
+            new Error(
+              "OpenAI realtime transcription could not send its final audio commit; check the provider connection",
+            ),
+            transport,
+          );
+          return;
+        }
+        committedAudioBytes = appendedAudioBytes;
+      }
     },
     onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
       // A reconnect starts a new provider session. Retaining outstanding item

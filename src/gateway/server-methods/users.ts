@@ -1,17 +1,22 @@
 // Gateway methods for durable user profile administration.
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
   formatValidationErrors,
   validateUsersLinkEmailParams,
   validateUsersListParams,
+  validateUsersPrefsGetParams,
+  validateUsersPrefsSetParams,
   validateUsersSelfParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import {
   ensureProfileForEmail,
+  getUserProfileDisplay,
   getUserProfileListItem,
   linkEmail,
   listProfiles,
@@ -22,6 +27,18 @@ import {
 } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+
+function refreshConnectedProfile(
+  context: GatewayRequestHandlerOptions["context"],
+  profile: { id: string; updatedAt: number },
+): ReturnType<typeof getUserProfileDisplay> {
+  const display = getUserProfileDisplay(profile.id);
+  context.refreshConnectedUserProfile?.({
+    ...display,
+    updatedAt: profile.updatedAt,
+  });
+  return display;
+}
 
 function decodeBase64(value: string): Uint8Array | undefined {
   const trimmed = value.trim();
@@ -49,6 +66,24 @@ function profileError(error: unknown) {
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
+function resolveAuthenticatedProfileId(
+  client: GatewayRequestHandlerOptions["client"],
+): string | undefined {
+  if (client?.authenticatedUserProfile?.profileId) {
+    return resolveUserProfileId(client.authenticatedUserProfile.profileId);
+  }
+  const authenticatedUserId = client?.authenticatedUserId;
+  if (!authenticatedUserId) {
+    return undefined;
+  }
+  // A failed Tailscale profile snapshot must not recreate its provider login
+  // through the legacy email resolver on a later self-profile request.
+  if (client.authenticatedUserIsTailscaleProvider) {
+    return undefined;
+  }
+  return ensureProfileForEmail(authenticatedUserId).id;
+}
+
 function canMutateProfile(
   client: GatewayRequestHandlerOptions["client"],
   profileId: string,
@@ -56,10 +91,11 @@ function canMutateProfile(
   if (client?.connect.scopes?.includes(ADMIN_SCOPE)) {
     return true;
   }
-  const authenticatedUserId = client?.authenticatedUserId;
-  return authenticatedUserId
-    ? ensureProfileForEmail(authenticatedUserId).id === resolveUserProfileId(profileId)
-    : false;
+  const authenticatedProfileId = resolveAuthenticatedProfileId(client);
+  return (
+    authenticatedProfileId !== undefined &&
+    authenticatedProfileId === resolveUserProfileId(profileId)
+  );
 }
 
 function requireProfileMutationAccess(
@@ -102,13 +138,114 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const profile = ensureProfileForEmail(client.authenticatedUserId);
-      respond(true, { profile: getUserProfileListItem(profile.id) });
+      const profileId = resolveAuthenticatedProfileId(client);
+      if (!profileId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
+        );
+        return;
+      }
+      respond(true, { profile: getUserProfileListItem(profileId) });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.linkEmail": ({ params, respond }) => {
+  "users.prefs.get": ({ client, params, respond }) => {
+    if (!validateUsersPrefsGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        invalidParams("users.prefs.get", validateUsersPrefsGetParams.errors),
+      );
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId ?? "";
+    if (!profileId) {
+      respond(true, { status: "no_durable_identity" }, undefined);
+      return;
+    }
+    try {
+      const canonicalProfileId = resolveUserProfileId(profileId);
+      if (!canonicalProfileId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
+        );
+        return;
+      }
+      respond(
+        true,
+        { status: "ok", entries: getUserPreferences(canonicalProfileId, params.keys) },
+        undefined,
+      );
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.prefs.set": ({ client, params, respond }) => {
+    if (!validateUsersPrefsSetParams(params)) {
+      respond(
+        false,
+        undefined,
+        invalidParams("users.prefs.set", validateUsersPrefsSetParams.errors),
+      );
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId ?? "";
+    if (!profileId) {
+      respond(true, { status: "no_durable_identity" }, undefined);
+      return;
+    }
+    try {
+      const canonicalProfileId = resolveUserProfileId(profileId);
+      if (!canonicalProfileId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
+        );
+        return;
+      }
+      const result = setUserPreferences(canonicalProfileId, params.entries);
+      if (!result.ok) {
+        if (result.error.code === "profile-key-limit") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
+              {
+                details: {
+                  code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+                  limit: result.error.limit,
+                  currentCount: result.error.currentCount,
+                },
+              },
+            ),
+          );
+          return;
+        }
+        const key = "key" in result.error ? ` for ${result.error.key}` : "";
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid users.prefs.set entry${key}: ${result.error.code}`,
+          ),
+        );
+        return;
+      }
+      respond(true, { status: "ok" }, undefined);
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.linkEmail": ({ context, params, respond }) => {
     if (!validateUsersLinkEmailParams(params)) {
       respond(
         false,
@@ -123,12 +260,14 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      respond(true, { profile: linkEmail(email, params.targetProfileId) });
+      const profile = linkEmail(email, params.targetProfileId);
+      refreshConnectedProfile(context, profile);
+      respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setDisplayName": ({ client, params, respond }) => {
+  "users.setDisplayName": ({ client, context, params, respond }) => {
     if (!validateUsersSetDisplayNameParams(params)) {
       respond(
         false,
@@ -141,12 +280,14 @@ export const usersHandlers: GatewayRequestHandlers = {
       if (!requireProfileMutationAccess(client, params.profileId, respond)) {
         return;
       }
-      respond(true, { profile: setDisplayName(params.profileId, params.displayName) });
+      const profile = setDisplayName(params.profileId, params.displayName);
+      refreshConnectedProfile(context, profile);
+      respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ client, params, respond }) => {
+  "users.setAvatar": ({ client, context, params, respond }) => {
     if (!validateUsersSetAvatarParams(params)) {
       respond(
         false,
@@ -173,7 +314,8 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
         return;
       }
-      respond(true, { profile: result.value });
+      const display = refreshConnectedProfile(context, result.value);
+      respond(true, { profile: result.value, avatarRevision: display.avatarRevision });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

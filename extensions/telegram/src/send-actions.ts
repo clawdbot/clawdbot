@@ -1,5 +1,4 @@
 import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildTypingThreadParams } from "./bot/helpers.js";
@@ -12,48 +11,44 @@ import {
   withTelegramApiContextLease,
   type TelegramApi,
   type TelegramApiContext,
-  type TelegramApiOverride,
 } from "./send-context.js";
+import type {
+  TelegramApiCallOpts,
+  TelegramMessageActionOpts,
+  TelegramSendOpts,
+} from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
-import type { OpenClawConfig } from "./send.runtime.js";
-import { parseTelegramTarget } from "./targets.js";
+import { parseTelegramTarget, type TelegramTarget } from "./targets.js";
 
-type TelegramReactionOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  api?: TelegramApiOverride;
+type TelegramReactionOpts = TelegramApiCallOpts & {
   remove?: boolean;
-  verbose?: boolean;
-  retry?: RetryConfig;
-  gatewayClientScopes?: readonly string[];
 };
 
-type TelegramTypingOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  verbose?: boolean;
-  api?: TelegramApiOverride;
-  retry?: RetryConfig;
-  messageThreadId?: number;
-};
+type TelegramTypingOpts = Omit<TelegramApiCallOpts, "gatewayClientScopes"> &
+  Pick<TelegramSendOpts, "messageThreadId">;
 
 export async function sendTypingTelegram(
   to: string,
   opts: TelegramTypingOpts,
 ): Promise<{ ok: true }> {
+  const target = parseTelegramTarget(to);
+  if (target.directMessagesTopicId != null) {
+    throw new Error("Telegram typing is not supported in channel Direct Messages chats.");
+  }
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(context, sendTypingTelegramWithContext(to, opts, context));
+  return withTelegramApiContextLease(
+    context,
+    sendTypingTelegramWithContext(to, target, opts, context),
+  );
 }
 
 async function sendTypingTelegramWithContext(
   to: string,
+  target: TelegramTarget,
   opts: TelegramTypingOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true }> {
   const { cfg, account, api } = context;
-  const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
@@ -135,21 +130,10 @@ async function reactMessageTelegramWithContext(
   return { ok: true };
 }
 
-type TelegramDeleteOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  notify?: boolean;
-  verbose?: boolean;
-  api?: TelegramApiOverride;
-  retry?: RetryConfig;
-  gatewayClientScopes?: readonly string[];
-};
-
 export async function deleteMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
-  opts: TelegramDeleteOpts,
+  opts: TelegramMessageActionOpts,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
   const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
@@ -161,7 +145,7 @@ export async function deleteMessageTelegram(
 async function deleteMessageTelegramWithContext(
   chatIdInput: string | number,
   messageIdInput: string | number,
-  opts: TelegramDeleteOpts,
+  opts: TelegramMessageActionOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
   const { api } = context;
@@ -197,7 +181,7 @@ async function deleteMessageTelegramWithContext(
 export async function pinMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
-  opts: TelegramDeleteOpts,
+  opts: TelegramMessageActionOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
@@ -209,7 +193,7 @@ export async function pinMessageTelegram(
 async function pinMessageTelegramWithContext(
   chatIdInput: string | number,
   messageIdInput: string | number,
-  opts: TelegramDeleteOpts,
+  opts: TelegramMessageActionOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const { api } = context;
@@ -234,7 +218,7 @@ async function pinMessageTelegramWithContext(
 export async function unpinMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number | undefined,
-  opts: TelegramDeleteOpts,
+  opts: TelegramMessageActionOpts,
 ): Promise<{ ok: true; chatId: string; messageId?: string }> {
   const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
@@ -246,7 +230,7 @@ export async function unpinMessageTelegram(
 async function unpinMessageTelegramWithContext(
   chatIdInput: string | number,
   messageIdInput: string | number | undefined,
-  opts: TelegramDeleteOpts,
+  opts: TelegramMessageActionOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; chatId: string; messageId?: string }> {
   const { api } = context;

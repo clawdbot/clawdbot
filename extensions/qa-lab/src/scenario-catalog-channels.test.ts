@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
+  readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
@@ -21,21 +22,30 @@ function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
 
+  it("classifies every current module flow intrinsically", () => {
+    const moduleFlows = readQaScenarioPack().scenarios.filter(
+      (scenario) => scenario.execution.flowKind === "module",
+    );
+
+    expect(moduleFlows).toHaveLength(144);
+    expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
+  });
+
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
       | {
+          requiredChannelDriver?: string;
           requiredProviderMode?: string;
-          sessionKey?: string;
         }
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
     expect(config?.requiredProviderMode).toBe("mock-openai");
-    expect(config?.sessionKey).toBe("agent:main:telegram:direct:qa-native-operator");
-    expect(JSON.stringify(requireFlowScenario(scenario).execution.flow)).toContain(
-      "session.key === config.sessionKey && session.hasActiveRun === true",
-    );
+    expect(config?.requiredChannelDriver).toBe("crabline");
+    const flow = JSON.stringify(requireFlowScenario(scenario).execution.flow);
+    expect(flow).toContain("transport.buildAgentDelivery");
+    expect(flow).toContain("peer: { kind: 'group', id: delivery.replyTo }");
   });
 
   it("keeps channel-owned scenarios independent from the driver implementation", () => {
@@ -67,6 +77,7 @@ describe("qa scenario catalog channel contracts", () => {
 
     expect(scenario.coverage?.primary).toEqual(["media.inbound-media-store"]);
     expect(scenario.coverage?.secondary).toEqual(["channels.inbound-media-normalization"]);
+    expect(scenario.plugins).toContain("openai");
     expect(scenario.execution.channel).toBe("qa-channel");
     expect(scenario.execution.providerMode).toBe("mock-openai");
     expect(flow).toContain('"sendInbound"');
@@ -82,16 +93,19 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"call":"runAgentPrompt"');
   });
 
-  it("marks live transport modules as live-driver-only", () => {
+  it("preserves module flow identity without mutating the driver contract", () => {
     for (const scenarioId of [
       "matrix-approval-exec-metadata-single-event",
       "matrix-mxid-prefixed-command-block",
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
     ]) {
-      expect(readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver, scenarioId).toBe(
-        "live",
-      );
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      expect(scenario.execution.flowKind, scenarioId).toBe("module");
+      expect(
+        readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver,
+        scenarioId,
+      ).toBeUndefined();
     }
   });
 
@@ -143,29 +157,78 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
   });
 
+  it("settles terminal-reply scenarios from durable task facts instead of sleeps", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback"));
+    const flow = JSON.stringify(scenario.execution.flow);
+    const config = scenario.execution.config as
+      | {
+          requiredProviderMode?: string;
+          cases?: Array<{ name?: string; marker?: string; expectedSendCount?: number }>;
+        }
+      | undefined;
+
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+    expect(config?.requiredProviderMode).toBe("mock-openai");
+    expect(config?.cases).toEqual([
+      {
+        name: "visible",
+        marker: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
+        expectedSendCount: 1,
+      },
+      {
+        name: "silent",
+        marker: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
+        expectedSendCount: 1,
+      },
+      {
+        name: "fallback",
+        marker: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
+        expectedSendCount: 1,
+      },
+    ]);
+    expect(flow).toContain("env.gateway.call('tasks.list'");
+    expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
+    expect(flow).toContain("task.status === 'completed'");
+    expect(flow).toContain("task.deliveryStatus === 'delivered'");
+    expect(flow).toContain("readSettledTerminalTask('restart')");
+    expect(flow).toContain("readSettledTerminalTask('empty')");
+    expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
+    expect(flow).toContain("env.providerMode === config.requiredProviderMode");
+    expect(flow).not.toContain("interrupted by a gateway restart");
+    expect(flow).toContain("verdicts.length === 5");
+    expect(flow).not.toContain('"call":"sleep"');
+  });
+
   it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {
     const scenario = requireFlowScenario(readQaScenarioById("channel-message-flows"));
 
     expect(scenario.execution.channel).toBeUndefined();
     expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.execution.retryCount).toBe(0);
     expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
-      channels: {
-        telegram: {
-          groups: { "*": { requireMention: false } },
-          streaming: { mode: "partial" },
-        },
-      },
+      channels: { telegram: { streaming: { mode: "partial" } } },
     });
+    expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
   });
 
-  it("disables Telegram mention gating for deterministic group delivery proofs", () => {
-    const scenario = readQaScenarioById("telegram-assistant-transcript-role-boundary");
+  it("keeps the shared channel canary eligible for QA Channel and Telegram", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-canary"));
 
-    expect(scenario.gatewayConfigPatch).toMatchObject({
-      channels: { telegram: { groups: { "*": { requireMention: false } } } },
-    });
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+  });
+
+  it("keeps transcript-role delivery on the Crabline driver", () => {
+    const scenario = readQaScenarioById("telegram-assistant-transcript-role-boundary");
+    const config = readQaScenarioExecutionConfig("telegram-assistant-transcript-role-boundary") as
+      | {
+          requiredChannelDriver?: string;
+        }
+      | undefined;
+
+    expect(scenario.gatewayConfigPatch).toBeUndefined();
+    expect(config?.requiredChannelDriver).toBe("crabline");
   });
 
   it("rejects malformed string matcher lists before running a flow", () => {

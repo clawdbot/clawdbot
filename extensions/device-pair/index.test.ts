@@ -309,6 +309,15 @@ afterAll(() => {
   vi.resetModules();
 });
 
+it("declares bare invocation client presentation without changing remote argument handling", () => {
+  const command = registerPairCommand();
+  expect(command.acceptsArgs).toBe(true);
+  expect(command.clientPresentation).toEqual({
+    when: "no-arguments",
+    action: { kind: "device-pairing" },
+  });
+});
+
 describe("device-pair /pair qr", () => {
   it("returns an inline QR image for webchat surfaces", async () => {
     const command = registerPairCommand();

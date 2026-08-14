@@ -33,7 +33,7 @@ vi.mock("./gateway.js", async (importOriginal) => {
   return { ...actual, callGatewayTool: callGatewayToolMock };
 });
 
-vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 const { createComputerTool, invalidateComputerFrameIfMissing } = await import("./computer-tool.js");
 const { DEFAULT_IMAGE_MAX_DIMENSION_PX } = await import("../image-sanitization.js");

@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeWebhookPath,
+  canonicalizeWebhookRouteKey,
   resolveRequestClientIp,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
@@ -154,7 +154,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
   processEvent: (event: GoogleChatEvent, target: WebhookTarget) => Promise<void>;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const path = normalizeWebhookPath(new URL(req.url ?? "/", "http://localhost").pathname);
+    const path = canonicalizeWebhookRouteKey(new URL(req.url ?? "/", "http://localhost").pathname);
     // Shared-path registrations use the same gateway proxy settings in normal runtime setup.
     const config = params.webhookTargets.get(path)?.[0]?.config;
     const clientIp =

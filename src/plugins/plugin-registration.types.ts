@@ -8,10 +8,15 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBridgeContract } from "../infra/diagnostic-trace-propagation.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
+  DiagnosticEventPayload,
+  DiagnosticEventMetadata
+>;
 
 type PluginInteractiveHandlerResult = {
   handled?: boolean;
@@ -285,6 +290,7 @@ export type OpenClawPluginServiceContext = {
         privateData: DiagnosticEventPrivateData,
       ) => void,
     ) => () => void;
+    registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
   };
 };
 

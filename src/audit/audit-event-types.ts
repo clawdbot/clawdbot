@@ -26,6 +26,7 @@ export const AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS = [
   "before_dispatch_handled",
   "acp_dispatch_completed",
   "acp_dispatch_empty",
+  "active_run_injected",
 ] as const;
 
 export type AuditInboundMessageCompletedReasonCode =

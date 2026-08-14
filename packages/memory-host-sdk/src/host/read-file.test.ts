@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { readMemoryFile } from "./read-file.js";
+import { readAgentMemoryFile, readMemoryFile } from "./read-file.js";
 
 async function createDirectorySymlink(target: string, linkPath: string): Promise<boolean> {
   try {
@@ -19,7 +19,7 @@ async function createDirectorySymlink(target: string, linkPath: string): Promise
 }
 
 describe("readMemoryFile", () => {
-  it("returns empty text for missing files under extra path directories", async () => {
+  it("returns empty text for absent extra paths and rejects non-directory parents", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
     try {
       const workspaceDir = path.join(tmpRoot, "workspace");
@@ -47,10 +47,7 @@ describe("readMemoryFile", () => {
           extraPaths: [extraDir],
           relPath: nonDirectoryParentPath,
         }),
-      ).resolves.toEqual({
-        text: "",
-        path: path.relative(workspaceDir, nonDirectoryParentPath).replace(/\\/g, "/"),
-      });
+      ).rejects.toThrow("path required");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
@@ -105,6 +102,34 @@ describe("readMemoryFile", () => {
           extraPaths: [extraDir],
           relPath: path.join(outsideLinkPath, "missing.md"),
         }),
+      ).rejects.toThrow("path required");
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces configured extra path glob patterns through agent reads", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
+    try {
+      const workspaceDir = path.join(tmpRoot, "workspace");
+      const extraDir = path.join(tmpRoot, "extra");
+      const allowedPath = path.join(extraDir, "runbooks", "team", "allowed.md");
+      const excludedPath = path.join(extraDir, "private.md");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(path.dirname(allowedPath), { recursive: true });
+      await fs.writeFile(allowedPath, "allowed", "utf-8");
+      await fs.writeFile(excludedPath, "private", "utf-8");
+
+      const extraPaths = [{ path: extraDir, pattern: "runbooks/**/*.md" }];
+      const cfg = {
+        agents: { entries: { main: { workspace: workspaceDir } } },
+        memory: { search: { extraPaths } },
+      };
+      await expect(
+        readAgentMemoryFile({ cfg, agentId: "main", relPath: allowedPath }),
+      ).resolves.toMatchObject({ text: "allowed" });
+      await expect(
+        readAgentMemoryFile({ cfg, agentId: "main", relPath: excludedPath }),
       ).rejects.toThrow("path required");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });

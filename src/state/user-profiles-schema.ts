@@ -20,4 +20,15 @@ CREATE TABLE IF NOT EXISTS user_profile_emails (
 
 CREATE INDEX IF NOT EXISTS idx_user_profile_emails_profile_id
   ON user_profile_emails(profile_id);
+
+CREATE TABLE IF NOT EXISTS user_profile_identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (provider, subject)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
+  ON user_profile_identities(profile_id);
 `;

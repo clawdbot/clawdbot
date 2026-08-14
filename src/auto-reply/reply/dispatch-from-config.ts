@@ -15,6 +15,7 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import "./dispatch-from-config.events.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
@@ -23,14 +24,26 @@ export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
+  const ticket = reserveReplyAdmissionTicket([
+    params.ctx.SessionKey,
+    params.ctx.CommandTargetSessionKey,
+  ]);
+  const ticketedParams = ticket
+    ? {
+        ...params,
+        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
+      }
+    : params;
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   try {
-    const result = await dispatchReplyFromConfigInner(params, messageAuditTerminal);
+    const result = await dispatchReplyFromConfigInner(ticketedParams, messageAuditTerminal);
     messageAuditTerminal?.finishSuccess(result);
     return result;
   } catch (error) {
     messageAuditTerminal?.finishError();
     throw error;
+  } finally {
+    ticket?.release();
   }
 }
 

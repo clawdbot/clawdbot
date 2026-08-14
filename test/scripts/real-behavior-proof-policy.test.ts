@@ -1,5 +1,6 @@
 // PR Context And Evidence Policy tests cover GitHub PR-body policy behavior.
 import { readFileSync } from "node:fs";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   NEEDS_PR_CONTEXT_LABEL,
@@ -308,7 +309,7 @@ describe("real-behavior-proof-policy", () => {
       "",
       "- Real environment tested: Local macOS source checkout, Node 24.",
       "- Exact steps or command run after this patch:",
-      "  1. Built the local checkout with `node scripts/build-all.mjs`.",
+      "  1. Built the local checkout with `node --import tsx scripts/build-all.mts`.",
       "  2. Ran a redacted behavior probe for `provider=google`, `model=gemini-3-flash-preview`, and `catalogReasoning=false`.",
       '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
       "- Observed result after fix:",
@@ -339,7 +340,7 @@ describe("real-behavior-proof-policy", () => {
       "",
       "- Real environment tested: Local macOS source checkout, Node v24.8.0, OpenClaw 2026.5.21 (c8a35c4), local `openclaw` shim pointed at the freshly built checkout. No channel credentials or provider API keys were used.",
       "- Exact steps or command run after this patch:",
-      "  1. Built the local checkout with `node scripts/build-all.mjs`.",
+      "  1. Built the local checkout with `node --import tsx scripts/build-all.mts`.",
       "  2. Updated `/Users/example/.local/bin/openclaw` to run this checkout's `openclaw.mjs` and verified `/Users/example/.local/bin/openclaw --version`.",
       "  3. Ran a redacted behavior probe for the reported cron validation decision with `provider=google`, `model=gemini-3-flash-preview`, `configuredThinkingDefault=low`, and `catalogReasoning=false`.",
       '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` from the local checkout recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
@@ -689,17 +690,3 @@ describe("readBoundedGitHubApiJson", () => {
     });
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

@@ -1,4 +1,5 @@
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import type { SubagentActivityPresentation } from "./chat-subagent-activity.ts";
 
 export type BackgroundTasksProps = {
   sessionKey: string;
@@ -13,7 +14,8 @@ export type BackgroundTasksProps = {
   error: string | null;
   /** null until the first load for this session finished. */
   tasks: TaskSummary[] | null;
-  selectedTaskId: string | null;
+  subagentActivity: SubagentActivityPresentation;
+  openTaskId?: string;
   taskDetails: ReadonlyMap<string, TaskSummary>;
   taskDetailErrors: ReadonlyMap<string, string>;
   taskDetailLoadingIds: ReadonlySet<string>;
@@ -23,7 +25,6 @@ export type BackgroundTasksProps = {
   onToggleFinished: () => void;
   onRefresh: () => void;
   onCancel: (taskId: string) => void;
-  onSelectTask: (task: TaskSummary) => void;
-  onBackToList: () => void;
-  onOpenSession: (sessionKey: string) => void;
+  onLoadDetail?: (task: TaskSummary) => void;
+  onOpenTaskDetail?: (task: TaskSummary) => void;
 };

@@ -14,6 +14,7 @@ import type {
   ChannelNativeApprovalTransportSpec,
   PreparedChannelNativeApprovalTarget,
 } from "./approval-native-runtime-types.js";
+import { classifyApprovalRequestChannelRoute } from "./approval-request-account-binding.js";
 import { resolveApprovalRequestKind, type ChannelApprovalKind } from "./approval-types.js";
 import {
   createExecApprovalChannelRuntime,
@@ -203,6 +204,13 @@ export function createChannelNativeApprovalRuntime<
     channel: adapter.channel,
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
+    shouldHandle: (request) => adapter.shouldHandle(request as TRequest),
+    classifyRoute: (request) =>
+      classifyApprovalRequestChannelRoute({
+        cfg: adapter.cfg,
+        request,
+        channel: adapter.channel ?? "",
+      }),
     requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
       if (gatewayRuntime) {
         if (method !== "send") {
@@ -231,31 +239,44 @@ export function createChannelNativeApprovalRuntime<
     isConfigured: adapter.isConfigured,
     shouldHandle: (request) => {
       const approvalKind = resolveApprovalKind(request);
-      routeReporter.observeRequest({
+      const selection = routeReporter.selectRequest({
         approvalKind,
         request,
       });
-      let shouldHandle: boolean;
-      try {
-        shouldHandle = adapter.shouldHandle(request);
-      } catch (error) {
+      if (selection.kind === "selected") {
+        return true;
+      }
+      if (selection.kind === "selector-error") {
         void routeReporter.reportSkipped({
           approvalKind,
           request,
+          reason: "ineligible",
         });
-        throw error;
-      }
-      if (shouldHandle) {
-        return shouldHandle;
+        throw selection.error;
       }
       void routeReporter.reportSkipped({
         approvalKind,
         request,
+        reason: selection.kind,
       });
       return false;
     },
-    finalizeResolved: adapter.finalizeResolved,
-    finalizeExpired: adapter.finalizeExpired,
+    finalizeResolved: async (params) => {
+      try {
+        await adapter.finalizeResolved(params);
+      } finally {
+        routeReporter.completeRequest(params.request.id);
+      }
+    },
+    finalizeExpired: adapter.finalizeExpired
+      ? async (params) => {
+          try {
+            await adapter.finalizeExpired?.(params);
+          } finally {
+            routeReporter.completeRequest(params.request.id);
+          }
+        }
+      : undefined,
     onStopped: adapter.onStopped,
     beforeGatewayClientStart: () => {
       routeReporter.start();
@@ -356,8 +377,8 @@ export function createChannelNativeApprovalRuntime<
       }
     },
     async stop() {
-      await routeReporter.stop();
       await runtime.stop();
+      await routeReporter.stop();
     },
   };
 }

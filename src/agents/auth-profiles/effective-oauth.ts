@@ -4,7 +4,7 @@
  * bootstrap credentials to fill unusable local profile state.
  */
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
-import { resolveEffectiveOAuthCredential as resolveManagedOAuthCredential } from "./oauth-manager.js";
+import { resolveEffectiveOAuthCredentialCore } from "./oauth-manager.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 /** Resolves the effective OAuth credential, optionally reading external CLI bootstrap state. */
@@ -14,7 +14,7 @@ export function resolveEffectiveOAuthCredential(params: {
   credential: OAuthCredential;
   allowKeychainPrompt?: boolean;
 }): OAuthCredential {
-  return resolveManagedOAuthCredential({
+  return resolveEffectiveOAuthCredentialCore({
     store: params.store,
     profileId: params.profileId,
     credential: params.credential,

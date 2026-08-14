@@ -8,7 +8,7 @@ import {
 } from "./models-config.providers.secret-helpers.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider: () => undefined,
+  resolvePluginSetupProviderCore: () => undefined,
 }));
 
 vi.mock("../infra/shell-env.js", () => ({

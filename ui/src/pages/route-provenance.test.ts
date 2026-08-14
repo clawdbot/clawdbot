@@ -4,10 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { page as agentsPage, type AgentsRouteData } from "./agents/route.ts";
+import type { DevicesRouteData } from "./devices/devices-page.ts";
+import { page as devicesPage } from "./devices/route.ts";
 import type { ModelProvidersRouteData } from "./model-providers/model-providers-page.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
-import type { NodesRouteData } from "./nodes/nodes-page.ts";
-import { page as nodesPage } from "./nodes/route.ts";
 import type { PluginsRouteData } from "./plugins/plugins-page.ts";
 import { page as pluginsPage } from "./plugins/route.ts";
 import { page as sessionsPage } from "./sessions/route.ts";
@@ -90,12 +90,12 @@ describe("route preload gateway provenance", () => {
     expect(agentsData.gateway).toBe(agentsGateway.gateway);
     expect(agentsData.gatewaySnapshot).toBe(agentsGateway.gateway.snapshot);
 
-    const nodesGateway = mutableGateway(snapshot(null, false));
-    const nodesData = await loadRoute<NodesRouteData>(nodesPage, {
-      gateway: nodesGateway.gateway,
+    const devicesGateway = mutableGateway(snapshot(null, false));
+    const devicesData = await loadRoute<DevicesRouteData>(devicesPage, {
+      gateway: devicesGateway.gateway,
     } as unknown as ApplicationContext);
-    expect(nodesData.gateway).toBe(nodesGateway.gateway);
-    expect(nodesData.gatewaySnapshot).toBe(nodesGateway.gateway.snapshot);
+    expect(devicesData.gateway).toBe(devicesGateway.gateway);
+    expect(devicesData.gatewaySnapshot).toBe(devicesGateway.gateway.snapshot);
   });
 
   it("keeps sessions provenance from before its async preload", async () => {

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import { setVoiceCallStateRuntime } from "../runtime-state.js";
-import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
+import type { AnswerCallInput, CallRecord, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
@@ -48,15 +48,19 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 
 const contexts: CallManagerContext[] = [];
 
-function installStateRuntime(): void {
+function installStateRuntime(shouldFail?: () => boolean): void {
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => "",
       openKeyedStore: (() => {
         throw new Error("openKeyedStore is not used by voice-call event tests");
       }) as never,
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) => {
+        if (shouldFail?.()) {
+          throw new Error("synthetic SQLite persistence failure");
+        }
+        return createPluginStateSyncKeyedStoreForTests("voice-call", options);
+      },
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call event tests");
       }) as never,
@@ -181,6 +185,97 @@ function requireFirstActiveCall(ctx: CallManagerContext) {
 }
 
 describe("processEvent (functional)", () => {
+  it.each(["speech", "answered", "terminal"] as const)(
+    "publishes %s side effects only after SQLite persistence succeeds",
+    (kind) => {
+      let failPersistence = true;
+      installStateRuntime(() => failPersistence);
+      const onCallAnswered = vi.fn();
+      const ctx = createContext({ onCallAnswered });
+      const call: CallRecord = {
+        callId: `call-durable-${kind}`,
+        providerCallId: "provider-before",
+        provider: "plivo",
+        direction: "outbound",
+        state: kind === "answered" ? "ringing" : "active",
+        from: "+15550000000",
+        to: "+15550000001",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+      };
+      ctx.activeCalls.set(call.callId, call);
+      ctx.providerCallIdMap.set("provider-before", call.callId);
+      const resolve = vi.fn();
+      const reject = vi.fn();
+      if (kind !== "answered") {
+        ctx.transcriptWaiters.set(call.callId, {
+          resolve,
+          reject,
+          timeout: setTimeout(() => {}, 60_000),
+        });
+      }
+      if (kind === "terminal") {
+        ctx.maxDurationTimers.set(
+          call.callId,
+          setTimeout(() => {}, 60_000),
+        );
+      }
+      const base = { id: `event-${kind}`, callId: call.callId, timestamp: Date.now() };
+      const event: NormalizedEvent =
+        kind === "speech"
+          ? { ...base, type: "call.speech", transcript: "durable", isFinal: true }
+          : kind === "answered"
+            ? { ...base, type: "call.answered", providerCallId: "provider-after" }
+            : { ...base, type: "call.ended", reason: "hangup-user" };
+
+      expect(() => processEvent(ctx, event)).toThrow("synthetic SQLite persistence failure");
+      expect(ctx.processedEventIds.has(event.id)).toBe(false);
+      expect(call.processedEventIds).toEqual([]);
+      expect(call.transcript).toEqual([]);
+      expect(call.providerCallId).toBe("provider-before");
+      expect(ctx.providerCallIdMap.has("provider-after")).toBe(false);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(reject).not.toHaveBeenCalled();
+      expect(ctx.maxDurationTimers.has(call.callId)).toBe(kind === "terminal");
+
+      failPersistence = false;
+      processEvent(ctx, event);
+      expect(ctx.processedEventIds.has(event.id)).toBe(true);
+      expect(resolve).toHaveBeenCalledTimes(kind === "speech" ? 1 : 0);
+      expect(reject).toHaveBeenCalledTimes(kind === "terminal" ? 1 : 0);
+      expect(onCallAnswered).toHaveBeenCalledTimes(kind === "answered" ? 1 : 0);
+      expect(ctx.activeCalls.has(call.callId)).toBe(kind !== "terminal");
+    },
+  );
+
+  it.each(["created", "rejected"] as const)(
+    "does not publish %s inbound calls before SQLite persistence succeeds",
+    (kind) => {
+      let failPersistence = true;
+      installStateRuntime(() => failPersistence);
+      const { ctx, hangupCalls } = createRejectingInboundContext();
+      ctx.config.inboundPolicy = kind === "created" ? "open" : "disabled";
+      const event = createInboundInitiatedEvent({
+        id: `event-durable-${kind}`,
+        providerCallId: `provider-durable-${kind}`,
+        from: "+15550000002",
+      });
+
+      expect(() => processEvent(ctx, event)).toThrow("synthetic SQLite persistence failure");
+      expect(ctx.activeCalls.size).toBe(0);
+      expect(ctx.providerCallIdMap.size).toBe(0);
+      expect(ctx.rejectedProviderCallIds.size).toBe(0);
+      expect(ctx.processedEventIds.size).toBe(0);
+      expect(hangupCalls).toHaveLength(0);
+
+      failPersistence = false;
+      expect(processEvent(ctx, event)).toEqual({ kind: "processed" });
+      expect(ctx.activeCalls.size).toBe(kind === "created" ? 1 : 0);
+      expect(hangupCalls).toHaveLength(kind === "rejected" ? 1 : 0);
+    },
+  );
+
   it("calls provider hangup when rejecting inbound call", () => {
     const { ctx, hangupCalls } = createRejectingInboundContext();
     const event = createInboundInitiatedEvent({
@@ -332,7 +427,7 @@ describe("processEvent (functional)", () => {
       timestamp: now + 1,
     };
 
-    processEvent(ctx, event);
+    expect(processEvent(ctx, event)).toEqual({ kind: "ignored", replayable: true });
 
     expect(ctx.processedEventIds.size).toBe(0);
 
@@ -887,7 +982,7 @@ describe("processEvent (functional)", () => {
       retryable: true,
     };
 
-    processEvent(ctx, event);
+    expect(processEvent(ctx, event)).toEqual({ kind: "processed", replayable: true });
     processEvent(ctx, event);
 
     const call = ctx.activeCalls.get("call-retryable-error");

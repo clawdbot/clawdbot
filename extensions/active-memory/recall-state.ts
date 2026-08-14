@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
   asDateTimestampMs,
@@ -69,9 +70,7 @@ function scheduleMemorySearchCleanupAfterTimeout(
           api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
         })
         .catch((error: unknown) => {
-          const message = toSingleLineLogValue(
-            error instanceof Error ? error.message : String(error),
-          );
+          const message = toSingleLineErrorMessage(error);
           api.logger.warn?.(
             `${logPrefix} failed to release memory search managers after timeout: ${message}`,
           );
@@ -223,6 +222,10 @@ function toSingleLineLogValue(value: unknown): string {
     : singleLine;
 }
 
+function toSingleLineErrorMessage(error: unknown): string {
+  return toSingleLineLogValue(coerceErrorMessage(error));
+}
+
 function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" && result.summary.length > 0;
 }
@@ -252,5 +255,6 @@ export {
   scheduleMemorySearchCleanupAfterTimeout,
   setCachedResult,
   shouldCacheResult,
+  toSingleLineErrorMessage,
   toSingleLineLogValue,
 };

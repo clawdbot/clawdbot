@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -264,6 +265,7 @@ class ChatControllerCommandControlsTest {
       controller.patchSession(
         key = "main",
         ownerAgentId = "owner-a",
+        expectedSessionId = "session-main",
         clearLabel = true,
         clearCategory = true,
         pinned = true,
@@ -275,6 +277,7 @@ class ChatControllerCommandControlsTest {
       val patch = requests.first { it.first == "sessions.patch" }.second.orEmpty()
       assertTrue(patch.contains("\"key\":\"main\""))
       assertTrue(patch.contains("\"agentId\":\"owner-a\""))
+      assertTrue(patch.contains("\"expectedSessionId\":\"session-main\""))
       assertTrue(patch.contains("\"label\":null"))
       assertTrue(patch.contains("\"category\":null"))
       assertTrue(patch.contains("\"pinned\":true"))
@@ -285,6 +288,56 @@ class ChatControllerCommandControlsTest {
       assertTrue(delete.contains("\"key\":\"main\""))
       assertTrue(delete.contains("\"deleteTranscript\":true"))
       assertEquals(2, requests.count { it.first == "sessions.list" })
+    }
+
+  @Test
+  fun archiveUsesObservedIdentityAndArchiveDeadline() =
+    runTest {
+      var archiveParams: String? = null
+      var archiveTimeoutMs: Long? = null
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "sessions.list") """{"sessions":[]}""" else "{}"
+          },
+          requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
+            assertEquals("sessions.patch", method)
+            archiveParams = paramsJson
+            archiveTimeoutMs = timeoutMs
+            "{}"
+          },
+        )
+
+      assertTrue(
+        controller.patchSession(
+          key = "agent:main:side",
+          expectedSessionId = "session-side",
+          archived = true,
+        ),
+      )
+
+      assertTrue(archiveParams.orEmpty().contains("\"expectedSessionId\":\"session-side\""))
+      assertEquals(10 * 60_000L, archiveTimeoutMs)
+    }
+
+  @Test
+  fun archiveWithoutObservedIdentityDoesNotDispatch() =
+    runTest {
+      val requests = mutableListOf<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            requests += method
+            "{}"
+          },
+        )
+
+      assertFalse(controller.patchSession(key = "agent:main:cached", archived = true))
+      assertFalse(requests.contains("sessions.patch"))
     }
 
   @Test
@@ -390,7 +443,10 @@ class ChatControllerCommandControlsTest {
     runTest {
       val (controller, requests) =
         chatControllerTestSetup {
-          respond("sessions.list", """{"sessions":[{"key":"main","unread":true}]}""")
+          respond(
+            "sessions.list",
+            """{"sessions":[{"key":"main","sessionId":"session-main","unread":true}]}""",
+          )
         }
 
       controller.refreshSessions(archived = true)
@@ -401,6 +457,12 @@ class ChatControllerCommandControlsTest {
           .second
           .orEmpty()
           .contains("\"archived\":true"),
+      )
+      assertEquals(
+        "session-main",
+        controller.sessions.value
+          .single()
+          .sessionId,
       )
 
       controller.switchSession("main")
@@ -474,7 +536,7 @@ class ChatControllerCommandControlsTest {
     runTest {
       val (controller, requests) =
         chatControllerTestSetup {
-          respond("sessions.list", """{"sessions":[{"key":"agent:main:side"}]}""")
+          respond("sessions.list", """{"sessions":[{"key":"agent:main:side","sessionId":"session-side"}]}""")
           respond("sessions.delete", """{"deleted":true}""")
         }
 
@@ -482,7 +544,11 @@ class ChatControllerCommandControlsTest {
       advanceUntilIdle()
       assertEquals("agent:main:side", controller.sessionKey.value)
 
-      controller.patchSession(key = "agent:main:side", archived = true)
+      controller.patchSession(
+        key = "agent:main:side",
+        expectedSessionId = "session-side",
+        archived = true,
+      )
       advanceUntilIdle()
       assertEquals("main", controller.sessionKey.value)
 

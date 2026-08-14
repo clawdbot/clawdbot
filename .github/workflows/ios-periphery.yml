@@ -64,6 +64,7 @@ jobs:
               "scripts/format-swift.sh",
               "scripts/install-swift-tools.sh",
               "scripts/ios-write-swift-filelist.mjs",
+              "scripts/ios-write-swift-filelist.mts",
               "scripts/lint-swift.sh",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {

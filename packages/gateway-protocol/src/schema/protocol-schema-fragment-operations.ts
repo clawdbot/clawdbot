@@ -1,4 +1,5 @@
 import * as auditActivity from "./audit-activity.js";
+import * as auditRun from "./audit-run.js";
 import * as audit from "./audit.js";
 import * as config from "./config.js";
 import * as openclaw from "./openclaw.js";
@@ -14,6 +15,15 @@ export const OperationsProtocolSchemas = {
   AuditActivityEventV1: auditActivity.AuditActivityEventV1Schema,
   AuditActivityListParams: auditActivity.AuditActivityListParamsSchema,
   AuditActivityListResult: auditActivity.AuditActivityListResultSchema,
+  ExecutionIdentityContextV1: auditRun.ExecutionIdentityContextV1Schema,
+  DecisionReceiptV1: auditRun.DecisionReceiptV1Schema,
+  AuditRunIdentityPresentV1: auditRun.AuditRunIdentityPresentV1Schema,
+  AuditRunIdentityUnknownV1: auditRun.AuditRunIdentityUnknownV1Schema,
+  AuditRunIdentityUnsupportedV1: auditRun.AuditRunIdentityUnsupportedV1Schema,
+  AuditRunIdentityAmbiguousV1: auditRun.AuditRunIdentityAmbiguousV1Schema,
+  AuditRunIdentityV1: auditRun.AuditRunIdentityV1Schema,
+  AuditRunInspectParams: auditRun.AuditRunInspectParamsSchema,
+  AuditRunInspectResult: auditRun.AuditRunInspectResultSchema,
   AuditEvent: audit.AuditEventSchema,
   AuditListParams: audit.AuditListParamsSchema,
   AuditListResult: audit.AuditListResultSchema,
@@ -35,6 +45,8 @@ export const OperationsProtocolSchemas = {
   TasksGetResult: tasks.TasksGetResultSchema,
   TasksCancelParams: tasks.TasksCancelParamsSchema,
   TasksCancelResult: tasks.TasksCancelResultSchema,
+  TasksRecoveryParams: tasks.TasksRecoveryParamsSchema,
+  TasksRecoveryResult: tasks.TasksRecoveryResultSchema,
   ConfigGetParams: config.ConfigGetParamsSchema,
   ConfigSetParams: config.ConfigSetParamsSchema,
   ConfigApplyParams: config.ConfigApplyParamsSchema,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildFindRunArgs,
+  classifyAttachedCiRun,
   classifyRollup,
   classifyRunAttachment,
   collectRollupContexts,
@@ -8,7 +9,7 @@ import {
   pollUntilDeadline,
   sanitizeCheckName,
   selectRunAfter,
-} from "../../scripts/watch-pr-ci.mjs";
+} from "../../scripts/watch-pr-ci.mts";
 
 const sha = "a".repeat(40);
 
@@ -21,6 +22,7 @@ describe("watch-pr-ci", () => {
       attachTimeout: 900,
       timeout: 3600,
       interval: 120,
+      completion: "rollup",
     });
     expect(
       parseArgs([
@@ -36,6 +38,8 @@ describe("watch-pr-ci", () => {
         "90",
         "--interval",
         "5",
+        "--completion",
+        "ci-run",
       ]),
     ).toMatchObject({
       repo: "fork/project",
@@ -43,6 +47,7 @@ describe("watch-pr-ci", () => {
       attachTimeout: 30,
       timeout: 90,
       interval: 5,
+      completion: "ci-run",
     });
     expect(parseArgs(["1", sha.toUpperCase()]).headSha).toBe(sha);
   });
@@ -55,6 +60,9 @@ describe("watch-pr-ci", () => {
     );
     expect(() => parseArgs(["1", sha, "--after", "0"])).toThrow(
       "--after must be a positive integer",
+    );
+    expect(() => parseArgs(["1", sha, "--completion", "required"])).toThrow(
+      "--completion must be rollup or ci-run",
     );
   });
 
@@ -191,6 +199,22 @@ describe("watch-pr-ci", () => {
         },
       }),
     ).toEqual({ verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 0 });
+  });
+
+  it("lets an attached successful CI run finish while an optional context remains pending", () => {
+    expect(
+      classifyRollup({
+        state: "PENDING",
+        contexts: {
+          nodes: [
+            { kind: "CheckRun", name: "optional proof", status: "IN_PROGRESS", conclusion: null },
+          ],
+        },
+      }).verdict,
+    ).toBe("PENDING");
+    expect(classifyAttachedCiRun({ status: "completed", conclusion: "success" })).toEqual({
+      verdict: "GREEN",
+    });
   });
 
   it.each(["FAILURE", "ERROR"])(

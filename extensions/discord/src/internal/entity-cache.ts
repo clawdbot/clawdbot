@@ -70,6 +70,8 @@ export class DiscordEntityCache {
     const threadUpdate: string = GatewayDispatchEvents.ThreadUpdate;
     const threadDelete: string = GatewayDispatchEvents.ThreadDelete;
     const guildUpdate: string = GatewayDispatchEvents.GuildUpdate;
+    const guildMemberAdd: string = GatewayDispatchEvents.GuildMemberAdd;
+    const guildMemberRemove: string = GatewayDispatchEvents.GuildMemberRemove;
     const guildMemberUpdate: string = GatewayDispatchEvents.GuildMemberUpdate;
     if (
       type === channelUpdate ||
@@ -82,7 +84,7 @@ export class DiscordEntityCache {
     if (type === guildUpdate) {
       this.deleteId("guild", raw.id);
     }
-    if (type === guildMemberUpdate) {
+    if (type === guildMemberAdd || type === guildMemberRemove || type === guildMemberUpdate) {
       const guildId = raw.guild_id;
       const user = raw.user && typeof raw.user === "object" ? (raw.user as { id?: unknown }) : {};
       if (typeof guildId === "string" && typeof user.id === "string") {

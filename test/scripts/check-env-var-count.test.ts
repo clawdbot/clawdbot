@@ -8,7 +8,7 @@ import {
   isCountedSourcePath,
   main,
   parseBudget,
-} from "../../scripts/check-env-var-count.mjs";
+} from "../../scripts/check-env-var-count.mts";
 
 const tempDirs: string[] = [];
 
@@ -71,6 +71,40 @@ describe("check-env-var-count", () => {
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
 
     expect(() => main(["--base", "missing"], root)).toThrow(/Could not resolve/u);
+  });
+
+  it("still checks the budget when the base shares no reachable ancestor", () => {
+    // Shallow clones and grafted agent checkouts resolve origin/main but truncate the
+    // history behind it, which used to fail the whole changed-file gate.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-shallow-"));
+    tempDirs.push(root);
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", ...args],
+        { cwd: root, stdio: "ignore" },
+      );
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONLY;\n");
+    git("init");
+    git("add", ".");
+    git("commit", "-m", "detached base");
+    // Name the base explicitly; init.defaultBranch varies by environment.
+    git("branch", "-M", "severed-base");
+    git("checkout", "--orphan", "severed");
+    git("add", ".");
+    git("commit", "-m", "severed history");
+
+    expect(() => main(["--base", "severed-base"], root)).not.toThrow();
+
+    // The absolute budget check must still run without a baseline.
+    fs.writeFileSync(
+      path.join(root, "src/runtime.ts"),
+      "process.env.OPENCLAW_ONE; process.env.OPENCLAW_TWO;\n",
+    );
+    expect(() => main(["--base", "severed-base"], root)).toThrow(/exceeds budget/u);
   });
 
   it("compares against the fork budget when the base branch later shrinks", () => {

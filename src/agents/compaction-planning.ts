@@ -3,6 +3,7 @@
  * token usage, chooses chunking strategy, and preserves active tool-use pairs
  * while splitting history for summaries.
  */
+import { createToolCallOccurrenceQueue } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   projectCompactionPlanningMessages,
   readCompactionPlanningOmittedChars,
@@ -109,7 +110,7 @@ function groupCompactionMessages(
   const groups: CompactionMessageGroup[] = [];
   let current: AgentMessage[] = [];
   let currentTokens = 0;
-  let pendingToolCallIds = new Set<string>();
+  let pendingToolCalls = createToolCallOccurrenceQueue<true>();
 
   for (const [index, message] of messages.entries()) {
     current.push(message);
@@ -121,19 +122,22 @@ function groupCompactionMessages(
         stopReason === "aborted" || stopReason === "error"
           ? []
           : extractToolCallsFromAssistant(message);
-      pendingToolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
-    } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
+      pendingToolCalls = createToolCallOccurrenceQueue();
+      for (const toolCall of toolCalls) {
+        pendingToolCalls.add(toolCall.id, true);
+      }
+    } else if (message.role === "toolResult" && pendingToolCalls.size > 0) {
       const resultId = extractToolResultId(message);
       if (resultId) {
-        pendingToolCallIds.delete(resultId);
+        pendingToolCalls.claim(resultId);
       } else {
-        pendingToolCallIds.clear();
+        pendingToolCalls.clear();
       }
     }
 
     // A displaced user turn still belongs to an unfinished call/result batch;
     // splitting it would make one of the resulting provider transcripts invalid.
-    if (pendingToolCallIds.size === 0) {
+    if (pendingToolCalls.size === 0) {
       groups.push({ messages: current, tokens: currentTokens });
       current = [];
       currentTokens = 0;

@@ -7,7 +7,7 @@ import {
   collectCliBootstrapExternalImportErrors,
   collectGatewayRunChunkBudgetErrors,
   listStaticImportSpecifiers,
-} from "../../scripts/check-cli-bootstrap-imports.mjs";
+} from "../../scripts/check-cli-bootstrap-imports.mts";
 
 const tempRoots: string[] = [];
 

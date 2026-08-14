@@ -232,11 +232,11 @@ describe("openclaw-tools update_plan gating", () => {
       taskSuggestionDeliveryMode: "gateway",
     });
 
-    expect(withoutSession).not.toContain("spawn_task");
+    expect(withoutSession).not.toContain("suggest_task");
     expect(withoutSession).not.toContain("dismiss_task");
-    expect(withoutSink).not.toContain("spawn_task");
+    expect(withoutSink).not.toContain("suggest_task");
     expect(withoutSink).not.toContain("dismiss_task");
-    expect(withSink).toEqual(expect.arrayContaining(["spawn_task", "dismiss_task"]));
+    expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {
@@ -405,7 +405,7 @@ function createSwarmToolNames(options: NonNullable<Parameters<typeof createOpenC
     ...options,
     config: {
       ...config,
-      agents: config.agents ?? { entries: { main: { default: true } } },
+      agents: config.agents ?? { entries: { main: {} } },
     },
   }).map((tool) => tool.name);
 }
@@ -421,7 +421,7 @@ describe("Swarm registration", () => {
 
   it("uses the effective requester agent override for the agents_wait gate", () => {
     const base = {
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: "agent:worker:main",
       requesterAgentIdOverride: "worker",
     };
     expect(
@@ -430,10 +430,7 @@ describe("Swarm registration", () => {
         config: {
           tools: { swarm: false },
           agents: {
-            list: [
-              { id: "main", default: true },
-              { id: "worker", tools: { swarm: true } },
-            ],
+            list: [{ id: "main" }, { id: "worker", tools: { swarm: true } }],
           },
         },
       }),
@@ -444,10 +441,7 @@ describe("Swarm registration", () => {
         config: {
           tools: { swarm: true },
           agents: {
-            list: [
-              { id: "main", default: true },
-              { id: "worker", tools: { swarm: false } },
-            ],
+            list: [{ id: "main" }, { id: "worker", tools: { swarm: false } }],
           },
         },
       }),
@@ -529,7 +523,7 @@ describe("sessions_yield completion ownership", () => {
     ["the controller when the run owner is blank", "   ", controllerSessionKey],
     ["the controller when the run owner is absent", undefined, controllerSessionKey],
   ] as const)("records yield intent against %s", async (_, runSessionKey, expectedSessionKey) => {
-    const registry = await import("./subagent-registry.js");
+    const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
       .mockReturnValue(1);
@@ -554,6 +548,7 @@ describe("sessions_yield completion ownership", () => {
 
       expect(result.details).toMatchObject({ status: "yielded" });
       expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
+        requesterAgentId: "main",
         requesterSessionKey: expectedSessionKey,
         requesterTurnRunId: "run-requester",
       });
@@ -624,14 +619,23 @@ describe("gateway client capability tool filtering", () => {
     expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "screen")).toBe(true);
   });
 
-  it("omits terminal for sandboxed agents", () => {
+  it("omits host UI runtime tools for sandboxed agents", () => {
     expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "terminal")).toBe(
+      true,
+    );
+    expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "portal")).toBe(
       true,
     );
     expect(
       hasTool(
         createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true }),
         "terminal",
+      ),
+    ).toBe(false);
+    expect(
+      hasTool(
+        createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true }),
+        "portal",
       ),
     ).toBe(false);
   });

@@ -19,7 +19,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -56,6 +56,7 @@ import { resolveContextEngineCapabilities } from "./context-engine-capabilities.
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
@@ -129,7 +130,7 @@ function buildContextEngineCompactionSessionTarget(
   params: CompactEmbeddedAgentSessionParams,
 ): ContextEngineSessionTarget {
   const agentId = params.sessionTarget?.agentId ?? params.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
   const storePath = params.sessionTarget?.storePath;
   return {
     ...(agentId ? { agentId } : {}),
@@ -239,7 +240,10 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  const runtimeTarget = await resolveAgentRunSessionTarget(params);
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...params,
+    missingSessionKey: "resolve-existing",
+  });
   const resolvedParams = {
     ...params,
     agentId: runtimeTarget.agentId,
@@ -302,7 +306,10 @@ async function compactEmbeddedAgentSessionImpl(
   if (inputParams.abortSignal?.aborted) {
     return createCompactionAbortedResult();
   }
-  const runtimeTarget = await resolveAgentRunSessionTarget(inputParams);
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...inputParams,
+    missingSessionKey: "resolve-existing",
+  });
   const agentIds = resolveSessionAgentIds({
     sessionKey: runtimeTarget.sessionKey,
     config: inputParams.config,
@@ -373,7 +380,7 @@ async function compactEmbeddedAgentSessionImpl(
     }
   };
   try {
-    return await withPluginRuntimeRegistryScope(lease.snapshot.pluginRegistry, run);
+    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
   } finally {
     lease.release();
   }
@@ -387,7 +394,10 @@ async function compactResolvedContextEngine(
   preparedModelRuntime: PreparedModelRuntimeSnapshot,
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
-  const runtimeTarget = await resolveAgentRunSessionTarget(params);
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...params,
+    missingSessionKey: "resolve-existing",
+  });
   const lockedHarnessRuntime =
     params.modelSelectionLocked === true
       ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
@@ -428,7 +438,6 @@ async function compactResolvedContextEngine(
   let preparedHarnessRuntime = selectedHarnessRuntime;
   let preparedParams = params;
   try {
-    const preparedStores = preparedModelRuntime.createStores();
     // Ensure the policy-selected harness plugin so selection can pick implicit codex.
     await ensureSelectedAgentHarnessPlugin({
       config: params.config,
@@ -441,15 +450,16 @@ async function compactResolvedContextEngine(
       workspaceDir: resolvedWorkspaceDir,
       pluginRegistry: requireActivePluginRegistry(),
     });
-    const {
-      model: ceModel,
-      authStorage,
-      modelRegistry,
-    } = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, params.config, {
+    const { resolution: modelResolution } = await resolveTieredModel({
+      provider: ceRuntimeProvider,
+      modelId: ceModelId,
+      agentDir,
+      config: params.config,
+      workspaceDir: resolvedWorkspaceDir,
       ...initialModelAuth,
-      ...preparedStores,
       preparedModelRuntime,
     });
+    const { model: ceModel, authStorage, modelRegistry } = modelResolution;
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
     // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
     // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
@@ -529,6 +539,7 @@ async function compactResolvedContextEngine(
     provider: ceContextConfigProvider,
     modelId: ceModelId,
     model: effectiveRuntimeModel,
+    agentId: runtimeTarget.agentId,
     requestedTokenBudget: params.contextTokenBudget,
   });
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
@@ -613,7 +624,7 @@ async function compactResolvedContextEngine(
         const hookRunner = engineOwnsCompaction
           ? asCompactionHookRunner(getGlobalHookRunner())
           : null;
-        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const hookSessionKey = runtimeTarget.sessionKey;
         const { sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,
           config: params.config,

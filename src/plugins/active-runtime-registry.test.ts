@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getLoadedRuntimePluginRegistry,
   listLoadedRuntimePluginIds,
+  listRuntimePluginIdsFromRegistry,
 } from "./active-runtime-registry.js";
 import { clearPluginLoaderCache } from "./loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -118,6 +119,7 @@ describe("getLoadedRuntimePluginRegistry", () => {
       }),
     ).toBeUndefined();
     expect(listLoadedRuntimePluginIds()).not.toContain("deferred");
+    expect(listRuntimePluginIdsFromRegistry(deferredRegistry)).not.toContain("deferred");
   });
 
   it("accepts metadata-only bundle plugins as loaded runtimes", () => {
@@ -137,6 +139,7 @@ describe("getLoadedRuntimePluginRegistry", () => {
       }),
     ).toBe(bundleRegistry);
     expect(listLoadedRuntimePluginIds()).toContain("bundle");
+    expect(listRuntimePluginIdsFromRegistry(bundleRegistry)).toContain("bundle");
   });
 
   it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {

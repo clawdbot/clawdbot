@@ -1,5 +1,3 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -10,7 +8,6 @@ import {
   formatExtraPaths,
   resolveMemoryPluginConfig,
   withMemoryCommand,
-  type MemoryManager,
 } from "./cli-runtime-common.js";
 import {
   defaultRuntime,
@@ -28,7 +25,6 @@ import type {
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
@@ -54,33 +50,6 @@ function formatSourceLabel(source: string, workspaceDir: string, agentId: string
     );
   }
   return source;
-}
-async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string | null> {
-  const status = manager.status?.();
-  if (!status || status.backend !== "qmd") {
-    return null;
-  }
-  const dbPath = status.dbPath?.trim();
-  if (!dbPath) {
-    return null;
-  }
-  let stat: fsSync.Stats;
-  try {
-    stat = await fs.stat(dbPath);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      throw new Error(`QMD index file not found: ${shortenHomePath(dbPath)}`, { cause: err });
-    }
-    throw new Error(
-      `QMD index file check failed: ${shortenHomePath(dbPath)} (${code ?? "error"})`,
-      { cause: err },
-    );
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    throw new Error(`QMD index file is empty: ${shortenHomePath(dbPath)}`);
-  }
-  return `QMD index: ${shortenHomePath(dbPath)} (${stat.size} bytes)`;
 }
 export async function runMemoryIndex(
   opts: MemoryCommandOptions,
@@ -179,10 +148,6 @@ export async function runMemoryIndex(
             }
           },
         );
-        const qmdIndexSummary = await summarizeQmdIndexArtifact(manager);
-        if (qmdIndexSummary) {
-          defaultRuntime.log(qmdIndexSummary);
-        }
         let postIndexStatus = manager.status();
         let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
         const vectorStoreAvailable =
@@ -381,18 +346,7 @@ export async function runMemoryPromote(
       }
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       const lockPath = resolveShortTermRecallLockPath(workspaceDir);
-      const customQmd = asRecord(asRecord(status.custom)?.qmd);
-      const audit = await auditShortTermPromotionArtifacts({
-        workspaceDir,
-        qmd:
-          status.backend === "qmd"
-            ? {
-                dbPath: status.dbPath,
-                collections:
-                  typeof customQmd?.collections === "number" ? customQmd.collections : undefined,
-              }
-            : undefined,
-      });
+      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
       if (opts.json) {
         defaultRuntime.writeJson({
           workspaceDir,

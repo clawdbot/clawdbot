@@ -3,10 +3,30 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { runConfigSet } from "./config-cli.js";
+
+// Config mutation owns these assertions; plugin discovery suites own registry breadth.
+// Keep the two real schemas this suite exercises, but build their metadata only once.
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  let snapshot: ReturnType<typeof actual.loadPluginMetadataSnapshot> | undefined;
+  return {
+    ...actual,
+    resolvePluginMetadataSnapshot: (
+      params: Parameters<typeof actual.resolvePluginMetadataSnapshot>[0],
+    ) => {
+      snapshot ??= actual.loadPluginMetadataSnapshot({
+        ...params,
+        pluginIds: ["discord", "openclaw-mem0"],
+        pluginIdScope: undefined,
+      });
+      return snapshot;
+    },
+  };
+});
 
 function createTestRuntime() {
   const logs: string[] = [];
@@ -113,30 +133,6 @@ async function withExecDryRunConfigHarness(
 }
 
 describe("config cli integration", () => {
-  beforeAll(async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-warmup-"));
-    const configPath = path.join(tempDir, "openclaw.json");
-    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
-    try {
-      fs.writeFileSync(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
-      setTestEnvValue("OPENCLAW_TEST_FAST", "1");
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      await runConfigSet({
-        path: "gateway.port",
-        value: "18790",
-        cliOptions: {},
-        runtime: createTestRuntime().runtime,
-      });
-    } finally {
-      envSnapshot.restore();
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("accepts plugin hook conversation-access policy via config set", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-plugin-hooks-"));
     const configPath = path.join(tempDir, "openclaw.json");

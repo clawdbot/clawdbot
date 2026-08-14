@@ -6,6 +6,8 @@ import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 
 vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 function buildPrompt(config: OpenClawConfig, agentId = "main"): string {

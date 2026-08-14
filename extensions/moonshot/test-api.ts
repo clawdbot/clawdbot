@@ -1,3 +1,2 @@
-// Moonshot API module exposes the plugin public contract.
-export { testing, testing as __testing } from "./src/kimi-web-search-provider.runtime.js";
-export { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
+// Moonshot test API exposes the web-search fixture.
+export { testing } from "./src/kimi-web-search-provider.runtime.js";

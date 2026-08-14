@@ -1,9 +1,18 @@
 // Control UI adapter for Web Awesome's accessible modal dialog.
 import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
-import { css, html } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+
+const modalToastLayers = (document.openClawModalToastLayers ??= new Set<HTMLElement>());
+
+function setModalToastLayer(modal: HTMLElement, open: boolean) {
+  modalToastLayers.delete(modal);
+  if (open) {
+    modalToastLayers.add(modal);
+  }
+}
 
 export class OpenClawModalDialog extends OpenClawLitElement {
   @property({ type: Boolean }) open = true;
@@ -49,6 +58,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
 
     :host(.fullscreen) wa-dialog::part(dialog) {
+      max-width: calc(100vw - 20px);
       max-height: calc(100dvh - 20px);
     }
 
@@ -57,8 +67,13 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       margin-block-end: auto;
     }
 
+    :host(.drawer) wa-dialog {
+      --width: min(var(--openclaw-modal-width, 100vw), 100vw);
+    }
+
     :host(.drawer) wa-dialog::part(dialog) {
       height: 100dvh;
+      max-width: 100vw;
       max-height: 100dvh;
       margin: 0 0 0 auto;
       border-radius: 0;
@@ -90,10 +105,11 @@ export class OpenClawModalDialog extends OpenClawLitElement {
 
     @media (max-width: 640px) {
       wa-dialog {
-        --width: calc(100vw - 24px);
+        --width: min(var(--openclaw-modal-width, 540px), calc(100vw - 24px));
       }
 
       wa-dialog::part(dialog) {
+        max-width: var(--openclaw-modal-max-width, calc(100vw - 24px));
         max-height: 90dvh;
       }
     }
@@ -108,6 +124,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   }
 
   override disconnectedCallback() {
+    setModalToastLayer(this, false);
     this.syncGeneration += 1;
     const webAwesomeDialog = this.webAwesomeDialog;
     const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
@@ -143,7 +160,10 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     `;
   }
 
-  protected override updated() {
+  protected override updated(changed: PropertyValues<this>) {
+    if (changed.has("open")) {
+      setModalToastLayer(this, this.open);
+    }
     void this.syncAccessibility();
     void this.syncDialogOpen();
   }
@@ -287,6 +307,10 @@ if (!customElements.get("openclaw-modal-dialog")) {
 }
 
 declare global {
+  interface Document {
+    openClawModalToastLayers?: Set<HTMLElement>;
+  }
+
   interface HTMLElementTagNameMap {
     "openclaw-modal-dialog": OpenClawModalDialog;
   }

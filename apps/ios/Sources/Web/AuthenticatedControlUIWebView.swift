@@ -93,6 +93,10 @@ enum AuthenticatedControlUI {
     static func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
         var hasher = Hasher()
         hasher.combine(config?.url)
+        hasher.combine(config?.tls?.required)
+        hasher.combine(config?.tls?.expectedFingerprint)
+        hasher.combine(config?.tls?.allowTOFU)
+        hasher.combine(config?.tls?.storeKey)
         hasher.combine(config?.token)
         hasher.combine(config?.password)
         hasher.combine(storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -104,13 +108,7 @@ enum AuthenticatedControlUI {
     }
 
     private static func originString(for url: URL) -> String {
-        guard let scheme = url.scheme, let host = url.host else { return "" }
-        let hostPart = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
-        var origin = "\(scheme)://\(hostPart)"
-        if let port = url.port {
-            origin += ":\(port)"
-        }
-        return origin
+        GatewayTLSAuthority(url: url)?.serialized ?? ""
     }
 
     private static func jsStringLiteral(_ value: String) -> String {
@@ -134,12 +132,89 @@ enum AuthenticatedControlUI {
     }
 }
 
+@MainActor
+final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate {
+    private let expectedOrigin: GatewayTLSAuthority?
+    private let tls: GatewayTLSParams?
+
+    init(url: URL, tls: GatewayTLSParams?) {
+        self.expectedOrigin = GatewayTLSAuthority(url: url)
+        self.tls = tls
+    }
+
+    func webView(
+        _: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
+    {
+        decisionHandler(self.allowsNavigation(
+            to: navigationAction.request.url,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame) ? .allow : .cancel)
+    }
+
+    func webView(
+        _: WKWebView,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @MainActor @Sendable (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?) -> Void)
+    {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let tls
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard self.matchesExpectedAuthority(
+            host: challenge.protectionSpace.host,
+            port: challenge.protectionSpace.port)
+        else {
+            // Cross-origin main-frame loads are already cancelled by navigation policy.
+            // Other authorities may belong to embedded content and do not inherit the Gateway pin.
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        switch GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: challenge.protectionSpace.host,
+            port: challenge.protectionSpace.port,
+            params: tls)
+        {
+        case .accept:
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        case .reject:
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
+    }
+
+    func allowsNavigation(to candidateURL: URL?, isMainFrame: Bool?) -> Bool {
+        if isMainFrame == false {
+            return true
+        }
+        guard isMainFrame == true, let candidateURL else { return false }
+        return GatewayTLSAuthority(url: candidateURL) == self.expectedOrigin
+    }
+
+    func matchesExpectedAuthority(host: String, port: Int) -> Bool {
+        self.expectedOrigin?.matches(host: host, port: port) == true
+    }
+}
+
 /// Ephemeral, script-hardened WKWebView for a self-contained Control UI page.
 struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let url: URL
     let authScript: String?
+    let tls: GatewayTLSParams?
 
-    func makeUIView(context _: Context) -> WKWebView {
+    func makeCoordinator() -> AuthenticatedControlUIWebViewCoordinator {
+        AuthenticatedControlUIWebViewCoordinator(url: self.url, tls: self.tls)
+    }
+
+    func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -152,6 +227,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
         webView.isOpaque = true
         webView.backgroundColor = .black
         webView.allowsLinkPreview = false
@@ -173,7 +249,11 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         // Connection changes recreate the view via `.id`; unrelated SwiftUI passes must not reload it.
     }
 
-    static func dismantleUIView(_ webView: WKWebView, coordinator _: Void) {
+    static func dismantleUIView(
+        _ webView: WKWebView,
+        coordinator _: AuthenticatedControlUIWebViewCoordinator)
+    {
         webView.stopLoading()
+        webView.navigationDelegate = nil
     }
 }

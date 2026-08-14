@@ -1,4 +1,4 @@
-import type { Message } from "@openclaw/llm-core";
+import type { AssistantMessage, Message } from "@openclaw/llm-core";
 // Agent Core helper module supports utils behavior.
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
@@ -13,6 +13,19 @@ export function createFileOps(): FileOperations {
     written: new Set(),
     edited: new Set(),
   };
+}
+
+/** Restore file metadata recorded by an earlier compaction or branch summary. */
+export function mergeSummaryFileOperations(
+  fileOps: FileOperations,
+  details: { readFiles: string[]; modifiedFiles: string[] },
+): void {
+  for (const path of Array.isArray(details.readFiles) ? details.readFiles : []) {
+    fileOps.read.add(path);
+  }
+  for (const path of Array.isArray(details.modifiedFiles) ? details.modifiedFiles : []) {
+    fileOps.edited.add(path);
+  }
 }
 
 /** Add file operations from assistant tool calls to an accumulator. */
@@ -85,11 +98,20 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
   return `\n\n${sections.join("\n\n")}`;
 }
 
+/** Extract visible summary text without normalizing valid model output. */
+export function extractSummaryText(response: AssistantMessage): string | undefined {
+  const summary = response.content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  return summary.trim() ? summary : undefined;
+}
+
 const TOOL_RESULT_MAX_CHARS = 2000;
 const IMPORTANT_TOOL_RESULT_TAIL =
   /(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)/i;
 
-function safeJsonStringify(value: unknown): string {
+export function stringifyCompactionValue(value: unknown): string {
   try {
     return JSON.stringify(value) ?? "undefined";
   } catch {
@@ -183,7 +205,7 @@ export function serializeConversation(messages: Message[]): string {
         } else if (block.type === "toolCall") {
           const args = block.arguments;
           const argsStr = Object.entries(args)
-            .map(([k, v]) => `${k}=${safeJsonStringify(v)}`)
+            .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
             .join(", ");
           toolCalls.push(`${block.name}(${argsStr})`);
         }

@@ -1,5 +1,9 @@
 {
   "id": "memory-wiki",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },

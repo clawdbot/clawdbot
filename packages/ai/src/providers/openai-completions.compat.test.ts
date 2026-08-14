@@ -913,4 +913,25 @@ describe("OpenAI-compatible completions compatibility", () => {
 
     expect(result.errorMessage).toBe("502: gateway maintenance");
   });
+
+  it("redacts OpenRouter terminal body and raw metadata from one error projection", async () => {
+    const media = "QUJDRA==";
+    mockOpenAI.nextError = Object.assign(new Error("400 status code (no body)"), {
+      status: 400,
+      body: { data: [{ b64_json: media }] },
+      error: {
+        code: "bad_image",
+        type: "invalid_request_error",
+        metadata: { raw: `render failed data:image/png;base64,${media}` },
+      },
+    });
+
+    const result = await streamOpenAICompletions(baseModel, context, { apiKey: "test" }).result();
+
+    expect(result).toMatchObject({
+      errorCode: "bad_image",
+      errorType: "invalid_request_error",
+    });
+    expect(JSON.stringify(result)).not.toContain(media);
+  });
 });

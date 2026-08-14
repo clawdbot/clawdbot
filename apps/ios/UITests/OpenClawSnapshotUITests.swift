@@ -44,7 +44,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseChatScreenshot() {
-        self.captureReleaseScreenshot(Self.chatScreenshotTarget)
+        self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
+            let input = self.chatMessageInput(in: app)
+            XCTAssertTrue(input.waitForExistence(timeout: 8))
+            input.tap()
+            let keyboard = app.keyboards.firstMatch
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+            }
+            let focusProbe = "focus"
+            input.typeText(focusProbe)
+            XCTAssertEqual(input.value as? String, focusProbe)
+            input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: focusProbe.count))
+            XCTAssertEqual(input.value as? String, "")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            if keyboard.exists {
+                XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
+            }
+        }
     }
 
     func testReleaseAgentScreenshot() {
@@ -681,9 +698,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
         app.tap()
+        XCTAssertFalse(app.staticTexts["Allow access"].exists)
 
         let copySetupCommand = app.buttons["Copy setup code command"]
         XCTAssertTrue(copySetupCommand.waitForExistence(timeout: 8))
@@ -893,8 +909,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
@@ -954,6 +968,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let request = try XCTUnwrap(self.app?.buttons["privacy-access-photos-action"])
         XCTAssertTrue(request.waitForExistence(timeout: 5))
+        XCTAssertEqual(request.label, "Continue")
         request.tap()
         self.app?.tap()
 
@@ -989,6 +1004,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(appleHealth.waitForExistence(timeout: 8))
         let action = try XCTUnwrap(self.app?.buttons["apple-health-summaries-action"])
         XCTAssertTrue(action.waitForExistence(timeout: 5))
+        XCTAssertEqual(action.label, "Enable Apple Health Summaries")
+        let labelWidth = (action.label as NSString).size(withAttributes: [
+            .font: UIFont.preferredFont(forTextStyle: .footnote),
+        ]).width
+        XCTAssertGreaterThanOrEqual(action.frame.width, labelWidth + 24)
         self.attachScreenshot(named: "apple-health-disclosure")
     }
 }
@@ -1074,9 +1094,17 @@ extension OpenClawSnapshotUITests {
         return app
     }
 
-    private func captureReleaseScreenshot(_ target: ScreenshotTarget) {
+    private func captureReleaseScreenshot(
+        _ target: ScreenshotTarget,
+        beforeCapture: ((XCUIApplication) -> Void)? = nil)
+    {
         self.launchApp(for: target)
         self.waitForReleaseScreenshotTarget(target)
+        guard let app = self.app else {
+            XCTFail("OpenClaw is not running for screenshot target \(target.name)")
+            return
+        }
+        beforeCapture?(app)
         snapshot(target.name, timeWaitingForIdle: 5)
         self.attachScreenshot(named: target.name)
     }
@@ -1279,8 +1307,6 @@ extension OpenClawSnapshotUITests {
         self.app = app
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))

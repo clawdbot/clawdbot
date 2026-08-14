@@ -23,7 +23,7 @@ const sdk = {
   createTrustedSession: mocks.createTrustedSession,
 };
 
-import { createCuaDriver } from "./driver-client.js";
+import { ClickButton, createCuaDriver, ScrollDirection } from "./driver-client.js";
 
 const authorization = {
   allowedModes: ["unrestricted"],
@@ -45,6 +45,22 @@ describe("CUA Driver direct session", () => {
       endSession: mocks.endSession,
       getDesktopState: mocks.getDesktopState,
       startSession: mocks.startSession,
+    });
+  });
+
+  it("matches the installed CUA Driver desktop input enum contract", async () => {
+    const driverSdk = await import("@trycua/cua-driver");
+
+    expect(ClickButton).toEqual({
+      Left: driverSdk.ClickButton.Left,
+      Right: driverSdk.ClickButton.Right,
+      Middle: driverSdk.ClickButton.Middle,
+    });
+    expect(ScrollDirection).toEqual({
+      Up: driverSdk.ScrollDirection.Up,
+      Down: driverSdk.ScrollDirection.Down,
+      Left: driverSdk.ScrollDirection.Left,
+      Right: driverSdk.ScrollDirection.Right,
     });
   });
 
@@ -108,6 +124,50 @@ describe("CUA Driver direct session", () => {
 
     driver.resetAvailabilityCache();
     expect(driver.isAvailable()).toBe(false);
+    expect(loadSdk).toHaveBeenCalledTimes(2);
+    await driver.dispose();
+  });
+
+  it("loads an ESM driver asynchronously and exposes it on a later availability probe", async () => {
+    let resolveSdk: ((value: typeof sdk) => void) | undefined;
+    const sdkPromise = new Promise<typeof sdk>((resolve) => {
+      resolveSdk = resolve;
+    });
+    const loadSdk = vi.fn(() => sdkPromise as never);
+    const driver = createCuaDriver({ loadSdk });
+
+    expect(driver.isAvailable()).toBe(false);
+    expect(loadSdk).toHaveBeenCalledOnce();
+
+    resolveSdk?.(sdk);
+    await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
+    await driver.getDesktopState();
+
+    expect(loadSdk).toHaveBeenCalledOnce();
+    expect(mocks.createConfigured).toHaveBeenCalledOnce();
+    expect(mocks.getDesktopState).toHaveBeenCalledOnce();
+    await driver.dispose();
+  });
+
+  it("retries an asynchronous ESM import failure after the availability cache resets", async () => {
+    let attempt = 0;
+    const loadSdk = vi.fn(() => {
+      attempt += 1;
+      return attempt === 1
+        ? Promise.reject(new Error("native module is temporarily unavailable"))
+        : Promise.resolve(sdk as never);
+    });
+    const driver = createCuaDriver({ loadSdk });
+
+    expect(driver.isAvailable()).toBe(false);
+    await expect(driver.getDesktopState()).rejects.toThrow(
+      "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: native module is temporarily unavailable",
+    );
+
+    driver.resetAvailabilityCache();
+    expect(driver.isAvailable()).toBe(false);
+    await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
+
     expect(loadSdk).toHaveBeenCalledTimes(2);
     await driver.dispose();
   });
