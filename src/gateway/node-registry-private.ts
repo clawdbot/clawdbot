@@ -6,6 +6,7 @@ import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/s
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_PRIVATE_COMMANDS,
+  NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -237,6 +238,7 @@ function resolveWorkerSupervisorProof(
 function isWorkerSupervisorProofCurrent(
   state: NodeRegistryPrivateState,
   proof: NodeWorkerSupervisorNodeProof,
+  requireLaunchEligibility: boolean,
 ): boolean {
   const node = state.context.getNode(proof.nodeId);
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -250,7 +252,7 @@ function isWorkerSupervisorProofCurrent(
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
     sameOptionalWorkerBuild(current.workerBuild, proof.workerBuild) &&
-    sameOptionalWorkerBuild(current.workerRuns, proof.workerRuns)
+    (!requireLaunchEligibility || sameOptionalWorkerBuild(current.workerRuns, proof.workerRuns))
   );
 }
 
@@ -493,7 +495,12 @@ export function registerNodeRegistryPrivateRuntime(
         };
       }
       const isProofCurrent = () =>
-        params.isDispatchAuthorized() && isWorkerSupervisorProofCurrent(state, params.node);
+        params.isDispatchAuthorized() &&
+        isWorkerSupervisorProofCurrent(
+          state,
+          params.node,
+          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        );
       if (!isProofCurrent()) {
         return {
           ok: false,
