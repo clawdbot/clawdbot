@@ -4,6 +4,7 @@ import {
   ControlModelSubscriberLimitError,
   createControlModel,
   type ControlModelConnectionSnapshot,
+  type ControlModelGatewayEventFrame,
   type ControlModelGatewayBinding,
   type ControlModelRequestOptions,
 } from "./index.js";
@@ -30,6 +31,7 @@ function createGatewayHarness(
   let connection = initial;
   const connectionListeners = new Set<() => void>();
   const invalidationListeners = new Set<() => void>();
+  const eventListeners = new Set<(frame: ControlModelGatewayEventFrame) => void>();
   const unsubscribeInvalidations = vi.fn();
   const subscribeInvalidations = vi.fn((listener: () => void) => {
     invalidationListeners.add(listener);
@@ -59,6 +61,10 @@ function createGatewayHarness(
       return () => connectionListeners.delete(listener);
     },
     subscribeSessionCatalogInvalidations: subscribeInvalidations,
+    subscribeEvents(listener) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
     request,
   };
   return {
@@ -78,6 +84,16 @@ function createGatewayHarness(
       for (const listener of invalidationListeners) {
         listener();
       }
+    },
+    emitEvent(frame: {
+      event: string;
+      payload?: unknown;
+      connectionEpoch?: number;
+      seq?: number;
+      gap?: boolean;
+    }) {
+      for (const listener of eventListeners)
+        listener({ connectionEpoch: connection.epoch, ...frame });
     },
   };
 }

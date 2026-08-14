@@ -151,8 +151,8 @@ from `@openclaw/gateway-protocol`, not from bundled implementation paths.
 Framework-neutral state and command projections above
 `@openclaw/gateway-client`.
 
-The first workspace-only slice owns connection lifecycle and immutable session
-catalog snapshots. It does not include conversation messages, UI artifacts,
+The optional model subpaths own connection lifecycle, immutable session catalog
+snapshots, and OC2 conversation projections. It does not include UI artifacts,
 framework adapters, or npm publication.
 
 ## Bind a Gateway client
@@ -168,6 +168,7 @@ const model = createControlModel({
     subscribeConnection: (listener) => connectionStore.subscribe(listener),
     subscribeSessionCatalogInvalidations: (listener) =>
       sessionCatalogInvalidations.subscribe(listener),
+    subscribeEvents: (listener) => gateway.subscribeEvents(listener),
     request: (method, params, options) => gateway.request(method, params, options),
   },
 });
@@ -182,11 +183,11 @@ The binding supplies monotonically increasing connection epochs. A response
 captured under a retired epoch never replaces state from the current
 connection.
 
-The invalidation binding owns the Gateway subscription boundary: it must
-activate `sessions.subscribe`, renew it for every replacement connection epoch,
-and invoke the listener for authorized `sessions.changed` events. This keeps a
-single subscription owner in the host instead of creating a second Gateway
-event lifecycle inside the model.
+The invalidation binding remains responsible for the session-catalog
+subscription and authorized `sessions.changed` invalidations. Conversation
+handles acquire their targeted `sessions.messages.subscribe` leases through the
+canonical Gateway Client coordinator, while the raw `subscribeEvents` seam
+provides epoch-stamped frames for conversation projection.
 
 ## Session snapshots
 
@@ -201,3 +202,27 @@ subscriber cannot block the Gateway event callback or prevent other subscribers
 from observing the current snapshot.
 
 Call `model.dispose()` before releasing the host connection.
+
+## OC2 conversations
+
+`model.conversation(sessionKey)` returns a stable, lazy
+`ControlModelConversation` handle. Handles expose immutable snapshots and
+coalesced subscriptions, plus `refreshHistory`, `loadMoreHistory`, `send`,
+`abort`, `resolveApproval`, `answerQuestion`, `cancelQuestion`, and `release`.
+An unsubscribed, operation-idle handle may be evicted and disposed when the
+finite inactive-handle bound is reached; subscribe to pin a handle or call
+`release` explicitly when it is no longer needed. Conversation history is
+reconciled through the canonical Gateway Client session projection, while live
+events are accepted only from the current connection epoch.
+`ControlModelCommandError` provides bounded, typed command failures.
+
+Hosts must implement the framework-neutral event seam:
+
+```ts
+subscribeEvents(listener) => () => void
+```
+
+Each frame contains `event`, `payload`, and the source `connectionEpoch`, with
+optional `seq` and explicit `gap`. The host owns connection epochs; the model
+rejects frames from retired epochs and resets the shared Gateway Client message
+subscription coordinator when a connection is replaced.
