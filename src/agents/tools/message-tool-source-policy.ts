@@ -32,7 +32,7 @@ const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]
 const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
   Type.Boolean({
     description:
-      "Set false for progress. Set true, or omit, for the completed current-source reply.",
+      "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
   }),
 );
 

@@ -2129,7 +2129,7 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe(false);
   });
 
-  it("preserves the core final delivery control only on message-tool-only schemas", async () => {
+  it("keeps the core final delivery control stable across source delivery modes", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -2147,8 +2147,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(sourceReplySchema.properties).toMatchObject({
       final: {
         type: "boolean",
-        description:
-          "Set false for progress. Set true, or omit, for the completed current-source reply.",
+        description: expect.stringContaining("Ignored for other sends"),
       },
     });
 
@@ -2158,7 +2157,7 @@ describe("Codex app-server dynamic tool build", () => {
       properties?: Record<string, unknown>;
     };
 
-    expect(automaticSchema.properties).not.toHaveProperty("final");
+    expect(automaticSchema).toEqual(sourceReplySchema);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

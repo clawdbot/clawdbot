@@ -1020,8 +1020,8 @@ describe("Codex app-server native code mode config", () => {
       "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
     );
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain("Visible source replies are not automatically delivered");
-    expect(instructions).toContain("Use `message(action=send)`");
+    expect(instructions).toContain("Follow the current turn's source-delivery directive");
+    expect(instructions).toContain("use `message(action=send)`");
     expect(instructions).not.toContain("`openclaw_direct.sessions_yield`");
   });
 

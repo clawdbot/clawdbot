@@ -525,7 +525,10 @@ describe("message tool gateway timeout", () => {
   });
 
   it("advertises source-reply finality without exposing idempotency controls", () => {
-    expect(getToolProperties(createMessageTool()).final).toMatchObject({ type: "boolean" });
+    expect(getToolProperties(createMessageTool()).final).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("Ignored for other sends"),
+    });
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
 
@@ -1300,6 +1303,29 @@ describe("message tool secret scoping", () => {
     expect(terminal?.sourceReplyToolCallId).toBe("message_terminal");
     expect(progress?.params).not.toHaveProperty("final");
     expect(terminal?.params).not.toHaveProperty("final");
+  });
+
+  it("ignores source-reply finality outside message-tool-only source turns", async () => {
+    mockSendResult();
+    const tool = createMessageTool({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      runMessageAction: mocks.runMessageAction as never,
+      agentId: "main",
+      agentSessionKey: "agent:main:telegram:direct:123",
+      sourceReplyDeliveryMode: "automatic",
+    });
+
+    await tool.execute("automatic-progress", {
+      action: "send",
+      message: "ordinary send",
+      to: "123",
+      final: false,
+    });
+
+    const input = firstRunMessageActionInput();
+    expect(input?.params).not.toHaveProperty("final");
+    expect(input?.sourceReplyFinal).toBeUndefined();
+    expect(input?.sourceReplyToolCallId).toBeUndefined();
   });
 
   it("assigns remote terminal source-reply receipts to the caller", async () => {
