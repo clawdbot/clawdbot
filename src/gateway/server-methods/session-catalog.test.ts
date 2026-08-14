@@ -18,6 +18,7 @@ type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
+  hasMultipleSessionSharingIdentities: vi.fn(() => false),
   listSessionEntriesReadOnly: vi.fn<
     (scope?: { agentId?: string; clone?: boolean; projection?: "full" | "list" }) => Array<{
       sessionKey: string;
@@ -57,7 +58,9 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
   return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
-
+vi.mock("../../state/user-profiles.js", () => ({
+  hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+}));
 const { resolveRegisteredCatalogCreateTarget, sessionCatalogHandlers } =
   await import("./session-catalog.js");
 
@@ -108,6 +111,7 @@ function startCall(
 describe("session catalog Gateway methods", () => {
   beforeEach(() => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
+    hoisted.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(false);
     hoisted.listSessionEntriesReadOnly.mockReset();
     hoisted.listSessionEntriesReadOnly.mockReturnValue([]);
     hoisted.recordSessionStateEvent.mockClear();

@@ -31,6 +31,9 @@ export async function runWriteConfigHealth(
   ctx: DoctorHealthFlowContext,
   options: { runPostWriteRepairs?: boolean } = {},
 ): Promise<void> {
+  if (ctx.configWriteDeferredByCronOwnership === true) {
+    return;
+  }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
   const { replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
@@ -53,23 +56,41 @@ export async function runWriteConfigHealth(
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
-    await replaceConfigFile({
-      nextConfig: ctx.cfg,
-      afterWrite: { mode: "auto" },
-      writeOptions: {
-        auditOrigin: "doctor",
-        allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
-        skipPluginValidation:
-          ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
-        ...(configResultWritePending && ctx.configResult.explicitSetPaths
-          ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
-          : {}),
-        preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-        ...(legacyParentVersionOverride
-          ? { lastTouchedVersionOverride: legacyParentVersionOverride }
-          : {}),
-      },
-    });
+    try {
+      await replaceConfigFile({
+        nextConfig: ctx.cfg,
+        afterWrite: { mode: "auto" },
+        writeOptions: {
+          auditOrigin: "doctor",
+          allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
+          skipPluginValidation:
+            ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+          ...(configResultWritePending && ctx.configResult.explicitSetPaths
+            ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
+            : {}),
+          preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+          ...(legacyParentVersionOverride
+            ? { lastTouchedVersionOverride: legacyParentVersionOverride }
+            : {}),
+        },
+      });
+    } catch (error) {
+      const { isCronOwnerWriteRefusalError } = await import("../config/io.cron-owner-refusal.js");
+      if (!isCronOwnerWriteRefusalError(error)) {
+        throw error;
+      }
+      const { note } = await import("../../packages/terminal-core/src/note.js");
+      note(
+        [
+          error.message,
+          "Doctor left the config unchanged, preserving any retained legacy owner for a later repair.",
+          'Resolve the reported Gateway or cron-store condition, then rerun "openclaw doctor --fix".',
+        ].join("\n"),
+        "Doctor warnings",
+      );
+      ctx.configWriteDeferredByCronOwnership = true;
+      return;
+    }
     // The final writer runs again after health repairs. Advance its baseline only
     // after the atomic write succeeds so later failures cannot mark volatile state durable.
     ctx.cfgForPersistence = structuredClone(ctx.cfg);

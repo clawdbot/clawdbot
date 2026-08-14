@@ -137,13 +137,16 @@ async function runOutboundDeliveryWithQueue(
     );
   }
   if (params.deferredDeliveryAdmissionPassed !== true) {
-    const admission = resolveDeferredDeliveryAdmission({
-      cfg: params.cfg,
-      channel,
-      to,
-      accountId: params.accountId,
-      phase: "live",
-    });
+    const admission = resolveDeferredDeliveryAdmission(
+      {
+        cfg: params.cfg,
+        channel,
+        to,
+        accountId: params.accountId,
+        phase: "live",
+      },
+      { agentId: params.session?.agentId },
+    );
     if (admission.status === "permanent_rejection") {
       emitPreQueueFailure();
       throw new Error(admission.reason);
@@ -225,6 +228,7 @@ async function runOutboundDeliveryWithQueue(
     delete requirements.messageSendingHooks;
     const support = await resolveOutboundDurableFinalDeliverySupport({
       cfg: params.cfg,
+      agentId: params.session?.agentId,
       channel,
       requirements,
     });

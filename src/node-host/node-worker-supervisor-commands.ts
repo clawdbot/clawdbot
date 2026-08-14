@@ -1,8 +1,18 @@
+import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
+import {
+  parseNodeWorkerWorkspaceExecInput,
+  type NodeWorkerWorkspaceExecResult,
+} from "../worker/node-workspace-protocol.js";
+import {
+  parseWorkerConnectionEndpoint,
+  type WorkerConnectionEndpoint,
+} from "../worker/worker-connection-endpoint.js";
 import {
   parseNodeWorkerCancelInput,
   parseNodeWorkerLaunchInput,
@@ -11,40 +21,98 @@ import {
   type NodeWorkerSupervisorControl,
   type NodeWorkerSupervisorReceipt,
 } from "./node-worker-supervisor-contract.js";
+import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 type NodeWorkerSupervisorCommandResult =
   | { handled: false }
-  | { handled: true; ok: true; payload: NodeWorkerSupervisorReceipt | null }
+  | {
+      handled: true;
+      ok: true;
+      payload: NodeWorkerSupervisorReceipt | NodeWorkerWorkspaceExecResult | null;
+    }
   | { handled: true; ok: false; code: "INVALID_REQUEST" | "UNAVAILABLE"; message: string };
+
+function resolveWorkerConnectionEndpoint(params: {
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+}): WorkerConnectionEndpoint {
+  if (!params.gatewayUrl) {
+    throw new Error("node worker gateway connection unavailable");
+  }
+  const gateway = new URL(params.gatewayUrl);
+  if (gateway.protocol !== "ws:" && gateway.protocol !== "wss:") {
+    throw new Error("node worker gateway connection must use WebSocket transport");
+  }
+  const endpointUrl = new URL(gateway.toString());
+  const basePath = gateway.pathname.replace(/\/$/u, "");
+  endpointUrl.pathname = `${basePath}${WORKER_PUBLIC_INGRESS_PATH}`;
+  endpointUrl.search = "";
+  endpointUrl.hash = "";
+  if (endpointUrl.host !== gateway.host) {
+    throw new Error("node worker endpoint must stay on the connected gateway host");
+  }
+  const endpoint = parseWorkerConnectionEndpoint({
+    kind: "websocket",
+    url: endpointUrl.toString(),
+    ...(gateway.protocol === "wss:" && params.gatewayTlsFingerprint
+      ? { tlsFingerprint: params.gatewayTlsFingerprint }
+      : {}),
+  });
+  if (!endpoint) {
+    throw new Error("node worker gateway connection could not form a worker endpoint");
+  }
+  return endpoint;
+}
 
 /** Dispatches the non-advertised worker control contract before public node commands. */
 export async function invokeNodeWorkerSupervisorCommand(params: {
   command: string;
   paramsJSON?: string | null;
   supervisor?: NodeWorkerSupervisorControl;
+  workspace?: NodeWorkerWorkspaceRuntime;
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+  signal?: AbortSignal;
 }): Promise<NodeWorkerSupervisorCommandResult> {
   const recognized =
     params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND ||
-    params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
+    params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND ||
+    params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND;
   if (!recognized) {
     return { handled: false };
   }
-  if (!params.supervisor) {
+  if (
+    (params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && !params.workspace) ||
+    (params.command !== NODE_WORKER_WORKSPACE_EXEC_COMMAND && !params.supervisor)
+  ) {
     return {
       handled: true,
       ok: false,
       code: "UNAVAILABLE",
-      message: "node worker supervisor unavailable",
+      message: "node worker runtime unavailable",
     };
   }
   try {
+    if (params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND) {
+      return {
+        handled: true,
+        ok: true,
+        payload: await params.workspace!.exec(
+          parseNodeWorkerWorkspaceExecInput(params.paramsJSON),
+          params.signal,
+        ),
+      };
+    }
     const receipt =
       params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
-        ? await params.supervisor.launch(parseNodeWorkerLaunchInput(params.paramsJSON))
+        ? await params.supervisor!.launch(
+            parseNodeWorkerLaunchInput(params.paramsJSON),
+            resolveWorkerConnectionEndpoint(params),
+          )
         : params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND
-          ? await params.supervisor.status(parseNodeWorkerLookupInput(params.paramsJSON).launchId)
-          : await params.supervisor.cancel(parseNodeWorkerCancelInput(params.paramsJSON));
+          ? await params.supervisor!.status(parseNodeWorkerLookupInput(params.paramsJSON).launchId)
+          : await params.supervisor!.cancel(parseNodeWorkerCancelInput(params.paramsJSON));
     return {
       handled: true,
       ok: true,

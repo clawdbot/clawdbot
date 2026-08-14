@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getAdmittedRunDelegatedAuthority,
+  resolvePreparedRunAdmission,
+  type AdmittedRunContext,
+} from "../../agents/admitted-run-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import {
   createOpenClawTestState,
@@ -57,8 +62,14 @@ describe("skill collection review", () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "useful", description: "Useful reusable procedure" },
     ]);
+    let admittedRunContext: AdmittedRunContext | undefined;
     let reviewResult: unknown;
     runEmbeddedAgent.mockImplementation(async (params) => {
+      admittedRunContext = await resolvePreparedRunAdmission({
+        runId: params.runId,
+        runtimeKind: "embedded",
+        preparedRunAdmission: params.preparedRunAdmission,
+      });
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
         config: params.config,
@@ -95,6 +106,10 @@ describe("skill collection review", () => {
       onError,
     });
     expect(onError).not.toHaveBeenCalled();
+    expect(admittedRunContext?.operationalRunInstance.runId).toBe(
+      runEmbeddedAgent.mock.calls[0]?.[0]?.runId,
+    );
+    expect(getAdmittedRunDelegatedAuthority(admittedRunContext!)).toBeUndefined();
     expect(reviewResult).toMatchObject({ kept: ["useful"], written: [], dropped: [] });
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -230,12 +245,53 @@ describe("skill collection review", () => {
     ]);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not dispatch a review for read-only trusted symlink targets",
+    async () => {
+      const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-readonly-");
+      const targetSkillsDir = await makeWorkspaceDir("openclaw-collection-review-target-");
+      const targetSkillDir = path.join(targetSkillsDir, "skills", "shared-skill");
+      await writeWorkspaceSkills(targetSkillsDir, [
+        { name: "shared-skill", description: "Shared read-only procedure" },
+      ]);
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      await fs.symlink(
+        path.join(targetSkillsDir, "skills", "shared-skill"),
+        path.join(workspaceDir, "skills", "shared-skill"),
+        "dir",
+      );
+      const onError = vi.fn();
+
+      await runScheduledSkillCollectionReviews({
+        config: {
+          agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+          skills: {
+            load: { allowSymlinkTargets: [path.join(targetSkillsDir, "skills")] },
+            workshop: { autonomous: { mode: "auto" } },
+          },
+        },
+        env: testState.env,
+        onError,
+      });
+
+      expect(onError).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      await expect(fs.access(path.join(targetSkillDir, "SKILL.md"))).resolves.toBeUndefined();
+    },
+  );
+
   it("does not dispatch a second review when the runner fails after reconciliation", async () => {
     const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-restart-");
     await writeWorkspaceSkills(workspaceDir, [
       { name: "useful", description: "Useful reusable procedure" },
     ]);
+    let admittedRunContext: AdmittedRunContext | undefined;
     runEmbeddedAgent.mockImplementation(async (params) => {
+      admittedRunContext = await resolvePreparedRunAdmission({
+        runId: params.runId,
+        runtimeKind: "embedded",
+        preparedRunAdmission: params.preparedRunAdmission,
+      });
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
         config: params.config,
@@ -261,6 +317,7 @@ describe("skill collection review", () => {
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledOnce();
+    expect(getAdmittedRunDelegatedAuthority(admittedRunContext!)).toBeUndefined();
   });
 
   it("reviews a same-model shared workspace without hiding every agent's skills", async () => {

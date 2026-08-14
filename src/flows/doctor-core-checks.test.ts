@@ -674,7 +674,9 @@ describe("CORE_HEALTH_CHECKS", () => {
         },
       },
     };
-    expect(hooksModelCatalogCase.calls).toContainEqual([{ config: cfg, readOnly: true }]);
+    expect(hooksModelCatalogCase.calls).toContainEqual([
+      { config: cfg, readOnly: true, providerDiscoveryProviderIds: [] },
+    ]);
   });
 
   it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {

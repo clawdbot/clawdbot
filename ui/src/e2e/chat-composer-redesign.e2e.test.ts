@@ -53,6 +53,9 @@ suite.define(() => {
         if (!composerBox || !footerBox || !menuBox || !triggerBox) {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
+        expect(menuBox.x).toBeGreaterThanOrEqual(12);
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(655);
+        expect(menuBox.width).toBeGreaterThanOrEqual(642);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
         expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
@@ -160,9 +163,7 @@ suite.define(() => {
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-      const modelRequests = await gateway.getRequests("models.list");
-      expect(modelRequests).toHaveLength(1);
-      expect(modelRequests[0]?.params).toEqual({ view: "configured" });
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
@@ -226,6 +227,7 @@ suite.define(() => {
       await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
       const speedToggle = composer.locator("[data-chat-speed-toggle]");
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
@@ -546,6 +548,9 @@ suite.define(() => {
       await textarea.fill("");
       await expect.poll(() => camera.count()).toBe(0);
       await model.click();
+      await expect
+        .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
+        .toBe(true);
       const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
@@ -661,10 +666,93 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="codex"]').count())
         .toBe(0);
-      // The advertised default is unavailable, so no usable catalog row is
-      // marked as the default and no synthetic empty row is introduced.
-      await expect.poll(() => composer.locator('[data-chat-model-default="true"]').count()).toBe(0);
+      // The advertised default is configured but unavailable, so its row stays
+      // visible and disabled while the usable model remains selectable.
+      const unavailableDefault = composer.locator('[data-chat-model-default="true"]');
+      await expect.poll(() => unavailableDefault.count()).toBe(1);
+      await expect.poll(() => unavailableDefault.getAttribute("disabled")).not.toBeNull();
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
+    });
+  });
+
+  it("keeps an auth-cold configured catalog visible and blocks chat until setup", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          available: false,
+        },
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          available: false,
+        },
+      ];
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.6-sol",
+        models,
+        methodResponses: {
+          "sessions.list": {
+            count: 1,
+            defaults: {
+              contextTokens: 200_000,
+              model: "gpt-5.6-sol",
+              modelProvider: "openai",
+            },
+            path: "",
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                model: "gpt-5.6-sol",
+                modelProvider: "openai",
+                status: "done",
+                updatedAt: Date.now(),
+              },
+            ],
+            ts: Date.now(),
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+
+      const composer = page.locator(".agent-chat__input");
+      const picker = composer.locator("details.chat-controls__model-picker");
+      const options = picker.locator(
+        "button[data-chat-model-option]:not([data-chat-model-target])",
+      );
+      await picker.locator("summary").click();
+      await gateway.waitForRequest("models.list");
+      await expect.poll(() => options.count()).toBe(2);
+      await expect.poll(() => options.last().isVisible()).toBe(true);
+      await expect.poll(() => options.first().textContent()).toContain("GPT-5.6 Sol");
+      await expect.poll(() => options.first().textContent()).toContain("Default");
+      await expect.poll(() => options.first().textContent()).toContain("Sign-in needed");
+      await expect
+        .poll(() =>
+          options.evaluateAll((rows) => rows.every((row) => row.hasAttribute("disabled"))),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => composer.locator(".chat-controls__model-catalog-state").textContent())
+        .toContain("Review the provider credential or sign-in, then retry");
+      await expect.poll(() => composer.locator("textarea").isDisabled()).toBe(true);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await composer.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/auth-cold-model-picker.png`,
+        });
+      }
+      await composer.locator('[data-chat-model-setup="true"]').click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     });
   });
 
@@ -764,9 +852,7 @@ suite.define(() => {
           activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
         .toBe(1);
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { view: "configured" } }),
-      ]);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
       await navigateToControlUiSession(page, "agent:other:main");
       const startupRequests = await gateway.getRequests("chat.startup");
@@ -788,10 +874,68 @@ suite.define(() => {
           activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
         .toBe(0);
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { view: "configured" } }),
-        expect.objectContaining({ params: { agentId: "other", view: "configured" } }),
-      ]);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+    });
+  });
+
+  it("keeps startup models visible and retries failed picker discovery", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const startupModel = {
+        id: "startup-model",
+        name: "Startup Model",
+        provider: "openai",
+        available: true,
+      };
+      const discoveredModel = {
+        id: "discovered-model",
+        name: "Discovered Model",
+        provider: "anthropic",
+        available: true,
+      };
+      const gateway = await installMockGateway(page, {
+        models: [startupModel],
+        methodResponses: {
+          "models.list": {
+            sequence: [
+              {
+                __mockError: {
+                  code: "UNAVAILABLE",
+                  message: "catalog discovery failed",
+                },
+              },
+              { models: [startupModel, discoveredModel] },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+
+      const composer = page.locator(".agent-chat__input");
+      await composer.locator('[data-chat-model-select="true"]').click();
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-catalog-state="error"]').isVisible())
+        .toBe(true);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/startup-model"]').isVisible())
+        .toBe(true);
+
+      await composer.locator('[data-chat-model-catalog-retry="true"]').click();
+
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      await expect
+        .poll(() =>
+          composer.locator('[data-chat-model-option="anthropic/discovered-model"]').isVisible(),
+        )
+        .toBe(true);
+      expect(await composer.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
+      for (const request of await gateway.getRequests("models.list")) {
+        expect(request.params).toEqual(expect.objectContaining({ view: "configured" }));
+        expect(request.params).not.toEqual(expect.objectContaining({ preparedOnly: true }));
+      }
     });
   });
 
@@ -839,7 +983,7 @@ suite.define(() => {
           "models.list": {
             cases: [
               {
-                match: { agentId: "work", view: "configured" },
+                match: { agentId: "work", view: "configured", preparedOnly: true },
                 response: { models: [] },
               },
             ],
@@ -864,7 +1008,9 @@ suite.define(() => {
         .not.toContain("GPT Default");
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { agentId: "work", view: "configured" } }),
+        expect.objectContaining({
+          params: { agentId: "work", view: "configured", preparedOnly: true },
+        }),
       ]);
     });
   });

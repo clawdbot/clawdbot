@@ -1609,7 +1609,7 @@ describe("refreshChatMetadata", () => {
   it("loads compatibility models when the gateway does not advertise chat metadata", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "models.list") {
-        expect(params).toEqual({ view: "configured" });
+        expect(params).toEqual({ view: "configured", preparedOnly: true });
         return {
           models: [{ id: "compat-model", name: "Compat Model", provider: "openai" }],
         };
@@ -1661,7 +1661,7 @@ describe("refreshChatMetadata", () => {
   it("loads agent-scoped compatibility models for a non-default agent", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "models.list") {
-        expect(params).toEqual({ view: "configured", agentId: "work" });
+        expect(params).toEqual({ view: "configured", agentId: "work", preparedOnly: true });
         return {
           models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
         };

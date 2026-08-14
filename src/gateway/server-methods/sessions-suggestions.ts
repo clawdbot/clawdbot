@@ -10,7 +10,6 @@ import {
   type SessionSharingIdentity,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
@@ -649,7 +648,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
           return false;
         }
-        const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
         const event: SessionTypingEvent = {
           sessionKey: target.canonicalKey,
           sessionId: current.entry.sessionId,
@@ -659,7 +657,16 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {
-          sessionKeys: subscriptionKeys(current.canonicalKey, current.agentId, defaultAgentId),
+          sessionKeys: subscriptionKeys(
+            current.canonicalKey,
+            current.agentId,
+            current.canonicalKey === "global"
+              ? tryResolveSessionCompatibilityOwnerAgentId(
+                  context.getRuntimeConfig(),
+                  current.canonicalKey,
+                )
+              : undefined,
+          ),
           agentId: target.agentId,
           dropIfSlow: true,
         });

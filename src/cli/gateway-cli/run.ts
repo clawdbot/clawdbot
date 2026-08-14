@@ -694,16 +694,11 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   installQaParentWatchdog();
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
-  // Dev gateways inherit the operator shell. Suppress ambient channel credentials so a
-  // development instance cannot silently connect to real channel services.
-  const devAmbientEnvTriggers = opts.devAmbientChannels ? "allow" : "suppress";
+  // Gateways inherit the launching shell, so suppress ambient channel credentials unless the
+  // operator explicitly allows them for this run.
+  const ambientEnvTriggers = opts.ambientChannels || opts.devAmbientChannels ? "allow" : "suppress";
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
-    defaultRuntime.exit(1);
-    return;
-  }
-  if (opts.devAmbientChannels && !devMode) {
-    defaultRuntime.error("Use --dev-ambient-channels with --dev.");
     defaultRuntime.exit(1);
     return;
   }
@@ -1212,11 +1207,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
           ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
           ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
-          ...(devMode
-            ? {
-                ambientEnvTriggers: devAmbientEnvTriggers,
-              }
-            : {}),
+          ambientEnvTriggers,
         });
       },
     });

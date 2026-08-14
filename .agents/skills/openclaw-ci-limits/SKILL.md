@@ -163,23 +163,53 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   same-repo pull requests, preflight owns the sole immutable semantic
   dependency-cache write of workspace `node_modules` plus the local pnpm store
   before fanout; all Blacksmith Node jobs are restore-only consumers and exact
-  misses fall back to the ordinary pnpm-store cache, while
-  hosted/fork/manual paths use only that store cache.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
-  Android at 2.
+  misses fall back to the ordinary pnpm-store cache, while hosted/fork/manual
+  paths use only that store cache.
+- CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
+  and 64 on the GitHub backend, Windows and Android at 2.
 - Canonical PR Node tests use one precise changed-target job when possible;
-  broad, deleted, unknown, or planner-failed changes fall back to the 14-job
-  compact full-suite plan. Targeted plans retain the full built-artifact
+  broad, deleted, unknown, or planner-failed changes fall back to the compact
+  full-suite plan. Targeted plans retain the full built-artifact
   boundary gate. `main`, manual, and release runs stay full.
 - `build-artifacts` on `blacksmith-16vcpu-ubuntu-2404`.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.
+- `OPENCLAW_CI_RUNNER_BACKEND=github` routes every configurable `ci.yml` job
+  to its existing GitHub-hosted fallback label. Unset or `blacksmith` preserves
+  the normal Blacksmith-first route.
 - Vitest/test compile caches are restore-only in CI and use immutable Actions
   caches; the daily/dispatch warmer is their sole writer. Build compile cache
   writes rotate at most once per UTC day. PRs create no runtime-cache archives.
 
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
+
+## Blacksmith Outage Circuit Breaker
+
+Use the repository variable only after confirming a Blacksmith outage or
+unavailable runner capacity. Do not set it merely for a failing test that has
+already started.
+
+```bash
+gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
+```
+
+In degraded mode, `ci.yml` uses the same hosted labels and non-Blacksmith paths
+as manual dispatches and fork pull requests. Blacksmith-only Docker and sticky
+steps stay off, dependency setup uses the ordinary Actions pnpm-store cache,
+and Android's large build uses separate low-memory Gradle processes. Standard
+4-core hosted runners make builds and test lanes slower. Blacksmith runner
+registration is no longer part of the budget, while GitHub-hosted concurrency
+limits apply.
+
+Flip back after the outage by deleting the variable:
+
+```bash
+gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
+```
+
+Scheduled health detection and automatic flipping are a follow-up, not part of
+the current circuit breaker.
 
 ## Validation
 

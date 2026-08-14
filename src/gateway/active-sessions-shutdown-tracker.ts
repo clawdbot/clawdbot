@@ -22,7 +22,7 @@ type ActiveSessionForShutdown = {
   sessionId: string;
   storePath: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
 };
 
 const trackedSessions = resolveGlobalMap<string, ActiveSessionForShutdown>(
