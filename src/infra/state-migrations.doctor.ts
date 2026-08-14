@@ -1217,8 +1217,8 @@ function buildLegacyStateMigrationSteps(
           mode: "automatic",
           now,
         });
-        return { changes: result.changes, warnings: result.warnings };
-      }),
+        return { changes: result.changes, warnings: [], notices: result.warnings };
+      }, true),
       kind: "legacy-main-session-keys",
     });
   }
@@ -1572,7 +1572,13 @@ export async function autoMigrateLegacyState(params: {
         ),
       ]),
     ];
-    const notices = mergeNotices([stateDirResult, detected, deviceAuth, deviceIdentity]);
+    const notices = mergeNotices([
+      stateDirResult,
+      detected,
+      ...alwaysRunSources,
+      deviceAuth,
+      deviceIdentity,
+    ]);
     logMigrationResults(changes, warnings, notices);
     return {
       migrated: stateDirResult.migrated || changes.length > 0,

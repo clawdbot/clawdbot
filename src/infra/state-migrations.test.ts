@@ -862,6 +862,22 @@ describe("state migrations", () => {
     expect(destination?.entry.sessionId).toBe("legacy-main-session");
   });
 
+  it("reports unresolved legacy-main ownership as a nonblocking automatic notice", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    };
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([
+      expect.stringContaining("legacy main rows have no unambiguous configured owner"),
+    ]);
+  });
+
   it("detects no plugin-state migration warnings after the startup lease creates fresh state", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
