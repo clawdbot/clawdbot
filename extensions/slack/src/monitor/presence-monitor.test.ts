@@ -84,9 +84,11 @@ describe("Slack presence monitor", () => {
   });
 
   it("seeds the first sample and wakes only on away-to-active", async () => {
+    let now = 1_000;
     const getPresence = vi
       .fn()
       .mockResolvedValueOnce({ presence: "active" })
+      .mockResolvedValueOnce({ presence: "away" })
       .mockResolvedValueOnce({ presence: "away" })
       .mockResolvedValueOnce({ presence: "active" })
       .mockResolvedValueOnce({ presence: "away" })
@@ -100,17 +102,26 @@ describe("Slack presence monitor", () => {
       cooldownStore: createCooldownStore(),
       enqueue,
       wake,
+      nowMs: () => now,
     });
     monitor.observe(createPrepared({ userId: "U123" }));
 
     await monitor.pollOnce();
+    now = 2_000;
     await monitor.pollOnce();
     expect(enqueue).not.toHaveBeenCalled();
 
+    now = 4_000;
+    await monitor.pollOnce();
+    expect(enqueue).not.toHaveBeenCalled();
+
+    now = 7_500;
     await monitor.pollOnce();
     expect(enqueue).toHaveBeenCalledOnce();
     expect(enqueue).toHaveBeenCalledWith(
-      expect.stringContaining("retrieve relevant memory and wiki context"),
+      expect.stringMatching(
+        /observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500/,
+      ),
       expect.objectContaining({ agentId: "main", sessionKey: "agent:main:slack:channel:D123" }),
       expect.objectContaining({
         deliveryContext: {
@@ -120,9 +131,14 @@ describe("Slack presence monitor", () => {
         },
       }),
     );
+    expect(enqueue.mock.calls[0]?.[0]).toContain("retrieve relevant memory and wiki context");
+    expect(enqueue.mock.calls[0]?.[0]).toContain("not exact time away");
+    expect(enqueue.mock.calls[0]?.[0]).toContain("unobserved presence changes");
     expect(wake).toHaveBeenCalledOnce();
 
+    now = 8_000;
     await monitor.pollOnce();
+    now = 9_000;
     await monitor.pollOnce();
     expect(enqueue).toHaveBeenCalledOnce();
   });

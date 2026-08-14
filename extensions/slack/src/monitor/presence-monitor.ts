@@ -18,7 +18,9 @@ const SLACK_PRESENCE_MAX_TARGETS = 2_000;
 
 type SlackPresenceEventsConfig = NonNullable<SlackAccountConfig["presenceEvents"]>;
 type SlackPresenceEventsMode = NonNullable<SlackPresenceEventsConfig["mode"]>;
-type Presence = "active" | "away";
+type PresenceObservation =
+  | { presence: "active" }
+  | { presence: "away"; firstObservedAtMs: number };
 
 type PresenceTarget = {
   key: string;
@@ -73,10 +75,17 @@ function isTargetEligible(target: PresenceTarget): boolean {
   return target.participants.size <= SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS;
 }
 
-function formatSlackPresenceEvent(target: PresenceTarget, userId: string): string {
+function formatSlackPresenceEvent(
+  target: PresenceTarget,
+  userId: string,
+  awayObservation: { observedAwayAtMs: number; observedActiveAtMs: number },
+): string {
+  const { observedAwayAtMs, observedActiveAtMs } = awayObservation;
+  const observedAwayDurationMs = Math.max(0, observedActiveAtMs - observedAwayAtMs);
   const lines = [
     "Slack presence event:",
-    `A human participant became active on Slack after being observed away: user_id=${JSON.stringify(userId)}${target.teamId ? ` team_id=${JSON.stringify(target.teamId)}` : ""} channel_id=${JSON.stringify(target.channelId)}${target.threadId ? ` thread_ts=${JSON.stringify(target.threadId)}` : ""}.`,
+    `Slack was first observed reporting away for a human participant and was later observed reporting active: user_id=${JSON.stringify(userId)}${target.teamId ? ` team_id=${JSON.stringify(target.teamId)}` : ""} channel_id=${JSON.stringify(target.channelId)}${target.threadId ? ` thread_ts=${JSON.stringify(target.threadId)}` : ""}.`,
+    `The elapsed time between these presence observations was: observed_away_at_ms=${observedAwayAtMs} observed_active_at_ms=${observedActiveAtMs} observed_away_duration_ms=${observedAwayDurationMs}. This is a polling-based observation interval, not exact time away; unobserved presence changes may have occurred between polls.`,
     "Before greeting, retrieve relevant memory and wiki context for this immutable user_id, including a known timezone when available. Use their local time; if their timezone is unknown, do not guess.",
     "Send at most one short, natural greeting in this Slack conversation. Do not reveal private memory. If no greeting is appropriate, stay silent.",
   ];
@@ -154,7 +163,7 @@ export function createSlackPresenceMonitor(params: {
     throw new Error("Slack presence monitor requires a client or client resolver");
   }
   const targets = new Map<string, PresenceTarget>();
-  const presenceByUser = new Map<string, Presence>();
+  const presenceByUser = new Map<string, PresenceObservation>();
   const nowMs = params.nowMs ?? Date.now;
   const enqueue = params.enqueue ?? enqueueRoutedSystemEvent;
   const wake = params.wake ?? requestHeartbeat;
@@ -223,7 +232,10 @@ export function createSlackPresenceMonitor(params: {
     pruneTargets(now);
   };
 
-  const emitTransition = (subject: PresenceSubject, now: number) => {
+  const emitTransition = (
+    subject: PresenceSubject,
+    awayObservation: { observedAwayAtMs: number; observedActiveAtMs: number },
+  ) => {
     const { teamId, userId } = subject;
     const target = Array.from(targets.values())
       .filter(
@@ -238,6 +250,7 @@ export function createSlackPresenceMonitor(params: {
     }
     const workspaceKey = teamId ?? "workspace";
     const cooldownKey = `${params.accountId}:${workspaceKey}:${userId}`;
+    const now = awayObservation.observedActiveAtMs;
     let reserved: boolean;
     try {
       reserved = params.cooldownStore.registerIfAbsent(cooldownKey, now, {
@@ -250,7 +263,7 @@ export function createSlackPresenceMonitor(params: {
     if (!reserved) {
       return;
     }
-    const queued = enqueue(formatSlackPresenceEvent(target, userId), target, {
+    const queued = enqueue(formatSlackPresenceEvent(target, userId, awayObservation), target, {
       contextKey: `slack:presence-active:${params.accountId}:${workspaceKey}:${userId}`,
       deliveryContext: {
         channel: "slack",
@@ -338,9 +351,19 @@ export function createSlackPresenceMonitor(params: {
         }
         const subjectKey = presenceSubjectKey(subject);
         const previous = presenceByUser.get(subjectKey);
-        presenceByUser.set(subjectKey, next);
-        if (previous === "away" && next === "active") {
-          emitTransition(subject, now);
+        const observedAtMs = nowMs();
+        const observation: PresenceObservation =
+          next === "away"
+            ? previous?.presence === "away"
+              ? previous
+              : { presence: "away", firstObservedAtMs: observedAtMs }
+            : { presence: "active" };
+        presenceByUser.set(subjectKey, observation);
+        if (previous?.presence === "away" && next === "active") {
+          emitTransition(subject, {
+            observedAwayAtMs: previous.firstObservedAtMs,
+            observedActiveAtMs: observedAtMs,
+          });
         }
       } catch (err) {
         if (stopped) {
