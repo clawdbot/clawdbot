@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { refreshControlUiServiceWorker } from "../../app/sw-refresh.runtime.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -12,6 +13,10 @@ import {
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+
+vi.mock("../../app/sw-refresh.runtime.ts", () => ({
+  refreshControlUiServiceWorker: vi.fn(async () => false),
+}));
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
@@ -26,6 +31,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
   afterEach(async () => {
     document.body.replaceChildren();
     createGhosttyTerminalMock.mockReset();
+    vi.mocked(refreshControlUiServiceWorker).mockReset();
+    vi.mocked(refreshControlUiServiceWorker).mockResolvedValue(false);
     vi.unstubAllGlobals();
     await i18n.setLocale("en");
   });
@@ -200,9 +207,18 @@ describe("OpenClawTerminalPanel reconnect", () => {
     await panel.updateComplete;
     await waitForFast(() => expect(controllers[0].dispose).toHaveBeenCalledOnce());
 
+    let releaseRefresh: ((replacementActivated: boolean) => void) | undefined;
+    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        releaseRefresh = resolve;
+      }),
+    );
     panel.client = client;
     panel.available = true;
     await panel.updateComplete;
+    await vi.waitFor(() => expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce());
+    expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(0);
+    releaseRefresh?.(false);
     await waitForFast(() => {
       expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(1);
     });

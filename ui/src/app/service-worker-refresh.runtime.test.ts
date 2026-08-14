@@ -40,28 +40,27 @@ describe("Control UI service-worker reconnect refresh", () => {
     } as unknown as ServiceWorkerContainer;
     vi.stubGlobal("navigator", { serviceWorker });
 
-    const { refreshWorker } = await import("./sw-refresh.runtime.ts");
-    const host = { refreshPending: true };
-    refreshWorker(host, { snapshot: { phase: "connected" } });
+    const { refreshControlUiServiceWorker } = await import("./sw-refresh.runtime.ts");
+    let settled = false;
+    const refresh = refreshControlUiServiceWorker().then((replacementActivated) => {
+      settled = true;
+      return replacementActivated;
+    });
     await vi.waitFor(() => expect(registration.update).toHaveBeenCalledOnce());
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(host.refreshPending).toBe(true);
+    expect(settled).toBe(false);
     state = "activated";
     for (const listener of listeners) {
       listener();
     }
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(host.refreshPending).toBe(true);
+    await expect(refresh).resolves.toBe(true);
   });
 
   it("releases the reconnect fence when service workers are unavailable", async () => {
     vi.stubGlobal("navigator", {});
-    const { refreshWorker } = await import("./sw-refresh.runtime.ts");
-    const host = { refreshPending: true };
+    const { refreshControlUiServiceWorker } = await import("./sw-refresh.runtime.ts");
 
-    refreshWorker(host, { snapshot: { phase: "connected" } });
-    await vi.waitFor(() => expect(host.refreshPending).toBe(false));
+    await expect(refreshControlUiServiceWorker()).resolves.toBe(false);
   });
 });

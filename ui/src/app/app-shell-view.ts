@@ -95,7 +95,6 @@ function renderScopeUpgradeBanner(
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
   readonly runtime: ApplicationRuntime | undefined;
-  readonly refreshPending: boolean;
   readonly activeSessionKey: string;
   readonly commandPaletteElement: OptionalCustomElement;
   readonly custodianMinimizeRequestId: number;
@@ -195,9 +194,10 @@ export function renderApplicationShell(host: ShellViewHost) {
       stopGateway();
     };
   };
-  const terminalAvailable =
-    !host.refreshPending &&
-    isTerminalAvailable(gatewaySnapshot, context.config.current.terminalEnabled ?? false);
+  const terminalAvailable = isTerminalAvailable(
+    gatewaySnapshot,
+    context.config.current.terminalEnabled ?? false,
+  );
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =

@@ -11,11 +11,6 @@ import "./app-host.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
-import { refreshWorker } from "./sw-refresh.runtime.ts";
-
-vi.mock("./sw-refresh.runtime.ts", () => ({
-  refreshWorker: vi.fn(),
-}));
 
 const HELLO: GatewayHelloOk = {
   type: "hello-ok",
@@ -64,34 +59,6 @@ afterEach(() => {
 });
 
 describe("Control UI Gateway target lineage", () => {
-  it("checks the incumbent worker before reconnect surfaces resume", async () => {
-    let snapshot = {
-      client: {} as GatewayBrowserClient,
-      phase: "connected",
-      lastError: null,
-      lastErrorCode: null,
-    } as ApplicationGateway["snapshot"];
-    const gateway = {
-      get snapshot() {
-        return snapshot;
-      },
-      connection: { gatewayUrl: "ws://gateway.test", token: "", password: "" },
-    } as ApplicationGateway;
-    const app = document.createElement("openclaw-app") as unknown as {
-      refreshPending: boolean;
-      synchronizeGateway: (gateway: ApplicationGateway) => void;
-    };
-
-    app.synchronizeGateway(gateway);
-    snapshot = { ...snapshot, client: null, phase: "reconnecting" };
-    app.synchronizeGateway(gateway);
-    snapshot = { ...snapshot, client: {} as GatewayBrowserClient, phase: "connected" };
-    app.synchronizeGateway(gateway);
-
-    await vi.waitFor(() => expect(refreshWorker).toHaveBeenCalledOnce());
-    expect(app.refreshPending).toBe(true);
-  });
-
   it("returns to the login gate when a newly selected Gateway's first attempt fails", () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.start();
