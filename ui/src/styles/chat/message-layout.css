@@ -309,7 +309,7 @@
   height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--btn-radius);
   color: var(--media-foreground);
   background: transparent;
   cursor: var(--cursor-action);

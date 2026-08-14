@@ -589,7 +589,7 @@
   background: transparent;
   color: var(--muted);
   padding: 6px 10px;
-  border-radius: 999px;
+  border-radius: var(--btn-radius);
   font-size: 12px; /* was 11px */
   line-height: 1;
   transition:

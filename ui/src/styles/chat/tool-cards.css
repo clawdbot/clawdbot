@@ -682,7 +682,7 @@
   height: var(--chat-tool-action-size, 40px);
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   font: inherit;

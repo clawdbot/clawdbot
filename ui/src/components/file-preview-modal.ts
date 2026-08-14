@@ -255,7 +255,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       flex: 0 0 auto;
       padding: 0;
       border: 1px solid var(--border);
-      border-radius: var(--radius-md);
+      border-radius: var(--btn-radius);
       background: var(--bg-elevated);
       color: var(--muted);
     }
@@ -396,8 +396,8 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .button {
       height: 36px;
-      padding: 0 14px;
-      border-radius: var(--radius-md);
+      padding: 0 16px;
+      border-radius: var(--btn-radius);
       border: 1px solid var(--border);
       background: var(--bg-elevated);
       color: var(--text);

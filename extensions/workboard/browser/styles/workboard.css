@@ -424,8 +424,7 @@
 .workboard-toolbar .btn,
 .workboard-draft .btn {
   min-height: var(--workboard-control-height);
-  padding: 0 12px;
-  border-radius: var(--workboard-control-radius);
+  padding: 0 14px;
 }
 
 .workboard .btn.active {

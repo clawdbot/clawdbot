@@ -13,8 +13,8 @@ export const desktopPanelLauncherStyles = css`
     align-items: center;
     gap: 5px;
     border: 0;
-    border-radius: 4px;
-    padding: 5px 7px;
+    border-radius: var(--btn-radius);
+    padding: 5px 9px;
     background: transparent;
     color: var(--muted);
     font: inherit;

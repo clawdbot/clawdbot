@@ -318,7 +318,7 @@
   color: var(--muted);
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
 }
 
 .agent-chat__goal-action:hover {

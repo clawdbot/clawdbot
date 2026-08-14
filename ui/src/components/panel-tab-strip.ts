@@ -553,7 +553,7 @@ export const panelTabStripStyles = css`
     justify-content: center;
     width: 18px;
     height: 18px;
-    border-radius: 5px;
+    border-radius: var(--btn-radius);
   }
   :where(.tabstrip-tab:hover, .tabstrip-tab[active]) + .tabstrip-tab__close,
   .tabstrip-tab__close:hover,

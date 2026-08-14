@@ -1143,8 +1143,10 @@ openclaw-session-owner-chip {
   gap: 6px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
-  padding: 8px 14px;
-  border-radius: var(--radius-md);
+  /* Pill corners eat into the horizontal end caps, so text needs more inline
+     padding than a rounded-rect button to keep the same optical inset. */
+  padding: 8px 16px;
+  border-radius: var(--btn-radius);
   font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.01em;
@@ -1215,12 +1217,12 @@ openclaw-session-owner-chip {
 }
 
 .btn--sm {
-  padding: 6px 10px;
+  padding: 6px 12px;
   font-size: 12px;
 }
 
 .btn--xs {
-  padding: 4px 6px;
+  padding: 4px 8px;
   font-size: 12px;
   line-height: 1;
 }
@@ -3274,7 +3276,7 @@ td.data-table-key-col {
   padding: 4px 12px;
   font-size: 13px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: var(--card);
   color: var(--text);
   transition:
@@ -4036,7 +4038,7 @@ td.data-table-key-col {
 
 .agent-tab-add {
   border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   padding: 6px 10px;
   font-size: 12px;
   font-weight: 600;
@@ -4326,7 +4328,7 @@ td.data-table-key-col {
   width: 36px;
   height: 36px;
   padding: 0;
-  border-radius: 12px;
+  border-radius: var(--btn-radius);
   border-color: color-mix(in srgb, var(--border) 78%, white 10%);
   background: linear-gradient(
     180deg,
@@ -5937,7 +5939,7 @@ td.data-table-key-col {
   height: 24px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   opacity: 0;

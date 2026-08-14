@@ -99,8 +99,8 @@ export const browserPanelStyles = css`
     color: var(--text, #d7dae0);
     font-size: 12px;
     font-family: inherit;
-    border-radius: 6px;
-    padding: 3px 10px;
+    border-radius: var(--btn-radius);
+    padding: 3px 12px;
   }
   .bp-btn:hover {
     background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);

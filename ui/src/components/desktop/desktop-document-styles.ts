@@ -46,8 +46,8 @@ export const desktopDocumentStyles = css`
     justify-content: center;
     gap: 5px;
     border: 0;
-    border-radius: 10px;
-    padding: 0 9px;
+    border-radius: var(--btn-radius);
+    padding: 0 11px;
     background: transparent;
     color: var(--text);
     font: inherit;
