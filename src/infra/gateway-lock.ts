@@ -35,8 +35,8 @@ const GATEWAY_LOCKS = createFileLockManager("openclaw.gateway-lock");
 type LockPayload = {
   pid: number;
   ownerId?: string;
-  /** Present when the Gateway stamps cron owners across legacy topology transitions. */
-  cronOwnerWrites?: "required";
+  /** Present when Gateway cron writes use the dynamic-default ownership projection. */
+  cronOwnerProjection?: "dynamic-default-v1";
   createdAt: string;
   configPath: string;
   port?: number;
@@ -48,7 +48,7 @@ type LockPayload = {
 const LockPayloadSchema = z.object({
   pid: z.number(),
   ownerId: z.string().min(1).optional(),
-  cronOwnerWrites: z.literal("required").optional(),
+  cronOwnerProjection: z.literal("dynamic-default-v1").optional(),
   createdAt: z.string(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
@@ -71,7 +71,7 @@ type GatewayLockRole = "gateway" | "agent-embedded" | "skill-workshop-apply" | "
 export type GatewayLockIdentity = {
   pid: number;
   ownerId?: string;
-  cronOwnerWrites?: "required";
+  cronOwnerProjection?: "dynamic-default-v1";
   createdAt: string;
   port: number;
   startTime?: number;
@@ -371,7 +371,7 @@ async function readVerifiedGatewayLockIdentity(
   return {
     pid: payload.pid,
     ...(payload.ownerId ? { ownerId: payload.ownerId } : {}),
-    ...(payload.cronOwnerWrites ? { cronOwnerWrites: payload.cronOwnerWrites } : {}),
+    ...(payload.cronOwnerProjection ? { cronOwnerProjection: payload.cronOwnerProjection } : {}),
     createdAt: payload.createdAt,
     port: payload.port,
     ...(payload.startTime !== undefined ? { startTime: payload.startTime } : {}),
@@ -483,7 +483,7 @@ async function acquireLockFile(
     return {
       pid: process.pid,
       ownerId: opts.ownerId,
-      ...(opts.role === "gateway" ? { cronOwnerWrites: "required" as const } : {}),
+      ...(opts.role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
       createdAt: resolveTimestampMsToIsoString(now()),
       configPath,
       stateDir,

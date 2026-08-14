@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import type { OpenClawConfig } from "./types.js";
 
 type CronOwnerRefusalDeps = Pick<
   typeof import("../infra/gateway-lock.js"),
@@ -53,6 +54,7 @@ async function loadDefaultDeps(): Promise<CronOwnerRefusalDeps> {
 }
 
 async function assertSafe(
+  cfg: OpenClawConfig,
   storePath: string,
   env: NodeJS.ProcessEnv,
   deps: CronOwnerRefusalDeps,
@@ -65,17 +67,24 @@ async function assertSafe(
     );
   });
   const state = await deps
-    .loadLegacyCronRepairState({ cfg: {}, storePath, env, readOnly: true })
+    .loadLegacyCronRepairState({ cfg, storePath, env, readOnly: true })
     .catch((error: unknown) => {
       throw refused(
         `Config write refused: cannot inspect cron ownership at ${storePath} (${formatErrorMessage(error)}).${RETRY}`,
         error,
       );
     });
-  const ownerless =
+  const unresolved =
     state?.rawJobs.filter((job) => {
       const id = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
-      return !hasOwner(job) && !hasOwner(id ? state.projectedOwnersByJobId.get(id) : undefined);
+      const projection = id ? state.projectedOwnersByJobId.get(id) : undefined;
+      return !hasOwner(job) && (!projection || projection.kind === "unresolved");
+    }).length ?? 0;
+  const projectedDynamicDefaults =
+    state?.rawJobs.filter((job) => {
+      const id = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
+      const projection = id ? state.projectedOwnersByJobId.get(id) : undefined;
+      return !hasOwner(job) && projection?.kind === "runtime-default";
     }).length ?? 0;
   const unverifiable = state?.invalidConfigRows?.length ?? 0;
   if (unverifiable > 0) {
@@ -83,17 +92,17 @@ async function assertSafe(
       `Config write refused: cron store ${storePath} contains ${unverifiable} corrupt row(s) whose ownership cannot be verified.${RETRY}`,
     );
   }
-  if (ownerless > 0 && !provenOwnerAgentId) {
+  if (unresolved > 0 && !provenOwnerAgentId) {
     throw refused(
-      `Config write refused: cron store ${storePath} contains ${ownerless} ownerless legacy cron job(s).${RETRY}`,
+      `Config write refused: cron store ${storePath} contains ${unresolved} ownerless legacy cron job(s).${RETRY}`,
     );
   }
-  if (active && active.pid !== process.pid && active.cronOwnerWrites !== "required") {
+  if (active && active.pid !== process.pid && active.cronOwnerProjection !== "dynamic-default-v1") {
     throw refused(
-      `Config write refused: live external Gateway pid ${active.pid} does not prove that cron writes preserve agent ownership. Restart it with this OpenClaw version, or stop it, then retry.`,
+      `Config write refused: live external Gateway pid ${active.pid} does not prove compatibility with the current cron ownership projection. Restart it with this OpenClaw version, or stop it, then retry.`,
     );
   }
-  if (ownerless > 0 && provenOwnerAgentId) {
+  if ((unresolved > 0 || projectedDynamicDefaults > 0) && provenOwnerAgentId) {
     try {
       deps.materializeLegacyDefaultCronJobOwners({
         storePath,
@@ -106,17 +115,22 @@ async function assertSafe(
         error,
       );
     }
-    return await assertSafe(storePath, env, deps);
+    return await assertSafe(cfg, storePath, env, deps);
   }
 }
 
 export async function prepareCronOwnerWriteRefusal(
-  params: { storePath: string; provenOwnerAgentId?: string; env?: NodeJS.ProcessEnv },
+  cfg: OpenClawConfig,
+  params: {
+    storePath: string;
+    provenOwnerAgentId?: string;
+    env?: NodeJS.ProcessEnv;
+  },
   injectedDeps?: CronOwnerRefusalDeps,
 ): Promise<{ recheck: () => Promise<void> }> {
   const env = params.env ?? process.env;
   const deps = injectedDeps ?? (await loadDefaultDeps());
-  const recheck = () => assertSafe(params.storePath, env, deps, params.provenOwnerAgentId);
+  const recheck = () => assertSafe(cfg, params.storePath, env, deps, params.provenOwnerAgentId);
   await recheck();
   return { recheck };
 }

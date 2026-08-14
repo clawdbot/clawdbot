@@ -1,5 +1,8 @@
 import { expect, it, vi } from "vitest";
-import type { LegacyCronRepairState } from "../commands/doctor/cron/legacy-repair.js";
+import type {
+  CronOwnerProjection,
+  LegacyCronRepairState,
+} from "../commands/doctor/cron/legacy-repair.js";
 import {
   isCronOwnerWriteRefusalError,
   prepareCronOwnerWriteRefusal,
@@ -9,14 +12,19 @@ import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.
 const state = (
   rawJobs: Array<Record<string, unknown>>,
   invalidConfigRows: Array<Record<string, unknown>> = [],
+  projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection> = new Map(),
 ) =>
   ({
     rawJobs,
     invalidConfigRows,
-    projectedOwnersByJobId: new Map(),
+    projectedOwnersByJobId,
   }) as unknown as LegacyCronRepairState;
 const deps = (
-  activeGateway?: { pid: number; port: number; cronOwnerWrites?: "required" },
+  activeGateway?: {
+    pid: number;
+    port: number;
+    cronOwnerProjection?: "dynamic-default-v1";
+  },
   jobs?: Record<string, unknown>[],
 ) => ({
   readActiveGatewayLockIdentity: vi.fn(async () =>
@@ -25,19 +33,32 @@ const deps = (
   loadLegacyCronRepairState: vi.fn(async () => (jobs ? state(jobs) : null)),
   materializeLegacyDefaultCronJobOwners: vi.fn(() => 0),
 });
+const cfg = { agents: { entries: { ops: {} } } };
 
-it("allows an ownership-safe live Gateway with a clean cron store and rechecks at commit", async () => {
-  const injected = deps({ pid: process.pid + 1, port: 18_789, cronOwnerWrites: "required" }, [
-    { id: "owned", agentId: "ops" },
-  ]);
-  const plan = await prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, injected);
+it("allows an ownership-safe live Gateway with a projected dynamic row and rechecks at commit", async () => {
+  const injected = deps(
+    {
+      pid: process.pid + 1,
+      port: 18_789,
+      cronOwnerProjection: "dynamic-default-v1",
+    },
+    [{ id: "dynamic" }],
+  );
+  injected.loadLegacyCronRepairState.mockResolvedValueOnce(
+    state(
+      [{ id: "dynamic" }],
+      [],
+      new Map([["dynamic", { kind: "runtime-default" as const, agentId: "ops" }]]),
+    ),
+  );
+  const plan = await prepareCronOwnerWriteRefusal(cfg, { storePath: "/tmp/cron.json" }, injected);
   injected.loadLegacyCronRepairState.mockResolvedValueOnce(state([{ id: "ownerless" }]));
   await expect(plan.recheck()).rejects.toThrow("ownerless legacy cron job");
 });
 
 it("refuses an unproven live Gateway without suggesting doctor", async () => {
   const injected = deps({ pid: process.pid + 1, port: 18_789 });
-  const refusal = prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, injected);
+  const refusal = prepareCronOwnerWriteRefusal(cfg, { storePath: "/tmp/cron.json" }, injected);
   await expect(refusal).rejects.toThrow("live external Gateway");
   await expect(refusal).rejects.not.toThrow("doctor --fix");
 });
@@ -46,11 +67,16 @@ it.each([
   ["without a live Gateway", undefined],
   [
     "with an ownership-safe live Gateway",
-    { pid: process.pid + 1, port: 18_789, cronOwnerWrites: "required" as const },
+    {
+      pid: process.pid + 1,
+      port: 18_789,
+      cronOwnerProjection: "dynamic-default-v1" as const,
+    },
   ],
 ])("refuses ownerless and corrupt cron rows %s", async (_name, activeGateway) => {
   await expect(
     prepareCronOwnerWriteRefusal(
+      cfg,
       { storePath: "/tmp/cron.json" },
       deps(activeGateway, [
         { id: "null", agentId: null },
@@ -64,7 +90,7 @@ it.each([
     state([], [{ id: "corrupt", reason: "invalid config" }]),
   );
   await expect(
-    prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, corrupt),
+    prepareCronOwnerWriteRefusal(cfg, { storePath: "/tmp/cron.json" }, corrupt),
   ).rejects.toThrow("contains 1 corrupt row");
 });
 
@@ -80,6 +106,7 @@ it("keeps include-owned binding writes fail closed", () => {
 it("materializes a proven retained owner before the commit recheck", async () => {
   for (const safe of [deps(), deps(undefined, [{ id: "owned", agentId: "research" }])]) {
     await prepareCronOwnerWriteRefusal(
+      cfg,
       { storePath: "/tmp/cron.json", provenOwnerAgentId: "ops" },
       safe,
     );
@@ -87,6 +114,16 @@ it("materializes a proven retained owner before the commit recheck", async () =>
   }
 
   const injected = deps(undefined, [{ id: "ownerless" }, { id: "owned", agentId: "research" }]);
+  injected.loadLegacyCronRepairState.mockResolvedValueOnce(
+    state(
+      [{ id: "ownerless" }, { id: "owned", agentId: "research" }],
+      [],
+      new Map([
+        ["ownerless", { kind: "runtime-default" as const, agentId: "ops" }],
+        ["owned", { kind: "explicit" as const, agentId: "research" }],
+      ]),
+    ),
+  );
   injected.materializeLegacyDefaultCronJobOwners.mockImplementationOnce(() => {
     injected.loadLegacyCronRepairState.mockResolvedValue(
       state([
@@ -98,6 +135,7 @@ it("materializes a proven retained owner before the commit recheck", async () =>
   });
 
   const plan = await prepareCronOwnerWriteRefusal(
+    cfg,
     {
       storePath: "/tmp/custom-cron.json",
       provenOwnerAgentId: "ops",
@@ -118,7 +156,7 @@ it("materializes a proven retained owner before the commit recheck", async () =>
 it("keeps ambiguous and failed owner handoffs as typed refusals", async () => {
   const ambiguous = deps(undefined, [{ id: "ownerless" }]);
   await expect(
-    prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, ambiguous),
+    prepareCronOwnerWriteRefusal(cfg, { storePath: "/tmp/cron.json" }, ambiguous),
   ).rejects.toSatisfy(isCronOwnerWriteRefusalError);
   expect(ambiguous.materializeLegacyDefaultCronJobOwners).not.toHaveBeenCalled();
 
@@ -127,6 +165,7 @@ it("keeps ambiguous and failed owner handoffs as typed refusals", async () => {
     throw new Error("database is temporarily read-only");
   });
   const failure = prepareCronOwnerWriteRefusal(
+    cfg,
     { storePath: "/tmp/cron.json", provenOwnerAgentId: "ops" },
     failed,
   );
@@ -138,6 +177,7 @@ it("keeps ambiguous and failed owner handoffs as typed refusals", async () => {
     new Error("database disk image is malformed"),
   );
   const unreadable = prepareCronOwnerWriteRefusal(
+    cfg,
     { storePath: "/tmp/corrupt-cron.json", provenOwnerAgentId: "ops" },
     corrupt,
   );

@@ -390,8 +390,11 @@ export async function add(
     const explicitOwnerAgentId =
       normalizeOptionalAgentId(normalizedInput.agentId) ??
       parseAgentSessionKey(normalizeOptionalString(normalizedInput.sessionKey))?.agentId;
-    // Persist the resolved default at creation so topology changes never make ownership ambiguous.
-    const creationInput = explicitOwnerAgentId ? normalizedInput : { ...normalizedInput, agentId };
+    const retainedLegacyAgentId = normalizeOptionalAgentId(state.deps.legacyDefaultAgentId);
+    const creationInput =
+      !explicitOwnerAgentId && retainedLegacyAgentId === agentId
+        ? { ...normalizedInput, agentId }
+        : normalizedInput;
     const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, creationInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
