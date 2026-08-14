@@ -134,10 +134,14 @@ suite.define(() => {
         await groupGrip.click();
         await expect.poll(() => groupToggle.getAttribute("aria-expanded")).toBe(groupExpanded);
         await groupAction.hover();
+        await expect
+          .poll(() => groupAction.evaluate((button) => getComputedStyle(button).opacity))
+          .toBe("1");
         await captureSidebarUiUnionProof(
           page,
           [sidebarSurface],
           `iconography-${variant}-group-controls.png`,
+          { preserveHover: true },
         );
         await groupAction.click();
         const groupMenu = sidebar.locator("wa-dropdown.sidebar-session-group-menu");
