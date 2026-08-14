@@ -47,7 +47,9 @@ describe("Control UI service-worker reconnect refresh", () => {
       return replacementActivated;
     });
     await vi.waitFor(() => expect(registration.update).toHaveBeenCalledOnce());
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(settled).toBe(false);
     state = "activated";
