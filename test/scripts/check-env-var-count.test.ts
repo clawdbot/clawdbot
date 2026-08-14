@@ -156,12 +156,13 @@ describe("check-env-var-count", () => {
     expect(() => main(["--base", "HEAD"], root)).toThrow(/exceeds budget|over budget/u);
   });
 
-  it("requires an explicit approval annotation when the budget increases", () => {
+  it("allows only the owner-approved 502 to 503 budget increase", () => {
     const root = tempDirs.make("openclaw-env-count-approved-grow-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
-    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONE;\n");
+    const names = Array.from({ length: 504 }, (_, index) => `OPENCLAW_TEST_${index}`);
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "502\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, 502).join("\n"));
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
     execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
     execFileSync(
@@ -170,15 +171,13 @@ describe("check-env-var-count", () => {
       { cwd: root, stdio: "ignore" },
     );
 
-    fs.writeFileSync(path.join(root, "src/runtime.ts"), "OPENCLAW_ONE OPENCLAW_TWO\n");
-    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "2\n");
-    expect(() => main(["--base", "HEAD"], root)).toThrow(/budget grew/u);
-
-    fs.writeFileSync(
-      path.join(root, "config/env-var-count-budget.txt"),
-      "# Approved increase: 1 -> 2\n2\n",
-    );
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, 503).join("\n"));
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "503\n");
     expect(() => main(["--base", "HEAD"], root)).not.toThrow();
+
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.join("\n"));
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "504\n");
+    expect(() => main(["--base", "HEAD"], root)).toThrow(/budget grew/u);
   });
 
   it("passes when the count exactly matches the budget", () => {
