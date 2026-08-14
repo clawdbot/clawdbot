@@ -1,3 +1,4 @@
+import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import {
   NodeWorkerLaunchStore,
   type NodeWorkerLaunchClaim,
@@ -23,6 +24,15 @@ function capacityAbortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
     : new Error("node worker admission aborted");
+}
+
+export class NodeWorkerCapacityExhaustedError extends Error {
+  readonly code = NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE;
+
+  constructor(waitMs: number) {
+    super(`node worker capacity remained full for ${waitMs} ms`);
+    this.name = "NodeWorkerCapacityExhaustedError";
+  }
 }
 
 /** Owns durable worker slot admission and live full/free publication edges. */
@@ -156,7 +166,7 @@ export class NodeWorkerCapacity {
   private async wait(deadlineMs: number, signal?: AbortSignal): Promise<void> {
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
-      throw new Error(`node worker capacity remained full for ${this.waitMs} ms`);
+      throw new NodeWorkerCapacityExhaustedError(this.waitMs);
     }
     if (signal?.aborted) {
       throw capacityAbortReason(signal);

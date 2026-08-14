@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -266,9 +267,11 @@ describe("node worker supervisor", () => {
     const rejected = launchInput(workspaceDir, "capacity-rejected", "wait");
     await supervisor.launch(running, TEST_WORKER_ENDPOINT);
 
-    await expect(supervisor.launch(rejected, TEST_WORKER_ENDPOINT)).rejects.toThrow(
-      "capacity remained full for 25 ms",
-    );
+    await expect(supervisor.launch(rejected, TEST_WORKER_ENDPOINT)).rejects.toMatchObject({
+      name: "NodeWorkerCapacityExhaustedError",
+      code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+      message: "node worker capacity remained full for 25 ms",
+    });
     expect(new NodeWorkerLaunchStore({ env }).get(rejected.launchId)).toBeUndefined();
     await supervisor.close();
   });
