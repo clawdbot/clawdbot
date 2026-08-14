@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
@@ -96,7 +95,6 @@ function buildRuntimeContext(
     sessionKey,
   });
   const compactCurrent = params.runtimeContext?.compactCurrent;
-  const sessionTarget = params.sessionTarget;
   if (!sessionKey && !agentId) {
     return undefined;
   }
@@ -124,15 +122,12 @@ function buildRuntimeContext(
         }).complete(request);
       },
     },
-    ...(compactCurrent && sessionTarget
+    ...(compactCurrent && params.sessionTarget
       ? {
-          // Command capabilities require this live invocation and its captured session generation.
+          // Command capabilities require this live invocation; retained references fail closed.
           compactCurrent: async () => {
             if (!isInvocationOpen()) {
               return blockedCompaction("command invocation closed");
-            }
-            if (loadSessionEntryReadOnly(sessionTarget)?.sessionId !== sessionTarget.sessionId) {
-              return blockedCompaction("command session changed");
             }
             const result = await compactCurrent();
             return isInvocationOpen() ? result : blockedCompaction("command invocation closed");

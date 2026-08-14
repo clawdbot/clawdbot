@@ -104,12 +104,17 @@ export const handlePluginCommand: CommandHandler = async (
     ...(sessionTarget
       ? {
           runtimeContext: {
-            // Bound-session gating above makes the canonical command outcome authoritative.
             compactCurrent: async () =>
-              (await handleCompactCommand(
-                { ...params, command: { ...params.command, commandBodyNormalized: "/compact" } },
-                true,
-              ))!.sessionCompaction!,
+              (await import("./commands-compact.runtime.js")).readSessionEntry(sessionTarget)
+                ?.sessionId === sessionTarget.sessionId
+                ? (await handleCompactCommand(
+                    {
+                      ...params,
+                      command: { ...params.command, commandBodyNormalized: "/compact" },
+                    },
+                    true,
+                  ))!.sessionCompaction!
+                : { compacted: false, reason: "command session changed" },
           },
         }
       : {}),

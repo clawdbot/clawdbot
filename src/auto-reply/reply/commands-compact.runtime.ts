@@ -9,6 +9,7 @@ export {
   resolveFreshSessionTotalTokens,
   resolveSessionFilePathOptions,
 } from "../../config/sessions.js";
+export { loadSessionEntryReadOnly as readSessionEntry } from "../../config/sessions/session-accessor.js";
 export { enqueueSystemEvent } from "../../infra/system-events.js";
 export { formatContextUsageShort, formatTokenCount } from "../status.js";
 export { incrementCompactionCount } from "./session-updates.js";
