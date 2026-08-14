@@ -35,12 +35,12 @@ import {
   resolveCodexNativeExecutionPolicy,
   type CodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
+import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
+import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import {
   isCodexNativeContainmentCapability,
   type CodexNativeContainmentCapability,
 } from "./runtime-artifact.js";
-import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
-import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import {
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
@@ -392,12 +392,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
   const readableAllTools = [...readableAllToolProjection.tools];
-  const normallyProfiledTools =
-    nativeToolSurfaceEnabled === false
-      ? filterCodexDynamicToolsForDisabledNativeSurface(readableAllTools, input.pluginConfig, {
-          preserveShell: shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy),
-        })
-      : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
+  const normallyProfiledTools = !nativeToolSurfaceEnabled
+    ? filterCodexDynamicToolsForDisabledNativeSurface(readableAllTools, input.pluginConfig, {
+        preserveShell: shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy),
+      })
+    : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
   const hostSystemAgentActive =
     input.isHostScopedToolActive?.("openclaw") ?? isHostScopedAgentToolActive("openclaw");
   const profileFilteredTools =
