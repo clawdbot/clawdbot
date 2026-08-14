@@ -1,0 +1,8 @@
+{
+  "id": "vctraderai-deploy-strategy-to-account",
+  "name": "VC Trader AI Deploy Strategy To Account (Propose)",
+  "description": "Stages a strategy-version-to-account deployment proposal at confirm tier T3. Propose-only: never deploys directly.",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["deploy_strategy_to_account"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

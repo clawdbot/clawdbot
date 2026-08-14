@@ -1,0 +1,8 @@
+{
+  "id": "vctraderai-search-data-vault",
+  "name": "VC Trader AI Search Data Vault",
+  "description": "Workspace-scoped ranked Data Vault full-text search using PFM_AGENT_TOKEN.",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["search_data_vault"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

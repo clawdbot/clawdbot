@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/vctraderai-deploy-strategy-to-account",
+  "version": "2026.8.14",
+  "private": true,
+  "description": "VC Trader AI propose tool that stages a strategy-version-to-account deployment proposal.",
+  "type": "module",
+  "dependencies": { "typebox": "1.1.38" },
+  "devDependencies": { "@openclaw/plugin-sdk": "workspace:*", "openclaw": "workspace:*" },
+  "openclaw": { "extensions": ["./index.ts"] }
+}
