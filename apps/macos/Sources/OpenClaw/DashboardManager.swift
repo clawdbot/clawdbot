@@ -11,7 +11,7 @@ private let dashboardManagerLogger = Logger(subsystem: "ai.openclaw", category: 
 final class DashboardManager {
     static let shared = DashboardManager(
         automaticGatewayProfileRefreshEnabled:
-        AppLaunchPresentationPolicy.current.allowsGatewayUIKeychainAccess)
+        AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
 
     private struct AuxiliaryWindowInstance {
         var target: DashboardGatewayTarget

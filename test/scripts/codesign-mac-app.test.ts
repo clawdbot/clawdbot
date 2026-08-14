@@ -170,7 +170,7 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
-  it("passes generated app entitlements to signing commands and cleans them", () => {
+  it("keeps helper signing plain and limits app entitlements to app code", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-success-");
     const app = path.join(tempRoot, "Fake.app");
     const binDir = path.join(tempRoot, "bin");
@@ -202,10 +202,12 @@ describe("codesign-mac-app temp file hygiene", () => {
 
     const signLines = readFileSync(logPath, "utf8").trim().split("\n");
     expect(signLines).toHaveLength(3);
-    expect(signLines[0]).toContain(`${path.join(app, "Contents", "MacOS", "openclaw-mlx-tts")}\t`);
-    expect(signLines[1]).toContain(`${path.join(app, "Contents", "MacOS", "OpenClaw")}\t`);
-    expect(signLines[2]).toContain(`${app}\t`);
-    for (const line of signLines) {
+    expect(signLines[0]).toBe(`plain\t${path.join(app, "Contents", "MacOS", "openclaw-mlx-tts")}`);
+    expect(signLines[1]).toContain(
+      `entitled\t${path.join(app, "Contents", "MacOS", "OpenClaw")}\t`,
+    );
+    expect(signLines[2]).toContain(`entitled\t${app}\t`);
+    for (const line of signLines.slice(1)) {
       const columns = line.split("\t");
       const entitlementPath = columns[2];
       const copiedEntitlementsPath = columns[3];
@@ -221,6 +223,44 @@ describe("codesign-mac-app temp file hygiene", () => {
       expect(copiedEntitlements).toContain("com.apple.security.device.camera");
     }
     expect(entitlementTemps(tempRoot)).toEqual([]);
+  });
+
+  it.each([
+    ["DISABLE_LIBRARY_VALIDATION", "forbids DISABLE_LIBRARY_VALIDATION=1"],
+    ["SKIP_TEAM_ID_CHECK", "forbids SKIP_TEAM_ID_CHECK=1"],
+  ])("rejects elevation-host %s bypasses before app validation", (key, diagnostic) => {
+    const tempRoot = tempDirs.make("openclaw-codesign-elevation-bypass-");
+    const result = spawnSync("bash", [scriptPath, path.join(tempRoot, "Missing.app")], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+        [key]: "1",
+        TMPDIR: tempRoot,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(diagnostic);
+    expect(entitlementTemps(tempRoot)).toEqual([]);
+  });
+
+  it("defines a closed Foundation elevation-host signing profile", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const elevationProfile = script.slice(
+      script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]'),
+      script.indexOf("else", script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]')),
+    );
+
+    expect(script).toContain(
+      'ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"',
+    );
+    expect(script).toContain('ELEVATION_TEAM_ID="FWJYW4S8P8"');
+    expect(elevationProfile).toContain("<dict/>");
+    expect(elevationProfile).not.toContain("com.apple.security.automation.apple-events");
+    expect(script).toContain("verify_elevation_signature");
+    expect(script).toContain('assert_no_apple_events_entitlement "$APP_BUNDLE"');
   });
 
   it("retries only transient Apple timestamp failures", () => {
