@@ -552,7 +552,7 @@ export function isArtifactSetFresh(params: ArtifactFreshParams) {
   }
   // Repair the mtime fast path so later invocations in this checkout skip
   // without re-reading every input byte.
-  const now = new Date();
+  const now = new Date(Math.max(Date.now(), Math.ceil(newestInputMtimeMs)));
   for (const relativePath of params.outputPaths) {
     const outputPath = resolve(rootDir, relativePath);
     if (fs.existsSync(outputPath)) {
