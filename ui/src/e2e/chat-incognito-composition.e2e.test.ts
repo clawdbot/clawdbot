@@ -69,7 +69,7 @@ suite.define(() => {
         },
         { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), mode: theme },
       );
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         methodResponses: { "sessions.list": incognitoSessions() },
         sessionKey: INCOGNITO_KEY,
       });
@@ -130,6 +130,24 @@ suite.define(() => {
           "dashed",
         );
         await capture("composer-focus", ".agent-chat__composer-shell");
+        const incognitoBorderColor = await composer.evaluate(
+          (node) => getComputedStyle(node).borderColor,
+        );
+
+        // Losing the connection must not dilute the offline warning: the
+        // composer keeps the warning border rather than the quieter incognito
+        // one, so the urgent, recoverable state stays the loud one.
+        await gateway.setOnline(false);
+        await gateway.closeLatest();
+        await expect
+          .poll(() => composer.locator(".agent-chat__offline-hint").count())
+          .toBeGreaterThan(0);
+        const offlineBorderColor = await composer.evaluate(
+          (node) => getComputedStyle(node).borderColor,
+        );
+        expect(offlineBorderColor).not.toBe(incognitoBorderColor);
+        await capture("composer-offline", ".agent-chat__composer-shell");
+        await gateway.setOnline(true);
 
         // No invented exit: incognito is fixed at creation, so the session menu
         // must not offer a transition the gateway cannot perform.
