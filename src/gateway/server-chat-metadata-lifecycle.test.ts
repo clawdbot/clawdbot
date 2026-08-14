@@ -121,4 +121,75 @@ describe("gateway chat metadata lifecycle", () => {
       "chat metadata catch-up refresh failed: Error: metadata unavailable",
     );
   });
+
+  it("retries subordinate changes after a published owner's catch-up build fails", async () => {
+    mocks.refresh.mockRejectedValueOnce(new Error("projection failed"));
+    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const lifecycle = await pendingLifecycle;
+
+    await lifecycle.attachContext(context, []);
+    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
+
+    authListener();
+
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
+  });
+
+  it("defers subordinate changes until an invalidated model owner publishes", async () => {
+    mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
+    const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);
+    const lifecycle = await pendingLifecycle;
+
+    await lifecycle.attachContext(context, []);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+
+    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
+    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
+    const skillsListener = mocks.registerSkillsListener.mock.calls[0]?.[0];
+    expect(modelListener).toEqual(expect.any(Function));
+    expect(authListener).toEqual(expect.any(Function));
+    expect(skillsListener).toEqual(expect.any(Function));
+
+    modelListener({ phase: "invalidated" });
+    authListener();
+    skillsListener();
+
+    expect(mocks.invalidate).toHaveBeenCalledTimes(3);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+
+    modelListener({ phase: "published" });
+
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("refreshes subordinate changes immediately while the model owner is published", async () => {
+    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const lifecycle = await pendingLifecycle;
+
+    await lifecycle.attachContext(context, []);
+    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
+    const skillsListener = mocks.registerSkillsListener.mock.calls[0]?.[0];
+
+    authListener();
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
+    skillsListener();
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(3));
+  });
+
+  it("propagates a failed model publication without starting a refresh", async () => {
+    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const lifecycle = await pendingLifecycle;
+
+    await lifecycle.attachContext(context, []);
+    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
+    const publicationError = new Error("replacement failed");
+
+    modelListener({ phase: "invalidated" });
+    modelListener({ phase: "failed", error: publicationError });
+
+    expect(mocks.fail).toHaveBeenCalledWith(publicationError);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+  });
 });

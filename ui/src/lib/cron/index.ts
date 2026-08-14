@@ -389,12 +389,16 @@ export async function loadCronStatus(state: CronState) {
   }
 }
 
-export async function loadCronModelSuggestions(state: CronModelSuggestionsState) {
-  if (!state.client || !state.connected) {
+export async function loadCronModelSuggestions(
+  state: CronModelSuggestionsState,
+  agentId: string | null,
+) {
+  if (!state.client || !state.connected || !agentId) {
     return;
   }
   try {
     const res = await state.client.request("models.list", {
+      agentId,
       view: "configured",
       preparedOnly: true,
     });
@@ -758,8 +762,8 @@ function clearCronRunsPage(state: CronState) {
   state.cronRunsNextOffset = null;
 }
 
-function resetCronFormToDefaults(state: CronState) {
-  state.cronForm = { ...DEFAULT_CRON_FORM, agentId: state.cronAgentId ?? "" };
+function resetCronFormToDefaults(state: CronState, agentId: string | null) {
+  state.cronForm = { ...DEFAULT_CRON_FORM, agentId: agentId ?? "" };
   // A fresh form starts visually clean; validation re-arms on the first change
   // or submit so required-field errors do not greet the user immediately.
   state.cronFieldErrors = {};
@@ -1146,7 +1150,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                     preserveLastOnUpdate: Boolean(editingJob?.delivery?.channel),
                   })
                 : undefined,
-            to: form.deliveryTo.trim() || undefined,
+            to:
+              form.deliveryTo.trim() ||
+              (selectedDeliveryMode === "announce" && editingJob?.delivery?.to ? null : undefined),
             accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
             ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
@@ -1204,7 +1210,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       result = { saved: true, jobId: editedJobId };
     } else {
       const response = await client.request("cron.add", job);
-      resetCronFormToDefaults(state);
+      resetCronFormToDefaults(state, agentId);
       result = { saved: true, jobId: extractSavedCronJobId(response) };
     }
     await reloadCronJobsSnapshot(state);
@@ -1485,8 +1491,8 @@ export function startCronClone(state: CronState, job: CronJob) {
   state.cronFieldErrors = validateCronForm(state.cronForm);
 }
 
-export function cancelCronEdit(state: CronState) {
+export function cancelCronEdit(state: CronState, agentId: string | null) {
   clearCronEditState(state);
-  resetCronFormToDefaults(state);
+  resetCronFormToDefaults(state, agentId);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -283,6 +283,52 @@ describe("config form scalar integrity", () => {
     ).toBe("Default: balanced");
   });
 
+  it("does not commit a clear while a number input holds partial numeric text", () => {
+    // Browsers report value === "" with validity.badInput while the user is
+    // mid-keystroke ("0." on the way to "0.5"). Committing undefined here
+    // deleted the stored value and wiped the input. jsdom never sets
+    // badInput, so simulate the browser tuple explicitly.
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderNumberInput({
+        schema: { type: "number" },
+        value: 0,
+        path: ["sampleRate"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "partial numeric input",
+    );
+    Object.defineProperty(input, "validity", {
+      value: { badInput: true },
+      configurable: true,
+    });
+    Object.defineProperty(input, "value", {
+      value: "",
+      configurable: true,
+      writable: true,
+    });
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+
+    // A genuine clear (no badInput) still removes the optional override.
+    Object.defineProperty(input, "validity", {
+      value: { badInput: false },
+      configurable: true,
+    });
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["sampleRate"], undefined);
+  });
+
   it("keeps restore disabled while a sensitive value is concealed", () => {
     const container = document.createElement("div");
 

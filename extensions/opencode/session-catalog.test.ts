@@ -256,7 +256,7 @@ function captureOpenCodeContinuationCatalog() {
     {},
     { id: "opencode", config: {}, runtime },
   );
-  return { createSessionEntry, provider: provider! };
+  return { createSessionEntry, entries, provider: provider! };
 }
 
 async function installFakeOpenCode(
@@ -608,6 +608,26 @@ describe("OpenCode session catalog", () => {
     ]);
     expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "opencode-catalog-import",
+    });
+  });
+
+  itWithCli("projects only adopted OpenCode rows with their OpenClaw session key", async () => {
+    await installFakeOpenCode();
+    const { entries, provider } = captureOpenCodeContinuationCatalog();
+    const sessionEntries = { entriesForAgent: () => entries } as never;
+
+    const before = await provider.list({ hostIds: ["gateway"], sessionEntries });
+    expect(before[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+
+    const adopted = await provider.continueSession!({
+      hostId: "gateway",
+      threadId: "ses_test",
+    });
+    const after = await provider.list({ hostIds: ["gateway"], sessionEntries });
+
+    expect(after[0]?.sessions[0]).toMatchObject({
+      threadId: "ses_test",
+      sessionKey: adopted.sessionKey,
     });
   });
 

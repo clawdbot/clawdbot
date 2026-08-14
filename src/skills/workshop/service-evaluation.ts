@@ -96,6 +96,7 @@ export async function evaluateSkillProposal(
   const rawOutcomes = bundles
     ? await runSkillProposalEvaluators(
         {
+          ...(correlationId ? { correlationId } : {}),
           proposal: {
             id: read.record.id,
             kind: read.record.kind,

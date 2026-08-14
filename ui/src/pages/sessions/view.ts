@@ -200,10 +200,6 @@ function resolveThinkLevelOptions(
   ];
 }
 
-function withCurrentOption(options: readonly string[], current: string): string[] {
-  return !current || options.includes(current) ? [...options] : [...options, current];
-}
-
 function withCurrentLabeledOption(
   options: readonly { value: string; label: string }[],
   current: string,
@@ -1639,7 +1635,10 @@ function renderSessionDetailsRow(params: {
     verbose,
   );
   const reasoning = row.reasoningLevel ?? "";
-  const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
+  const reasoningLevels = withCurrentLabeledOption(
+    buildSessionLevelOptions(REASONING_LEVELS),
+    reasoning,
+  );
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
   const checkpointLabel = formatCheckpointCount(visibleCheckpointCount);
@@ -1715,10 +1714,7 @@ function renderSessionDetailsRow(params: {
               label: t("sessionsView.reasoning"),
               disabled: props.loading || Boolean(props.patchAdminDisabledReason),
               disabledReason: props.patchAdminDisabledReason,
-              options: reasoningLevels.map((level) => ({
-                value: level,
-                label: level || t("sessionsView.inherit"),
-              })),
+              options: reasoningLevels,
               current: reasoning,
               onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
             })}

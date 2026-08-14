@@ -300,9 +300,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Pushes retain three lanes of headroom under the workflow's 28-worker cap.
     expect(compact).toHaveLength(25);
     expect(pullRequestCompact).toHaveLength(31);
-    expect(githubCompact).toHaveLength(32);
-    expect(githubPullRequestCompact).toHaveLength(38);
-    expect(githubPullRequestCompact.length).toBeLessThanOrEqual(48);
+    expect(githubCompact).toHaveLength(46);
+    expect(githubPullRequestCompact).toHaveLength(54);
+    expect(githubPullRequestCompact.length).toBeLessThanOrEqual(64);
+    expect(Math.max(...githubCompact.map((shard) => shard.predictedSeconds ?? Infinity))).toBe(209);
+    expect(
+      Math.max(...githubPullRequestCompact.map((shard) => shard.predictedSeconds ?? Infinity)),
+    ).toBe(210);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
@@ -331,8 +335,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Spawn/signal-timing suites never mix with regular groups, and every
     // compact bin runs serially: overlapping Vitest runs flake timing-
     // sensitive tests on both runner classes.
-    const exclusiveGroupRe = /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$/u;
-    for (const shard of pullRequestCompact) {
+    const exclusiveGroupRe =
+      /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$/u;
+    for (const shard of [...pullRequestCompact, ...githubPullRequestCompact]) {
       const exclusiveCount = shard.groups.filter((group) =>
         exclusiveGroupRe.test(group.shard_name),
       ).length;
@@ -370,19 +375,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(pullRequestCompactGroups.map((group) => group.shard_name).toSorted()).toEqual(
       expectedGroupNames.toSorted(),
     );
-    expect(
-      githubCompact.flatMap((shard) => shard.groups.map((group) => group.shard_name)).toSorted(),
-    ).toEqual(compactGroups.map((group) => group.shard_name).toSorted());
-    expect(
-      githubPullRequestCompact
-        .flatMap((shard) => shard.groups.map((group) => group.shard_name))
-        .toSorted(),
-    ).toEqual(pullRequestCompactGroups.map((group) => group.shard_name).toSorted());
+    const hostedOwnerNames = (plan: typeof githubCompact) =>
+      new Set(
+        plan.flatMap((shard) =>
+          shard.groups.map((group) => group.shard_name.replace(/-hosted-\d+$/u, "")),
+        ),
+      );
+    expect(hostedOwnerNames(githubCompact)).toEqual(
+      new Set(compactGroups.map((group) => group.shard_name)),
+    );
+    expect(hostedOwnerNames(githubPullRequestCompact)).toEqual(
+      new Set(pullRequestCompactGroups.map((group) => group.shard_name)),
+    );
     const groupsWith = (plan: typeof githubCompact, shardName: string) =>
       plan.find((shard) => shard.groups.some((group) => group.shard_name === shardName))?.groups;
+    const hostedAgentSupportGroups = githubCompact
+      .flatMap((shard) => shard.groups)
+      .filter((group) => group.shard_name.startsWith("agentic-agents-support-hosted-"));
+    expect(hostedAgentSupportGroups).toHaveLength(2);
     expect(
-      groupsWith(githubCompact, "agentic-agents-support")?.map((group) => group.shard_name),
-    ).toEqual(["agentic-agents-support"]);
+      hostedAgentSupportGroups
+        .flatMap((group) => group.includePatterns ?? [])
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(
+      globSync(agentVitestProjectOwners.support.include, {
+        exclude: agentVitestProjectOwners.support.exclude,
+      })
+        .map(toRepoPath)
+        .toSorted((left, right) => left.localeCompare(right)),
+    );
     expect(
       groupsWith(compact, "agentic-agents-support")?.map((group) => group.shard_name),
     ).toContain("agentic-agents-embedded-overflow-compaction");

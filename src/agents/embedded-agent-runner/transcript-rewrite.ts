@@ -1,5 +1,5 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
-import { stripOpenAIResponsesCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteResult,
@@ -12,9 +12,7 @@ type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
 
 function stripStalePrefixReplay(message: AgentMessage): AgentMessage {
-  return message.role === "assistant"
-    ? stripOpenAIResponsesCompactionReplayCheckpoint(message)
-    : message;
+  return message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message;
 }
 
 function estimateMessageBytes(message: AgentMessage): number {

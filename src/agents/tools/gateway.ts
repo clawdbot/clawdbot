@@ -401,6 +401,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   opts: GatewayCallOptions;
   target: "local" | "remote";
   turnCapability?: string;
+  turnCapabilitySessionKey?: string;
   runId?: string;
   sessionId?: string;
   sourceReplyFinal?: boolean;
@@ -426,11 +427,13 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   if (usesUntrustedGatewayContext && !terminalSourceReply) {
     return undefined;
   }
+  const turnCapabilitySessionKey =
+    normalizeOptionalString(params.turnCapabilitySessionKey) ?? identity.sessionKey;
   const messageActionContext = resolveMessageActionTurnCapability({
     token: params.turnCapability,
     agentId: identity.agentId,
     runId: params.runId,
-    sessionKey: identity.sessionKey,
+    sessionKey: turnCapabilitySessionKey,
     sessionId: params.sessionId,
   });
   if (!messageActionContext) {
@@ -472,6 +475,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
       };
   return await mintAgentRuntimeIdentityToken({
     ...identity,
+    sessionKey: turnCapabilitySessionKey,
     operationalRunInstance: identity.operationalRunInstance,
     messageActionContext: resolvedMessageActionContext,
   });

@@ -18,7 +18,7 @@ import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import type { SkillSnapshot } from "../../../skills/types.js";
+import type { ExplicitSkillSelection, SkillSnapshot } from "../../../skills/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
   SourceReplyDeliveryMode,
@@ -83,6 +83,8 @@ export type FollowupRun = {
   currentInboundAudio?: boolean;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentInboundContext?: CurrentInboundPromptContext;
+  /** Explicit skills resolved from the authenticated inbound message. */
+  explicitSkillSelections?: ExplicitSkillSelection[];
   /** Abort signal for turns that are canceled by their source-channel admission fence. */
   abortSignal?: AbortSignal;
   /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */

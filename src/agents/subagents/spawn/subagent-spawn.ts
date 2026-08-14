@@ -50,7 +50,7 @@ import type {
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
 import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
-import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
+import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
@@ -372,7 +372,7 @@ export async function spawnSubagentDirect(
       agentId: targetAgentId,
     });
     const launchChildRun = async () =>
-      await callSubagentGateway(
+      await callNativeSubagentGateway(
         {
           method: "agent",
           params: childLaunch.request,
@@ -403,6 +403,10 @@ export async function spawnSubagentDirect(
         waitForSessionDeletion,
       });
     type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
+    // Set once the gateway accepts the child run, so a later failure can tell an
+    // accepted run apart from one that never started.
+    let acceptedChildRunId: string | undefined;
+    let taskRowOwnership: "required" | "gateway_best_effort" = "required";
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
       async initialize() {
         const result =
@@ -424,13 +428,26 @@ export async function spawnSubagentDirect(
         if (params.collect) {
           return { runId: childIdem };
         }
-        const response = await launchChildRun();
-        return { runId: readGatewayRunId(response) ?? childIdem };
+        const launch = await launchChildRun();
+        taskRowOwnership = launch.taskRowOwnership;
+        acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
+        return { runId: acceptedChildRunId };
       },
       async cleanupOnFailure({ phase, state }) {
         if (phase === "initialize") {
           await cleanupFailedSpawn();
           return;
+        }
+        // The gateway skips its fallback CLI task row because this launch claims
+        // the run's row, and registration is what delivers it. A register failure
+        // means no owner ever recorded the run, so abort the run the gateway
+        // already accepted instead of leaving it executing unrecorded.
+        if (phase === "register" && acceptedChildRunId && taskRowOwnership === "required") {
+          await terminateAcceptedCollectorRun({
+            childSessionKey,
+            gatewayRunId: acceptedChildRunId,
+            ...provisionalSessionIdentity,
+          });
         }
         await rollbackPreparedContextEngine(state?.contextEnginePreparation);
         if (attachmentAbsDir) {
@@ -518,6 +535,7 @@ export async function spawnSubagentDirect(
           groupId: swarmGroupId,
           queuedLaunch,
           queued: params.collect === true,
+          taskRowOwnership,
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
           retainAttachmentsOnKeep: retainOnSessionKeep,
@@ -549,8 +567,10 @@ export async function spawnSubagentDirect(
         runId: childRunId,
         start: async () => {
           await runWithGatewayIndependentRootWorkContinuation(async () => {
-            const response = await launchChildRun();
-            const gatewayRunId = readGatewayRunId(response) ?? childRunId;
+            const launch = await launchChildRun();
+            // Queued registration already owns the task row before either dispatch route starts.
+            // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
+            const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
             try {
               if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
                 throw new Error(
