@@ -344,7 +344,11 @@ public struct ChatSessionsSheet: View {
                     }
                 }
                 Button {
-                    Task { await self.viewModel.forkSession(key: session.key) }
+                    Task {
+                        await self.viewModel.forkSession(
+                            key: session.key,
+                            fromLastCompleted: session.hasActiveRun == true)
+                    }
                 } label: {
                     self.actionLabel(
                         LocalizedStringKey(String(localized: "Fork")),

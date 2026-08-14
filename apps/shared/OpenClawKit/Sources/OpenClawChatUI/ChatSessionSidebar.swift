@@ -265,7 +265,11 @@ struct ChatSessionSidebar: View {
                 systemImage: session.pinned == true ? "pin.slash" : "pin")
         }
         Button {
-            Task { await self.viewModel.forkSession(key: session.key) }
+            Task {
+                await self.viewModel.forkSession(
+                    key: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
+            }
         } label: {
             self.actionLabel(String(localized: "Fork"), systemImage: "arrow.triangle.branch")
         }
