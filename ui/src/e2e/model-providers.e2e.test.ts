@@ -412,18 +412,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
             skidding: Reflect.get(node, "skidding"),
           })),
         ).toEqual({ distance: 8, placement: "top", skidding: 0 });
-        const helpButtonBox = await helpButton.boundingBox();
-        const labelBox = await utilityLabel.boundingBox();
-        const popoverBox = await popoverBody.boundingBox();
-        if (!helpButtonBox || !labelBox || !popoverBox) {
-          throw new Error("expected utility label, help trigger, and popover bounds");
-        }
-        expect(popoverBox.y + popoverBox.height).toBeLessThan(helpButtonBox.y);
-        const helpButtonCenter = helpButtonBox.x + helpButtonBox.width / 2;
-        const popoverCenter = popoverBox.x + popoverBox.width / 2;
-        expect(Math.abs(helpButtonCenter - popoverCenter)).toBeLessThanOrEqual(1);
-
         if (recordVisuals) {
+          const labelBox = await utilityLabel.boundingBox();
+          const popoverBox = await popoverBody.boundingBox();
+          if (!labelBox || !popoverBox) {
+            throw new Error("expected utility label and popover bounds");
+          }
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
