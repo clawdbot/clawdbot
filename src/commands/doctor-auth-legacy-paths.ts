@@ -22,7 +22,13 @@ function addCandidate(
   agentDir: string | undefined,
 ): void {
   const authPath = resolveLegacyAuthProfilesPath(agentDir);
-  candidates.set(path.resolve(authPath), { agentDir, authPath });
+  const key = path.resolve(authPath);
+  const existing = candidates.get(key);
+  // The shared-main store (undefined agentDir) owns its path: an agent-scoped
+  // alias resolving to the same file must not demote it to a per-agent import.
+  if (!existing || agentDir === undefined) {
+    candidates.set(key, { agentDir, authPath });
+  }
 }
 
 function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
@@ -58,6 +64,9 @@ export function listAuthProfileRepairCandidates(
   env: NodeJS.ProcessEnv,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
+  // The shared-main default store (undefined agentDir) must stay first so the
+  // canonical location wins the per-path dedupe over agent-scoped aliases.
+  addCandidate(candidates, undefined);
   addCandidate(candidates, resolveLegacyInheritedAuthDir(cfg, env));
   const envAgentDir =
     readNonBlankString(env.OPENCLAW_AGENT_DIR) ?? readNonBlankString(env.PI_CODING_AGENT_DIR);
