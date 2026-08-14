@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   created_via TEXT CHECK (created_via IS NULL OR created_via IN ('operator', 'spawn', 'channel', 'cron', 'talk', 'run', 'plugin', 'internal')),
   created_actor_type TEXT CHECK (created_actor_type IS NULL OR created_actor_type IN ('human', 'agent', 'system')),
   created_actor_id TEXT,
+  project_id TEXT,
   parent_session_key TEXT,
   spawned_by TEXT,
   fork_source_session_key TEXT,

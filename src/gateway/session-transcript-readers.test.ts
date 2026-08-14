@@ -7,7 +7,7 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
   replaceTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
@@ -308,7 +308,7 @@ describe("session transcript reader facade", () => {
       })}\n`,
       "utf-8",
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId,

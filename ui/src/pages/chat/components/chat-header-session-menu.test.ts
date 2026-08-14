@@ -4,9 +4,12 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
-import type { SessionMenuActionKind } from "../../../components/session-menu.ts";
 import "./chat-header-session-menu.ts";
-import type { HeaderMenuAction, HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
+import type {
+  HeaderMenuAction,
+  HeaderMenuActionKind,
+  HeaderMenuQuickAction,
+} from "./chat-header-session-menu.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
@@ -46,7 +49,7 @@ async function mountMenu(
     settings?: UiSettings;
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
-    actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
+    actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
@@ -119,7 +122,14 @@ describe("chat header session menu", () => {
       menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
     ).map(itemLabel);
 
-    expect(labels).toEqual(["Rename…", "View", "Fork", "Archive session", "Delete…"]);
+    expect(labels).toEqual([
+      "Rename…",
+      "View",
+      "Fork",
+      "Continue in terminal…",
+      "Archive session",
+      "Delete…",
+    ]);
     expect(
       menu.querySelector(".chat-header-session-menu__trigger")?.getAttribute("aria-label"),
     ).toBe("Actions for Test session");
@@ -189,8 +199,7 @@ describe("chat header session menu", () => {
         {
           id: "changes",
           label: "Show session changes",
-          icon: icons.fileDiff,
-          disabledReason: "This session's workspace is not a git checkout.",
+          icon: icons.diff,
           onActivate: showChanges,
         },
       ],
@@ -211,7 +220,6 @@ describe("chat header session menu", () => {
     expect(panelItems.map(itemLabel)).toEqual(["Show background tasks", "Show session changes"]);
     expect(panelItems[0]?.checked).toBe(false);
     expect(panelItems[0]?.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
-    expect(panelItems[1]?.disabled).toBe(true);
     expect(
       Array.from(
         item(menu, "Layout").querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
@@ -222,7 +230,7 @@ describe("chat header session menu", () => {
     select(menu, "quick:panels:changes");
     select(menu, "quick:layout:split-right");
     expect(showTasks).toHaveBeenCalledOnce();
-    expect(showChanges).not.toHaveBeenCalled();
+    expect(showChanges).toHaveBeenCalledOnce();
     expect(splitRight).toHaveBeenCalledOnce();
   });
 
@@ -287,6 +295,29 @@ describe("chat header session menu", () => {
     dropdown?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true }),
     );
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("emits terminal continuation only while the current Gateway is connected", async () => {
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const connected = await mountMenu({ onAction });
+
+    expect(item(connected, "Continue in terminal…").disabled).toBe(false);
+    const dropdown = connected.querySelector("wa-dropdown") as HTMLElement & { open: boolean };
+    dropdown.open = true;
+    select(connected, "continue-in-terminal");
+    expect(dropdown.open).toBe(false);
+    expect(onAction).toHaveBeenCalledWith({ kind: "continue-in-terminal" });
+
+    const disconnected = await mountMenu({
+      actionDisabledReasons: { "continue-in-terminal": "Gateway disconnected." },
+      onAction,
+    });
+    const disabledAction = item(disconnected, "Continue in terminal…");
+    expect(disabledAction.disabled).toBe(true);
+    expect(disabledAction.getAttribute("title")).toBe("Gateway disconnected.");
+    onAction.mockClear();
+    select(disconnected, "continue-in-terminal");
     expect(onAction).not.toHaveBeenCalled();
   });
 });

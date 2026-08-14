@@ -397,7 +397,7 @@ describe("OpenClaw shell update affordance", () => {
         latestVersion: "2026.7.2",
         channel: "stable" as const,
       },
-      updateRunning: false,
+      updateBusy: false,
       canUpdate: true,
       onUpdate: vi.fn(),
       refreshRequired: false,
@@ -487,7 +487,7 @@ describe("OpenClaw shell update affordance", () => {
     const shared = {
       onboarding: true,
       updateAvailable: null,
-      updateRunning: false,
+      updateBusy: false,
       onUpdate: vi.fn(),
       refreshRequired: true,
       onRefresh: vi.fn(),

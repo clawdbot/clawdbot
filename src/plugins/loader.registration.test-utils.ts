@@ -9,6 +9,7 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -48,10 +49,8 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
+import { listRegisteredMemoryEmbeddingProviderAdapters } from "./memory-embedding-provider-runtime.js";
+import { registerMemoryEmbeddingProvider } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
   getMemoryCapabilityRegistration,
@@ -696,6 +695,47 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("reserves private worker supervisor commands from plugin registration", () => {
+    useNoBundledPlugins();
+    const commands = [...NODE_WORKER_PRIVATE_COMMANDS];
+    const plugin = writePlugin({
+      id: "private-worker-controls",
+      filename: "private-worker-controls.cjs",
+      body: `module.exports = {
+          id: "private-worker-controls",
+          register(api) {
+            for (const command of ${JSON.stringify(commands)}) {
+              api.registerNodeHostCommand({ command, handle: async () => "{}" });
+            }
+            api.registerNodeInvokePolicy({
+              commands: ${JSON.stringify(commands)},
+              handle: async () => ({ ok: true, payloadJSON: "{}" }),
+            });
+          },
+        };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          allow: ["private-worker-controls"],
+          load: { paths: [plugin.file] },
+        },
+      },
+      onlyPluginIds: ["private-worker-controls"],
+    });
+
+    expect(registry.nodeHostCommands).toEqual([]);
+    expect(registry.nodeInvokePolicies).toEqual([]);
+    for (const command of commands) {
+      expect(registry.diagnostics.some((diagnostic) => diagnostic.message.includes(command))).toBe(
+        true,
+      );
+    }
+  });
+
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
     registerMemoryEmbeddingProvider({
@@ -784,7 +824,9 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
-    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(listRegisteredMemoryEmbeddingProviderAdapters().map((adapter) => adapter.id)).toEqual([
+      "active",
+    ]);
     expect(listMemoryPromptPreparations()).toHaveLength(1);
   });
 
@@ -984,7 +1026,7 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryPromptPreparations()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(listMemoryEmbeddingProviders()).toStrictEqual([]);
+    expect(listRegisteredMemoryEmbeddingProviderAdapters()).toStrictEqual([]);
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {

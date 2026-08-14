@@ -19,6 +19,10 @@ import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
+import {
+  SetupMigrationFreshnessError,
+  SetupMigrationTargetChangedError,
+} from "./setup.migration-snapshot.js";
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
@@ -34,6 +38,8 @@ type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuth
 type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
+type ListSetupMigrationOptions =
+  typeof import("./setup.migration-import.js").listSetupMigrationOptions;
 type RunSetupMigrationImport = typeof import("./setup.migration-import.js").runSetupMigrationImport;
 type RunSearchSetupFlow = typeof import("../flows/search-setup.js").runSearchSetupFlow;
 
@@ -129,7 +135,9 @@ const enableDefaultOnboardingInternalHooks = vi.hoisted(() =>
   })),
 );
 const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
-const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
+const listSetupMigrationOptions = vi.hoisted(() =>
+  vi.fn<ListSetupMigrationOptions>(async () => []),
+);
 const runSetupMigrationImport = vi.hoisted(() =>
   vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
 );
@@ -371,7 +379,7 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore: resolvePluginSetupProvider,
 }));
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
@@ -1016,6 +1024,99 @@ describe("runSetupWizard", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
   });
 
+  it("uses the configured remote password for the setup reachability probe", async () => {
+    const remotePassword = "remote-password"; // pragma: allowlist secret
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+            password: remotePassword,
+          },
+        },
+      }),
+    );
+
+    await runSetupWizard(
+      { acceptRisk: true, flow: "advanced", mode: "remote" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: undefined,
+      password: remotePassword,
+    });
+  });
+
+  it("keeps a configured remote token authoritative over an environment password", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+            token: { source: "env", provider: "default", id: "REMOTE_SECRET_TOKEN" },
+          },
+        },
+        secrets: { providers: { default: { source: "env" } } },
+      }),
+    );
+    vi.stubEnv("REMOTE_SECRET_TOKEN", "resolved-remote-token");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password"); // pragma: allowlist secret
+
+    try {
+      await runSetupWizard(
+        { acceptRisk: true, flow: "advanced", mode: "remote" },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: "resolved-remote-token",
+    });
+  });
+
+  it("uses an ambient gateway token as the shared remote fallback", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+          },
+        },
+      }),
+    );
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "ambient-token"; // pragma: allowlist secret
+
+    try {
+      await runSetupWizard(
+        { acceptRisk: true, flow: "advanced", mode: "remote" },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: "ambient-token",
+    });
+  });
+
   it("does not reuse stored remote credentials for an overridden URL", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
@@ -1038,17 +1139,22 @@ describe("runSetupWizard", () => {
       warnings: [],
       legacyIssues: [],
     });
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "ambient-password"); // pragma: allowlist secret
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "advanced",
-        mode: "remote",
-        remoteUrl: "wss://flag.example.com:18789",
-      },
-      createRuntime(),
-      buildWizardPrompter({}),
-    );
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "advanced",
+          mode: "remote",
+          remoteUrl: "wss://flag.example.com:18789",
+        },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://flag.example.com:18789",
@@ -1360,6 +1466,59 @@ describe("runSetupWizard", () => {
 
     expect(runSetupMigrationImport).toHaveBeenCalledOnce();
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "freshness rejection",
+      error: new SetupMigrationFreshnessError(
+        "Migration import during onboarding requires a fresh OpenClaw setup.\nExisting setup:\n- state agents/ exists",
+      ),
+      detail: "state agents/ exists",
+    },
+    {
+      label: "target change",
+      error: new SetupMigrationTargetChangedError(
+        "Migration target changed before promotion. Review it and retry.",
+      ),
+      detail: "Migration target changed before promotion",
+    },
+  ])("returns to setup mode after an interactive import $label", async ({ error, detail }) => {
+    const workspaceDir = await makeCaseDir("import-retry-");
+    listSetupMigrationOptions.mockResolvedValueOnce([{ providerId: "hermes", label: "Hermes" }]);
+    runSetupMigrationImport.mockRejectedValueOnce(error);
+    const setupChoices: Array<"import:hermes" | "quickstart"> = ["import:hermes", "quickstart"];
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
+      if (message === "Setup mode") {
+        return setupChoices.shift();
+      }
+      return "__skip__";
+    });
+    const prompter = buildWizardPrompter({ select: select as unknown as WizardPrompter["select"] });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(2);
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining(detail),
+      "Existing config detected",
+    );
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
   });
 
   it("continues onboarding after a recovered promotion", async () => {
@@ -2445,6 +2604,78 @@ describe("runSetupWizard", () => {
       "gateway probe params",
     );
   });
+
+  it.each([
+    {
+      label: "explicit CLI gateway values",
+      gatewayOptions: {
+        gatewayPort: 19511,
+        gatewayBind: "lan" as const,
+        gatewayAuth: "password" as const,
+        gatewayToken: "manual-gateway-token-placeholder",
+        gatewayPassword: "manual-gateway-password-placeholder",
+        tailscale: "off" as const,
+        tailscaleResetOnExit: false,
+      },
+      expectedPort: 19511,
+      expectedProbeAuth: {
+        token: "manual-gateway-token-placeholder",
+        password: "manual-gateway-password-placeholder",
+      },
+    },
+    {
+      label: "derived port when gateway values are omitted",
+      gatewayOptions: {},
+      expectedPort: 18789,
+      expectedProbeAuth: {},
+    },
+  ])(
+    "uses the $label for the manual probe and port prompt",
+    async ({ gatewayOptions, expectedPort, expectedProbeAuth }) => {
+      const prompter = buildWizardPrompter({});
+      const runtime = createRuntime();
+
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "advanced",
+          mode: "local",
+          authChoice: "skip",
+          ...gatewayOptions,
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+
+      expectRecordFields(
+        getMockCallArg(probeGatewayReachable, 0, 0, "gateway probe"),
+        { url: `ws://127.0.0.1:${expectedPort}`, ...expectedProbeAuth },
+        "gateway probe params",
+      );
+      const gatewaySetup = expectRecordFields(
+        getMockCallArg(configureGatewayForSetup, 0, 0, "gateway setup"),
+        { localPort: expectedPort },
+        "gateway setup params",
+      );
+      if (gatewayOptions.gatewayPort !== undefined) {
+        expect(gatewaySetup.quickstartGateway).toMatchObject({
+          port: 19511,
+          bind: "lan",
+          authMode: "password",
+          token: "manual-gateway-token-placeholder",
+          password: "manual-gateway-password-placeholder",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        });
+      }
+    },
+  );
 
   it("passes secretInputMode through to local gateway config step", async () => {
     configureGatewayForSetup.mockClear();

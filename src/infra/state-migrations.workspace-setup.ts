@@ -27,7 +27,7 @@ import {
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 import {
-  markSourceRemoved,
+  markLegacyMigrationSourceRemoved,
   readReceipt,
   type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
@@ -386,7 +386,7 @@ async function cleanupReceiptSource(params: {
     const hasClaim = await sourceClaim.exists(true);
     if (!hasSource && !hasClaim) {
       if (!params.receipt.removedSource) {
-        markSourceRemoved(params.receipt.sourceKey, params.env);
+        markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
       }
       return { changes: [], warnings: [] };
     }
@@ -433,7 +433,7 @@ async function cleanupReceiptSource(params: {
     }
     assertConfiguredWorkspaceIdentity(params.source);
     await sourceClaim.remove({ skipSourceCheck: true });
-    markSourceRemoved(params.receipt.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
     return {
       changes: [],
       warnings: [],
@@ -564,7 +564,7 @@ async function migrateOneSource(params: {
       throw new Error("legacy workspace claim changed after import");
     }
     await sourceClaim.remove({ removeSource: params.removeSource, skipSourceCheck: true });
-    markSourceRemoved(result.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
     return {
       changes: [],

@@ -27,6 +27,8 @@ import {
 } from "./pending-final-delivery.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
@@ -390,6 +392,10 @@ export async function executePreparedReplyAgentRun(
           isRestartRecoveryArmed,
         }),
       ),
+  );
+  recordReplyOperationAgentTurn(
+    resolveReplyOperationRunState(opts),
+    runOutcome.outcome.kind === "settled" ? runOutcome.outcome.status : "failed",
   );
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();

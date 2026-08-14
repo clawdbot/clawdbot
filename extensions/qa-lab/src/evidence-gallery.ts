@@ -5,7 +5,10 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord as readRecord,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 import type {
   QaEvidenceArtifactView,
@@ -563,12 +566,6 @@ async function buildArtifactView(params: {
       ),
     source: sanitizeGalleryText(params.artifact.source, params),
   };
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function readCountRecord(value: unknown): Record<string, number> {

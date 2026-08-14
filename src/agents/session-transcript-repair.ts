@@ -4,6 +4,7 @@ import type { AgentMessage } from "@openclaw/agent-core";
  *
  * Normalizes raw tool-call blocks and synthesizes missing tool results without rewriting trusted local payloads.
  */
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   hasNonEmptyString as hasNonEmptyStringField,
   normalizeLowercaseStringOrEmpty,
@@ -74,12 +75,7 @@ function hasPartialJson(
 }
 
 function isCompleteJsonObject(value: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
-  } catch {
-    return false;
-  }
+  return safeParseJsonRecord(value) !== undefined;
 }
 
 function isFinalizedOpenAIResponsesToolCall(

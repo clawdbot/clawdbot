@@ -9,6 +9,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { gte as semverGte, valid as validSemver } from "semver";
+import { coerceErrorMessage } from "./lib/error-format.mts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mts";
 import {
   collectPackageDistImports,
@@ -77,7 +78,7 @@ let cliArgs: ReturnType<typeof parseArgs>;
 try {
   cliArgs = parseArgs(process.argv.slice(2));
 } catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
+  fail(coerceErrorMessage(error));
 }
 if (cliArgs.help) {
   console.log(usage());
@@ -209,11 +210,7 @@ function collectBundledPackageRuntimeErrors({
   try {
     bundledPackageJson = JSON.parse(readText(manifestPath)) as Record<string, unknown>;
   } catch (error) {
-    errors.push(
-      `unreadable bundled ${name} package.json: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    errors.push(`unreadable bundled ${name} package.json: ${coerceErrorMessage(error)}`);
     return errors;
   }
   if (bundledPackageJson.name !== name) {
@@ -587,9 +584,7 @@ if (shouldValidateShrinkwrap) {
       );
     }
   } catch (error) {
-    errors.push(
-      `unreadable npm-shrinkwrap.json: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    errors.push(`unreadable npm-shrinkwrap.json: ${coerceErrorMessage(error)}`);
   }
 }
 if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
@@ -682,11 +677,7 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
       }
     }
   } catch (error) {
-    errors.push(
-      `unreadable dist/postinstall-inventory.json: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    errors.push(`unreadable dist/postinstall-inventory.json: ${coerceErrorMessage(error)}`);
   }
 }
 

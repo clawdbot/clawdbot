@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
@@ -38,7 +39,6 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import {
   limitSidebarSessionRows,
   SIDEBAR_SESSION_NO_ATTENTION,
@@ -158,6 +158,7 @@ export function buildSidebarSessionNavigationState(input: {
     }
     return {
       key: row.key,
+      sessionId: row.sessionId,
       displayName: row.displayName,
       incognito: row.incognito === true,
       createdActor: row.createdActor,
@@ -196,6 +197,8 @@ export function buildSidebarSessionNavigationState(input: {
       acpSession: isAcpSessionKey(row.key),
       worktreeId: row.worktree?.id,
       placementState: row.placement?.state,
+      diskSpaceStatus:
+        row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
       workspaceConflictCount:
         row.placement && "workspaceResultConflict" in row.placement
           ? Math.max(

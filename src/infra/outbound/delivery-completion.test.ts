@@ -136,7 +136,7 @@ describe("pending-final delivery completion", () => {
 
   it("does not owe a notice for the pre-dispatch claim or terminal outcomes", async () => {
     await installContextOnPendingFinal();
-    // prepared -> unknown is the pre-I/O claim on every healthy send.
+    await settlePendingFinalDelivery(completion, "queued", ["prepared"]);
     await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
     await settlePendingFinalDelivery(completion, "delivered");
 

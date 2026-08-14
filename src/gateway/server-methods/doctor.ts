@@ -2,8 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -30,7 +33,6 @@ import {
   repairDreamingArtifacts,
   writeBackfillDiaryEntries,
 } from "./doctor.memory-core-runtime.js";
-import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
@@ -131,24 +133,11 @@ export type DoctorMemoryStatusPayload = {
 export type DoctorMemoryEmbeddingRuntimePayload = {
   engine: "llama.cpp";
   state: "ready" | "failed";
-  backend?: "metal" | "cuda" | "vulkan" | "cpu";
-  buildType?: "localBuild" | "prebuilt";
-  deviceNames?: string[];
-  memory?: {
-    totalBytes: number;
-    usedBytes: number;
-    freeBytes: number;
-    unifiedBytes: number;
-    observedAtMs: number;
-  };
-  offload?: {
-    supported: boolean;
-    offloadedLayers?: number;
-    totalLayers?: number;
-  };
-  context?: {
-    requestedSize: number | "auto";
-  };
+  backend?: "metal" | "cpu";
+  buildInfo?: string;
+  model?: { id: string; path?: string };
+  capabilities?: { vision: boolean; draft: boolean };
+  endpoints?: Record<string, "ready" | "unavailable">;
   loadError?: string;
 };
 
@@ -320,11 +309,7 @@ const DREAMING_ENTRY_LIST_LIMIT = 8;
 // Keep malformed persisted timestamps behind valid entries; returning NaN here
 // makes Array.sort preserve arbitrary input order and can hide valid diagnostics.
 function parseDreamingTimestampMs(value: string | undefined): number {
-  if (!value) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
 }
 
 function compareDreamingEntryByRecency(
@@ -521,14 +506,14 @@ function isManagedDreamingJob(
   job: ManagedCronJobLike,
   params: { name: string; tag: string; payloadText: string },
 ): boolean {
-  const description = normalizeTrimmedString(job.description);
+  const description = normalizeOptionalString(job.description);
   if (description?.includes(params.tag)) {
     return true;
   }
   // Older managed jobs may lack the tag, so fall back to the exact system-event signature.
-  const name = normalizeTrimmedString(job.name);
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
-  const payloadText = normalizeTrimmedString(job.payload?.text);
+  const name = normalizeOptionalString(job.name);
+  const payloadKind = normalizeOptionalString(job.payload?.kind)?.toLowerCase();
+  const payloadText = normalizeOptionalString(job.payload?.text);
   return (
     name === params.name && payloadKind === "systemevent" && payloadText === params.payloadText
   );
@@ -662,7 +647,21 @@ function resolveDoctorMemoryAgent(
   }
   const requestedAgentId =
     typeof rawAgentId === "string" ? normalizeAgentId(rawAgentId) : undefined;
-  const agentId = requestedAgentId ?? resolveDefaultAgentId(cfg);
+  let agentId = requestedAgentId;
+  if (!agentId) {
+    try {
+      agentId = resolveDefaultAgentId(cfg, {
+        surface: "doctor memory",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    } catch (error) {
+      if (!(error instanceof AgentSelectionRequiredError)) {
+        throw error;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+      return null;
+    }
+  }
   if (requestedAgentId && !listAgentIds(cfg).includes(agentId)) {
     respond(
       false,
@@ -738,7 +737,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
       }
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
-      const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
+      const workspaceDir = normalizeOptionalString(
+        (status as Record<string, unknown>).workspaceDir,
+      );
       const configuredWorkspaces = requestedAgentId
         ? workspaceDir
           ? [workspaceDir]

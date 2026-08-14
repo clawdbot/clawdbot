@@ -459,6 +459,7 @@ describe("Control UI Vite config", () => {
     }
     const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
     expect(catalog.common.health).toBe("Santé");
+    expect(catalog.activity.title).toBeTypeOf("string");
     expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl"));
   });
 });

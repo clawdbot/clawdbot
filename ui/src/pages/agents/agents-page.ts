@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -28,7 +29,7 @@ import {
   type AgentsState,
 } from "../../lib/agents/index.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
-import { currentConfigObject } from "../../lib/config/index.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
   createInitialCronState,
   loadCronJobsPage,
@@ -42,7 +43,6 @@ import {
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";

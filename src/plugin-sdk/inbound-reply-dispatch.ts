@@ -13,7 +13,7 @@ import {
 } from "../channels/turn/durable-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  normalizeOutboundReplyPayload,
+  normalizeOutboundReplyPayloadCore,
   type OutboundReplyPayload,
 } from "../infra/outbound/reply-payload-normalize.js";
 import { dispatchChannelInboundReply } from "./channel-inbound.js";
@@ -87,7 +87,7 @@ async function recordInboundSessionAndDispatchReply(
     dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
       preparePayload: (payload): OutboundReplyPayload =>
-        payload && typeof payload === "object" ? normalizeOutboundReplyPayload(payload) : {},
+        payload && typeof payload === "object" ? normalizeOutboundReplyPayloadCore(payload) : {},
       deliver: async (payload, info) => {
         if (params.durable) {
           const durable = await deliverInboundReplyWithMessageSendContextCore({

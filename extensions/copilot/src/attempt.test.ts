@@ -14,6 +14,7 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
@@ -485,10 +486,10 @@ function makeParams(
     runId: "run-1",
     sessionFile: "session.json",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey: "agent:agent-1:session-1",
     sessionTarget: {
       sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
+      sessionKey: "agent:agent-1:session-1",
       storePath: "openclaw-agent.sqlite",
     },
     timeoutMs: 5000,
@@ -1716,7 +1717,7 @@ describe("runCopilotAttempt", () => {
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
+        sessionKey: "agent:agent-1:session-1",
         workspaceDir: "C:\\workspace",
       }),
     );
@@ -4903,17 +4904,4 @@ describe("runCopilotAttempt", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -692,7 +692,7 @@ private actor TestChatTransportState {
     var listSessionsQueries: [TestSessionListQuery] = []
     var renamedLabelsByKey: [(key: String, label: String)] = []
     var pinnedChanges: [(key: String, pinned: Bool)] = []
-    var archivedChanges: [(key: String, archived: Bool)] = []
+    var archivedChanges: [(key: String, expectedSessionID: String?, archived: Bool)] = []
     var sessionSettingsRouteGeneration: UInt64 = 0
     var capturedSessionSettingsRouteGenerations: [UInt64] = []
 }
@@ -927,6 +927,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func patchSession(
         key: String,
+        expectedSessionID: String?,
         label: String??,
         category _: String??,
         pinned: Bool?,
@@ -946,7 +947,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
             }
         }
         if let archived {
-            await self.state.archivedChangesAppend(key: key, archived: archived)
+            await self.state.archivedChangesAppend(
+                key: key,
+                expectedSessionID: expectedSessionID,
+                archived: archived)
             if let setSessionArchivedHook {
                 try await setSessionArchivedHook(key, archived)
             }
@@ -1219,7 +1223,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.pinnedChanges
     }
 
-    func archivedChanges() async -> [(key: String, archived: Bool)] {
+    func archivedChanges() async -> [(key: String, expectedSessionID: String?, archived: Bool)] {
         await self.state.archivedChanges
     }
 
@@ -1353,8 +1357,11 @@ extension TestChatTransportState {
         self.pinnedChanges.append((key: key, pinned: pinned))
     }
 
-    fileprivate func archivedChangesAppend(key: String, archived: Bool) {
-        self.archivedChanges.append((key: key, archived: archived))
+    fileprivate func archivedChangesAppend(key: String, expectedSessionID: String?, archived: Bool) {
+        self.archivedChanges.append((
+            key: key,
+            expectedSessionID: expectedSessionID,
+            archived: archived))
     }
 }
 
@@ -11486,6 +11493,50 @@ struct ChatViewModelTests {
         #expect(sanitized == "Hello?")
     }
 
+    @Test func `history system facts survive sanitation and produce visible rows`() async throws {
+        let history = historyPayloadWithoutRunState(
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "[System] Gateway restarted cleanly."]],
+                    "timestamp": 1,
+                    "provenance": [
+                        "kind": "internal_system",
+                        "sourceTool": "restart-sentinel",
+                    ],
+                ]),
+                AnyCodable([
+                    "role": "system",
+                    "content": [],
+                    "timestamp": 2,
+                    "__openclaw": [
+                        "kind": "compaction",
+                        "id": "compact-history",
+                        "tokensBefore": 20000,
+                        "tokensAfter": 8000,
+                    ],
+                ]),
+            ])
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("system history loaded") { await MainActor.run { vm.messages.count == 2 } }
+
+        let rows = await MainActor.run { ChatTranscriptRow.build(from: vm.messages) }
+        #expect(rows.count == 2)
+        guard let first = rows.first, case let .systemNotice(notice) = first else {
+            Issue.record("Expected a restart notice")
+            return
+        }
+        #expect(notice.body == "Gateway restarted cleanly.")
+        guard let last = rows.last, case let .historyDivider(divider) = last else {
+            Issue.record("Expected a compaction divider")
+            return
+        }
+        #expect(divider.metric == "saved 12k tokens")
+    }
+
     @Test func `abort requests do not clear pending until aborted event`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
@@ -11624,9 +11675,13 @@ struct ChatViewModelSessionManagementTests {
     }
 
     @Test func `archive removes the session from the active list`() async throws {
+        let archivedSession = sessionEntry(
+            key: "agent:main:topic-b",
+            updatedAt: 100,
+            sessionId: "session-topic-b")
         let initial = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
-            sessionEntry(key: "agent:main:topic-b", updatedAt: 100),
+            archivedSession,
         ])
         let afterArchive = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
@@ -11640,11 +11695,14 @@ struct ChatViewModelSessionManagementTests {
             await MainActor.run { vm.sessions.count == 2 }
         }
 
-        await MainActor.run { vm.setSessionArchived(key: "agent:main:topic-b", archived: true) }
+        await MainActor.run { vm.setSessionArchived(archivedSession, archived: true) }
         #expect(await MainActor.run { vm.sessions.map(\.key) } == ["agent:main:topic-a"])
         try await waitUntil("archive patch sent") {
             let changes = await transport.archivedChanges()
-            return changes.count == 1 && changes[0].key == "agent:main:topic-b" && changes[0].archived
+            return changes.count == 1 &&
+                changes[0].key == "agent:main:topic-b" &&
+                changes[0].expectedSessionID == "session-topic-b" &&
+                changes[0].archived
         }
     }
 
@@ -11674,13 +11732,22 @@ struct ChatViewModelSessionManagementTests {
                 }
             })
 
-        let restored = await vm.restoreSession(key: "agent:main:old")
+        let restored = await vm.restoreSession(sessionEntry(
+            key: "agent:main:old",
+            updatedAt: 1,
+            sessionId: "session-old",
+            archived: true))
         #expect(restored)
-        let failed = await vm.restoreSession(key: "agent:main:broken")
+        let failed = await vm.restoreSession(sessionEntry(
+            key: "agent:main:broken",
+            updatedAt: 1,
+            sessionId: "session-broken",
+            archived: true))
         #expect(!failed)
         #expect(await MainActor.run { vm.errorText } == "restore failed")
         let changes = await transport.archivedChanges()
         #expect(changes.map(\.key) == ["agent:main:old", "agent:main:broken"])
+        #expect(changes.map(\.expectedSessionID) == ["session-old", "session-broken"])
         #expect(changes.allSatisfy { !$0.archived })
     }
 

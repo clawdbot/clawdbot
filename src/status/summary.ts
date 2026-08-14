@@ -6,12 +6,12 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
 } from "../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
@@ -263,6 +263,7 @@ export async function getStatusSummary(
     includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
+    hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true, includeChannelSummary = true } = options;
@@ -356,7 +357,7 @@ export async function getStatusSummary(
       summary.target === "last"
         ? Boolean(route?.channel && route.to)
         : summary.target === "owner"
-          ? hasResolvableHeartbeatOwnerRoute({ cfg, entry, heartbeat })
+          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
           : true;
     return {
       agentId: agent.id,
@@ -375,7 +376,7 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const mainSessionKey = resolveMainSessionKey(cfg);
+  const mainSessionKey = resolveSystemMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
   taskMaintenanceModule.configureTaskRegistryMaintenance();
@@ -550,7 +551,7 @@ export async function getStatusSummary(
 
   const storeSources = agentList.agents.map((agent) => ({
     agentId: agent.id,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: agent.id }),
+    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
   }));
   const paths = new Set<string>();
   const pathCounts = new Map<string, number>();
@@ -561,7 +562,7 @@ export async function getStatusSummary(
 
   const byAgent = await Promise.all(
     agentList.agents.map(async (agent) => {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
       const candidates = loadSessionCandidates(storePath, agent.id);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
@@ -590,8 +591,16 @@ export async function getStatusSummary(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
   const totalSessions = allSessions.length;
+  const hostDesktopStatus =
+    options.hostDesktopStatus ??
+    (
+      await (
+        await import("../gateway/desktop/host-source.js")
+      ).inspectHostDesktop({ config: cfg.desktop?.host })
+    ).status;
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    hostDesktop: hostDesktopStatus,
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,

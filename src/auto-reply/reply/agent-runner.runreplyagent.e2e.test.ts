@@ -34,11 +34,16 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  replyRunRegistry,
+} from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
@@ -557,6 +562,12 @@ describe("runReplyAgent active steering", () => {
 
   it("injects a steer without claiming a new agent reply", async () => {
     const runState: ReplyOperationRunState = {};
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -582,16 +593,22 @@ describe("runReplyAgent active steering", () => {
       },
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    try {
+      await expect(run()).resolves.toBeUndefined();
 
-    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
-      "session",
-      "hello",
-      expect.objectContaining({ steeringMode: "all" }),
-    );
+      expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
+      expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+        "session",
+        "hello",
+        expect.objectContaining({ steeringMode: "all" }),
+      );
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(replyRunRegistry.get("main")).toBe(active);
+    } finally {
+      active.complete();
+    }
   });
 
   it("does not let before_agent_reply claim an accepted steer", async () => {
@@ -999,6 +1016,29 @@ describe("runReplyAgent heartbeat followup guard", () => {
     await run();
 
     expect(runState.admission).toEqual({ status: "owned" });
+    expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
+  });
+
+  it("records a failed heartbeat turn when a visible reply replaces its synthetic failure", async () => {
+    const runState: ReplyOperationRunState = {};
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Visible terminal failure." }],
+      meta: {
+        error: {
+          kind: "tool_result_mismatch",
+          message: "Agent run failed after producing a visible reply.",
+        },
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
+    });
+
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : [result];
+
+    expect(payloads.map((payload) => payload?.text)).toEqual(["Visible terminal failure."]);
+    expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
   });
 
   it("runs visible turns with the session id returned by admission", async () => {
@@ -1243,8 +1283,12 @@ describe("runReplyAgent heartbeat followup guard", () => {
     });
 
     try {
-      const { run } = createMinimalRun();
+      const runState: ReplyOperationRunState = {};
+      const { run } = createMinimalRun({
+        opts: { [REPLY_OPERATION_RUN_STATE]: runState },
+      });
       await expect(run()).rejects.toThrow("persist exploded");
+      expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
       expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     } finally {
       persistSpy.mockRestore();
@@ -3395,8 +3439,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     for (const testCase of cases) {
       const sessionEntry = makeSessionEntry({
         providerOverride: "openai",
-        modelOverride: "gpt-5.6-luna",
+        modelOverride: "gpt-5.6-sol",
         modelOverrideSource: "user",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
       });
       await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
       const sessionStore = { main: sessionEntry };
@@ -3407,10 +3453,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
         const { run, onFallbackStep } = args;
         expect(args.provider, testCase.name).toBe("openai");
-        expect(args.model, testCase.name).toBe("gpt-5.6-luna");
+        expect(args.model, testCase.name).toBe("gpt-5.6-sol");
         await onFallbackStep?.({
           fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-5.6-luna",
+          fallbackStepFromModel: "openai/gpt-5.6-sol",
           fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
           fallbackStepFromFailureReason: "rate_limit",
           fallbackStepFinalOutcome: "succeeded",
@@ -3423,7 +3469,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           attempts: [
             {
               provider: "openai",
-              model: "gpt-5.6-luna",
+              model: "gpt-5.6-sol",
               error: "Provider openai is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
@@ -3437,7 +3483,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
-        runOverrides: { provider: "openai", model: "gpt-5.6-luna" },
+        runOverrides: { provider: "openai", model: "gpt-5.6-sol" },
       });
       const phases: string[] = [];
       const off = onAgentEvent((evt) => {
@@ -3455,11 +3501,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload.text, testCase.name).toContain("Model Fallback:");
       expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
       expect(stored.providerOverride, testCase.name).toBe("openai");
-      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-luna");
+      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-sol");
       expect(stored.modelOverrideSource, testCase.name).toBe("user");
-      expect(stored.modelProvider, testCase.name).toBe("deepinfra");
-      expect(stored.model, testCase.name).toBe("moonshotai/Kimi-K2.5");
-      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
+      expect(stored.modelProvider, testCase.name).toBe("openai");
+      expect(stored.model, testCase.name).toBe("gpt-5.6-sol");
+      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-sol");
       expect(stored.fallbackNotice?.activeModel, testCase.name).toBe(
         "deepinfra/moonshotai/Kimi-K2.5",
       );

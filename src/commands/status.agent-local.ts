@@ -3,7 +3,7 @@
 
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
@@ -49,7 +49,7 @@ export async function getAgentLocalStatuses(
     const bootstrapPath = workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
     const bootstrapPending = bootstrapPath != null ? await pathExists(bootstrapPath) : null;
 
-    const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
+    const sessionsPath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const sessions = listSessionEntriesReadOnly({ agentId, storePath: sessionsPath })
       // Global/unknown buckets are aggregate compatibility entries, not agent activity.
       .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")

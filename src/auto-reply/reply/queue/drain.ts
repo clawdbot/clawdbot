@@ -4,7 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import { resolveStorePath } from "../../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
@@ -318,6 +318,7 @@ type FollowupRuntimeMetadata = Pick<
   | "currentInboundEventKind"
   | "currentInboundAudio"
   | "currentInboundContext"
+  | "explicitSkillSelections"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -348,7 +349,7 @@ function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
 
 function resolveFollowupTranscriptTarget(source: FollowupRun) {
   const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
-  const storePath = resolveStorePath(source.run.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(source.run.config.session?.store, {
     agentId: source.run.agentId,
   });
   const sessionEntry = loadSessionEntryReadOnly({
@@ -554,10 +555,19 @@ function collectRuntimeMetadata(
       item.onReplyAdmissionWaitChange ? [item.onReplyAdmissionWaitChange] : [],
     ),
   );
+  const explicitSkillSelections = [
+    ...new Map(
+      items
+        .flatMap((item) => item.explicitSkillSelections ?? [])
+        .map((selection) => [selection.path, selection] as const),
+    ).values(),
+  ];
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: collectCurrentInboundContext(items),
+    explicitSkillSelections:
+      explicitSkillSelections.length > 0 ? explicitSkillSelections : undefined,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -914,6 +924,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    explicitSkillSelections: source.explicitSkillSelections,
     media: source.media,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
@@ -979,6 +990,7 @@ async function runSyntheticOverflowSummary(params: {
     errorContext: "followup overflow summary transcript",
   });
   const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
+  const runtimeMetadata = collectRuntimeMetadata(params.sources);
   let admitted = false;
   await params.runFollowup({
     prompt: params.prompt,
@@ -989,7 +1001,8 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
-    onReplyAdmissionWaitChange: collectRuntimeMetadata(params.sources).onReplyAdmissionWaitChange,
+    onReplyAdmissionWaitChange: runtimeMetadata.onReplyAdmissionWaitChange,
+    explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {

@@ -45,6 +45,7 @@ import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-tur
 import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
+import { setupInferenceLog } from "./setup-inference-core.js";
 import { runSetupInferenceTest } from "./setup-inference-persist.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
@@ -1474,6 +1475,7 @@ describe("activateSetupInference", () => {
   it("persists inference only after the live test succeeds", async () => {
     const initialConfig = {
       agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
         list: [
           {
             id: "ops",
@@ -1527,6 +1529,7 @@ describe("activateSetupInference", () => {
       params: { temperature: 1.7 },
       tools: { allow: ["exec"] },
     });
+    expect(configHarness.current().agents?.defaults?.systemAgent).toEqual({ agentId: "ops" });
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(resolveRouteMetadata).toHaveBeenCalledOnce();
   });
@@ -1880,6 +1883,7 @@ describe("activateSetupInference", () => {
     };
     const concurrentConfig: OpenClawConfig = {
       agents: {
+        defaults: { systemAgent: { agentId: "work" } },
         list: [
           { id: "work", default: true, model: "openai/broken", name: "edited during probe" },
           { id: "new-agent", model: "anthropic/claude-opus-5" },
@@ -1900,6 +1904,7 @@ describe("activateSetupInference", () => {
 
     expect(result.ok).toBe(true);
     const persistedConfig = configHarness.current();
+    expect(persistedConfig.agents?.defaults?.systemAgent).toEqual({ agentId: "work" });
     expect(persistedConfig.agents?.entries).toEqual({
       work: {
         default: true,
@@ -1916,6 +1921,7 @@ describe("activateSetupInference", () => {
       name: "default model",
       concurrent: {
         agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
           list: [
             {
               id: "ops",
@@ -1929,12 +1935,13 @@ describe("activateSetupInference", () => {
       } satisfies OpenClawConfig,
     },
     {
-      name: "default agent",
+      name: "system agent",
       concurrent: {
         agents: {
+          defaults: { systemAgent: { agentId: "other" } },
           list: [
-            { id: "ops", agentDir: "/tmp/ops", model: "openai/broken" },
-            { id: "other", default: true, agentDir: "/tmp/other", model: "openai/broken" },
+            { id: "ops", default: true, agentDir: "/tmp/ops", model: "openai/broken" },
+            { id: "other", agentDir: "/tmp/other", model: "openai/broken" },
           ],
         },
       } satisfies OpenClawConfig,
@@ -1955,9 +1962,10 @@ describe("activateSetupInference", () => {
       } satisfies OpenClawConfig,
     },
     {
-      name: "default agent execution settings",
+      name: "system agent execution settings",
       concurrent: {
         agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
           list: [
             {
               id: "ops",
@@ -1975,6 +1983,7 @@ describe("activateSetupInference", () => {
   ])("rejects a changed $name after the live probe", async ({ concurrent }) => {
     const probedConfig = {
       agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
         list: [
           { id: "ops", default: true, agentDir: "/tmp/ops", model: "openai/broken" },
           { id: "other", agentDir: "/tmp/other", model: "openai/broken" },
@@ -2074,6 +2083,7 @@ describe("activateSetupInference", () => {
 
     const result = await activateSetupInference({
       kind: "openai-api-key",
+      modelRef: "openai/gpt-5.6",
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(sourceConfig, { runtimeConfig }),
         runEmbeddedAgent: runEmbeddedAgent as never,
@@ -2124,7 +2134,7 @@ describe("activateSetupInference", () => {
     const result = await activateSetupInference({
       kind: "openai-api-key",
       deps: {
-        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6")) as never,
+        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         // The real revalidation throws when the current route owner no longer
         // matches the probe credential (e.g. a Codex-imported OAuth profile
@@ -2641,23 +2651,14 @@ describe("activateSetupInference", () => {
   it("runs provider-owned local setup from an app-guided discovery choice", async () => {
     const { stateDir, initialConfig } = await createMainAgentFixture();
     const runAuth = vi.fn(async () => ({
-      profiles: [
-        {
-          profileId: "ollama:default",
-          credential: {
-            type: "api_key" as const,
-            provider: "ollama",
-            key: "ollama-local",
-          },
-        },
-      ],
+      profiles: [],
+      defaultModel: "local-test/gemma4",
       configPatch: {
         models: {
           providers: {
-            ollama: {
-              baseUrl: "http://127.0.0.1:11434",
+            "local-test": {
+              baseUrl: "http://127.0.0.1:12345",
               api: "ollama" as const,
-              apiKey: "ollama-local",
               models: [],
             },
           },
@@ -2665,19 +2666,18 @@ describe("activateSetupInference", () => {
       },
     }));
     const detect = vi.fn(async () => ({
-      modelRef: "ollama/qwen3.5:4b",
-      detail: "qwen3.5:4b at http://127.0.0.1:11434",
+      modelRef: "local-test/deepseek-r1",
+      detail: "deepseek-r1 at http://127.0.0.1:12345",
     }));
-    const prepare = vi.fn(async () => ({
+    const prepare = vi.fn(async (params: { modelRef: string }) => ({
       profiles: [],
-      defaultModel: "ollama/qwen3.5:4b",
+      defaultModel: params.modelRef,
       configPatch: {
         models: {
           providers: {
-            ollama: {
-              baseUrl: "http://127.0.0.1:11434",
+            "local-test": {
+              baseUrl: "http://127.0.0.1:12345",
               api: "ollama" as const,
-              apiKey: "ollama-local",
               models: [],
             },
           },
@@ -2685,13 +2685,13 @@ describe("activateSetupInference", () => {
       },
     }));
     const provider: ProviderPlugin = {
-      id: "ollama",
-      label: "Ollama",
-      pluginId: "ollama",
+      id: "local-test",
+      label: "Local Test Provider",
+      pluginId: "local-test",
       auth: [
         {
           id: "local",
-          label: "Ollama",
+          label: "Local Test Provider",
           kind: "custom",
           run: runAuth,
           appGuidedSetup: { detect, prepare },
@@ -2700,14 +2700,14 @@ describe("activateSetupInference", () => {
     };
     const runEmbeddedAgent = vi.fn(
       async (params: SuccessfulRunParams & { authProfileId?: string }) =>
-        successfulRun("ollama", "qwen3.5:4b", params),
+        successfulRun("local-test", "gemma4", params),
     );
     const configHarness = createConfigTransformHarness(initialConfig);
 
     try {
       const result = await activateSetupInference({
         kind: "provider-auth",
-        authChoice: "ollama",
+        authChoice: "local-test",
         workspace: "/tmp/openclaw-workspace",
         prompter: { note: vi.fn(async () => {}) } as never,
         deps: {
@@ -2716,11 +2716,11 @@ describe("activateSetupInference", () => {
           }),
           resolvePluginProviders: () => [provider],
           resolveManifestProviderAuthChoice: () => ({
-            pluginId: "ollama",
-            providerId: "ollama",
+            pluginId: "local-test",
+            providerId: "local-test",
             methodId: "local",
-            choiceId: "ollama",
-            choiceLabel: "Ollama",
+            choiceId: "local-test",
+            choiceLabel: "Local Test Provider",
             appGuidedDiscovery: true,
           }),
           runEmbeddedAgent: runEmbeddedAgent as never,
@@ -2728,25 +2728,14 @@ describe("activateSetupInference", () => {
         },
       });
 
-      expect(result).toMatchObject({ ok: true, modelRef: "ollama/qwen3.5:4b" });
+      expect(result).toMatchObject({ ok: true, modelRef: "local-test/gemma4" });
       expect(runAuth).toHaveBeenCalledOnce();
-      expect(detect).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({
-            models: {
-              providers: {
-                ollama: expect.objectContaining({
-                  baseUrl: "http://127.0.0.1:11434",
-                  apiKey: "ollama-local",
-                }),
-              },
-            },
-          }),
-        }),
-      );
+      expect(detect).not.toHaveBeenCalled();
       expect(prepare).toHaveBeenCalledWith(
-        expect.objectContaining({ modelRef: "ollama/qwen3.5:4b" }),
+        expect.objectContaining({ modelRef: "local-test/gemma4" }),
       );
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(expect.objectContaining({ model: "gemma4" }));
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
@@ -5854,6 +5843,7 @@ describe("verifySetupInference", () => {
   });
 
   it("returns a refreshed staged profile when the live inference test fails", async () => {
+    const warn = vi.spyOn(setupInferenceLog, "warn").mockImplementation(() => {});
     const profileId = "openai:default";
     const runEmbeddedAgent = vi.fn(async (params: { agentDir?: string }) => {
       expect(params.agentDir).toBeDefined();
@@ -5902,6 +5892,17 @@ describe("verifySetupInference", () => {
         },
       ],
     });
+    expect(warn).toHaveBeenCalledWith("Inference setup probe failed.", {
+      event: "setup_inference_probe_failed",
+      provider: "openai",
+      model: "gpt-5.5",
+      runner: "embedded",
+      status: "timeout",
+      timeoutMs: 90_000,
+      durationMs: expect.any(Number),
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("request timed out");
+    warn.mockRestore();
   });
 
   it("rejects a staged credential that differs from the configured profile pin", async () => {

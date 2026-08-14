@@ -56,8 +56,9 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn"
+          class="chat-send-btn new-session-page__start-submit"
           ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${options.onSubmit}
         >
@@ -72,8 +73,9 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn new-session-page__start-primary"
+          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary"
           ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${options.onSubmit}
         >
@@ -270,9 +272,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
           </div>
         </div>
         ${options.pendingAttachmentReads > 0
-          ? html`<span class="agent-chat__sr-only" role="status"
-              >${t("newSession.readingAttachment")}</span
-            >`
+          ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
           : nothing}
       </div>
     </div>

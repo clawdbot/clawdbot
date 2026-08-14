@@ -4,7 +4,10 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as optionalPiString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
 import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
@@ -19,14 +22,6 @@ const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
 export type PiSessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
-
-function optionalPiString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
 
 function boundedLimit(value: unknown, fallback = DEFAULT_PAGE_LIMIT): number {
   if (value === undefined) {

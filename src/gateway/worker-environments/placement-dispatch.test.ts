@@ -17,7 +17,7 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 
 describe("worker placement dispatch", () => {
   let root: string;
@@ -566,9 +566,9 @@ describe("worker placement dispatch", () => {
           to: "provisioning",
           expectedGeneration: interrupted.generation,
           patch: {
-            environmentId: workerEnvironmentIdForIdempotencyKey(
+            environmentId: deriveEnvironmentIntent(
               `session-dispatch:${REQUEST.sessionId}:${interrupted.generation}`,
-            ),
+            ).environmentId,
           },
         });
       }

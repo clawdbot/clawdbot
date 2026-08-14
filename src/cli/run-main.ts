@@ -53,9 +53,9 @@ import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import {
   getCoreCliCommandDescriptors,
-  getCoreCliCommandNames,
+  getCoreCliCommandNamesCore,
 } from "./program/core-command-descriptors.js";
-import { getSubCliEntries } from "./program/subcli-descriptors.js";
+import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import {
   resolveMissingPluginCommandMessage,
   rewriteUpdateFlagArgv,
@@ -865,8 +865,8 @@ function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.
 
 function isKnownBuiltInCommandRoot(primary: string): boolean {
   return (
-    getCoreCliCommandNames().includes(primary) ||
-    getSubCliEntries().some((entry) => entry.name === primary)
+    getCoreCliCommandNamesCore().includes(primary) ||
+    getSubCliEntriesCore().some((entry) => entry.name === primary)
   );
 }
 
@@ -884,7 +884,7 @@ function resolveBuiltInMachineOutput(argv: string[]): boolean {
   if (!primary) {
     return false;
   }
-  const descriptor = [...getCoreCliCommandDescriptors(), ...getSubCliEntries()].find(
+  const descriptor = [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()].find(
     (entry) => entry.name === primary,
   );
   return descriptor ? resolvesMachineOutput(descriptor, argv) : false;

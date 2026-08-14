@@ -123,7 +123,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(harness.patch).toHaveBeenCalledWith(
       archivedRow.key,
       { archived: true },
-      { agentId: "main" },
+      { agentId: "main", expectedSessionId: `session:${archivedRow.key}` },
     );
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
@@ -133,7 +133,11 @@ describe("AppSidebar session mutation feedback", () => {
       2,
       archivedRow.key,
       { archived: false },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: `session:${archivedRow.key}`,
+        deferListRefresh: true,
+      },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       3,

@@ -1,7 +1,7 @@
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import {
@@ -115,7 +115,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           return false;
         }
       }
-      const send = await sendDurableMessageBatch({
+      const send = await sendDurableMessageBatchCore({
         cfg,
         channel: delivery.channel,
         to: delivery.to,

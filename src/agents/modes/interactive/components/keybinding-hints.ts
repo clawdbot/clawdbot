@@ -3,7 +3,7 @@
  */
 
 import { getKeybindings, type Keybinding, type KeyId } from "@earendil-works/pi-tui";
-import { theme } from "../theme/theme.js";
+import { interactiveAgentTheme as theme } from "../theme/theme.js";
 
 function formatKeyPart(part: string): string {
   return process.platform === "darwin" && part.toLowerCase() === "alt" ? "option" : part;

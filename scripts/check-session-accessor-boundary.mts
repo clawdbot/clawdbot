@@ -21,6 +21,7 @@ const legacyReaderNames = new Set([
   "readSessionStoreReadOnly",
   "readSessionStoreSnapshot",
   "resolveSessionStoreEntry",
+  "resolveSessionStoreEntryCore",
 ]);
 const legacyWholeStoreAccessNames = new Set([
   ...legacyReaderNames,
@@ -67,7 +68,10 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
   "updateSessionStore",
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
-const materializingSessionEntryAccessorNames = new Set(["listSessionEntries", "loadSessionEntry"]);
+const materializingSessionEntryAccessorNames = new Set([
+  "listSessionEntriesCore",
+  "loadSessionEntry",
+]);
 
 // Shipped beta.5 official plugins import these deprecated helpers during
 // doctor migrations. Remove this ratchet with the compatibility bridge once
@@ -163,7 +167,6 @@ export const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/mattermost/src/mattermost/model-picker.ts",
   "extensions/matrix/src/matrix/monitor/handler.ts",
   "extensions/matrix/src/session-route.ts",
-  "extensions/qqbot/src/engine/group/activation.ts",
   "extensions/slack/src/monitor/slash.ts",
   "extensions/telegram/src/bot-core.ts",
   "extensions/telegram/src/bot-handlers.runtime.ts",

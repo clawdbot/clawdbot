@@ -20,7 +20,7 @@ import {
 import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
 import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
-import { collectChannelSecurityFindings } from "../security/audit-channel.js";
+import { collectChannelSecurityFindingsCore } from "../security/audit-channel.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
@@ -340,7 +340,7 @@ export async function collectSecurityWarnings(
     warnings.push(...tokenConflict.warningLines);
   }
 
-  const channelFindings = await collectChannelSecurityFindings({
+  const channelFindings = await collectChannelSecurityFindingsCore({
     cfg,
     mode: "doctor",
     plugins: listReadOnlyChannelPluginsForConfig(cfg, {

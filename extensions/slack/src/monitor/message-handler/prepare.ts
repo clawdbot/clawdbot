@@ -36,7 +36,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -538,6 +538,8 @@ async function resolveSlackConversationContext(params: {
   const isRoomish = isRoom || isGroupDm;
   const channelConfig = isRoom
     ? resolveSlackChannelConfig({
+        teamId: params.eventScope?.teamId ?? ctx.teamId,
+        allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
@@ -604,6 +606,7 @@ async function authorizeSlackInboundMessage(params: {
 
   if (
     !ctx.isChannelAllowed({
+      teamId: params.eventScope?.teamId ?? ctx.teamId,
       channelId: message.channel,
       channelName,
       channelType: resolvedChannelType,
@@ -1136,6 +1139,7 @@ export async function prepareSlackMessage(params: {
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const messageIngress = await resolveSlackCommandIngress({
     ctx,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
     senderId,
     senderName: senderNameForAuth,
     channelType: conversation.resolvedChannelType ?? "channel",
@@ -1493,10 +1497,13 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
-  enqueueSystemEvent(inboundLabel, {
-    sessionKey,
-    contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
-  });
+  enqueueRoutedSystemEvent(
+    inboundLabel,
+    { ...route, sessionKey },
+    {
+      contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
+    },
+  );
 
   const envelopeFrom =
     resolveConversationLabel({
@@ -1602,6 +1609,7 @@ export async function prepareSlackMessage(params: {
     threadStarterMedia,
   } = await resolveSlackThreadContextData({
     ctx,
+    agentId: route.agentId,
     account,
     message,
     isGroupDm,
@@ -1666,7 +1674,8 @@ export async function prepareSlackMessage(params: {
       agentId: route.agentId,
       dmScope: route.dmScope,
       accountId: route.accountId,
-      routeSessionKey: sessionKey,
+      routeSessionKey: route.sessionKey,
+      dispatchSessionKey: sessionKey,
       parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: {
@@ -1771,7 +1780,7 @@ export async function prepareSlackMessage(params: {
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
-        allowFrom: ctx.allowFrom,
+        allowFrom: allowFromLower,
         normalizeEntry: normalizeSlackAllowOwnerEntry,
       })
     : null;

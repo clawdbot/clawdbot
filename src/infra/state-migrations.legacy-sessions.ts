@@ -16,7 +16,7 @@ import {
   emptyDirOrMissing,
   isAmbiguousSharedStoreKey,
   isLegacyDefaultMainAliasKey,
-  mergeSessionEntry,
+  selectNewerSessionEntry,
   normalizeSessionEntry,
   pickLatestLegacyDirectEntry,
   removeDirIfEmpty,
@@ -166,7 +166,7 @@ export async function migrateLegacySessions(
     merged[key] = entry;
   }
   for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
-    merged[key] = mergeSessionEntry({
+    merged[key] = selectNewerSessionEntry({
       existing: merged[key],
       incoming: entry,
       preferIncomingOnTie: false,

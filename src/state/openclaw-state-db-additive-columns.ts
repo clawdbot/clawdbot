@@ -11,6 +11,7 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "bootstrap_content_digest", dataType: "TEXT", tableName: "claw_installs" },
   { columnName: "bootstrap_source_path", dataType: "TEXT", tableName: "claw_installs" },
   { columnName: "desktop_json", dataType: "TEXT", tableName: "worker_environments" },
+  { columnName: "bootstrap_install_kind", dataType: "TEXT", tableName: "worker_environments" },
   { columnName: "extension_adapter_identity", dataType: "TEXT", tableName: "claw_package_refs" },
   { columnName: "extension_detected_format", dataType: "TEXT", tableName: "claw_package_refs" },
   { columnName: "extension_format", dataType: "TEXT", tableName: "claw_package_refs" },
@@ -21,4 +22,5 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "terminal_reason", dataType: "TEXT", tableName: "worker_session_placements" },
   { columnName: "terminal_at_ms", dataType: "INTEGER", tableName: "worker_session_placements" },
   { columnName: "run_end_cleanup_json", dataType: "TEXT", tableName: "worktrees" },
+  { columnName: "workspace_dir", dataType: "TEXT", tableName: "installed_plugin_index" },
 ] as const satisfies readonly LazyAdditiveStateColumnDefinition[];

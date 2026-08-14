@@ -437,24 +437,6 @@ describe("createVideoGenerateTool", () => {
     expect(properties.audioRoles).toBeUndefined();
   });
 
-  it("hides reference-audio params for known video provider aliases without audio input support", () => {
-    const properties = toolParameterProperties(
-      createVideoGenerateTool({
-        config: asConfig({
-          agents: {
-            defaults: {
-              videoGenerationModel: { primary: "openai/sora-2" },
-            },
-          },
-        }),
-      }),
-    );
-
-    expect(properties.audioRef).toBeUndefined();
-    expect(properties.audioRefs).toBeUndefined();
-    expect(properties.audioRoles).toBeUndefined();
-  });
-
   it("exposes reference-audio params when the configured video provider declares audio inputs", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({

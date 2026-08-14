@@ -4,15 +4,11 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
-import type {
-  AgentCommandOutputEventData,
-  AgentItemEventData,
-  AgentPatchSummaryEventData,
-} from "../infra/agent-activity-events.js";
 import {
-  emitAgentApprovalEvent,
-  emitAgentCommandOutputEvent,
-  emitAgentPatchSummaryEvent,
+  emitAgentActivityEvent,
+  type AgentCommandOutputEventData,
+  type AgentItemEventData,
+  type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -30,6 +26,11 @@ import {
   readMessageToolSourceReplyText,
   resolveMessageToolSourceReplyFinal,
 } from "./embedded-agent-message-tool-source-reply.js";
+import {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+} from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
   isMessagingToolSendAction,
@@ -77,17 +78,16 @@ import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.typ
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
+} from "./embedded-agent-tool-media.js";
+import {
   capLiveExecResult,
-  extractMessagingToolSourceReplyPayload,
   extractToolErrorCode,
-  extractMessagingToolSend,
-  extractMessagingToolSendResult,
   extractToolErrorMessage,
-  isToolResultError,
   isToolResultTimedOut,
   sanitizeToolResult,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
@@ -95,7 +95,8 @@ import {
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+import { isToolResultError } from "./tool-result-error.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -105,7 +106,7 @@ export async function handleToolExecutionEnd(
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
 ) {
   const rawToolName = evt.toolName;
-  const toolName = normalizeToolName(rawToolName);
+  const toolName = normalizeToolPolicyName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   ctx.state.liveEditDiffStateById.delete(toolCallId);
@@ -127,6 +128,10 @@ export async function handleToolExecutionEnd(
     if (channelView) {
       // A later successful app result supersedes the earlier launch target.
       ctx.state.latestMcpAppChannelView = channelView;
+    }
+    const connectAction = readMcpConnectAction(result);
+    if (connectAction) {
+      ctx.state.latestMcpConnectAction = connectAction;
     }
   }
   try {
@@ -452,9 +457,10 @@ export async function handleToolExecutionEnd(
         ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
         message: execDetails.warningText,
       };
-      emitAgentApprovalEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "approval",
         data: approvalData,
       });
       emitAgentEventCallbackBestEffort(ctx, {
@@ -519,9 +525,10 @@ export async function handleToolExecutionEnd(
           ? { cwd: execDetails.cwd }
           : {}),
       };
-      emitAgentCommandOutputEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "command_output",
         data: outputData,
       });
       emitAgentEventCallbackBestEffort(ctx, {
@@ -545,9 +552,10 @@ export async function handleToolExecutionEnd(
             toolCallId,
             message: parsedApprovalResult.body || parsedApprovalResult.raw,
           };
-          emitAgentApprovalEvent({
+          emitAgentActivityEvent({
             runId: ctx.params.runId,
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+            stream: "approval",
             data: approvalData,
           });
           emitAgentEventCallbackBestEffort(ctx, {
@@ -591,9 +599,10 @@ export async function handleToolExecutionEnd(
         deleted: patchSummary.deleted,
         summary: summaryText ?? buildPatchSummaryText(patchSummary),
       };
-      emitAgentPatchSummaryEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "patch",
         data: patchData,
       });
       emitAgentEventCallbackBestEffort(ctx, {

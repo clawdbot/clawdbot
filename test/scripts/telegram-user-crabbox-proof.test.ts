@@ -388,6 +388,19 @@ describe("telegram user Crabbox proof log polling", () => {
     );
   });
 
+  it("accepts only a positive fixed human delay", () => {
+    expect(parseArgs(["start", "--human-delay-fixed-ms", "1200"]).humanDelayFixedMs).toBe(1200);
+    expect(() => parseArgs(["start", "--human-delay-fixed-ms", "0"])).toThrow(
+      "--human-delay-fixed-ms must be a positive integer.",
+    );
+    expect(() => parseArgs(["start", "--human-delay-fixed-ms", "1e3"])).toThrow(
+      "--human-delay-fixed-ms must be a positive integer.",
+    );
+    expect(() =>
+      parseArgs(["send", "--session", "session.json", "--human-delay-fixed-ms", "1200"]),
+    ).toThrow("--human-delay-fixed-ms is available only for start sessions.");
+  });
+
   it("rejects duplicate single-value proof controls while keeping repeated expectations", () => {
     expect(() =>
       parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
@@ -496,6 +509,35 @@ describe("telegram user Crabbox proof log polling", () => {
 
     expect(disabledConfig.channels.telegram.linkPreview).toBe(false);
     expect(defaultConfig.channels.telegram).not.toHaveProperty("linkPreview");
+  });
+
+  it("injects the requested fixed human delay before startup", () => {
+    const delayedConfigRoot = writeSutConfig({
+      gatewayPort: 19042,
+      groupId: "group",
+      humanDelayFixedMs: 1200,
+      mockPort: 19043,
+      outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
+      testerId: "tester",
+    });
+    const defaultConfigRoot = writeSutConfig({
+      gatewayPort: 19044,
+      groupId: "group",
+      mockPort: 19045,
+      outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
+      testerId: "tester",
+    });
+    tempDirs.push(delayedConfigRoot.tempRoot, defaultConfigRoot.tempRoot);
+
+    const delayedConfig = JSON.parse(fs.readFileSync(delayedConfigRoot.configPath, "utf8"));
+    const defaultConfig = JSON.parse(fs.readFileSync(defaultConfigRoot.configPath, "utf8"));
+
+    expect(delayedConfig.agents.defaults.humanDelay).toEqual({
+      maxMs: 1200,
+      minMs: 1200,
+      mode: "custom",
+    });
+    expect(defaultConfig.agents.defaults).not.toHaveProperty("humanDelay");
   });
 
   it("pins the browser fixture SDK and exposes only the required app capabilities", () => {

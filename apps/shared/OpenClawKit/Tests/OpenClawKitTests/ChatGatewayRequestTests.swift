@@ -250,10 +250,20 @@ struct ChatGatewayRequestTests {
         let archive = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
+            expectedSessionID: "session-child",
             label: nil,
             category: nil,
             pinned: nil,
             archived: true,
+            unread: nil)
+        let restore = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "agent:main:child",
+            agentID: nil,
+            expectedSessionID: "session-child",
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: false,
             unread: nil)
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:main:child",
@@ -261,6 +271,10 @@ struct ChatGatewayRequestTests {
 
         #expect(rename.params["label"]?.value is NSNull)
         #expect(archive.params["archived"]?.value as? Bool == true)
+        #expect(archive.params["expectedSessionId"]?.value as? String == "session-child")
+        #expect(archive.timeoutMs == 600_000)
+        #expect(restore.params["expectedSessionId"]?.value as? String == "session-child")
+        #expect(restore.timeoutMs == 15000)
         #expect(fork.method == "sessions.create")
         #expect(fork.params["parentSessionKey"]?.value as? String == "agent:main:child")
         #expect(fork.params["fork"]?.value as? Bool == true)

@@ -15,7 +15,6 @@ function createChatComposerState(): ChatComposerState {
     slashMenuMode: "command",
     slashMenuCommand: null,
     slashMenuArgItems: [],
-    slashMenuExpanded: false,
     slashCommandRefreshPending: false,
     skillMenuOpen: false,
     skillMenuItems: [],

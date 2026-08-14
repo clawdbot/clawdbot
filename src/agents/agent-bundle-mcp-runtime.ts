@@ -51,6 +51,7 @@ import type {
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
+  RequesterMcpConnect,
   SessionMcpRequesterScope,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
@@ -400,6 +401,7 @@ export function createSessionMcpRuntime(params: {
   connectionOverrides?: ReadonlyMap<string, McpServerConnectionResolved>;
   redactConnectionServerNames?: ReadonlySet<string>;
   requesterScope?: SessionMcpRequesterScope;
+  requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): SessionMcpRuntime {
@@ -695,6 +697,7 @@ export function createSessionMcpRuntime(params: {
             cfg: params.cfg,
             agentDir: params.agentDir,
             prepareDataDir: dataDirOwnership?.dataDir,
+            requesterScope: params.requesterScope,
           });
           if (!resolved) {
             continue;
@@ -1047,6 +1050,7 @@ export function createSessionMcpRuntime(params: {
     agentDir: params.agentDir,
     configFingerprint,
     ...(params.requesterScope ? { requesterScope: params.requesterScope } : {}),
+    ...(params.requesterConnect ? { requesterConnect: params.requesterConnect } : {}),
     // A runtime partition hosts either only static or only requester-scoped servers.
     isRequesterScopedServer: () => params.requesterScope !== undefined,
     mcpAppsEnabled,

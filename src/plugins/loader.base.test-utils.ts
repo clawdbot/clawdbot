@@ -53,7 +53,7 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
@@ -432,7 +432,7 @@ describe("loadOpenClawPlugins", () => {
         allow: [plugin.id],
       },
     };
-    const manifestRegistry = loadPluginManifestRegistry({ config });
+    const manifestRegistry = loadPluginManifestRegistryCore({ config });
     fs.rmSync(path.join(plugin.dir, "openclaw.plugin.json"));
 
     const registry = loadOpenClawPlugins({
@@ -1635,7 +1635,7 @@ describe("loadOpenClawPlugins", () => {
     const discovery = await import("./discovery.js");
     const manifestRegistry = await import("./manifest-registry.js");
     const discoverySpy = vi.spyOn(discovery, "discoverOpenClawPlugins");
-    const manifestSpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry");
+    const manifestSpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore");
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -1856,7 +1856,7 @@ describe("loadOpenClawPlugins", () => {
 
     const manifestRegistry = await import("./manifest-registry.js");
     const manifestSpy = vi
-      .spyOn(manifestRegistry, "loadPluginManifestRegistry")
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryCore")
       .mockImplementation(() => {
         throw new Error("corrupt plugin manifest");
       });

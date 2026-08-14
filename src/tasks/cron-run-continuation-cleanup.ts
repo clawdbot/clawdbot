@@ -1,6 +1,6 @@
 /** Removes an idle exact-run continuation through the session lifecycle owner. */
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -54,7 +54,7 @@ export async function removeCronRunContinuationSessionIfIdle(
   }
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const cfg = getRuntimeConfig();
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const entry = loadSessionEntry({
     agentId,
     sessionKey,

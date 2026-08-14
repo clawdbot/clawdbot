@@ -83,7 +83,7 @@ describe("runtime workspace state pin", () => {
         new URL("./runtime-workspace-state.ts?workspace-pin-reload", import.meta.url).href
       );
 
-      expect(reloaded.getActivePluginRegistryWorkspaceDirFromState()).toBe("/workspace/a");
+      expect(reloaded.getActivePluginRegistryWorkspaceDirFromStateCore()).toBe("/workspace/a");
     });
   });
 

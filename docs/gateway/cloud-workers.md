@@ -9,7 +9,7 @@ doc-schema-version: 1
 
 Cloud workers let a session run its agent loop on a throwaway cloud machine while everything about the session stays where it always was: visible in the sidebar, streaming live, with the transcript owned by the Gateway. The Gateway leases a box, installs a pinned copy of OpenClaw on it, syncs the session's workspace over, and hands the turn loop to a restricted `openclaw worker` process. Model calls are proxied back through the Gateway, so provider credentials never leave your machine, and prompt caching keeps working because the provider sees one continuous stream.
 
-When the work is done (or the box dies), the machine is discarded. The durable state — transcript, workspace commits, placement records — lives with the Gateway.
+When the work is done (or the box dies), the machine is discarded. The durable state — transcript, last-reconciled workspace files, and placement records — lives with the Gateway.
 
 <Note>
 Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and the Gateway does not advertise `sessions.dispatch`. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
@@ -17,13 +17,13 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 
 ## What runs where
 
-| Concern                                                 | Location                                                                         |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Agent loop + tools (`exec`, `read`, `write`, `edit`, …) | Cloud worker box                                                                 |
-| Model inference and provider credentials                | Gateway (proxied by `{provider, model}` reference)                               |
-| Transcript (durable, session store)                     | Gateway                                                                          |
-| Live streaming into the sidebar                         | Gateway fanout, fed by the worker's replayable event stream                      |
-| Workspace git history                                   | Authored on the box credential-free; the Gateway adopts commits and owns push/PR |
+| Concern                                                 | Location                                                                          |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Agent loop + tools (`exec`, `read`, `write`, `edit`, …) | Cloud worker box                                                                  |
+| Model inference and provider credentials                | Gateway (proxied by `{provider, model}` reference)                                |
+| Transcript (durable, session store)                     | Gateway                                                                           |
+| Live streaming into the sidebar                         | Gateway fanout, fed by the worker's replayable event stream                       |
+| Workspace file state                                    | Changed on the box credential-free; the Gateway reconciles files and owns push/PR |
 
 The box needs no inbound ports except `sshd`: the Gateway connects out via pinned SSH, and a reverse tunnel carries the worker's WebSocket back. The bundled Crabbox provider forces the public SSH route and disables managed Tailscale enrollment. Outbound internet access is provider policy; the default AWS profile can reach the internet unless you restrict its network or security group.
 
@@ -149,6 +149,8 @@ In the Control UI, open **New Session** and use the unified **Place** picker to 
 
 Cloud selection enables that worktree automatically. The Gateway creates the session, finishes dispatch, and only then sends the first turn. The server badge in the session sidebar shows the durable placement state.
 
+While a placement is active, OpenClaw automatically samples available space on the remote workspace volume. Low-space warnings appear in the selected chat and on the session's cloud badge. They are advisory, clear automatically after space recovers, and do not stop or reclaim the worker.
+
 Cloud workers run the OpenClaw agent runtime. Models mapped to an external runtime such as Codex or Claude CLI are disabled in the picker; select a direct model that resolves to the OpenClaw runtime. Cloud targets are not offered for external CLI session catalogs.
 
 The equivalent RPC flow is:
@@ -188,6 +190,14 @@ openclaw gateway call sessions.reclaim \
 
 Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. A failed model turn keeps the active placement available for a retry. Workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
 
+## What survives a dead machine
+
+The Gateway commits each complete user, assistant, and tool-result message to the canonical session transcript before the worker's session write settles. Commits are ordered and idempotent against the exact transcript leaf. If the machine disappears mid-message, durable history ends at the last committed message. Partial text or tool progress already shown by the live stream may disappear; the failed turn remains visible, and the failed placement records a bounded terminal reason above the composer.
+
+Workspace state has a wider loss window. A completed turn reconciles worker files before releasing its claim, and **Stop cloud worker…** performs one final reconciliation before destroying the machine. Changes made between reconciliations exist only on the worker and can be lost. Session deletion does not synchronize a live worker: active placements must first be stopped or archived. Deletion then snapshots the already-reconciled managed worktree under `refs/openclaw/snapshots/` before removing it.
+
+After a failed placement, redispatch the session and retry the turn. A reclaimed placement redispatches automatically on the next turn. The new worker rebuilds its inference context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
+
 ## Desktop (interactive)
 
 Cloud Worker Desktop is an experimental Labs feature and is off by default. Enable **Cloud Worker Desktop** in **Settings → Agents & Tools → Labs**, or set `cloudWorkers.desktop: true`, then restart the Gateway for the Desktop panel to appear.
@@ -196,7 +206,7 @@ Set `"desktop": true` in a crabbox profile's `settings` to lease worker boxes wi
 
 Operators with `operator.admin` access watch and control the desktop from the Control UI **Desktop** panel (also in the command palette). The panel lists desktop-capable environments from `environments.list`, shows only apps the provider advertised, and launches those apps through `worker.desktop.launch`. It connects through the Gateway, which forwards the box's loopback VNC over the same pinned SSH transport used for worker traffic — the desktop is never exposed on the box's network, and the VNC password is delivered only inside the authenticated `worker.desktop.observe` RPC result, never stored by the Gateway.
 
-Connections start view-only. **Take control** requests an input-capable connection; only one controller is active at a time, and taking control disconnects the previous controller (they are downgraded to view-only). Up to 8 observers can watch one environment. The desktop forward starts on first observe and shuts down about a minute after the last observer disconnects; stopping or reclaiming the environment tears it down immediately.
+Connections start view-only. Clicking the desktop takes control (an input-capable connection); only one controller is active at a time, and taking control disconnects the previous controller (they are downgraded to view-only). Up to 8 observers can watch one environment. The desktop forward starts on first observe and shuts down about a minute after the last observer disconnects; stopping or reclaiming the environment tears it down immediately.
 
 The Browser launcher starts one visible Chrome or Chromium process on the worker display with raw CDP bound to `127.0.0.1` and a fresh lease-scoped user-data directory. It does not import cookies, attach the Chrome extension relay, or use Chrome MCP. The operator toolbar and cloud-worker agent share this process. A worker turn receives the normal `browser` tool only when the lease advertises Browser, the bundled Browser plugin is active, and normal tool policy allows `browser`; workers without that capability keep the existing coding-tool catalog. Generic desktop `computer` control is not part of this Labs surface.
 
@@ -225,6 +235,7 @@ Desktop observe and app launch are not supported when the Gateway itself runs on
 - **Direct AWS authorization fails after `doctor` passes** — `doctor` proves read-only AWS access, not the complete mutation policy. Inspect the named denied action and grant only Crabbox's required provisioning/cleanup actions, or configure coordinator-backed Crabbox instead. A fresh direct AWS lease normally needs key-pair import before `RunInstances`; an authorization failure there creates no instance.
 - **Worker reclaimed after upgrading from a 2026.7.2 beta** — those betas used the older worker launch contract. On restart, OpenClaw destroys an idle incompatible worker, keeps the session and workspace, marks the placement reclaimed, and provisions a current worker on the next dispatch or turn. A beta worker interrupted while still starting is marked failed after cleanup; retry the dispatch to provision it with the current contract.
 - **Cloud workspace conflict notice** — the turn completed and kept the local version of each listed path. Use the staged-ref commands in the notice to inspect or take the cloud version; no retry is required for the non-conflicting changes, which are already applied.
+- **Cloud session disk-space warning** — delete unneeded files from the remote workspace or stop the cloud worker before large writes. The warning clears automatically after the next successful sample shows enough free space; a failed sample leaves the last successful warning visible and does not affect the session lifecycle.
 - **“The previous cloud turn's workspace result is still reconciling”** — the Gateway waited briefly for the prior result's durable fence and could not acquire the session claim. Wait for reconciliation to finish, then retry the turn; restarting the Gateway is safe because recovery preserves staged results before reclaiming a dead worker.
 - **Lease housekeeping** — `crabbox list --provider <backend> --json` is a read-only inventory. `crabbox stop --provider <backend> --id <lease>` and `crabbox release --provider <backend> --id <lease>` are destructive and release a lease manually. Idle leases expire on the profile's `idleTimeout`.
 

@@ -146,14 +146,10 @@ suite.define(() => {
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
-    const workingLabel = currentPage.locator(
-      ".chat-working-indicator__status > .agent-chat__sr-only",
-    );
+    const workingLabel = currentPage.locator(".chat-working-indicator__status > .sr-only");
     expect(await workingLabel.textContent()).toBe("Working…");
     expect(
-      await currentPage
-        .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")
-        .count(),
+      await currentPage.locator(".chat-working-indicator__status > span:not(.sr-only)").count(),
     ).toBe(0);
   });
 

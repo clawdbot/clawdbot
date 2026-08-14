@@ -1,9 +1,9 @@
 /** Base Vitest mocks for Windows schtasks daemon tests. */
 import { vi } from "vitest";
 import {
+  gatewayServiceProbeHostsMock,
   inspectPortUsageMock,
   killProcessTreeMock,
-  resolveGatewayServiceProbeHosts,
   schtasksCalls,
   schtasksResponses,
 } from "./schtasks-fixtures.js";
@@ -22,7 +22,7 @@ vi.mock("../../infra/ports-inspect.js", () => ({
 }));
 
 vi.mock("../gateway-service-probe-hosts.js", () => ({
-  resolveGatewayServiceProbeHosts: () => resolveGatewayServiceProbeHosts(),
+  resolveGatewayServiceProbeHosts: () => gatewayServiceProbeHostsMock(),
 }));
 
 vi.mock("../../process/kill-tree.js", () => ({

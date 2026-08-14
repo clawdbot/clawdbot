@@ -232,8 +232,10 @@ pnpm test:perf:groups --report <vitest-json> \
 - For test-only changes, run `pnpm test:changed` or the exact edited tests.
 - Run `pnpm build` when touching lazy-loading, bundled artifacts, package
   boundaries, dynamic imports, build output, or public surfaces.
-- For plugin SDK/barrel/runtime changes, add `pnpm plugin-sdk:api:check` or
-  `pnpm plugin-sdk:api:gen` when the API surface may drift.
+- For plugin SDK/barrel/runtime changes, compare exact commits with
+  `pnpm plugin-sdk:api:diff -- --base <base-sha> --head <head-sha>` when the
+  public API surface may drift. For PR-local proof, use the branch merge base
+  as `<base-sha>` and the exact tested head commit as `<head-sha>`.
 - For plugin-suite perf fixes, verify at least one representative plugin batch
   plus the changed gate; use Package Acceptance if the bug only exists in a
   packed artifact.

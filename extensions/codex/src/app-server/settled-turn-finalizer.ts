@@ -39,6 +39,7 @@ export async function runCodexSettledTurnFinalization(
   const bounded = await runBoundedCodexAppServerTurn({
     config: attempt.config,
     model: { mode: "required", id: attempt.modelId },
+    modelProvider: "openai",
     profile: attempt.authProfileId,
     timeoutMs: attempt.runTimeoutOverrideMs ?? attempt.timeoutMs,
     signal: attempt.abortSignal,

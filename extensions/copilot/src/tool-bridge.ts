@@ -23,6 +23,7 @@ import {
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
 
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
@@ -910,8 +911,4 @@ function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
     .filter(([, count]) => count > 1)
     .map(([name]) => name)
     .toSorted();
-}
-
-function toCopilotToolError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

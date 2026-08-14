@@ -67,7 +67,8 @@ type WorkerEmbeddedTranscriptClient = {
 };
 
 type WorkerEmbeddedLiveClient = {
-  emit: (event: WorkerLiveEvent) => Promise<void>;
+  enqueuePreview: (event: WorkerLiveEvent) => boolean;
+  emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
 
 type RunWorkerEmbeddedTurnParams = {
@@ -317,7 +318,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     } catch (error) {
       finalTranscriptFailure = toWorkerAgentError(error, "Worker transcript flush failed.");
     }
-    await liveRuntime.flush();
     if (finalTranscriptFailure === undefined) {
       await liveRuntime.emitTerminal();
     }

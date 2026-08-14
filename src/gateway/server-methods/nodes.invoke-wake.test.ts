@@ -16,7 +16,7 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
-import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
+import { expectRecordFields, requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
@@ -201,7 +201,7 @@ function isUuidV4(value: string): boolean {
 
 function requireRespondPayload(call: RespondCall | undefined, label: string) {
   expect(call?.[0], `${label} success`).toBe(true);
-  return requireRecord(call?.[1], `${label} payload`);
+  return requireGatewayRecord(call?.[1], `${label} payload`);
 }
 
 function expectQueuedAction(
@@ -583,10 +583,13 @@ describe("plugin surface refresh", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(true);
     expect(call[2]).toBeUndefined();
-    const payload = requireRecord(call[1], "refresh payload");
+    const payload = requireGatewayRecord(call[1], "refresh payload");
     expect(payload.surface).toBe("canvas");
     expect(payload.expiresAtMs).toBe(1_100);
-    const pluginSurfaceUrls = requireRecord(payload.pluginSurfaceUrls, "refresh surface urls");
+    const pluginSurfaceUrls = requireGatewayRecord(
+      payload.pluginSurfaceUrls,
+      "refresh surface urls",
+    );
     const canvasUrl = requireString(pluginSurfaceUrls.canvas, "refresh canvas url");
     const parsedCanvasUrl = new URL(canvasUrl);
     expect(parsedCanvasUrl.origin).toBe("http://127.0.0.1:18789");
@@ -629,8 +632,11 @@ describe("plugin surface refresh", () => {
 
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(true);
-    const payload = requireRecord(call[1], "operator refresh payload");
-    const pluginSurfaceUrls = requireRecord(payload.pluginSurfaceUrls, "operator surface urls");
+    const payload = requireGatewayRecord(call[1], "operator refresh payload");
+    const pluginSurfaceUrls = requireGatewayRecord(
+      payload.pluginSurfaceUrls,
+      "operator surface urls",
+    );
     const canvasUrl = requireString(pluginSurfaceUrls.canvas, "operator canvas url");
     expect(canvasUrl).not.toContain("old-token");
     expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
@@ -718,9 +724,12 @@ describe("plugin surface refresh", () => {
 
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(true);
-    const payload = requireRecord(call[1], "refresh payload");
+    const payload = requireGatewayRecord(call[1], "refresh payload");
     expect(payload.expiresAtMs).toBe(1_100);
-    const pluginSurfaceUrls = requireRecord(payload.pluginSurfaceUrls, "refresh surface urls");
+    const pluginSurfaceUrls = requireGatewayRecord(
+      payload.pluginSurfaceUrls,
+      "refresh surface urls",
+    );
     const canvasUrl = requireString(pluginSurfaceUrls.canvas, "refresh canvas url");
     expect(canvasUrl).not.toBe(currentUrl);
     expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
@@ -1888,7 +1897,7 @@ describe("node.invoke APNs wake path", () => {
 
     await maybeWakeNodeWithApns(nodeId, { lifecycle, generation });
 
-    const transport = requireRecord(
+    const transport = requireGatewayRecord(
       mockArg(mocks.sendApnsBackgroundWake, 0, 0),
       "guarded APNs transport",
     );
@@ -2114,7 +2123,10 @@ describe("node.invoke APNs wake path", () => {
       requestParams: { nodeId, idempotencyKey: "idem-revoked-during-dispatch" },
     });
     await vi.waitFor(() => expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1));
-    const signal = requireRecord(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload").signal;
+    const signal = requireGatewayRecord(
+      mockArg(nodeRegistry.invoke, 0, 0),
+      "node invoke payload",
+    ).signal;
     if (!(signal instanceof AbortSignal)) {
       throw new Error("expected dispatched node work to receive an abort signal");
     }
@@ -2220,7 +2232,7 @@ describe("node.invoke APNs wake path", () => {
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
     const call = firstRespondCall(respond);
-    const details = requireRecord(call[2]?.details, "queued foreground details");
+    const details = requireGatewayRecord(call[2]?.details, "queued foreground details");
     expectRecordFields(details.wake, "queued foreground wake", {
       path: "sent",
       available: true,

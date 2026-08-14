@@ -402,21 +402,38 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
-  const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
+  const parsePreauthConnectFrame = (data: RawData) => {
     if (isClosed() || rawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
-      return false;
+      return null;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawDataToString(data));
     } catch {
-      return false;
+      return null;
     }
     if (
       !validateRequestFrame(parsed) ||
       parsed.method !== "connect" ||
       !validateConnectParams(parsed.params)
     ) {
+      return null;
+    }
+    return parsed;
+  };
+
+  const isPreparedControlConnect = (data: RawData): boolean => {
+    const parsed = parsePreauthConnectFrame(data);
+    if (!parsed) {
+      return false;
+    }
+    const connectParams = parsed.params as { role?: unknown };
+    return connectParams.role !== "node" && !claimsWorkerConnectionIdentity(parsed.params);
+  };
+
+  const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
+    const parsed = parsePreauthConnectFrame(data);
+    if (!parsed) {
       return false;
     }
 
@@ -457,6 +474,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const admission = tryBeginGatewayRootWorkAdmission();
     if (!admission) {
+      if (
+        !isGatewayRestartDraining() &&
+        getGatewaySuspendAdmissionPhase() === "prepared" &&
+        isPreparedControlConnect(data)
+      ) {
+        // Refuse-only suspension fences work, not control-plane visibility. Only
+        // operator connects are admitted while prepared, and they can only reach
+        // suspend-control methods after handshake; node and worker connects would
+        // attach presence/registry state, so they stay refused.
+        await handleMessage(data);
+        return;
+      }
       if (await rejectConnectForClosedAdmission(data)) {
         return;
       }

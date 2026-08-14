@@ -198,6 +198,8 @@ const defaultControlUiFeatureMethods = [
   "config.apply",
   "config.patch",
   "config.set",
+  "device.scopes.requestUpgrade",
+  "device.scopes.waitUpgrade",
   "session.members.add",
   "session.members.list",
   "session.members.remove",
@@ -264,6 +266,8 @@ export type ControlUiMockGatewayScenario = {
   historyMessages?: unknown[];
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
+  /** URL prefixes that retain the browser's real WebSocket transport. */
+  webSocketPassthroughPrefixes?: string[];
   /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
   inFlightRun?: {
     runId: string;
@@ -684,6 +688,7 @@ function normalizeScenario(
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
+    webSocketPassthroughPrefixes: scenario.webSocketPassthroughPrefixes ?? [],
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
@@ -740,6 +745,7 @@ function installControlUiMockGateway(
   },
   parseJson5: (raw: string) => unknown,
 ) {
+  const NativeWebSocket = window.WebSocket;
   type BrowserRequest = { id: string; method: string; params?: unknown };
   type BrowserFrame = {
     id?: unknown;
@@ -1435,12 +1441,15 @@ function installControlUiMockGateway(
         : configuredValue;
     }
     switch (method) {
-      case "connect":
+      case "connect": {
+        const auth = isRecord(params) && isRecord(params.auth) ? params.auth : null;
+        const connectedDeviceToken =
+          auth && typeof auth.deviceToken === "string" ? auth.deviceToken : scenario.deviceToken;
         return {
           auth: {
             ...(deviceAuthMigrationPending
               ? {}
-              : { deviceToken: scenario.deviceToken, recoveryMigrationAllowed: true as const }),
+              : { deviceToken: connectedDeviceToken, recoveryMigrationAllowed: true as const }),
             recoveryScope: "e2e-recovery-scope",
             role: "operator",
             scopes: scenario.operatorScopes,
@@ -1475,6 +1484,7 @@ function installControlUiMockGateway(
           },
           type: "hello-ok",
         };
+      }
       case "agent.identity.get":
         return {
           agentId: scenario.assistantAgentId,
@@ -1956,7 +1966,23 @@ function installControlUiMockGateway(
   };
 
   (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
-  window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  const RoutedWebSocket = function (url: string | URL, protocols?: string | string[]) {
+    const resolvedUrl = String(url);
+    if (scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))) {
+      return protocols === undefined
+        ? new NativeWebSocket(resolvedUrl)
+        : new NativeWebSocket(resolvedUrl, protocols);
+    }
+    return new MockWebSocket(resolvedUrl);
+  };
+  RoutedWebSocket.prototype = MockWebSocket.prototype;
+  Object.assign(RoutedWebSocket, {
+    CLOSED: MockWebSocket.CLOSED,
+    CLOSING: MockWebSocket.CLOSING,
+    CONNECTING: MockWebSocket.CONNECTING,
+    OPEN: MockWebSocket.OPEN,
+  });
+  window.WebSocket = RoutedWebSocket as unknown as typeof WebSocket;
   window.addEventListener("pagehide", () => {
     sessionMessageSubscriptions.clear();
     stopRepeatingSessionEvents();

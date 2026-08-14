@@ -9,14 +9,14 @@ import {
   installPluginFromNpmPackArchiveMock,
   installPluginFromNpmSpecMock,
   installPluginFromPathMock,
-  parseClawHubPluginSpec,
+  parseClawHubPluginSpecMock,
   promptYesNoMock,
-  readConfigFileSnapshotForWrite,
+  readConfigFileSnapshotForWriteMock,
   resetPluginsCliTestState,
-  resolveMarketplaceInstallShortcut,
+  resolveMarketplaceInstallShortcutMock,
   runPluginsCommand,
   runtimeErrors,
-  writeConfigFile,
+  configWriteMock,
 } from "./plugins-cli-test-helpers.js";
 import { resolvePluginInstallPreflight } from "./plugins-install-preflight.js";
 
@@ -30,7 +30,7 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 
 function expectNoPluginInstallSideEffects(): void {
   expect(withPluginLifecycleLeaseMock).not.toHaveBeenCalled();
-  expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+  expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
   expect(promptYesNoMock).not.toHaveBeenCalled();
   expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
   expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
@@ -40,7 +40,7 @@ function expectNoPluginInstallSideEffects(): void {
   expect(installPluginFromPathMock).not.toHaveBeenCalled();
   expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
   expect(installHooksFromPathMock).not.toHaveBeenCalled();
-  expect(writeConfigFile).not.toHaveBeenCalled();
+  expect(configWriteMock).not.toHaveBeenCalled();
 }
 
 describe("plugin install mutation-free preflight", () => {
@@ -54,7 +54,7 @@ describe("plugin install mutation-free preflight", () => {
   });
 
   it("resolves registered marketplace shorthand before ordinary source classification", async () => {
-    resolveMarketplaceInstallShortcut.mockResolvedValue({
+    resolveMarketplaceInstallShortcutMock.mockResolvedValue({
       ok: true,
       plugin: "superpowers",
       marketplaceName: "claude-plugins-official",
@@ -179,7 +179,7 @@ describe("plugin install mutation-free preflight", () => {
     },
   ])("rejects $label before the lifecycle lease", async ({ args, error }) => {
     if (args[0] === "clawhub:demo") {
-      parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+      parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
     }
 
     await expect(runPluginsCommand(["plugins", "install", ...args, "--force"])).rejects.toThrow(

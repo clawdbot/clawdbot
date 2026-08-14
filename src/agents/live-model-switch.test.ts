@@ -35,12 +35,12 @@ vi.mock("../config/sessions/session-accessor.js", () => {
   return {
     loadSessionEntry,
     loadSessionEntryReadOnly: loadSessionEntry,
-    patchSessionEntry: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+    patchSessionEntryCore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
   };
 });
 
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
+  resolveSessionStorePathCore: (...args: unknown[]) => state.resolveStorePathMock(...args),
 }));
 
 let mod: typeof import("./live-model-switch.js");

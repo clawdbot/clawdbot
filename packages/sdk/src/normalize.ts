@@ -1,11 +1,8 @@
 // OpenClaw SDK helper module supports normalize behavior.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
 
 function readLowerString(value: unknown): string | undefined {
   return readNonEmptyString(value)?.toLowerCase();

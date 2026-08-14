@@ -9,7 +9,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 
 type WorkerDispatchRequest = Parameters<
   ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
@@ -90,9 +90,9 @@ export function seedActivePlacement(
 }
 
 export function createDispatchEnvironmentFixtures(generation = 1) {
-  const environmentId = workerEnvironmentIdForIdempotencyKey(
+  const environmentId = deriveEnvironmentIntent(
     `session-dispatch:${REQUEST.sessionId}:${generation}`,
-  );
+  ).environmentId;
   const profileSnapshot: WorkerProfile = { settings: { region: "test" } };
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,

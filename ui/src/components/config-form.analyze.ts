@@ -73,10 +73,10 @@ function isAnySchema(schema: JsonSchema): boolean {
 function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
   const filtered = values.filter((value) => value != null);
   const nullable = filtered.length !== values.length;
-  return { enumValues: uniqueValues(filtered), nullable };
+  return { enumValues: uniqueSchemaValues(filtered), nullable };
 }
 
-function uniqueValues(values: unknown[]): unknown[] {
+function uniqueSchemaValues(values: unknown[]): unknown[] {
   const unique: unknown[] = [];
   for (const value of values) {
     if (!unique.some((existing) => Object.is(existing, value))) {
@@ -591,7 +591,7 @@ function normalizeUnion(
     return {
       schema: {
         ...schema,
-        enum: uniqueValues(literals),
+        enum: uniqueSchemaValues(literals),
         nullable,
         enumIncludesNull: nullable,
         anyOf: undefined,

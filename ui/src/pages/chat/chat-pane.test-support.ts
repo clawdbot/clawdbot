@@ -41,8 +41,19 @@ export type TestChatPane = HTMLElement & {
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
+  recoverSession: () => Promise<boolean>;
+  restartRecoveryComposerBanner: () =>
+    | {
+        text: string;
+        actionLabel: string;
+        actionStyle?: "primary";
+        busy?: boolean;
+        busyLabel?: string;
+        onAction: () => void;
+      }
+    | undefined;
   prepareForEviction: () => void;
-  restoreArchivedSession: (sessionKey: string) => Promise<void>;
+  restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
@@ -120,7 +131,10 @@ export type TestChatPane = HTMLElement & {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
+  headerPlacementReclaimingKey: string | null;
+  reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
+  applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,

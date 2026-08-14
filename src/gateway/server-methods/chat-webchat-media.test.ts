@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDefaultLocalRoots } from "../../media/local-media-access.js";
+import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 async function buildWebchatAudioBlocks(
@@ -211,7 +211,7 @@ describe("webchat audio blocks through assistant messages", () => {
   });
 
   it("falls back to default localRoots when explicit roots are omitted", async () => {
-    const [defaultRoot] = getDefaultLocalRoots();
+    const [defaultRoot] = getDefaultLocalRootsCore();
     if (defaultRoot === undefined) {
       throw new Error("expected default local media root");
     }

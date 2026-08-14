@@ -16,7 +16,7 @@ import {
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import {
   collectSecretStoreRefKeysInConfig,
-  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotState,
 } from "../../secrets/runtime-state.js";
 import {
   deleteSecretStoreEntry,
@@ -136,7 +136,7 @@ export function createSecretsHandlers(params: {
   const reloadStoreReference = async (
     name: string,
   ): Promise<{ reloaded: boolean; warningCount?: number }> => {
-    const snapshot = getActiveSecretsRuntimeSnapshot();
+    const snapshot = getActiveSecretsRuntimeSnapshotState();
     const refKeys = snapshot
       ? collectSecretStoreRefKeysInConfig(snapshot.sourceConfig, name)
       : new Set<string>();

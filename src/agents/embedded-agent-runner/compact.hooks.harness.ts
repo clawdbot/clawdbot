@@ -77,7 +77,7 @@ export const sessionCompactImpl = vi.fn(async () => ({
 }));
 export const sessionManualCompactionMock = vi.fn();
 export const sessionAutomaticCompactionMock = vi.fn();
-export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
+export const triggerInternalHookMock: Mock<(event?: unknown) => void> = vi.fn();
 const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
@@ -445,6 +445,9 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
     release: vi.fn(),
   }),
 );
+export const getCurrentPluginMetadataSnapshotMock: Mock<
+  typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
+> = vi.fn(() => emptyPluginMetadataSnapshot);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -563,6 +566,8 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   acquireAgentRunPreparedModelRuntimeMock.mockClear();
+  getCurrentPluginMetadataSnapshotMock.mockReset();
+  getCurrentPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot);
 
   resolveContextEngineMock.mockReset();
   resolveContextEngineMock.mockResolvedValue({
@@ -615,7 +620,7 @@ export function resetCompactHooksHarnessMocks(): void {
     details: { ok: true },
   });
 
-  triggerInternalHook.mockReset();
+  triggerInternalHookMock.mockReset();
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
@@ -650,9 +655,10 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-    getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+    getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
     setCurrentPluginMetadataSnapshot: vi.fn(),
+    withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
   }));
 
   vi.doMock("../../plugins/command-registry-state.js", () => {
@@ -717,7 +723,7 @@ export async function loadCompactHooksHarness(): Promise<{
     );
     return {
       ...actual,
-      triggerInternalHook,
+      triggerInternalHook: triggerInternalHookMock,
     };
   });
 
@@ -781,7 +787,7 @@ export async function loadCompactHooksHarness(): Promise<{
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
     ),
-    getApiKeyForModel: (params: { profileId?: string; allowAuthProfileFallback?: boolean }) =>
+    getApiKeyForModelCore: (params: { profileId?: string; allowAuthProfileFallback?: boolean }) =>
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
@@ -812,6 +818,7 @@ export async function loadCompactHooksHarness(): Promise<{
     clearCommandLane: vi.fn(() => 0),
     GatewayDrainingError: class GatewayDrainingError extends Error {},
     isGatewayDraining: vi.fn(() => false),
+    isCommandLaneTaskTimeoutError: vi.fn(() => false),
   }));
 
   vi.doMock("../../tasks/detached-task-runtime.js", async () => {
@@ -875,17 +882,6 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../agent-tools.js", () => ({
     createOpenClawCodingTools: createOpenClawCodingToolsMock,
-    resolveProcessToolScopeKey: ({
-      scopeKey,
-      sessionKey,
-      sessionId,
-      agentId,
-    }: {
-      scopeKey?: string;
-      sessionKey?: string;
-      sessionId?: string;
-      agentId?: string;
-    }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
   }));
 
   vi.doMock("./replay-history.js", () => ({

@@ -567,7 +567,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
-export function buildConfigSchema(params?: {
+export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
   cache?: boolean;

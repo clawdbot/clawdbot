@@ -229,13 +229,15 @@ vi.mock("./browser-tool.runtime.js", async () => {
   const { wrapExternalContent } = await vi.importActual<typeof import("./sdk-security-runtime.js")>(
     "./sdk-security-runtime.js",
   );
-  const readStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const readRawStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const normalizeMockOptionalString = (value: unknown) =>
+    readRawStringValue(value)?.trim() || undefined;
   const readStringParam = (
     params: Record<string, unknown>,
     key: string,
     opts?: { required?: boolean; label?: string },
   ) => {
-    const value = readStringValue(params[key])?.trim();
+    const value = readRawStringValue(params[key])?.trim();
     if (value) {
       return value;
     }
@@ -277,7 +279,7 @@ vi.mock("./browser-tool.runtime.js", async () => {
       details: result,
     }),
     listNodes: nodesUtilsMocks.listNodes,
-    normalizeOptionalString: (value: unknown) => readStringValue(value)?.trim() || undefined,
+    normalizeOptionalString: normalizeMockOptionalString,
     persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
     readPositiveIntegerParam: (
       params: Record<string, unknown>,
@@ -300,7 +302,7 @@ vi.mock("./browser-tool.runtime.js", async () => {
       return value;
     },
     readStringParam,
-    readStringValue,
+    readStringValue: readRawStringValue,
     resolveExistingUploadPaths: pathValidationMocks.resolveExistingUploadPaths,
     resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
       const node = nodes.find(

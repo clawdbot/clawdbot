@@ -273,8 +273,6 @@ vi.mock("./one-shot-exit.js", () => ({
 
 vi.mock("../infra/env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/env.js")>()),
-  isTruthyEnvValue: (value?: string) =>
-    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: normalizeEnvMock,
 }));
 

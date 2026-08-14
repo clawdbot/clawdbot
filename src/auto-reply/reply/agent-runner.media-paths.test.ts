@@ -928,7 +928,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(call?.imageOrder).toBeUndefined();
   });
 
-  it("falls back to prompt refs instead of forwarding partial current media", async () => {
+  it("retains resolved current images and skips unresolved attachments", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-partial-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "present.png");
@@ -958,9 +958,14 @@ describe("runReplyAgent media path normalization", () => {
         OriginatingTo: "chat-1",
         AccountId: "default",
         MessageSid: "msg-1",
-        MediaPaths: [path.join(tmpDir, "missing.png"), imagePath],
-        MediaTypes: ["image/png", "image/png"],
-        MediaWorkspaceDir: tmpDir,
+        media: [
+          {
+            path: path.join(tmpDir, "missing.png"),
+            contentType: "image/png",
+            workspaceDir: tmpDir,
+          },
+          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+        ],
       } as unknown as TemplateContext,
       "compare these images",
     );
@@ -972,7 +977,8 @@ describe("runReplyAgent media path normalization", () => {
           imageOrder?: string[];
         }
       | undefined;
-    expect(call?.images).toBeUndefined();
-    expect(call?.imageOrder).toBeUndefined();
+    expect(call?.images).toHaveLength(1);
+    expect(call?.images?.[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+    expect(call?.imageOrder).toEqual(["inline"]);
   });
 });

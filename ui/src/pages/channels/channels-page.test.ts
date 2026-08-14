@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { NostrProfile } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import "./channels-page.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;

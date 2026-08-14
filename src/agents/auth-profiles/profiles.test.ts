@@ -29,10 +29,11 @@ import {
 } from "./profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  getRuntimeAuthProfileStoreSnapshot as getInternalRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore as getInternalRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreStateMutationToken,
+  listRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
@@ -598,6 +599,33 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it("does not persist built-in CLI ownership metadata", async () => {
+    await withAuthProfileTestState("openclaw-auth-cli-provenance-", async ({ agentDir }) => {
+      const profileId = "openai:default";
+      const runtimeStore: RuntimeAuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "external-access",
+            refresh: "external-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+        runtimeExternalProfileIds: [profileId],
+        runtimeExternalCliProfileIds: [profileId],
+      };
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: runtimeStore }]);
+
+      saveAuthProfileStore(runtimeStore, agentDir);
+
+      const persisted = loadPersistedAuthProfileStore(agentDir);
+      expect(persisted).not.toHaveProperty("runtimeExternalCliProfileIds");
+      expect(persisted?.profiles[profileId]).toBeUndefined();
+    });
+  });
+
   it.each(["before save", "before publication"] as const)(
     "preserves a runtime-only OAuth mutation %s",
     async (mutationTiming) => {
@@ -796,6 +824,69 @@ describe("promoteAuthProfileInOrder", () => {
         ).toBeUndefined();
       },
       { clearOAuthDir: true },
+    );
+  });
+
+  it("restores an exactly owned derived snapshot under its custom database key", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-custom-key-rollback-",
+      async ({ agentDirFor }) => {
+        const derivedAgentDir = agentDirFor("custom-key");
+        const databasePath = path.join(derivedAgentDir, "custom.sqlite");
+        saveAuthProfileStore({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:baseline": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-baseline",
+            },
+          },
+        });
+        const capturedRuntime = loadAuthProfileStoreForRuntime(derivedAgentDir);
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { databasePath, agentDir: derivedAgentDir, store: capturedRuntime },
+        ]);
+        const snapshot = captureAuthProfileStorePersistenceSnapshot();
+        const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+          snapshot,
+          store: {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:temporary": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-temporary",
+              },
+            },
+          },
+        });
+
+        expect(committed.publishRuntimeSnapshots()).toBe(true);
+        expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+          expect.objectContaining({
+            databasePath,
+            store: expect.objectContaining({
+              profiles: expect.objectContaining({
+                "openai:temporary": expect.objectContaining({ key: "sk-temporary" }),
+              }),
+            }),
+          }),
+        ]);
+
+        restoreAuthProfileStorePersistenceSnapshot(snapshot, committed.owned);
+
+        expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+          expect.objectContaining({
+            databasePath,
+            store: expect.objectContaining({
+              profiles: expect.objectContaining({
+                "openai:baseline": expect.objectContaining({ key: "sk-baseline" }),
+              }),
+            }),
+          }),
+        ]);
+      },
     );
   });
 

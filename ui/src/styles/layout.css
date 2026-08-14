@@ -15,8 +15,9 @@
       var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap) +
       var(--shell-chrome-controls-gap)
   );
-  --shell-floating-update-card-left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
+  --shell-chrome-safe-area-left: calc(
+    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) -
+      var(--shell-chrome-control-size) - var(--shell-chrome-controls-gap) + 8px
   );
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
@@ -73,6 +74,9 @@
 .shell--nav-collapsed {
   grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
+  --shell-chrome-safe-area-left: calc(
+    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
+  );
 }
 
 /* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
@@ -134,6 +138,23 @@
 
 .shell--mobile-nav .shell-chrome-controls {
   display: none;
+}
+
+/* Reserve notice space only while the corresponding in-page chrome remains visible. */
+:is(
+    html:not(.openclaw-native-nav, .openclaw-native-web-chrome)
+      .shell:not(.shell--mobile-nav, .shell--settings),
+    html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+      .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
+  )
+  .content
+  > :is(
+    openclaw-update-banner,
+    openclaw-device-scope-upgrade-banner,
+    openclaw-device-auth-migration-banner
+  )
+  .callout {
+  margin-left: var(--shell-chrome-safe-area-left);
 }
 
 html.openclaw-native-macos .shell-chrome-controls {
@@ -216,6 +237,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
    (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
    shell stays in charge and the settings sidebar rides inside the drawer. */
 
+/* stylelint-disable-next-line no-duplicate-selectors -- settings navigation variable belongs with the takeover rules below */
 .shell {
   --shell-settings-nav-width: 288px;
 }
@@ -391,6 +413,8 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar__search-input {
+  --control-ui-touch-input-size: calc(12.5px * var(--control-ui-text-scale));
+
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -421,12 +445,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 .settings-sidebar__search-input::-webkit-search-cancel-button {
   appearance: none;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .settings-sidebar__search-input {
-    font-size: max(16px, calc(12.5px * var(--control-ui-text-scale)));
-  }
 }
 
 .settings-sidebar__search-clear {
@@ -664,9 +682,6 @@ openclaw-settings-save-indicator {
 
 .settings-save-indicator__apply {
   border-radius: 999px;
-}
-
-.settings-save-indicator__apply {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
   background: var(--accent-subtle);
   color: var(--text);
@@ -1112,7 +1127,7 @@ openclaw-settings-save-indicator {
   flex-shrink: 0;
   width: 14px;
   height: 14px;
-  color: var(--warn, #b7791f);
+  color: var(--warn);
 }
 
 .sidebar-attention__item--error .sidebar-attention__icon {
@@ -1154,8 +1169,8 @@ openclaw-settings-save-indicator {
 
 /* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
 .shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
-  width: min(360px, calc(100% - var(--shell-floating-update-card-left) - 16px));
-  margin-left: var(--shell-floating-update-card-left);
+  width: min(360px, calc(100% - var(--shell-chrome-safe-area-left) - 16px));
+  margin-left: var(--shell-chrome-safe-area-left);
 }
 
 /* Native hosts hide the web cluster; onboarding never mounts it. */
@@ -1243,6 +1258,50 @@ html.openclaw-native-macos
 
 .sidebar-update-card__action--busy:disabled {
   cursor: wait;
+}
+
+/* The install outlives the request that started it, so the card keeps moving
+   for the whole wait instead of reading as a dead disabled button. */
+.sidebar-update-card__action--busy .sidebar-update-card__icon svg {
+  animation: sidebar-update-card-spin 1s linear infinite;
+}
+
+@keyframes sidebar-update-card-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
+    animation: none;
+  }
+}
+
+/* The update outcome belongs beside the control that started it, not over the
+   top of the shell where it covers unrelated chrome. While the update dialog is
+   open it owns the report, so the ambient copy would only duplicate it. */
+body.update-dialog-open .sidebar-update-card__status {
+  display: none;
+}
+
+.sidebar-update-card__status {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sidebar-update-card__status--danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.sidebar-update-card__status--warn {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 
 .sidebar-update-card__action--undismissable {
@@ -2426,11 +2485,12 @@ html.openclaw-native-macos
   max-width: 264px;
   max-height: 420px;
   overflow-y: auto;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
+  animation: menu-in 140ms var(--ease-out);
 }
 
 wa-dropdown.sidebar-customize-menu {
@@ -2443,11 +2503,11 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   max-width: 264px;
   max-height: 420px;
   overflow-y: auto;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-customize-menu__title {
@@ -2467,8 +2527,8 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 }
 
 .sidebar-customize-menu__group-title {
-  margin: 6px 4px 2px;
-  padding: 7px 6px 4px;
+  margin: 6px 0 2px;
+  padding: 7px 8px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   color: var(--muted);
   font-size: calc(10px * var(--control-ui-text-scale));
@@ -2482,10 +2542,10 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 30px;
+  min-height: var(--menu-item-height);
   padding: 0 8px;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -2497,7 +2557,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 }
 
 .sidebar-customize-menu__item:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--bg-hover);
 }
 
 /* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
@@ -2522,20 +2582,6 @@ wa-dropdown-item.sidebar-customize-menu__item {
   width: 100%;
   color: inherit;
   text-decoration: none;
-}
-
-/* Pin-editor rows: wa-dropdown flags every row [checkbox-adjacent] when the menu
-   holds checkbox items and tucks the shadow checkmark into a 2em start inset via
-   a -1.5em margin. Our compact `padding: 0 8px` above removes that inset, so
-   rebuild the check column here or the checkmark lands outside the row edge. */
-.sidebar-pin-editor-menu .sidebar-customize-menu__item[checkbox-adjacent] {
-  padding-inline-start: 30px; /* 8px edge + 14px check column + 8px gutter */
-}
-
-.sidebar-pin-editor-menu .sidebar-customize-menu__item::part(checkmark) {
-  width: 14px;
-  min-width: 14px;
-  margin-inline: -22px 8px; /* pull back into the padding; the end margin spaces the icon */
 }
 
 /* The agent switcher marks its selection in the trailing details rail
@@ -2572,11 +2618,12 @@ wa-dropdown-item.sidebar-customize-menu__item {
   z-index: 121;
   min-width: 224px;
   max-width: 264px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
+  animation: menu-in 140ms var(--ease-out);
 }
 
 wa-dropdown.session-menu {
@@ -2587,11 +2634,11 @@ wa-dropdown.session-menu {
 wa-dropdown.session-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 /* Popover hosts live in the top layer so menus escape in-page stacking
@@ -2614,11 +2661,12 @@ openclaw-session-menu[popover] {
   z-index: 121;
   min-width: 176px;
   max-width: 220px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
+  animation: menu-in 140ms var(--ease-out);
 }
 
 wa-dropdown.sidebar-session-sort-menu {
@@ -2629,11 +2677,11 @@ wa-dropdown.sidebar-session-sort-menu {
 wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 176px;
   max-width: 220px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-session-sort-menu__title {
@@ -2651,10 +2699,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 30px;
+  min-height: var(--menu-item-height);
   padding: 0 8px;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -2684,14 +2732,15 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   font-size: 10px;
 }
 
-.session-menu__item:hover:not(:disabled),
+.session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
 .session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
 .sidebar-session-sort-menu__item:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--bg-hover);
 }
 
-.session-menu__item:disabled {
+.session-menu__item:disabled,
+.session-menu__item[aria-disabled="true"] {
   opacity: 0.42;
   cursor: not-allowed;
 }
@@ -2756,7 +2805,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 /* Keycap hint, not content: the app's quiet mono shortcut idiom (see
    .chat-question-panel__option kbd), fixed-width so letters and digits share
    one rail beside the labels. */
-.session-menu__shortcut {
+.session-menu__shortcut,
+.chat-controls__model-option-action kbd {
   flex: 0 0 auto;
   min-width: 12px;
   color: var(--muted);
@@ -3324,9 +3374,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .sidebar-hover-card__person-email {
   color: var(--muted);
   font-weight: 400;
-}
-
-.sidebar-hover-card__person-email {
   font-size: var(--control-ui-text-xs);
 }
 
@@ -3461,6 +3508,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .sidebar-agent-menu__filter input {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
   width: 100%;
   padding: 5px 8px;
   border-radius: 6px;
@@ -3469,12 +3518,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   color: inherit;
   font: inherit;
   font-size: var(--control-ui-text-sm);
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .sidebar-agent-menu__filter input {
-    font-size: max(16px, var(--control-ui-text-sm));
-  }
 }
 
 .sidebar-agent-menu__empty {
@@ -3885,9 +3928,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
-/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
-   when the gateway refuses or lacks the terminal surface. */
-.terminal-view-unavailable {
+/* Standalone terminal/desktop documents: centered notice when the gateway
+   refuses or lacks the requested surface. */
+.terminal-view-unavailable,
+.desktop-view-unavailable {
   position: fixed;
   inset: 0;
   display: flex;
@@ -3929,11 +3973,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .sidebar-session-pr-indicator--merged {
-  color: #a78bfa;
-}
-
-:root[data-theme-mode="light"] .sidebar-session-pr-indicator--merged {
-  color: #7c3aed;
+  color: var(--pr-merged);
 }
 
 .sidebar-session-pr-indicator svg {
@@ -4014,15 +4054,4 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   to {
     opacity: 1;
   }
-}
-
-.sidebar-recent-session--draft {
-  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent-subtle) 60%, transparent);
-}
-
-.sidebar-recent-session--draft .sidebar-recent-session__name {
-  color: var(--text-strong);
-  font-style: italic;
 }

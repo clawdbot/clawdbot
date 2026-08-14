@@ -248,7 +248,7 @@ function readOptionalTrimmedString(
   params: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  return typeof params[key] === "string" ? params[key].trim() || undefined : undefined;
+  return normalizeOptionalString(params[key]);
 }
 
 function resolveActionUploadFilePath(params: Record<string, unknown>): string | undefined {

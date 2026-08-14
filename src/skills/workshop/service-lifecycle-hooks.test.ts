@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -29,6 +30,7 @@ import {
   listSkillProposalEvents,
   proposeCreateSkill,
   proposeUpdateSkill,
+  rejectSkillProposal,
 } from "./service.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -181,6 +183,57 @@ describe("Skill Workshop lifecycle hooks", () => {
       }),
       { workspaceDir, agentId: "main" },
     );
+  });
+
+  it("releases the target lease before dispatching a reconciliation hook", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-reconcile-lock-");
+    const first = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Reconcile Lock",
+      description: "First proposal sharing the target.",
+      content: "# Reconcile Lock\n",
+    });
+    const second = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Reconcile Lock",
+      description: "Second proposal sharing the target.",
+      content: "# Reconcile Lock\n",
+    });
+    await writeSkill({
+      dir: first.record.target.skillDir,
+      name: "reconcile-lock",
+      description: "Created elsewhere",
+      body: "# Created Elsewhere\n",
+    });
+    const hookEntered = createDeferred();
+    const releaseHook = createDeferred();
+    hookMocks.proposalChanged.mockImplementation(async (event) => {
+      if (event.action === "stale" && event.proposal.id === first.record.id) {
+        hookEntered.resolve();
+        await releaseHook.promise;
+      }
+    });
+
+    const inspection = inspectSkillProposal(first.record.id, { workspaceDir });
+    await hookEntered.promise;
+    try {
+      const rejected = await rejectSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: second.record.id,
+      });
+      expect(rejected.status).toBe("rejected");
+    } finally {
+      releaseHook.resolve();
+    }
+    await expect(inspection).resolves.toMatchObject({ record: { status: "stale" } });
+    expect(
+      listSkillProposalEvents({ workspaceDir, proposalId: first.record.id }).events.map(
+        (event) => event.type,
+      ),
+    ).toEqual(["created", "stale"]);
   });
 
   it("rejects apply when an untouched target asset changes after evaluation", async () => {

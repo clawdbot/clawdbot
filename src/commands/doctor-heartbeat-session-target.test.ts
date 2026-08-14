@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
@@ -63,7 +63,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
   }
 
   function writeStore(cfg: OpenClawConfig, entries: Record<string, unknown>) {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
     fs.writeFileSync(storePath, JSON.stringify(entries, null, 2));
   }
@@ -82,8 +82,8 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   it("recognizes a SQLite-resident heartbeat target", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
-    await upsertSessionEntry(
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
+    await upsertSessionEntryCore(
       { agentId: "ops", sessionKey: "agent:ops:slack:channel:c123", storePath },
       { sessionId: "sqlite-heartbeat-target", updatedAt: Date.now() },
     );

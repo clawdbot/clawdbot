@@ -14,7 +14,7 @@ export const schtasksCalls: string[][] = [];
 export const inspectPortUsageMock: MockFn<
   (port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>
 > = vi.fn();
-export const resolveGatewayServiceProbeHosts: MockFn<() => Promise<readonly string[]>> = vi.fn();
+export const gatewayServiceProbeHostsMock: MockFn<() => Promise<readonly string[]>> = vi.fn();
 export const killProcessTreeMock: MockFn<typeof killProcessTreeImpl> = vi.fn();
 
 /** Runs a test with Windows-like daemon environment paths and cleans the temp dir. */
@@ -40,8 +40,8 @@ export function resetSchtasksBaseMocks() {
   schtasksResponses.length = 0;
   schtasksCalls.length = 0;
   inspectPortUsageMock.mockReset();
-  resolveGatewayServiceProbeHosts.mockReset();
-  resolveGatewayServiceProbeHosts.mockResolvedValue(["127.0.0.1"]);
+  gatewayServiceProbeHostsMock.mockReset();
+  gatewayServiceProbeHostsMock.mockResolvedValue(["127.0.0.1"]);
   killProcessTreeMock.mockReset();
 }
 

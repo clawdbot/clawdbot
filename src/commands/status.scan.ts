@@ -54,6 +54,7 @@ export async function scanStatus(
     async (progress) => {
       const isFullScan = opts.all === true || opts.deep === true;
       const overview = await collectStatusScanOverview({
+        env: process.env,
         commandName: "status",
         opts,
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",

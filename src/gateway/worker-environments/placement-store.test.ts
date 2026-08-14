@@ -695,6 +695,9 @@ describe("worker session placement store", () => {
         liveEvent: 8,
       }),
     ).toMatchObject({ lastTranscriptAckCursor: 4, lastLiveEventAckCursor: 9 });
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: SESSION.sessionId, claimId: currentClaim.claimId },
+    ]);
   });
 
   it("advances the workspace manifest only under the exact worker turn claim", () => {

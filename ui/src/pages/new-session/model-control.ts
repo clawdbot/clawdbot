@@ -6,7 +6,7 @@ import type {
   SessionCatalog,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayAgentRow, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -14,7 +14,8 @@ import {
   normalizeChatModelProviderId,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
-import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
+import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
+import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import {
@@ -44,6 +45,11 @@ type NewSessionMetadataLoad = {
 };
 
 type CatalogCreateTarget = Pick<SessionCatalog, "id" | "label">;
+type ReconciledNewSessionSelection = {
+  model: string;
+  thinkingLevel: string;
+  repaired: boolean;
+};
 
 function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
@@ -472,6 +478,13 @@ export class NewSessionModelControl {
     return this.restoringPreference;
   }
 
+  isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
+    return (
+      this.metadataState.hasSnapshot &&
+      isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
+    );
+  }
+
   private restorePreference(
     preference: NewSessionPreference | null | undefined,
     agent: GatewayAgentRow | undefined,
@@ -480,63 +493,57 @@ export class NewSessionModelControl {
     if (!preference) {
       return;
     }
-    // A same-agent metadata refresh revalidates the stored pair. Clear the
-    // previous restoration first so retired catalog entries cannot survive.
-    this.selected = "";
-    this.thinkingLevel = "";
-    const preferredTarget = preference.model
-      ? resolveDraftModelTarget(preference.model, undefined, this.catalog)
-      : null;
-    if (
-      preference.model &&
-      (!preferredTarget?.entry || preferredTarget.entry.available === false)
-    ) {
-      this.onSelectionChange({ model: "", thinkingLevel: "" });
-      return;
-    }
-    this.selected = preferredTarget?.entry
-      ? buildQualifiedChatModelValue(preferredTarget.entry.id, preferredTarget.entry.provider)
-      : "";
-    if (!preference.thinkingLevel) {
-      return;
-    }
-    const sourceResult = context?.sessions.state.result ?? null;
-    const agentDefaultModel = agent?.model?.primary;
-    const defaultTarget = resolveDraftModelTarget(
-      agentDefaultModel ?? sourceResult?.defaults.model,
-      agentDefaultModel ? undefined : sourceResult?.defaults.modelProvider,
-      this.catalog,
+    const selection = this.reconcileSelection(
+      preference.model ?? "",
+      preference.thinkingLevel ?? "",
+      { agent, context },
     );
-    const selectedTarget = resolveDraftModelTarget(this.selected, undefined, this.catalog);
-    const draftRow: GatewaySessionRow = {
-      key: "new-session:preference",
-      kind: "direct",
-      updatedAt: null,
-      ...(selectedTarget
-        ? { model: selectedTarget.model, modelProvider: selectedTarget.provider ?? undefined }
-        : {}),
-    };
-    const thinking = resolveChatThinkingSelectState({
-      catalog: this.catalog,
-      defaults: {
-        ...sourceResult?.defaults,
-        modelProvider: defaultTarget?.provider ?? sourceResult?.defaults.modelProvider ?? null,
-        model: defaultTarget?.model ?? sourceResult?.defaults.model ?? null,
-        contextTokens: sourceResult?.defaults.contextTokens ?? null,
-        agentRuntime: agent?.agentRuntime ?? sourceResult?.defaults.agentRuntime,
-        thinkingLevels: agent?.thinkingLevels ?? sourceResult?.defaults.thinkingLevels,
-        thinkingOptions: agent?.thinkingOptions ?? sourceResult?.defaults.thinkingOptions,
-        thinkingDefault: agent?.thinkingDefault ?? sourceResult?.defaults.thinkingDefault,
-      },
-      session: draftRow,
-      sessionKey: draftRow.key,
-      sessionsResult: sourceResult,
-    });
-    if (thinking.options.some((entry) => entry.value === preference.thinkingLevel)) {
-      this.thinkingLevel = preference.thinkingLevel;
-    } else {
-      this.onSelectionChange({ model: this.selected, thinkingLevel: "" });
+    this.selected = selection.model;
+    this.thinkingLevel = selection.thinkingLevel;
+    if (selection.repaired) {
+      this.onSelectionChange({ model: selection.model, thinkingLevel: selection.thinkingLevel });
     }
+  }
+
+  private reconcileSelection(
+    model: string,
+    thinkingLevel: string,
+    options: { agent?: GatewayAgentRow; context: ApplicationContext | undefined },
+  ): ReconciledNewSessionSelection {
+    const requestedModel = model.trim();
+    const selectedTarget = requestedModel
+      ? resolveDraftModelTarget(requestedModel, undefined, this.catalog)
+      : null;
+    if (requestedModel && (!selectedTarget?.entry || selectedTarget.entry.available === false)) {
+      return { model: "", thinkingLevel: "", repaired: true };
+    }
+    const selected = selectedTarget?.entry
+      ? buildQualifiedChatModelValue(selectedTarget.entry.id, selectedTarget.entry.provider)
+      : "";
+    if (!thinkingLevel) {
+      return { model: selected, thinkingLevel: "", repaired: false };
+    }
+    const defaults = options.context?.sessions.state.result?.defaults;
+    const agentDefaultModel = options.agent?.model?.primary;
+    const defaultTarget = selected
+      ? null
+      : resolveDraftModelTarget(
+          agentDefaultModel ?? defaults?.model,
+          agentDefaultModel ? undefined : defaults?.modelProvider,
+          this.catalog,
+        );
+    const targetEntry = selectedTarget?.entry ?? defaultTarget?.entry;
+    const authoritativeLevels = selected
+      ? targetEntry?.thinkingLevels
+      : (options.agent?.thinkingLevels ?? defaults?.thinkingLevels ?? targetEntry?.thinkingLevels);
+    const normalizedThinking = normalizeThinkingOptionValue(thinkingLevel);
+    const supported = authoritativeLevels?.some(
+      (level) => normalizeThinkingOptionValue(level.id) === normalizedThinking,
+    );
+    if (targetEntry?.reasoning === false || (authoritativeLevels !== undefined && !supported)) {
+      return { model: selected, thinkingLevel: "", repaired: true };
+    }
+    return { model: selected, thinkingLevel, repaired: false };
   }
 
   resolveAgentRuntimeId(options: {
@@ -585,14 +592,10 @@ export class NewSessionModelControl {
       this.catalog,
     );
     const selectedTarget = resolveDraftModelTarget(this.selected, undefined, this.catalog);
-    const draftRow: GatewaySessionRow = {
-      key: sessionKey,
-      kind: "direct",
-      updatedAt: null,
-      ...(selectedTarget
-        ? { model: selectedTarget.model, modelProvider: selectedTarget.provider ?? undefined }
-        : {}),
-      ...(this.thinkingLevel ? { thinkingLevel: this.thinkingLevel } : {}),
+    const thinkingTarget = {
+      model: selectedTarget?.model,
+      modelProvider: selectedTarget?.provider ?? undefined,
+      thinkingLevel: this.thinkingLevel || undefined,
     };
     const thinkingDefaults = {
       ...sourceResult?.defaults,
@@ -640,19 +643,13 @@ export class NewSessionModelControl {
       showFastMode: false,
       stream: null,
       thinkingDefaults,
-      thinkingSession: draftRow,
+      thinkingSession: thinkingTarget,
       onModelSelect: (value) => {
         this.selectionGeneration += 1;
         this.restoringPreference = false;
-        this.selected = value;
-        const target = resolveDraftModelTarget(
-          value || agentDefaultModel || sourceResult?.defaults.model,
-          value || agentDefaultModel ? undefined : sourceResult?.defaults.modelProvider,
-          this.catalog,
-        );
-        if (target?.entry?.reasoning === false) {
-          this.thinkingLevel = "";
-        }
+        const selection = this.reconcileSelection(value, this.thinkingLevel, options);
+        this.selected = selection.model;
+        this.thinkingLevel = selection.thinkingLevel;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
       onModelPickerTargetSelect: (groupId, catalogId) => {
@@ -666,6 +663,7 @@ export class NewSessionModelControl {
         this.thinkingLevel = value;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
+      onModelSetup: () => options.context?.navigate("model-setup"),
       onRequestUpdate: this.notify,
     });
   }

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -22,22 +23,25 @@ import {
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
+import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
 import "./components/chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
+  HeaderMenuActionKind,
   HeaderMenuQuickAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
+  resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
 import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
@@ -48,6 +52,7 @@ import {
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import { renderChatTerminalButton } from "./components/chat-terminal-button.ts";
+import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import {
@@ -172,19 +177,46 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
     });
     const archiveAllowed = Boolean(row && canArchiveSessionRow(row, configuredMainKey));
     const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
-    const actionDisabledReasons = row
+    const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
           session: row,
         })
       : {};
-    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
-    const openDesktopPanel = () =>
+    const continueInTerminalDisabledReason = row
+      ? this.continueInTerminalDisabledReason(row)
+      : undefined;
+    const actionDisabledReasons: Partial<Record<HeaderMenuActionKind, string>> = {
+      ...sessionActionDisabledReasons,
+      ...(continueInTerminalDisabledReason
+        ? { "continue-in-terminal": continueInTerminalDisabledReason }
+        : {}),
+    };
+    const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
+    const desktopPanelAvailable =
+      desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const openDesktopPanel = () => {
+      if (!desktopEnvironmentId) {
+        return;
+      }
       window.dispatchEvent(
         new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
-          detail: { open: true },
+          detail: { open: true, environmentId: desktopEnvironmentId },
         }),
       );
+    };
+    const browserPanelAction = sessionWorkspace.onToggleBrowser
+      ? html`<openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-browser-panel-toggle"
+            type="button"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
+          </button>
+        </openclaw-tooltip>`
+      : nothing;
     const desktopPanelAction = desktopPanelAvailable
       ? html`<openclaw-tooltip .content=${t("desktop.toggle")}>
           <button
@@ -209,6 +241,14 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         onActivate: sessionWorkspace.onToggleTerminal,
       });
     }
+    if (sessionWorkspace.onToggleBrowser) {
+      panelMenuActions.push({
+        id: "browser",
+        label: t("browser.toggle"),
+        icon: icons.globe,
+        onActivate: sessionWorkspace.onToggleBrowser,
+      });
+    }
     if (desktopPanelAvailable) {
       panelMenuActions.push({
         id: "desktop",
@@ -230,8 +270,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       panelMenuActions.push({
         id: "changes",
         label: t("chat.sessionDiff.show"),
-        icon: icons.fileDiff,
-        disabledReason: sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : undefined,
+        icon: icons.diff,
         onActivate: sessionWorkspace.onOpenDiff,
       });
     }
@@ -291,7 +330,12 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         onActivate: () => this.onSplitRight?.(this.paneId),
       });
     }
-    return renderChatPaneHeader({
+    const placement = resolveChatPanePlacement({
+      gatewaySnapshot: this.context.gateway.snapshot,
+      reclaimingKey: this.headerPlacementReclaimingKey,
+      row,
+    });
+    const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
@@ -309,6 +353,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
+      parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
       branches:
         this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
@@ -323,7 +368,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         this.state,
         this.catalogSession,
         sessionWorkspace.onToggleTerminal,
-      )}${desktopPanelAction}`,
+      )}${browserPanelAction}${desktopPanelAction}`,
       discussionAction: this.renderSessionDiscussionAction(discussion),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
@@ -431,6 +476,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
               .onAction=${(action: HeaderMenuAction) => this.handleHeaderSessionAction(action, row)}
             ></openclaw-chat-header-session-menu>`
           : nothing,
+      placementReclaimDisabledReason: placement.reclaimDisabledReason,
       nativeGateways: this.nativeGateways,
       gatewaysSnapshot: this.gatewaysSnapshot,
       onboarding: this.onboarding,
@@ -450,6 +496,10 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           this.handleHeaderMenuAction(action, row, workspace.root, branch);
         }
       },
+      onOpenParentSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
+      onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
       onBranchSelect: (leafEntryId) => {
         const access = readChatSessionActionAccess(
           this.context.gateway.snapshot,
@@ -466,6 +516,13 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       onSplitRight: this.onSplitRight,
       onClosePane: this.onClosePane,
     });
+    const continueCommand = this.currentContinueInTerminalCommand(row);
+    return html`${header}${continueCommand
+      ? renderContinueInTerminalDialog({
+          command: continueCommand,
+          onClose: () => this.closeContinueInTerminalDialog(),
+        })
+      : nothing}`;
   }
 
   // Probe once per session activation; transient failures stay uncached so the
@@ -488,6 +545,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
     try {
       const info = await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
         sessionKey,
+        agentId: resolveChatAgentId(state),
       });
       // A reconnect supersedes in-flight probes; a stale result must not
       // overwrite the new source's cache (e.g. an old "none" hiding the action).
@@ -538,6 +596,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         }
         return await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
           sessionKey: key,
+          agentId: resolveChatAgentId(state),
         });
       },
       openDiscussion: async (key) => {
@@ -546,6 +605,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         }
         return await state.client.request<SessionDiscussionInfo>("session.discussion.open", {
           sessionKey: key,
+          agentId: resolveChatAgentId(state),
         });
       },
       onStateChange: (key, discussionState, openUrl) => {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const {
@@ -147,7 +147,7 @@ describe("agentsListCommand", () => {
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases in human output",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const workspace = path.join(home, "workspace");
         const agentDir = path.join(home, "agents", "main", "agent");
         await fs.promises.mkdir(workspace, { recursive: true });

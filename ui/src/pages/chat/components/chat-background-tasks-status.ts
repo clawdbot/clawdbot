@@ -100,7 +100,10 @@ export function renderBackgroundTasksStatusRow(
   if (!backgroundTasks?.connected) {
     return nothing;
   }
-  const subagentActivity = renderSubagentActivity(backgroundTasks.subagentActivity);
+  const subagentActivity = renderSubagentActivity(
+    backgroundTasks.subagentActivity,
+    backgroundTasks.onOpenTaskDetail,
+  );
   const remainingTasks = (backgroundTasks.tasks ?? []).filter(
     (task) => !backgroundTasks.subagentActivity.taskIds.has(task.id),
   );
@@ -134,7 +137,7 @@ export function renderBackgroundTasksStatusRow(
             <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
           `
         : nothing}
-      <span class="agent-chat__sr-only" role="status">${label}</span>
+      <span class="sr-only" role="status">${label}</span>
       <openclaw-tooltip class="chat-tasks-status__preview">
         <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
         ${renderStatusPreview(remainingTasks)}

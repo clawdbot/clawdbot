@@ -334,6 +334,14 @@ suite.define(() => {
       defaultAgentId: "ops",
       deferredMethods: ["chat.startup"],
       historyMessages: [],
+      models: [
+        {
+          available: true,
+          id: "startup-model",
+          name: "Startup Model",
+          provider: "openai",
+        },
+      ],
       sessionKey: "global",
     });
 

@@ -14,7 +14,7 @@ import {
   defaultTitle,
   formatToolDetailText,
   formatDetailKey,
-  normalizeToolName,
+  normalizeToolDisplayName,
   resolveToolVerbAndDetailForArgs,
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
@@ -58,7 +58,7 @@ export function resolveToolDisplay(params: {
   meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolName(params.name);
+  const name = normalizeToolDisplayName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";

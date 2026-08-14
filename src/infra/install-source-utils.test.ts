@@ -8,7 +8,7 @@ import {
   resolveArchiveSourcePath,
   resolveNpmPackArchiveMetadata,
   resolveNpmSpecMetadata,
-  withTempDir,
+  withInstallWorkspace,
 } from "./install-source-utils.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
@@ -132,12 +132,12 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-describe("withTempDir", () => {
+describe("withInstallWorkspace", () => {
   it("creates a temp dir and always removes it after callback", async () => {
     let observedDir = "";
     const markerFile = "marker.txt";
 
-    const value = await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
+    const value = await withInstallWorkspace("openclaw-install-source-utils-", async (tmpDir) => {
       observedDir = tmpDir;
       await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
       await expect(fs.readFile(path.join(tmpDir, markerFile), "utf8")).resolves.toBe("ok");

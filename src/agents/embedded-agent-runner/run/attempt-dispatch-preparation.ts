@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { resolveStorePath } from "../../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
@@ -124,7 +124,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           agentId: workspaceResolution.agentId,
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
-          storePath: resolveStorePath(params.config?.session?.store, {
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, {
             agentId: workspaceResolution.agentId,
           }),
         })
@@ -229,7 +229,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       model: effectiveModel,
       resolvedApiKey: resolvedAttemptApiKey,
       authProfileId: runtime.lastProfileId,
-      authProfileIdSource: lockedProfileId ? "user" : "auto",
+      authProfileIdSource:
+        runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "user" : "auto",
       initialReplayState: input.replayState,
       authStorage,
       authProfileStore: resolveRunAttemptAuthProfileStore(),

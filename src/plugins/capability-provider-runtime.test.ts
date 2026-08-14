@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => ({
     (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
   >(() => undefined),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
-  loadPluginManifestRegistry: vi.fn<(params?: Record<string, unknown>) => MockManifestRegistry>(
+  loadPluginManifestRegistryCore: vi.fn<(params?: Record<string, unknown>) => MockManifestRegistry>(
     () => createEmptyMockManifestRegistry(),
   ),
   resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-installed-index"),
@@ -71,7 +71,7 @@ vi.mock("./bundled-capability-runtime.js", () => ({
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistry,
+  loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistryCore,
   resolveInstalledManifestRegistryIndexFingerprint:
     mocks.resolveInstalledManifestRegistryIndexFingerprint,
 }));
@@ -80,7 +80,7 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./manifest-registry.js")>();
   return {
     ...actual,
-    loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+    loadPluginManifestRegistryCore: mocks.loadPluginManifestRegistryCore,
   };
 });
 
@@ -112,12 +112,12 @@ vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
       };
     },
     loadPluginManifestRegistryForPluginRegistry: (
-      ...args: Parameters<typeof mocks.loadPluginManifestRegistry>
+      ...args: Parameters<typeof mocks.loadPluginManifestRegistryCore>
     ) => {
       const [{ includeDisabled: _includeDisabled, ...params } = {}] = args as [
         Record<string, unknown>?,
       ];
-      return mocks.loadPluginManifestRegistry(params);
+      return mocks.loadPluginManifestRegistryCore(params);
     },
   };
 });
@@ -209,7 +209,7 @@ function setCapabilityManifestPlugins(
     contracts: Record<string, string[]>;
   }>,
 ) {
-  mocks.loadPluginManifestRegistry.mockReturnValue({
+  mocks.loadPluginManifestRegistryCore.mockReturnValue({
     plugins: plugins.map((plugin) => ({ origin: "bundled", ...plugin })) as never,
     diagnostics: [],
   });
@@ -224,11 +224,11 @@ function expectInitialRuntimeRegistryLookup() {
 }
 
 function requireManifestRegistryLoadParams(index = 0): Record<string, unknown> {
-  const call = mocks.loadPluginManifestRegistry.mock.calls[index] as
+  const call = mocks.loadPluginManifestRegistryCore.mock.calls[index] as
     | [Record<string, unknown>]
     | undefined;
   if (!call) {
-    throw new Error(`loadPluginManifestRegistry call ${index} missing`);
+    throw new Error(`loadPluginManifestRegistryCore call ${index} missing`);
   }
   return call[0];
 }
@@ -308,7 +308,7 @@ function setBundledCapabilityFixture(
   pluginId = "openai",
   providerId = pluginId,
 ) {
-  mocks.loadPluginManifestRegistry.mockReturnValue({
+  mocks.loadPluginManifestRegistryCore.mockReturnValue({
     plugins: [
       {
         id: pluginId,
@@ -376,8 +376,8 @@ describe("resolvePluginCapabilityProviders", () => {
     );
     mocks.loadPluginRegistrySnapshot.mockReset();
     mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
-    mocks.loadPluginManifestRegistry.mockReset();
-    mocks.loadPluginManifestRegistry.mockReturnValue(createEmptyMockManifestRegistry());
+    mocks.loadPluginManifestRegistryCore.mockReset();
+    mocks.loadPluginManifestRegistryCore.mockReturnValue(createEmptyMockManifestRegistry());
     mocks.loadBundledCapabilityRuntimeRegistry.mockReset();
     mocks.loadBundledCapabilityRuntimeRegistry.mockImplementation(() => mocks.createMockRegistry());
     mocks.withBundledPluginEnablementCompat.mockReset();
@@ -447,7 +447,7 @@ describe("resolvePluginCapabilityProviders", () => {
       ["fal"],
     );
     expectActiveRegistryLookup(["fal"]);
-    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 
   it("prepares media capability families from one supplied metadata snapshot", () => {
@@ -495,7 +495,7 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(prepared.musicGenerationProviders?.map((provider) => provider.id)).toEqual([
       "musicGenerationProviders",
     ]);
-    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -797,7 +797,7 @@ describe("resolvePluginCapabilityProviders", () => {
       ["external-image"],
     );
     expectActiveRegistryLookup(["external-image"]);
-    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 
   it("uses the active registry when capability providers are already loaded", () => {
@@ -808,7 +808,7 @@ describe("resolvePluginCapabilityProviders", () => {
     const providers = resolvePluginCapabilityProviders({ key: "speechProviders" });
 
     expectResolvedCapabilityProviderIds(providers, ["openai"]);
-    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     expectInitialRuntimeRegistryLookup();
   });
 
@@ -831,7 +831,7 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.loadPluginRegistrySnapshot.mockReturnValue({
       plugins: [{ pluginId: "external-image", origin: "global", enabled: true }],
     });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "external-image",
@@ -882,7 +882,7 @@ describe("resolvePluginCapabilityProviders", () => {
         generateImage: async () => ({ images: [] }),
       },
     } as never);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "fal",
@@ -991,7 +991,7 @@ describe("resolvePluginCapabilityProviders", () => {
         },
       },
     } as OpenClawConfig;
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "openai",
@@ -1092,7 +1092,7 @@ describe("resolvePluginCapabilityProviders", () => {
           },
         },
       } as OpenClawConfig;
-      mocks.loadPluginManifestRegistry.mockReturnValue({
+      mocks.loadPluginManifestRegistryCore.mockReturnValue({
         plugins: [
           { id: "openai", origin: "bundled", contracts: { [key]: ["openai"] } },
           { id: "google", origin: "bundled", contracts: { [key]: ["google"] } },
@@ -1126,7 +1126,7 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.loadPluginRegistrySnapshot.mockReturnValue({
       plugins: [{ pluginId: "fish-audio-speech", origin: "global", enabled: true }],
     });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "fish-audio-speech",
@@ -1192,7 +1192,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["deepgram"]);
-    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     expectInitialRuntimeRegistryLookup();
   });
 
@@ -1228,7 +1228,7 @@ describe("resolvePluginCapabilityProviders", () => {
         },
       } as never,
     );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "deepgram",
@@ -1279,14 +1279,14 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
-    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     expectInitialRuntimeRegistryLookup();
   });
 
   it("keeps active capability providers when cfg has no explicit plugin config", () => {
     const active = createEmptyPluginRegistry();
     addSpeechProvider(active, "acme");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "microsoft",
@@ -1418,7 +1418,7 @@ describe("resolvePluginCapabilityProviders", () => {
       source: "test",
       provider: { id: "google" },
     } as never);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "google",
@@ -1461,7 +1461,7 @@ describe("resolvePluginCapabilityProviders", () => {
         label: "OpenAI",
       },
     } as never);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "deepgram",
@@ -1487,7 +1487,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expect(provider?.id).toBe("openai");
     expectActiveRegistryLookup(["deepgram", "openai"]);
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledOnce();
   });
 
   it("prefers a canonical provider id over an earlier provider alias", () => {
@@ -1565,7 +1565,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["google", "microsoft"]);
     expectActiveRegistryLookup(["google", "microsoft"]);
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -1599,7 +1599,7 @@ describe("resolvePluginCapabilityProviders", () => {
       resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
     );
 
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledTimes(2);
   });
 
   it("reloads equivalent unprepared manifest metadata while applying bundled compat", () => {
@@ -1621,7 +1621,7 @@ describe("resolvePluginCapabilityProviders", () => {
       }),
     );
 
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledTimes(2);
   });
 
   it("reuses a compatible active registry even when the capability list is empty", () => {
@@ -1715,7 +1715,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectNoResolvedCapabilityProviders(providers);
-    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
@@ -1756,7 +1756,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
     expectInitialRuntimeRegistryLookup();
     expectActiveRegistryLookup(["microsoft"]);
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -1777,7 +1777,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it("scopes media capability snapshot loads to manifest-derived bundled owners", () => {
     const cfg = { plugins: { allow: ["openai", "minimax"] } } as OpenClawConfig;
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "openai",
@@ -1814,7 +1814,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it("does not unscoped-load media generation capabilities without bundled owners", () => {
     const cfg = { plugins: { allow: ["openai"] } } as OpenClawConfig;
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "openai",
@@ -1857,7 +1857,7 @@ describe("resolvePluginCapabilityProviders", () => {
         create: async () => ({ provider: null }),
       },
     } as never);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "google",
@@ -1903,7 +1903,7 @@ describe("resolvePluginCapabilityProviders", () => {
         create: async () => ({ provider: null }),
       },
     } as never);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "google",
@@ -1929,7 +1929,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expect(provider).toBeUndefined();
-    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });

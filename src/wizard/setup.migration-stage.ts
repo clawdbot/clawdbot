@@ -14,7 +14,10 @@ import type {
   MigrationItem,
   MigrationPlan,
 } from "../plugins/types.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -37,6 +40,7 @@ import {
   type SetupMigrationPromotionContinuation,
   type SetupMigrationPromotionResume,
 } from "./setup.migration-promotion.js";
+import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
 export { recoverSetupMigrationPromotion } from "./setup.migration-promotion.js";
 export type {
@@ -319,6 +323,7 @@ export async function createSetupMigrationStage(params: {
   });
   openOpenClawAgentDatabase({ agentId, env: stageEnv });
   let databasesDisposed = false;
+  let finalAgentDatabaseRegistered = false;
   let retainForRecovery = false;
 
   const disposeDatabases = () => {
@@ -328,13 +333,6 @@ export async function createSetupMigrationStage(params: {
     clearRuntimeAuthProfileStoreSnapshot(stagedAgentDir);
     const stagedAgentDatabasePath = path.join(stagedAgentDir, "openclaw-agent.sqlite");
     disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
-    // Verification may already close this handle. The staged registry still must
-    // publish the final path before its shared database is promoted.
-    registerOpenClawAgentDatabase({
-      agentId,
-      path: path.join(finalAgentDir, "openclaw-agent.sqlite"),
-      env: stageEnv,
-    });
     closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(stageEnv));
     databasesDisposed = true;
   };
@@ -367,9 +365,13 @@ export async function createSetupMigrationStage(params: {
       }
       const configBefore = await readConfigFile();
       if (hashSetupMigrationConfig(configBefore) !== hashSetupMigrationConfig(expectedConfig)) {
-        throw new Error("Migration config changed before promotion. Review it and retry.");
+        throw new SetupMigrationTargetChangedError(
+          "Migration config changed before promotion. Review it and retry.",
+        );
       }
       const configTarget = configs.getFinalConfig();
+      // Shared state is owned by the live runtime. Promote durable import artifacts,
+      // then merge the derived agent registry fact instead of replacing its database.
       const components: PromotionComponent[] = [
         {
           name: "workspace",
@@ -381,12 +383,6 @@ export async function createSetupMigrationStage(params: {
           name: "agent",
           stagedPath: stagedAgentDir,
           finalPath: finalAgentDir,
-          status: "staged",
-        },
-        {
-          name: "state",
-          stagedPath: path.join(stagedStateDir, "state"),
-          finalPath: path.join(params.stateDir, "state"),
           status: "staged",
         },
       ];
@@ -441,6 +437,14 @@ export async function createSetupMigrationStage(params: {
           }
           await fs.mkdir(path.dirname(component.finalPath), { recursive: true, mode: 0o700 });
           await fs.rename(component.stagedPath, component.finalPath);
+          if (component.name === "agent") {
+            registerOpenClawAgentDatabase({
+              agentId,
+              path: path.join(finalAgentDir, "openclaw-agent.sqlite"),
+              env: finalEnv,
+            });
+            finalAgentDatabaseRegistered = true;
+          }
           component.status = "promoted";
           await writePromotionJournal(journalPath, journal);
         }
@@ -471,6 +475,14 @@ export async function createSetupMigrationStage(params: {
       } catch (error) {
         if (retainForRecovery) {
           throw error;
+        }
+        if (finalAgentDatabaseRegistered) {
+          unregisterOpenClawAgentDatabase({
+            agentId,
+            path: path.join(finalAgentDir, "openclaw-agent.sqlite"),
+            env: finalEnv,
+          });
+          finalAgentDatabaseRegistered = false;
         }
         if (await rollbackComponents(journal.components)) {
           journal.status = "rolled-back";

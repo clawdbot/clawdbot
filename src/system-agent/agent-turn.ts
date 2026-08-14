@@ -241,7 +241,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
     { resolveSystemAgentProposalTransition, resolveSystemAgentDirectiveTransition },
   ] = await Promise.all([
     import("../infra/agent-events.js"),
-    import("../agents/embedded-agent-subscribe.tools.js"),
+    import("../agents/embedded-agent-tool-results.js"),
     import("../agents/tools/system-agent-tool.js"),
   ]);
   return onAgentEvent((evt) => {

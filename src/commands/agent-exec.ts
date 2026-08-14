@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
@@ -17,7 +18,6 @@ import type {
 } from "../infra/embedded-state-lock.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 
 const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;

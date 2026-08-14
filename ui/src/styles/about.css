@@ -28,7 +28,7 @@
   border-radius: 50%;
   background: radial-gradient(
     closest-side,
-    color-mix(in srgb, var(--lob-shell, #c44536) 22%, transparent),
+    color-mix(in srgb, var(--lob-shell) 22%, transparent),
     transparent 72%
   );
   pointer-events: none;
@@ -292,17 +292,4 @@
   color: var(--muted);
   font-size: var(--control-ui-text-xs, 12px);
   white-space: nowrap;
-}
-
-/* Screen-reader-only live region for copy feedback (no shared utility yet). */
-.about-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }

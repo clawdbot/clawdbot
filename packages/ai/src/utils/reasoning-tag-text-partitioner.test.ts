@@ -736,4 +736,18 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.pushVisible("<think>outer<think>inner</think>")).toEqual([]);
     expect(partitioner.flush()).toEqual([{ kind: "thinking", text: "outerinner" }]);
   });
+
+  it("never emits nested unclosed internal reflection on flush", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    expect(partitioner.pushVisible("<thinking>outer<internal>private reflection")).toEqual([]);
+    expect(partitioner.flush()).toEqual([]);
+  });
+
+  it("never emits closed internal reflection", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    expect(partitioner.pushVisible("<internal>private reflection</internal>")).toEqual([]);
+    expect(partitioner.flush()).toEqual([]);
+  });
 });

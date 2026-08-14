@@ -394,12 +394,8 @@ async function formatRuntimePatchMutationDiagnostics(params: {
   ].join("; ");
 }
 
-function readNonEmptyString(value: unknown) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function normalizeToolCallId(value: unknown) {
-  return readNonEmptyString(value);
+  return normalizeOptionalString(value);
 }
 
 function stringifyTranscriptToolResult(value: unknown): string {
@@ -436,10 +432,10 @@ function extractTranscriptText(value: unknown): string {
       continue;
     }
     const text =
-      readNonEmptyString(block.text) ??
-      readNonEmptyString(block.content) ??
-      readNonEmptyString(block.message) ??
-      readNonEmptyString(block.error);
+      normalizeOptionalString(block.text) ??
+      normalizeOptionalString(block.content) ??
+      normalizeOptionalString(block.message) ??
+      normalizeOptionalString(block.error);
     if (text) {
       parts.push(text);
     }
@@ -457,11 +453,11 @@ function extractTranscriptToolCalls(
       if (!isRecord(block)) {
         continue;
       }
-      const type = readNonEmptyString(block.type)?.toLowerCase();
+      const type = normalizeOptionalString(block.type)?.toLowerCase();
       if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
         continue;
       }
-      const tool = readNonEmptyString(block.name);
+      const tool = normalizeOptionalString(block.name);
       if (!tool) {
         continue;
       }
@@ -486,7 +482,8 @@ function extractTranscriptToolCalls(
       continue;
     }
     const functionRecord = isRecord(call.function) ? call.function : undefined;
-    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
+    const tool =
+      normalizeOptionalString(call.name) ?? normalizeOptionalString(functionRecord?.name);
     if (!tool) {
       continue;
     }
@@ -558,10 +555,10 @@ function extractTranscriptToolResults(
 ): QaRuntimeToolFixtureTranscriptToolResult[] {
   const results: QaRuntimeToolFixtureTranscriptToolResult[] = [];
   const tool =
-    readNonEmptyString(message.toolName) ??
-    readNonEmptyString(message.tool_name) ??
-    readNonEmptyString(message.name) ??
-    readNonEmptyString(message.tool);
+    normalizeOptionalString(message.toolName) ??
+    normalizeOptionalString(message.tool_name) ??
+    normalizeOptionalString(message.name) ??
+    normalizeOptionalString(message.tool);
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
     const text = extractTranscriptText(message.content);
     const structuredFailure = isStructuredFailureToolResult({
@@ -598,7 +595,7 @@ function extractTranscriptToolResults(
     if (!isRecord(block)) {
       continue;
     }
-    const type = readNonEmptyString(block.type)?.toLowerCase();
+    const type = normalizeOptionalString(block.type)?.toLowerCase();
     if (type !== "tool_result" && type !== "toolresult" && type !== "tool_result_error") {
       continue;
     }
@@ -611,10 +608,10 @@ function extractTranscriptToolResults(
       is_error: block.is_error,
     });
     const blockTool =
-      readNonEmptyString(block.toolName) ??
-      readNonEmptyString(block.tool_name) ??
-      readNonEmptyString(block.name) ??
-      readNonEmptyString(block.tool);
+      normalizeOptionalString(block.toolName) ??
+      normalizeOptionalString(block.tool_name) ??
+      normalizeOptionalString(block.name) ??
+      normalizeOptionalString(block.tool);
     results.push({
       id:
         normalizeToolCallId(block.tool_use_id) ??
@@ -703,7 +700,7 @@ async function readSessionTranscriptBytes(
 ) {
   const store = await readRawQaSessionStore(env);
   const entry = store[sessionKey];
-  const sessionId = readNonEmptyString(entry?.sessionId);
+  const sessionId = normalizeOptionalString(entry?.sessionId);
   if (!sessionId) {
     throw new Error(`session transcript entry not found for ${sessionKey}`);
   }

@@ -24,6 +24,79 @@ import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const standaloneBundledChannelSmokeFiles = [
+  "scripts/test-built-bundled-channel-entry-smoke.mts",
+  "scripts/lib/bundled-plugin-build-entries.mjs",
+  "scripts/lib/bundled-plugin-paths.mjs",
+  "scripts/lib/optional-bundled-clusters.mjs",
+  "scripts/lib/package-root-args.mts",
+  "scripts/lib/record-shared.mjs",
+  "scripts/process-warning-filter.mts",
+];
+
+function runStandaloneBundledChannelSmoke(entrySource: string) {
+  const rootDir = tempDirs.make("openclaw-prepack-standalone-smoke-");
+  for (const relativePath of standaloneBundledChannelSmokeFiles) {
+    const destination = path.join(rootDir, relativePath);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(path.join(process.cwd(), relativePath), destination);
+  }
+
+  const packageRoot = path.join(rootDir, "package");
+  const extensionRoot = path.join(packageRoot, "dist", "extensions", "fixture-channel");
+  mkdirSync(extensionRoot, { recursive: true });
+  writeFileSync(path.join(packageRoot, "package.json"), '{"files":[]}\n');
+  writeFileSync(
+    path.join(extensionRoot, "package.json"),
+    `${JSON.stringify({
+      name: "@openclaw/fixture-channel",
+      openclaw: { channel: true, extensions: ["./index.ts"] },
+    })}\n`,
+  );
+  writeFileSync(path.join(extensionRoot, "index.js"), entrySource);
+
+  return spawnSync(
+    process.execPath,
+    [
+      path.join(rootDir, "scripts", "test-built-bundled-channel-entry-smoke.mts"),
+      "--package-root",
+      packageRoot,
+    ],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_CHANNEL_SMOKE_INSTALLED_LAYOUT: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+}
+
+describe("standalone bundled channel smoke", () => {
+  it("runs without workspace packages linked at the root", () => {
+    const result = runStandaloneBundledChannelSmoke(`
+      export default {
+        kind: "bundled-channel-entry",
+        loadChannelPlugin() {
+          return { id: "fixture-channel" };
+        },
+      };
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("channel=1");
+  });
+
+  it("rejects a non-record channel entry default export", () => {
+    const result = runStandaloneBundledChannelSmoke("export default [];\n");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("AssertionError");
+  });
+});
+
 describe("collectSourcePackWorkspaceDependencyErrors", () => {
   it("rejects the plain source pack that pnpm rewrites without bundling @openclaw/ai", () => {
     const rootDir = tempDirs.make("openclaw-source-pack-workspace-");

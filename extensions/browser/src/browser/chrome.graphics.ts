@@ -1,4 +1,10 @@
-import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  asFiniteNumber,
+  filterStringEntries,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Managed Chrome graphics diagnostics.
  *
@@ -7,7 +13,7 @@ import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-ru
  */
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactCdpErrorText, withCdpSocket } from "./cdp.helpers.js";
-import { getChromeWebSocketUrl, type RunningChrome } from "./chrome.js";
+import { getChromeWebSocketEndpoint, type RunningChrome } from "./chrome.js";
 import type {
   BrowserGraphicsAcceleration,
   BrowserGraphicsDevice,
@@ -24,11 +30,11 @@ type ChromeGraphicsProbeOptions = {
 };
 
 function readChromeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function readChromeNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return asFiniteNumber(value) ?? 0;
 }
 
 function readStringRecord(value: unknown): Record<string, string> {
@@ -40,12 +46,6 @@ function readStringRecord(value: unknown): Record<string, string> {
     .filter((entry): entry is [string, string] => typeof entry[1] === "string")
     .toSorted(([left], [right]) => left.localeCompare(right));
   return Object.fromEntries(entries);
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function readSize(value: unknown): { width: number; height: number } {
@@ -162,7 +162,7 @@ function normalizeChromeGraphicsInfo(
     devices,
     featureStatus,
     disabledFeatures,
-    driverBugWorkarounds: readStringArray(gpu.driverBugWorkarounds),
+    driverBugWorkarounds: filterStringEntries(gpu.driverBugWorkarounds),
     videoDecoding: readVideoDecoding(gpu.videoDecoding),
     videoEncoding: readVideoEncoding(gpu.videoEncoding),
   };
@@ -174,19 +174,28 @@ export async function inspectChromeGraphicsDiagnostics(
 ): Promise<BrowserGraphicsDiagnostics> {
   const observedAt = Date.now();
   try {
-    const wsUrl = await getChromeWebSocketUrl(cdpUrl, options.httpTimeoutMs, options.ssrfPolicy);
-    if (!wsUrl) {
+    const endpoint = await getChromeWebSocketEndpoint(
+      cdpUrl,
+      options.httpTimeoutMs,
+      options.ssrfPolicy,
+    );
+    if (!endpoint) {
       return {
         status: "unavailable",
         observedAt,
         reason: "browser-level CDP WebSocket was not advertised",
       };
     }
-    const result = await withCdpSocket(wsUrl, async (send) => await send("SystemInfo.getInfo"), {
-      handshakeTimeoutMs: options.handshakeTimeoutMs,
-      commandTimeoutMs: options.commandTimeoutMs,
-      handshakeRetries: 0,
-    });
+    const result = await withCdpSocket(
+      endpoint.url,
+      async (send) => await send("SystemInfo.getInfo"),
+      {
+        handshakeTimeoutMs: options.handshakeTimeoutMs,
+        commandTimeoutMs: options.commandTimeoutMs,
+        handshakeRetries: 0,
+        lookup: endpoint.lookup,
+      },
+    );
     return normalizeChromeGraphicsInfo(result, observedAt);
   } catch (error) {
     return {

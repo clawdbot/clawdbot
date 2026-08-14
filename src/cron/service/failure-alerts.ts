@@ -1,5 +1,8 @@
 /** Resolves and emits cron failure-alert notifications. */
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
@@ -10,6 +13,7 @@ import { normalizeTargetForProvider } from "../../infra/outbound/target-normaliz
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
@@ -62,14 +66,6 @@ function normalizeFailureAlertRecipient(channel: CronMessageChannel, to: string)
   }
 }
 
-function normalizeTo(input: unknown): string | undefined {
-  if (typeof input !== "string") {
-    return undefined;
-  }
-  const to = input.trim();
-  return to ? to : undefined;
-}
-
 function clampPositiveInt(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -104,9 +100,11 @@ export function resolveFailureAlert(
   const mode = jobConfig?.mode ?? globalConfig?.mode;
   const inheritsGlobalMode =
     !jobConfig?.mode || jobConfig.mode === (globalConfig?.mode ?? "announce");
-  const jobTo = normalizeTo(jobConfig?.to);
+  const jobTo = normalizeOptionalString(jobConfig?.to);
   const jobChannel = resolveFailureAlertChannel(jobConfig?.channel, jobTo);
-  const configuredGlobalTo = inheritsGlobalMode ? normalizeTo(globalConfig?.to) : undefined;
+  const configuredGlobalTo = inheritsGlobalMode
+    ? normalizeOptionalString(globalConfig?.to)
+    : undefined;
   const globalChannel = inheritsGlobalMode
     ? resolveFailureAlertChannel(globalConfig?.channel, configuredGlobalTo)
     : undefined;
@@ -115,7 +113,7 @@ export function resolveFailureAlert(
   const inheritsGlobalRoute =
     inheritsGlobalMode && (mode === "webhook" || !jobChannel || jobChannel === globalChannel);
   const globalTo = inheritsGlobalRoute ? configuredGlobalTo : undefined;
-  const deliveryTo = normalizeTo(job.delivery?.to);
+  const deliveryTo = normalizeOptionalString(job.delivery?.to);
   const deliveryChannel = resolveFailureAlertChannel(job.delivery?.channel, deliveryTo);
   const channel = jobChannel ?? globalChannel ?? deliveryChannel ?? "last";
   const inheritsDeliveryChannel =
@@ -235,12 +233,16 @@ function emitFailureAlert(
     return;
   }
 
-  state.deps.enqueueSystemEvent(payload.text ?? "", { agentId: params.job.agentId });
+  enqueueCronSystemEvent(state, payload.text ?? "", {
+    agentId: params.job.agentId,
+    sessionKey: params.job.sessionKey,
+  });
   if (params.job.wakeMode === "now") {
-    state.deps.requestHeartbeat({
-      source: "cron",
+    requestCronHeartbeat(state, {
       intent: "immediate",
       reason: `cron:${params.job.id}:failure-alert`,
+      agentId: params.job.agentId,
+      sessionKey: params.job.sessionKey,
     });
   }
 }

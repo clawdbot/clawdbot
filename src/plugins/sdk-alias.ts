@@ -419,6 +419,7 @@ const cachedWorkspacePackageAliasMaps = new PluginLruCache<Record<string, string
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
 const CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH = "codex-session-transcript-runtime";
+const NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH = "native-hook-relay-runtime";
 const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "agent-runtime-test-contracts",
@@ -459,6 +460,7 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     subpaths: [
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
       CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH,
+      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
     ],
   },
   {
@@ -517,21 +519,6 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
     ],
   ],
   ["media-generation-core", ["", "capability-model-ref", "catalog", "model-ref", "normalization"]],
-  [
-    "media-core",
-    [
-      "",
-      "base64",
-      "constants",
-      "content-length",
-      "file-name",
-      "inbound-path-policy",
-      "inline-image-data-url",
-      "media-source-url",
-      "mime",
-      "read-byte-stream-with-limit",
-    ],
-  ],
   ["retry", [""]],
   [
     "terminal-core",
@@ -669,14 +656,7 @@ export function listWorkspacePackageExportAliasEntries(params: {
     params.packageDir,
     "package.json",
   );
-  const fallbackPackageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
-  const packageJson =
-    tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath) ??
-    (fallbackPackageRoot
-      ? tryReadJsonSync<PluginSdkPackageJson>(
-          path.join(fallbackPackageRoot, "packages", params.packageDir, "package.json"),
-        )
-      : null);
+  const packageJson = tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath);
   const exports = packageJson?.exports;
   if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
     return listRootPackagedWorkspacePackageAliasEntries(params);
@@ -737,6 +717,7 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   return [
     ...new Set([
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
       OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
         ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
@@ -914,7 +895,7 @@ function resolveWorkspacePackageAliasMap(params: {
   const aliasMap: Record<string, string> = {};
   const workspacePackageAliasEntries = [
     ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
-    ...["normalization-core", "acp-core"].flatMap((packageDir) =>
+    ...["media-core", "normalization-core", "acp-core"].flatMap((packageDir) =>
       listWorkspacePackageExportAliasEntries({
         packageRoot,
         packageName: `@openclaw/${packageDir}`,

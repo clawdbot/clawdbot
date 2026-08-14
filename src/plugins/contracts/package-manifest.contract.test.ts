@@ -71,10 +71,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "openshell" },
-  {
-    pluginId: "qqbot",
-    pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
-  },
   { pluginId: "slack" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "telegram" },

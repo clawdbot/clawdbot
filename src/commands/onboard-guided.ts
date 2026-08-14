@@ -10,7 +10,6 @@ import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import type {
   SetupInferenceCandidate,
   SetupInferenceDetection,
-  SetupInferenceFailureStatus,
 } from "../system-agent/setup-inference.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
@@ -19,8 +18,9 @@ import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
 import {
   activationLines,
+  formatSetupCandidateFailure,
   runManualStage,
-  setupFailureReason,
+  type SetupCandidateFailure,
   tryCandidate,
 } from "./onboard-guided-manual.js";
 import {
@@ -65,8 +65,6 @@ export type GuidedOnboardingDeps = {
 export type GuidedAccessMode = "full" | "guarded";
 
 type GuidedOnboardingHandoff = { workspace: string; next: "browser" | "hatch" | "chat" };
-
-type LadderFailure = { label: string; status: SetupInferenceFailureStatus };
 
 async function openSystemAgentChat(
   deps: GuidedOnboardingDeps,
@@ -259,7 +257,7 @@ async function runGuidedOnboardingFlow(
   const detect =
     deps.detect ?? (await import("../system-agent/setup-inference.js")).detectSetupInference;
   const autoAttemptedKinds = new Set<SetupInferenceCandidate["kind"]>();
-  const ladderFailures: LadderFailure[] = [];
+  const ladderFailures: SetupCandidateFailure[] = [];
   let detection: SetupInferenceDetection | undefined;
   let resultLines: string[] | undefined;
   let successLabel: string | undefined;
@@ -384,7 +382,7 @@ async function runGuidedOnboardingFlow(
         activate,
         // Legacy chat handoff keeps loud per-candidate failures.
         ...(custodianMode
-          ? { collectFailure: (failure: LadderFailure) => ladderFailures.push(failure) }
+          ? { collectFailure: (failure: SetupCandidateFailure) => ladderFailures.push(failure) }
           : {}),
       });
       if (attempt.kind === "success") {
@@ -441,12 +439,7 @@ async function runGuidedOnboardingFlow(
         await prompter.note(
           [
             t("wizard.guided.failedOptionsIntro"),
-            ...ladderFailures.map((failure) =>
-              t("wizard.guided.failedOptionLine", {
-                label: failure.label,
-                reason: setupFailureReason(failure.status),
-              }),
-            ),
+            ...ladderFailures.map(formatSetupCandidateFailure),
           ].join("\n"),
           t("wizard.guided.aiAccessTitle"),
         );
@@ -468,12 +461,7 @@ async function runGuidedOnboardingFlow(
     }
   } else if (!resultLines) {
     if (ladderFailures.length > 0) {
-      const failureLines = ladderFailures.map((failure) =>
-        t("wizard.guided.failedOptionLine", {
-          label: failure.label,
-          reason: setupFailureReason(failure.status),
-        }),
-      );
+      const failureLines = ladderFailures.map(formatSetupCandidateFailure);
       await prompter.note(
         [t("wizard.guided.failedOptionsIntro"), ...failureLines].join("\n"),
         t("wizard.guided.aiAccessTitle"),

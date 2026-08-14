@@ -8,7 +8,7 @@ import { vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
@@ -58,7 +58,7 @@ export function canonicalSubagentRunFixtures(
 /** Reads test session entries through the active SQLite accessor. */
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   ) as unknown as SessionStore;
 }
 

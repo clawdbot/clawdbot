@@ -2,10 +2,15 @@ import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
+import {
+  asNonArrayRecord,
+  asNullableRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
-import { isGitHubPullRequestLink } from "../../components/github-link-hovercard.ts";
+import { isGitHubPullRequestLink } from "../../components/github-link-target.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
@@ -41,6 +46,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
+import { refreshSessionWorkspace } from "./components/chat-session-workspace.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
@@ -64,7 +70,7 @@ function applyLiveUserMessage(
   payload: unknown,
   runActive: boolean | undefined,
 ): void {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  if (!isRecord(payload)) {
     return;
   }
   const event = payload as {
@@ -92,10 +98,7 @@ function applyLiveUserMessage(
   }
   const sourceRecord = sourceMessage as Record<string, unknown>;
   const marker = sourceRecord["__openclaw"];
-  const sourceMetadata =
-    marker && typeof marker === "object" && !Array.isArray(marker)
-      ? (marker as Record<string, unknown>)
-      : {};
+  const sourceMetadata = asNonArrayRecord(marker);
   const message = {
     ...sourceRecord,
     __openclaw: {
@@ -247,10 +250,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const matchesChat = Boolean(
     event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
   );
-  const source =
-    payload && typeof payload === "object" && !Array.isArray(payload)
-      ? (payload as Record<string, unknown>)
-      : null;
+  const source = asNullableRecord(payload);
   const resetsSelectedSession =
     matchesChat && (source?.reason === "reset" || source?.phase === "reset");
   if (resetsSelectedSession) {
@@ -473,6 +473,9 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     if (terminal) {
       removeDeliveredQueuedChatSendForRun(state, payload?.runId);
       void resumeStoredChatOutboxes(state);
+      if (chatScopedEventSessionMatches(state, payload?.sessionKey, payload?.agentId)) {
+        refreshSessionWorkspace(state);
+      }
     }
     requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
     return;
@@ -498,8 +501,9 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
-    handleAgentEvent(state as never, event.payload as never);
-    requestChatPageUpdate(state);
+    if (handleAgentEvent(state as never, event.payload as never)) {
+      requestChatPageUpdate(state);
+    }
     return;
   }
   if (event.event === "session.operation") {

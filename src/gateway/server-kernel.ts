@@ -1,12 +1,14 @@
 import { isNixMode } from "../config/paths.js";
+import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
+import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
+import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -16,6 +18,10 @@ type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
 type ReadPreparedGatewayModelCatalog =
   typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
+type LoadPreparedGatewayModelCatalogSnapshot =
+  typeof import("./server-model-catalog.js").loadPreparedGatewayModelCatalogSnapshot;
+type ReadPreparedGatewayModelCatalogOwnerSnapshot =
+  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalogOwnerSnapshot;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -76,6 +82,22 @@ const readPreparedGatewayModelCatalog: ReadPreparedGatewayModelCatalog = async (
   const mod = await loadGatewayModelCatalogModule();
   return mod.readPreparedGatewayModelCatalog(...args);
 };
+const loadPreparedGatewayModelCatalogSnapshot: LoadPreparedGatewayModelCatalogSnapshot = async (
+  ...args
+) => {
+  const mod = await loadGatewayModelCatalogModule();
+  return mod.loadPreparedGatewayModelCatalogSnapshot(...args);
+};
+const readPreparedGatewayModelCatalogOwnerSnapshot: ReadPreparedGatewayModelCatalogOwnerSnapshot =
+  async (...args) => {
+    const mod = await loadGatewayModelCatalogModule();
+    return mod.readPreparedGatewayModelCatalogOwnerSnapshot(...args);
+  };
+
+registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+  loadDeferred: (params) => loadPreparedGatewayModelCatalogSnapshot(params),
+  readPrepared: readPreparedGatewayModelCatalogOwnerSnapshot,
+});
 
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =
@@ -162,7 +184,8 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     if (lifecycleRuntime) {
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
-      clearSecretsRuntimeSnapshot();
+      clearGatewayAgentCliShim();
+      clearSecretsRuntimeSnapshotState();
       clearPluginMetadataLifecycleCaches();
     }
     throw error;

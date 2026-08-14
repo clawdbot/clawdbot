@@ -8,10 +8,12 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
+  getCurrentPluginMetadataSnapshotMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedExtensionFactoriesMock,
@@ -56,7 +58,7 @@ import {
   sessionMessages,
   sessionCompactImpl,
   sessionManualCompactionMock,
-  triggerInternalHook,
+  triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
 import {
   abortEmbeddedAgentRun,
@@ -254,7 +256,7 @@ function createPreparedCodexCompactionPlans(modelId = "gpt-5.5") {
 }
 
 const sessionHook = (action: string): SessionHookEvent | undefined =>
-  triggerInternalHook.mock.calls.find((call) => {
+  triggerInternalHookMock.mock.calls.find((call) => {
     const event = call[0] as SessionHookEvent | undefined;
     return event?.type === "session" && event.action === action;
   })?.[0] as SessionHookEvent | undefined;
@@ -314,7 +316,7 @@ beforeEach(() => {
 
 describe("compactEmbeddedAgentSessionDirect hooks", () => {
   beforeEach(() => {
-    triggerInternalHook.mockClear();
+    triggerInternalHookMock.mockClear();
     hookRunner.hasHooks.mockReset();
     hookRunner.runBeforeCompaction.mockReset();
     hookRunner.runAfterCompaction.mockReset();
@@ -1173,6 +1175,69 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it("plans direct compaction from the requested workspace metadata without ambient discovery", async () => {
+    const baseMetadataSnapshot = expectDefined(
+      getCurrentPluginMetadataSnapshotMock(),
+      "default plugin metadata snapshot",
+    );
+    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+      params?.workspaceDir === TEST_WORKSPACE_DIR
+        ? {
+            ...baseMetadataSnapshot,
+            configFingerprint: "workspace-compaction-normalization",
+            plugins: [
+              {
+                id: "compaction-normalizer",
+                channels: [],
+                providers: ["anthropic"],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                origin: "workspace",
+                rootDir: TEST_WORKSPACE_DIR,
+                source: `${TEST_WORKSPACE_DIR}/index.js`,
+                manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
+                modelIdNormalization: {
+                  providers: {
+                    anthropic: {
+                      aliases: { legacy: "claude-modern" },
+                    },
+                  },
+                },
+              } satisfies PluginManifestRecord,
+            ],
+          }
+        : undefined,
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+      agentHarnessId: "codex",
+      modelFallbacksOverride: ["anthropic/legacy"],
+      config: {} as never,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({
+            provider: "anthropic",
+            modelId: "claude-modern",
+            runtime: "codex",
+          }),
+        ]),
+      }),
+    );
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: TEST_WORKSPACE_DIR,
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    );
+  });
+
   it("keeps model-locked OpenClaw compaction on its exact model without fallbacks", async () => {
     sessionCompactImpl.mockRejectedValueOnce(
       Object.assign(new Error("primary compaction rate limited"), { status: 429 }),
@@ -1876,7 +1941,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("forwards internal compaction hook messages to the caller", async () => {
     const onHookMessages = vi.fn();
-    triggerInternalHook.mockImplementation((event: unknown) => {
+    triggerInternalHookMock.mockImplementation((event: unknown) => {
       const hookEvent = event as { action?: string; messages?: string[] };
       hookEvent.messages?.push(`${hookEvent.action} notice`);
     });
@@ -2386,7 +2451,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     const sessionId = "9d6c8436-7cb2-4bd5-a302-e33305bfc8c4";
     const sessionKey = "agent:main:telegram:direct:reporter";
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         { sessionId, updatedAt: 1 },
       );
@@ -2420,7 +2485,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     }
   });
 
-  it("uses the acquired gateway runtime generation for queued model resolution", async () => {
+  it("uses the acquired gateway runtime generation for queued tiered model resolution", async () => {
     await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
         allowGatewaySubagentBinding: true,
@@ -2434,9 +2499,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       : undefined;
     expect(snapshot).toBeDefined();
     expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toMatchObject({
-      authStorage: {},
-      modelRegistry: {},
       preparedModelRuntime: snapshot,
+      skipAgentDiscovery: true,
     });
   });
 
@@ -4337,7 +4401,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
     } as never);
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         {
           agentId: "main",
           sessionKey: delegatedSessionKey,
@@ -4381,7 +4445,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
     } as never);
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: delegatedSessionKey, storePath },
         { sessionId: "stored-session", updatedAt: 1 },
       );
@@ -4482,7 +4546,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
     } as never);
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: TEST_SESSION_KEY, storePath },
         { sessionId: TEST_SESSION_ID, updatedAt: 1 },
       );

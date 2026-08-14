@@ -6,12 +6,8 @@ import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
-import {
-  readMcpOAuthStore,
-  resolveMcpOAuthStoreKey,
-  updateMcpOAuthStore,
-  type McpOAuthStore,
-} from "./mcp-oauth-store.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { readMcpOAuthStore, updateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
 
 export type McpOAuthConfig = {
   scope?: unknown;
@@ -82,25 +78,21 @@ function beginMcpOAuthAuthorization(store: McpOAuthStore): McpOAuthStore {
 
 /** Creates the MCP SDK OAuth provider backed by canonical shared SQLite state. */
 export function createMcpOAuthClientProvider(params: {
-  serverName: string;
-  serverUrl: string;
+  identity: McpOAuthIdentity;
   config?: McpOAuthConfig;
-  onAuthorizationUrl?: (url: URL) => void | Promise<void>;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
   lease?: OpenClawStateLeaseContext;
 }): OAuthClientProvider {
   const config = params.config ?? {};
-  const storeKey = resolveMcpOAuthStoreKey(params.serverName, params.serverUrl);
+  const storeKey = params.identity.storeKey;
   const assertOwnedInTransaction = bindMcpOAuthLeaseAssertion(params.lease);
   const updateStore = (update: (store: McpOAuthStore) => McpOAuthStore) =>
     updateMcpOAuthStore(storeKey, update, assertOwnedInTransaction);
-  const allowAuthorizationRedirect =
-    params.allowAuthorizationRedirect ?? Boolean(params.onAuthorizationUrl);
   const assertAuthorizationRedirectAllowed = () => {
-    if (!allowAuthorizationRedirect) {
+    if (params.allowAuthorizationRedirect !== true) {
       throw new Error(
-        `MCP server "${params.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.serverName}.`,
+        `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
       );
     }
   };
@@ -162,8 +154,8 @@ export function createMcpOAuthClientProvider(params: {
       updateStore((store) => ({
         ...beginMcpOAuthAuthorization(store),
         lastAuthorizationUrl: authorizationUrl.toString(),
+        redirectUrl: resolveOAuthRedirectUrl(config, store),
       }));
-      await params.onAuthorizationUrl?.(authorizationUrl);
     },
     saveCodeVerifier(codeVerifier) {
       assertAuthorizationRedirectAllowed();

@@ -1,3 +1,4 @@
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/session-accessor.js";
 import {
@@ -30,8 +31,7 @@ export function readChatHistoryMessageId(message: unknown): string | undefined {
 
 export function readChatHistoryMessageSeq(message: unknown): number | undefined {
   const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  const seq = metadata?.seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+  return asPositiveSafeInteger(metadata?.seq);
 }
 
 type ChatHistoryPage = {

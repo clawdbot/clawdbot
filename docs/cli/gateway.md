@@ -75,8 +75,11 @@ openclaw gateway run   # equivalent, explicit form
 <ParamField path="--dev" type="boolean">
   Create a dev config + workspace if missing (skips `BOOTSTRAP.md`).
 </ParamField>
+<ParamField path="--ambient-channels" type="boolean">
+  Allow the Gateway to auto-configure channels from ambient environment variables. By default, channels require an explicit `channels.<id>` config block.
+</ParamField>
 <ParamField path="--dev-ambient-channels" type="boolean">
-  Allow a dev Gateway to auto-configure channels from ambient environment variables. Requires `--dev`.
+  Deprecated alias for `--ambient-channels`.
 </ParamField>
 <ParamField path="--reset" type="boolean">
   Reset dev config, credentials, sessions, and workspace. Requires `--dev`.
@@ -515,6 +518,36 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 <Note>
 `--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected). Use `--port` for a custom-port local Gateway; explicit `--url` targets still require explicit credentials.
 </Note>
+
+### `gateway suspend`
+
+Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
+`--wait`, active work returns a nonzero exit with blocker details. With
+`--wait`, the CLI retries until the bounded deadline using one stable request
+ID.
+
+```bash
+openclaw gateway suspend
+openclaw gateway suspend --request-id snapshot-2026-08-11 --wait 30
+openclaw gateway suspend --port 18999 --json
+```
+
+The ready output includes the suspension ID, lease expiry, and the matching
+resume command. Common RPC options such as `--url`, `--token`, `--password`,
+`--timeout`, `--json`, and `--port` are supported.
+
+### `gateway resume <suspensionId>`
+
+Release a prepared suspension after thaw or when the host operation is
+abandoned.
+
+```bash
+openclaw gateway resume <suspensionId>
+openclaw gateway resume <suspensionId> --port 18999 --json
+```
+
+An already expired or resumed lease is a successful no-op. A different active
+suspension ID is rejected.
 
 ## Manage the Gateway service
 

@@ -33,7 +33,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveProviderThinkingProfile } from "../plugins/provider-thinking.js";
+import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 
 /** UI-facing thinking level option. */
@@ -203,10 +203,10 @@ export function resolveThinkingProfile(params: {
   };
   const providerProfile =
     params.providerPolicySource === "active"
-      ? resolveProviderThinkingProfile(providerProfileParams, {
+      ? resolveEffectiveThinkingProfile(providerProfileParams, {
           allowPublicArtifactFallback: false,
         })
-      : resolveProviderThinkingProfile(providerProfileParams);
+      : resolveEffectiveThinkingProfile(providerProfileParams);
   // Any anthropic-messages catalog row routes through the canonical Claude
   // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
   // non-Claude models on the anthropic-messages transport collapse to the Claude

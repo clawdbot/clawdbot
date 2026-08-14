@@ -28,7 +28,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-utils.js")>();
   return {
     ...actual,
-    loadSessionEntryReadOnly: (sessionKey: string) => ({
+    loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
       canonicalKey: sessionKey,
       entry: structuredClone(sessionEntries.get(sessionKey)),
     }),

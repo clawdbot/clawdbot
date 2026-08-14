@@ -7,6 +7,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SnapshotAriaNode } from "./client.types.js";
 import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
+import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 /** Structured snapshot node shape returned by chrome-devtools-mcp. */
@@ -88,16 +89,22 @@ function registerRef(
   return undefined;
 }
 
-/** Flatten a Chrome MCP snapshot tree into OpenClaw ARIA-style nodes. */
-export function flattenChromeMcpSnapshotToAriaNodes(
+/** Build ARIA nodes while preserving whether a traversal ceiling omitted input. */
+export function flattenChromeMcpSnapshotToAriaResult(
   root: ChromeMcpSnapshotNode,
   limit = 500,
-): SnapshotAriaNode[] {
+): { nodes: SnapshotAriaNode[]; truncated?: true } {
   const boundedLimit = Math.max(1, Math.min(2000, Math.floor(limit)));
   const out: SnapshotAriaNode[] = [];
+  let truncated = false;
 
   const visit = (node: ChromeMcpSnapshotNode, depth: number) => {
     if (out.length >= boundedLimit) {
+      truncated = true;
+      return;
+    }
+    if (depth > ROLE_SNAPSHOT_MAX_DEPTH) {
+      truncated = true;
       return;
     }
     const ref = normalizeSnapshotString(node.id);
@@ -111,16 +118,18 @@ export function flattenChromeMcpSnapshotToAriaNodes(
         depth,
       });
     }
-    for (const child of node.children ?? []) {
+    const children = node.children ?? [];
+    for (const [index, child] of children.entries()) {
       visit(child, depth + 1);
       if (out.length >= boundedLimit) {
+        truncated ||= index + 1 < children.length;
         return;
       }
     }
   };
 
   visit(root, 0);
-  return out;
+  return truncated ? { nodes: out, truncated: true } : { nodes: out };
 }
 
 /** Build a compact text snapshot and ref map from a Chrome MCP snapshot tree. */
@@ -130,20 +139,28 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
 }): {
   snapshot: string;
   refs: RoleRefMap;
+  truncated?: true;
 } {
   const refs: RoleRefMap = {};
   const tracker = createDuplicateTracker();
   const lines: string[] = [];
+  const maxDepth = Math.min(
+    params.options?.maxDepth ?? ROLE_SNAPSHOT_MAX_DEPTH,
+    ROLE_SNAPSHOT_MAX_DEPTH,
+  );
+  const hardLimitApplied =
+    params.options?.maxDepth === undefined || params.options.maxDepth >= ROLE_SNAPSHOT_MAX_DEPTH;
+  let truncated = false;
 
   const visit = (node: ChromeMcpSnapshotNode, depth: number) => {
+    if (depth > maxDepth) {
+      truncated ||= hardLimitApplied;
+      return;
+    }
     const role = normalizeRole(node);
     const name = normalizeSnapshotString(node.name);
     const value = normalizeSnapshotString(node.value);
     const description = normalizeSnapshotString(node.description);
-    const maxDepth = params.options?.maxDepth;
-    if (maxDepth !== undefined && depth > maxDepth) {
-      return;
-    }
 
     const includeNode = shouldIncludeNode({ role, name, options: params.options });
     if (includeNode) {
@@ -180,5 +197,6 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
     }
   }
 
-  return { snapshot: lines.join("\n"), refs };
+  const result = { snapshot: lines.join("\n"), refs };
+  return truncated ? { ...result, truncated: true } : result;
 }

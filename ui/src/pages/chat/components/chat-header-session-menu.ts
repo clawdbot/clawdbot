@@ -3,7 +3,6 @@ import { property } from "lit/decorators.js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "../../../components/menu-shortcuts.ts";
-import type { SessionMenuActionKind } from "../../../components/session-menu.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
@@ -13,8 +12,10 @@ export type HeaderMenuAction =
   | { kind: "open-in"; editor: EditorId; path: string }
   | { kind: "rename" }
   | { kind: "fork" }
+  | { kind: "continue-in-terminal" }
   | { kind: "toggle-archived" }
   | { kind: "delete" };
+export type HeaderMenuActionKind = Exclude<HeaderMenuAction["kind"], "open-in">;
 
 export type HeaderMenuQuickAction = {
   id: string;
@@ -22,7 +23,6 @@ export type HeaderMenuQuickAction = {
   icon: TemplateResult;
   active?: boolean;
   badge?: number;
-  disabledReason?: string;
   onActivate: () => void;
 };
 
@@ -39,7 +39,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) layoutActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) actionDisabledReasons: Partial<
-    Record<SessionMenuActionKind, string>
+    Record<HeaderMenuActionKind, string>
   > = {};
   @property({ attribute: false }) forkDisabled = false;
   @property({ attribute: false }) archiveAllowed = false;
@@ -48,11 +48,11 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onSettingsChange: (patch: Partial<UiSettings>) => void = () => {};
   @property({ attribute: false }) onAction: (action: HeaderMenuAction) => void = () => {};
 
-  private actionDisabled(kind: SessionMenuActionKind, extra = false): boolean {
+  private actionDisabled(kind: HeaderMenuActionKind, extra = false): boolean {
     return extra || Boolean(this.actionDisabledReasons[kind]);
   }
 
-  private actionTitle(kind: SessionMenuActionKind): string | typeof nothing {
+  private actionTitle(kind: HeaderMenuActionKind): string | typeof nothing {
     return this.actionDisabledReasons[kind] ?? nothing;
   }
 
@@ -65,7 +65,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       const [, group, id] = value.split(":");
       const actions = group === "panels" ? this.panelActions : this.layoutActions;
       const action = actions.find((candidate) => candidate.id === id);
-      if (action && !action.disabledReason) {
+      if (action) {
         action.onActivate();
       }
       return;
@@ -97,10 +97,14 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     if (
       value === "rename" ||
       value === "fork" ||
+      value === "continue-in-terminal" ||
       value === "toggle-archived" ||
       value === "delete"
     ) {
       if (!this.actionDisabled(value, value === "fork" && this.forkDisabled)) {
+        if (value === "continue-in-terminal") {
+          (event.currentTarget as HTMLElement & { open: boolean }).open = false;
+        }
         this.onAction({ kind: value });
       }
     }
@@ -134,8 +138,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           value=${`quick:${group}:${action.id}`}
           type=${action.active === undefined ? nothing : "checkbox"}
           .checked=${action.active ?? false}
-          ?disabled=${Boolean(action.disabledReason)}
-          title=${action.disabledReason ?? nothing}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${action.icon}</span>
           <span class="session-menu__text">${action.label}</span>
@@ -251,6 +253,17 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
           <span class="session-menu__text">${t("sessionsView.forkSession")}</span>
           ${menuShortcutHint("f")}
+        </wa-dropdown-item>
+        <wa-dropdown-item
+          class="session-menu__item"
+          value="continue-in-terminal"
+          ?disabled=${this.actionDisabled("continue-in-terminal")}
+          title=${this.actionTitle("continue-in-terminal")}
+        >
+          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.terminal}</span>
+          <span class="session-menu__text"
+            >${t("chat.sessionHeader.continueInTerminal.action")}</span
+          >
         </wa-dropdown-item>
         <div class="session-menu__separator" role="separator"></div>
         <wa-dropdown-item

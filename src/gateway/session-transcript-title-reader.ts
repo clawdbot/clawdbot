@@ -234,7 +234,7 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
   }
 
   const watermarks = readSessionTranscriptWatermarkBatch(
-    cachedCandidates.map((candidate) => candidate.scope),
+    cachedCandidates.map((candidate) => toTranscriptReadScope(candidate.target)),
   );
   for (const [candidateIndex, candidate] of cachedCandidates.entries()) {
     const watermark = watermarks[candidateIndex];
@@ -256,7 +256,11 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
   }
 
   const probes =
-    misses.length > 0 ? readSessionTranscriptTitleProbeBatch(misses.map((miss) => miss.scope)) : [];
+    misses.length > 0
+      ? readSessionTranscriptTitleProbeBatch(
+          misses.map((miss) => toTranscriptReadScope(miss.target)),
+        )
+      : [];
   for (const [probeIndex, miss] of misses.entries()) {
     const probe = probes[probeIndex];
     if (!probe) {

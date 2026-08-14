@@ -36,6 +36,7 @@ export function listRunsForRequesterFromRuns(
   requesterSessionKey: string,
   options?: {
     requesterRunId?: string;
+    requesterAgentId?: string;
   },
 ): SubagentRunRecord[] {
   const key = requesterSessionKey.trim();
@@ -56,6 +57,7 @@ export function listRunsForRequesterFromRuns(
   for (const entry of runs.values()) {
     if (
       entry.requesterSessionKey === key &&
+      (!options?.requesterAgentId || entry.requesterAgentId === options.requesterAgentId) &&
       (typeof lowerBound !== "number" || entry.createdAt >= lowerBound) &&
       (typeof upperBound !== "number" || entry.createdAt <= upperBound)
     ) {
@@ -69,6 +71,7 @@ export function listRunsForRequesterFromRuns(
 export function listRunsForControllerFromRuns(
   runs: Map<string, SubagentRunRecord>,
   controllerSessionKey: string,
+  controllerAgentId?: string,
 ): SubagentRunRecord[] {
   const key = controllerSessionKey.trim();
   const results: SubagentRunRecord[] = [];
@@ -76,7 +79,10 @@ export function listRunsForControllerFromRuns(
     return results;
   }
   for (const entry of runs.values()) {
-    if (resolveControllerSessionKey(entry) === key) {
+    if (
+      resolveControllerSessionKey(entry) === key &&
+      (!controllerAgentId || entry.requesterAgentId === controllerAgentId)
+    ) {
       results.push(entry);
     }
   }
@@ -89,7 +95,6 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
   latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   countActiveDescendantRuns(rootSessionKey: string): number;
   countPendingDescendantRuns(rootSessionKey: string): number;
-  countPendingDescendantRunsExcludingRun(rootSessionKey: string, excludeRunId: string): number;
   hasDescendantRunAwaitingSettle(rootSessionKey: string, excludeRunId?: string): boolean;
   listDescendantRunsForRequester(rootSessionKey: string): T[];
   runsByControllerSessionKey: ReadonlyMap<string, readonly T[]>;
@@ -291,14 +296,6 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     return count;
   };
 
-  const countPendingDescendantRunsExcludingRun = (
-    rootSessionKey: string,
-    excludeRunId: string,
-  ): number =>
-    countPendingDescendantRunsInternal(rootSessionKey, {
-      excludeRunId,
-    });
-
   const hasDescendantRunAwaitingSettle = (rootSessionKey: string, excludeRunId?: string): boolean =>
     countPendingDescendantRunsInternal(rootSessionKey, {
       excludeRunId,
@@ -319,7 +316,6 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     latestRunsByChildSessionKey,
     countActiveDescendantRuns,
     countPendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun,
     hasDescendantRunAwaitingSettle,
     listDescendantRunsForRequester,
     runsByControllerSessionKey,
@@ -403,6 +399,7 @@ export function resolveRequesterForChildSessionFromRuns(
   childSessionKey: string,
 ): {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
 } | null {
   const latest = getLatestSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey);
@@ -411,6 +408,7 @@ export function resolveRequesterForChildSessionFromRuns(
   }
   return {
     requesterSessionKey: latest.requesterSessionKey,
+    requesterAgentId: latest.requesterAgentId,
     requesterOrigin: latest.requesterOrigin,
   };
 }
@@ -434,7 +432,7 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
 export function countActiveRunsForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   controllerSessionKey: string,
-  options?: { collect?: boolean },
+  options?: { collect?: boolean; requesterAgentId?: string },
 ): number {
   const key = controllerSessionKey.trim();
   if (!key) {
@@ -451,6 +449,9 @@ export function countActiveRunsForSessionFromRuns(
       continue;
     }
     if (resolveConcurrencyOwnerSessionKey(entry) !== key) {
+      continue;
+    }
+    if (options?.requesterAgentId && entry.requesterAgentId !== options.requesterAgentId) {
       continue;
     }
     rememberLatestRunEntry(latestByChildSessionKey, entry.childSessionKey, entry);
@@ -485,18 +486,6 @@ export function countPendingDescendantRunsFromRuns(
   return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(rootSessionKey);
 }
 
-/** Counts pending descendants while excluding one run id from the total. */
-export function countPendingDescendantRunsExcludingRunFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  rootSessionKey: string,
-  excludeRunId: string,
-): number {
-  return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRunsExcludingRun(
-    rootSessionKey,
-    excludeRunId,
-  );
-}
-
 /**
  * True when any descendant below a root session has not reached a terminal
  * settle. Differs from the pending count in one way: a run whose final
@@ -507,8 +496,18 @@ export function hasDescendantRunAwaitingSettleFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
   excludeRunId?: string,
+  requesterAgentId?: string,
 ): boolean {
-  return buildSubagentRunReadIndexFromRuns({ runs }).hasDescendantRunAwaitingSettle(
+  const scopedRuns = requesterAgentId
+    ? new Map(
+        [...runs].filter(
+          ([, entry]) =>
+            entry.requesterSessionKey !== rootSessionKey ||
+            entry.requesterAgentId === requesterAgentId,
+        ),
+      )
+    : runs;
+  return buildSubagentRunReadIndexFromRuns({ runs: scopedRuns }).hasDescendantRunAwaitingSettle(
     rootSessionKey,
     excludeRunId,
   );

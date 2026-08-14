@@ -7,9 +7,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import type { MemoryIndexManager } from "./index.js";
 import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import type { MemoryIndexManager } from "./manager.js";
 
 type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
 

@@ -99,26 +99,4 @@ describe('spawnSubagentDirect mode="session" with thread binding-capable channel
       expect(result.error).toContain("sessions_send");
     }
   });
-
-  it("rejects thread=true with actionable guidance when hooks do not bind the requester channel", async () => {
-    const result = await spawnSubagentDirect(
-      {
-        task: "persistent planning session",
-        mode: "session",
-        thread: true,
-        context: "isolated",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "webchat",
-      },
-    );
-
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.error).toContain("not running on a channel");
-      expect(result.error).toContain('mode="run"');
-      expect(result.error).toContain("sessions_send");
-    }
-  });
 });

@@ -8,7 +8,10 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
+import {
+  shouldSuppressBuiltInModelCore,
+  shouldUnconditionallySuppress,
+} from "../model-suppression.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderMetadataOwners,
@@ -70,7 +73,7 @@ export function shouldSuppressConfiguredModel(params: {
   ) {
     return false;
   }
-  return shouldSuppressBuiltInModel({
+  return shouldSuppressBuiltInModelCore({
     provider: params.provider,
     id: params.modelId,
     ...(params.cfg ? { config: params.cfg } : {}),

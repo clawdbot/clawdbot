@@ -4,7 +4,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
-import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,

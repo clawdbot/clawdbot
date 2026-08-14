@@ -6,6 +6,7 @@ import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { compareValidSemver } from "../../infra/semver.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
@@ -27,7 +28,6 @@ import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
-  buildCliEnvAuthLog,
   buildCliExecLogLine,
   CLAUDE_SELECTED_AUTH_ENV_KEYS,
   CLI_BACKEND_PRESERVE_ENV,
@@ -113,16 +113,6 @@ function assertExactToolAvailabilityRuntimeVersion(params: {
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerExecuteTestApi")] = {
-    buildCliEnvAuthLog,
-    buildCliExecLogLine,
-    setCliRunnerExecuteTestDeps: (overrides: Record<string, unknown>) => {
-      Object.assign(executeDeps, overrides as Partial<typeof executeDeps>);
-    },
-  };
-}
-
 type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
 };
@@ -185,6 +175,7 @@ export async function executePreparedCliRun(
         prompt,
         imagePrompt: params.imagePrompt,
         workspaceDir: context.workspaceDir,
+        localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
         images: params.images,
         imageOrder: params.imageOrder,
         media: params.media,

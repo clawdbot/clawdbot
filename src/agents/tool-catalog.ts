@@ -311,6 +311,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "portal",
+    label: "portal",
+    description: "Expose local web apps through the gateway",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "canvas",
     label: "canvas",
     description: "Control node Canvas surfaces when the Canvas plugin is enabled",

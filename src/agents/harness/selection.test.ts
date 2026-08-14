@@ -55,7 +55,7 @@ const agentRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
 const compactAuthMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(),
-  getApiKeyForModel: vi.fn(),
+  getApiKeyForModelCore: vi.fn(),
   prepareAgentRuntimeAuth: vi.fn(),
   resolveModelAsync: vi.fn(),
 }));
@@ -122,7 +122,7 @@ vi.mock("../model-auth.js", async (importOriginal) => ({
   ensureAuthProfileStore: compactAuthMocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles:
     compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles,
-  getApiKeyForModel: compactAuthMocks.getApiKeyForModel,
+  getApiKeyForModelCore: compactAuthMocks.getApiKeyForModelCore,
 }));
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
@@ -174,7 +174,7 @@ beforeEach(async () => {
   compactAuthMocks.resolveModelAsync.mockResolvedValue({
     model: { id: "gpt-5.5", provider: "openai" },
   });
-  compactAuthMocks.getApiKeyForModel.mockResolvedValue({ apiKey: "test-key" });
+  compactAuthMocks.getApiKeyForModelCore.mockResolvedValue({ apiKey: "test-key" });
   providerOwnerMocks.resolveProviderRefOwnership.mockReset();
   providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({ status: "unowned" });
   contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun
@@ -214,7 +214,7 @@ afterEach(() => {
   agentRunAttempt.mockClear();
   compactAuthMocks.prepareAgentRuntimeAuth.mockClear();
   compactAuthMocks.resolveModelAsync.mockReset();
-  compactAuthMocks.getApiKeyForModel.mockReset();
+  compactAuthMocks.getApiKeyForModelCore.mockReset();
   compactAuthMocks.ensureAuthProfileStore.mockReset();
   compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReset();
   providerOwnerMocks.resolveProviderRefOwnership.mockReset();
@@ -1298,6 +1298,48 @@ describe("runAgentHarnessAttempt", () => {
     ]);
   });
 
+  it("isolates native tools unless every exact deny is explicitly safe", async () => {
+    const received: boolean[] = [];
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+      received.push(attempt.pluginHarnessToolPolicyRestricted === true);
+      return createAttemptResult("codex");
+    });
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      conversationToolPolicySupport: "exact",
+      conversationToolPolicySafeDenyTools: [
+        "tts",
+        "music_generate",
+        "browser",
+        "unknown_native_tool",
+      ],
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    const policies = [
+      { deny: ["tts", "music_generate"] },
+      { deny: ["browser"] },
+      { deny: ["exec"] },
+      { deny: ["video_generate"] },
+      { deny: ["unknown_native_tool"] },
+      { deny: ["group:runtime"] },
+      { deny: ["*"] },
+      { allow: ["tts"] },
+    ];
+    for (const conversationToolPolicy of policies) {
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        conversationToolPolicy,
+      });
+    }
+
+    expect(received).toEqual([false, false, true, true, true, true, true, true]);
+  });
+
   it("marks only explicit restrictive policy layers for plugin harness isolation", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
@@ -1920,6 +1962,18 @@ describe("selectAgentHarness", () => {
       },
       identity: { sessionKey: "agent:worker:main" },
     },
+    {
+      label: "persisted fixed-store owner",
+      config: {
+        session: { store: "/stores/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "worker" } },
+          list: [{ id: "main" }, { id: "worker", params: { store: false } }],
+        },
+      },
+      identity: { sessionKey: "global" },
+    },
   ] as const)(
     "projects $label agent request params into harness support",
     ({ config, identity }) => {
@@ -1972,10 +2026,14 @@ describe("selectAgentHarness", () => {
     });
   });
 
-  it("rejects explicit Codex when agent request params cannot be reproduced", () => {
+  it("uses a harness-declared OpenClaw fallback for explicit request params", () => {
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
       ctx.modelProvider?.requestTransportOverrides === "present"
-        ? { supported: false as const, reason: "authored request params are unsupported" }
+        ? {
+            supported: false as const,
+            reason: "authored request params are unsupported",
+            fallbackRuntime: "openclaw" as const,
+          }
         : { supported: true as const },
     );
     registerAgentHarness({
@@ -1985,20 +2043,30 @@ describe("selectAgentHarness", () => {
       runAttempt: vi.fn(async () => createAttemptResult("codex")),
     });
 
-    expect(() =>
+    expect(
       selectAgentHarness({
         provider: "openai",
-        modelId: "gpt-5.5",
+        modelId: "gpt-5.6-sol",
         modelProvider: {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           requestTransportOverrides: "none",
           runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
-        config: { agents: { defaults: { params: { store: false } } } },
-        agentHarnessRuntimeOverride: "codex",
-      }),
-    ).toThrow("authored request params are unsupported");
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": {
+                  params: { responsesServerCompaction: true },
+                  agentRuntime: { id: "codex" },
+                },
+              },
+            },
+          },
+        },
+      }).id,
+    ).toBe("openclaw");
     expect(supports).toHaveBeenCalledWith(
       expect.objectContaining({
         modelProvider: expect.objectContaining({ requestTransportOverrides: "present" }),
@@ -2309,6 +2377,33 @@ describe("selectAgentHarness", () => {
         ...pin,
       }),
     ).toThrow("prepared retry route is incompatible");
+  });
+
+  it.each([
+    ["explicit", { agentHarnessRuntimeOverride: "codex" }],
+    ["pinned", { agentHarnessId: "codex" }],
+  ] as const)("uses a declared fallback for a %s harness across prepared routes", (_label, pin) => {
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(
+      selectAgentHarnessForPreparedModelProviders({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProviders: [
+          { requestTransportOverrides: "none" },
+          { requestTransportOverrides: "present" },
+        ],
+        ...pin,
+      }).id,
+    ).toBe("openclaw");
   });
 
   it.each([
@@ -2655,7 +2750,7 @@ describe("selectAgentHarness", () => {
     ).resolves.toEqual({ ok: true, compacted: false });
 
     expect(compactAuthMocks.resolveModelAsync).not.toHaveBeenCalled();
-    expect(compactAuthMocks.getApiKeyForModel).not.toHaveBeenCalled();
+    expect(compactAuthMocks.getApiKeyForModelCore).not.toHaveBeenCalled();
     expect(compact).toHaveBeenCalledWith(
       expect.objectContaining({
         runtimeAuthPlan: expect.objectContaining({
@@ -2881,7 +2976,7 @@ describe("selectAgentHarness", () => {
   });
 
   it("keeps compaction recoverable when auth profile lookup fails", async () => {
-    compactAuthMocks.getApiKeyForModel.mockRejectedValue(new Error("missing auth profile"));
+    compactAuthMocks.getApiKeyForModelCore.mockRejectedValue(new Error("missing auth profile"));
     const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
       ok: true,
       compacted: false,
@@ -2958,7 +3053,7 @@ describe("selectAgentHarness", () => {
       }),
     ).resolves.toEqual({ ok: true, compacted: false });
 
-    expect(compactAuthMocks.getApiKeyForModel).not.toHaveBeenCalled();
+    expect(compactAuthMocks.getApiKeyForModelCore).not.toHaveBeenCalled();
     expect(compact).toHaveBeenCalledWith(
       expect.objectContaining({
         resolvedApiKey: "already-resolved",
@@ -3069,7 +3164,7 @@ describe("selectAgentHarness", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
-    expect(compactAuthMocks.getApiKeyForModel).toHaveBeenCalledWith(
+    expect(compactAuthMocks.getApiKeyForModelCore).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: expect.any(String),
         model: expect.objectContaining({
@@ -3197,7 +3292,7 @@ describe("selectAgentHarness", () => {
     await expect(
       maybeCompactAgentHarnessSession({
         sessionId: "session-1",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:strict:main",
         sandboxSessionKey: "global",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp/workspace",

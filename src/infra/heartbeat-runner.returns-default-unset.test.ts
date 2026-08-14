@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
@@ -27,7 +27,7 @@ import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
-  resolveHeartbeatPrompt,
+  resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatSummaryForAgent,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
@@ -419,7 +419,7 @@ describe("resolveHeartbeatIntervalMs", () => {
   });
 });
 
-describe("resolveHeartbeatPrompt", () => {
+describe("resolveConfiguredHeartbeatPrompt", () => {
   it.each([
     { name: "default prompt", cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
     {
@@ -430,7 +430,7 @@ describe("resolveHeartbeatPrompt", () => {
       expected: "ping",
     },
   ])("uses $name", ({ cfg, expected }) => {
-    expect(resolveHeartbeatPrompt(cfg)).toBe(expected);
+    expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe(expected);
   });
 });
 
@@ -457,10 +457,21 @@ describe("isHeartbeatEnabledForAgent", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
-  it("falls back to default agent when no heartbeat config exists", () => {
+  it("uses the configured ambient heartbeat owner when one is explicit", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        defaults: { heartbeat: { agentId: "ops", every: "30m" } },
         list: [{ id: "main" }, { id: "ops" }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  });
+
+  it("falls back to the sole agent when no heartbeat config exists", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main" }],
       },
     };
     expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
@@ -1168,7 +1179,7 @@ describe("runHeartbeatOnce", () => {
         session: { store: storeTemplate },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-      const storePath = resolveStorePath(storeTemplate, { agentId });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId });
       const sessionsDir = path.dirname(storePath);
       const sessionId = "sid-ops";
       const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
@@ -1656,7 +1667,7 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
       const agentId = resolveAgentIdFromSessionKey(sessionKey);
-      const storePath = resolveStorePath(storeTemplate, { agentId });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId });
       await seedWhatsAppSession(storePath, sessionKey);
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
@@ -1697,8 +1708,8 @@ describe("runHeartbeatOnce", () => {
 
   async function runHeartbeatScratchScenario(params: {
     fileState: HeartbeatScratchState;
-    source?: "notifications-event";
-    reason?: "interval" | "wake";
+    source?: "notifications-event" | "background-task" | "background-task-blocked";
+    reason?: "interval" | "wake" | "background-task" | "background-task-blocked";
     unscheduled?: boolean;
     queueCronEvent?: boolean;
     queueSystemEvent?: boolean;
@@ -1736,7 +1747,9 @@ describe("runHeartbeatOnce", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          ...(params.unscheduled ? {} : { heartbeat: { every: "5m", target: "whatsapp" } }),
+          heartbeat: params.unscheduled
+            ? { every: "0m", target: "whatsapp" }
+            : { every: "5m", target: "whatsapp" },
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -1951,8 +1964,8 @@ tasks:
     const cases: Array<{
       name: string;
       fileState: HeartbeatScratchState;
-      reason?: "interval" | "wake";
-      source?: "notifications-event";
+      reason?: "interval" | "wake" | "background-task" | "background-task-blocked";
+      source?: "notifications-event" | "background-task" | "background-task-blocked";
       unscheduled?: boolean;
       queueCronEvent?: boolean;
       queueSystemEvent?: boolean;
@@ -1961,6 +1974,7 @@ tasks:
       expectedSendCalls: number;
       expectedReplyCalls: number;
       expectCronContext?: boolean;
+      expectedVisibleReplyMarker?: string;
       replyText?: string;
     }> = [
       {
@@ -1999,6 +2013,32 @@ tasks:
         expectedSendCalls: 1,
         expectedReplyCalls: 1,
         replyText: "post-update event processed",
+      },
+      {
+        name: "empty file + background task wake runs",
+        fileState: "empty",
+        source: "background-task",
+        reason: "background-task",
+        unscheduled: true,
+        queueSystemEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        expectedVisibleReplyMarker: "background task result processed",
+        replyText: "background task result processed",
+      },
+      {
+        name: "empty file + blocked background task wake runs",
+        fileState: "empty",
+        source: "background-task-blocked",
+        reason: "background-task-blocked",
+        unscheduled: true,
+        queueSystemEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        expectedVisibleReplyMarker: "blocked background task follow-up processed",
+        replyText: "blocked background task follow-up processed",
       },
       {
         name: "empty file + queued cron interval runs",
@@ -2061,16 +2101,28 @@ tasks:
       expectedReplyCalls,
       expectedSendCalls,
       expectCronContext,
+      expectedVisibleReplyMarker,
       ...scenario
     } of cases) {
       const { res, replySpy, sendWhatsApp } = await runHeartbeatScratchScenario(scenario);
       try {
-        expect(res.status, name).toBe(expectedStatus);
-        if (res.status === "skipped") {
-          expect(res.reason, name).toBe(expectedSkipReason);
+        expect(
+          {
+            status: res.status,
+            skipReason: res.status === "skipped" ? res.reason : undefined,
+            replyCalls: replySpy.mock.calls.length,
+            sendCalls: sendWhatsApp.mock.calls.length,
+          },
+          name,
+        ).toEqual({
+          status: expectedStatus,
+          skipReason: expectedSkipReason,
+          replyCalls: expectedReplyCalls,
+          sendCalls: expectedSendCalls,
+        });
+        if (expectedVisibleReplyMarker) {
+          expect(sendWhatsApp.mock.calls[0]?.[1], name).toContain(expectedVisibleReplyMarker);
         }
-        expect(replySpy, name).toHaveBeenCalledTimes(expectedReplyCalls);
-        expect(sendWhatsApp, name).toHaveBeenCalledTimes(expectedSendCalls);
         if (expectCronContext) {
           const calledCtx = replyBody(replySpy);
           expect(calledCtx.Provider, name).toBe("cron-event");

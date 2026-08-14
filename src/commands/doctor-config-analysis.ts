@@ -272,3 +272,20 @@ export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
     "Doctor warnings",
   );
 }
+
+/** Warns when per-requester MCP OAuth cannot build a public callback URL. */
+export function noteMcpOriginWarning(cfg: OpenClawConfig): void {
+  const hasPerRequesterOAuth = Object.values(cfg.mcp?.servers ?? {}).some(
+    (server) => server.oauth?.identity === "per-requester",
+  );
+  if (!hasPerRequesterOAuth || cfg.gateway?.publicOrigin) {
+    return;
+  }
+  note(
+    [
+      '- An MCP server uses oauth.identity "per-requester", but gateway.publicOrigin is not set.',
+      "  Set gateway.publicOrigin to the externally reachable Gateway origin so senders can complete MCP sign-in.",
+    ].join("\n"),
+    "Doctor warnings",
+  );
+}

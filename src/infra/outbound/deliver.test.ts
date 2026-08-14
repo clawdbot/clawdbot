@@ -2411,18 +2411,19 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    const errorEvent = events.find((event) => event.type === "message.delivery.error") as
-      | Record<string, unknown>
-      | undefined;
+    const deliveryEvents = events.filter((event) => event.type.startsWith("message.delivery."));
+    expect(deliveryEvents.map((event) => event.type)).toEqual([
+      "message.delivery.started",
+      "message.delivery.error",
+    ]);
+    const errorEvent = deliveryEvents[1] as Record<string, unknown> | undefined;
     expect(errorEvent?.type).toBe("message.delivery.error");
     expect(errorEvent?.channel).toBe("matrix");
     expect(errorEvent?.deliveryKind).toBe("text");
     expect(typeof errorEvent?.durationMs).toBe("number");
     expect(errorEvent?.errorCategory).toBe("TypeError");
     expect(errorEvent?.sessionKey).toBe("session-1");
-    expect(
-      JSON.stringify(events.filter((event) => event.type.startsWith("message.delivery."))),
-    ).not.toContain("secret delivery body");
+    expect(JSON.stringify(deliveryEvents)).not.toContain("secret delivery body");
   });
 
   it("emits one metadata-only audit terminal for a successful logical payload", async () => {

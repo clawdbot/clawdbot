@@ -47,7 +47,7 @@ vi.mock("../fallback-state.js", () => ({
 }));
 
 vi.mock("./agent-runner-core.js", () => ({
-  resolveConfiguredFallbackModel: () => ({
+  resolveFallbackOriginModel: () => ({
     provider: "anthropic",
     model: "claude",
   }),

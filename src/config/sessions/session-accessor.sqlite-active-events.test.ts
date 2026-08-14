@@ -350,6 +350,34 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
   });
 
+  it("fails closed when the latest indexed reset payload is malformed", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "kept",
+          parentId: "old",
+          message: { role: "assistant", content: "kept" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "kept",
+      timestamp: "2026-08-12T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "kept",
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    database.db
+      .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 3")
+      .run(scope.sessionId);
+
+    expect(() => readSessionTranscriptMessageEventCount(scope)).toThrow();
+  });
+
   it("recomputes a cached reset window after a branch-changing message", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [

@@ -234,7 +234,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
 Notes:
 
 - If a preview grows past Matrix's per-event size limit, OpenClaw stops preview streaming and falls back to final-only delivery.
-- Media replies always send attachments normally; if a stale preview cannot be reused safely, OpenClaw redacts it before sending the final media reply.
+- Media replies always send attachments normally. If a visible preview cannot be reused safely, OpenClaw keeps it until the complete replacement is confirmed and then redacts it. If replacement delivery fails, is partial, or produces no visible event, the preview remains visible.
 - Tool-progress preview updates are on by default when preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.
 - Preview edits cost extra Matrix API calls. Leave `streaming.mode: "off"` for the most conservative rate-limit profile.
 - Legacy scalar/boolean `streaming` values and the flat `blockStreaming` / `chunkMode` keys are rewritten to this nested shape by `openclaw doctor --fix`.

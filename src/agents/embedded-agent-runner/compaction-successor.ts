@@ -4,7 +4,7 @@ import {
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
@@ -85,7 +85,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
         })
       : undefined;
     const markerMatches = marker
-      ? listSessionEntries({
+      ? listSessionEntriesCore({
           agentId: marker.agentId,
           storePath: marker.storePath,
         }).filter(({ entry }) => entry.sessionId === marker.sessionId)

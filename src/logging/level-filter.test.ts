@@ -7,7 +7,6 @@ const { readLoggingConfigMock } = vi.hoisted(() => ({
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: readLoggingConfigMock,
-  shouldSkipMutatingLoggingConfigRead: () => false,
 }));
 
 let logging: typeof import("../logging.js");

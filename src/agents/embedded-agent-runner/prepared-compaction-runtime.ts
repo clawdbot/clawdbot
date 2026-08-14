@@ -27,8 +27,9 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { createOpenClawCodingTools, resolveProcessToolScopeKey } from "../agent-tools.js";
+import { createOpenClawCodingTools } from "../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
+import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,

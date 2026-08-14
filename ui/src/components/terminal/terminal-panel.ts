@@ -384,7 +384,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           this.terminalSessions.booting,
           toolbar,
           (id) => this.terminalSessions.switchTo(id),
-          (id) => this.terminalSessions.closeTab(id),
+          (id) => {
+            this.terminalSessions.closeTab(id);
+            return this.updateComplete.then(() => undefined);
+          },
           () => void this.terminalSessions.openSession(),
         )}
         ${renderTerminalPanelViewport(

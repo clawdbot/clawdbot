@@ -119,7 +119,9 @@ function setupCompactionRemovedFallbackAttempt() {
     return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
   });
   mockedClassifyFailoverReason.mockReturnValue("model_not_found");
-  mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+  // The pinned profile may rotate to another same-provider credential before
+  // the outer model fallback runs, so every credential attempt must fail alike.
+  mockedRunEmbeddedAttempt.mockResolvedValue(
     makeAttemptResult({
       assistantTexts: [],
       lastAssistant: makeAssistantMessageFixture({
@@ -226,7 +228,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     await expect(promise).rejects.toThrow(
       `anthropic/test-model: ${COMPACTION_REMOVED_ERROR_MESSAGE}`,
     );
-    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(1);
+    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
       model: "test-model",

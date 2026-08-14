@@ -4,8 +4,8 @@ import { vi } from "vitest";
 import type { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
-import "./execute.js";
-import type { CliReusableSession } from "./types.js";
+import { executeDeps } from "./execute-deps.js";
+export { buildCliExecLogLine } from "./execute-logging.js";
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
@@ -13,40 +13,8 @@ type EnqueueSystemEventFn = typeof enqueueSystemEvent;
 type RequestHeartbeatFn = typeof requestHeartbeat;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
-type BuildCliExecLogLineParams = {
-  provider: string;
-  model: string;
-  promptChars: number;
-  trigger?: string;
-  useResume: boolean;
-  cliSessionId?: string;
-  resolvedSessionId?: string;
-  reusableSession: CliReusableSession;
-  hasHistoryPrompt: boolean;
-};
-
-type CliRunnerExecuteTestApi = {
-  buildCliEnvAuthLog(childEnv: Record<string, string>): string;
-  buildCliExecLogLine(params: BuildCliExecLogLineParams): string;
-  setCliRunnerExecuteTestDeps(overrides: Record<string, unknown>): void;
-};
-
-function getTestApi(): CliRunnerExecuteTestApi {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.cliRunnerExecuteTestApi")
-  ] as CliRunnerExecuteTestApi;
-}
-
-export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
-  return getTestApi().buildCliEnvAuthLog(childEnv);
-}
-
-export function buildCliExecLogLine(params: BuildCliExecLogLineParams): string {
-  return getTestApi().buildCliExecLogLine(params);
-}
-
-export function setCliRunnerExecuteTestDeps(overrides: Record<string, unknown>): void {
-  getTestApi().setCliRunnerExecuteTestDeps(overrides);
+export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
+  Object.assign(executeDeps, overrides);
 }
 
 export const supervisorSpawnMock: UnknownMock = vi.fn();

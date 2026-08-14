@@ -5,6 +5,7 @@ import type { SessionMenuActionKind } from "./session-menu.ts";
 
 type SessionMenuAccessRow = {
   key: string;
+  sessionId?: string;
   archived?: boolean;
 };
 
@@ -34,7 +35,12 @@ export function sessionMenuReasons(params: {
     const access = readSessionMethodAccess(snapshot, {
       method: "sessions.patchMany",
       params: {
-        targets: batchRows.map((row) => ({ key: row.key })),
+        targets: batchRows.map((row) => ({
+          key: row.key,
+          ...(typeof patch.archived === "boolean" && row.sessionId
+            ? { expectedSessionId: row.sessionId }
+            : {}),
+        })),
         patch,
       },
     });
@@ -45,7 +51,10 @@ export function sessionMenuReasons(params: {
   };
   const unreadReason = batchPatchReason({ unread: true });
   const categoryReason = batchPatchReason({ category: null });
-  const archiveReason = batchPatchReason({ archived: true });
+  const lifecycleRows = batchRows ?? [session];
+  const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
+    ? "Session lifecycle action requires a durable session identity."
+    : batchPatchReason({ archived: true });
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",

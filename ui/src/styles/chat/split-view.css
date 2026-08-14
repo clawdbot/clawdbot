@@ -35,6 +35,8 @@ openclaw-chat-pane {
 /* One cell = pane header + pane; the header lives in-flow with its pane, so
    split geometry needs no mirrored toolbar layer. */
 .chat-split-view__cell {
+  --chat-surface: var(--bg-content, var(--bg));
+
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -154,8 +156,7 @@ openclaw-chat-pane {
      line up with the sidebar across the top of the shell. */
   min-height: 48px;
   padding: 0 6px 0 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  background: color-mix(in srgb, var(--panel) 62%, transparent);
+  background: var(--chat-surface);
   /* Chrome row, not content: a selectable title would fight the native
      window drag the macOS app starts from this row. */
   user-select: none;
@@ -170,6 +171,10 @@ openclaw-chat-pane {
   flex: 0 1 auto;
   min-width: 0;
   align-items: center;
+  /* Inter's visible glyph mass sits slightly below the 28px action glyphs even
+     when their CSS boxes share a center. Lift the whole trail as one optical
+     unit so project icon, labels, and separator meet the chrome centerline. */
+  transform: translateY(-1px);
   /* Both interactive segments pull their 5px hover padding back out of flow, so
      this gap is the separator's actual optical air on each side. */
   gap: 6px;
@@ -200,7 +205,8 @@ openclaw-chat-pane {
   font-size: 12px;
 }
 
-.chat-pane__session-title-button {
+.chat-pane__session-title-button,
+.chat-pane__parent-session {
   display: block;
   /* Hover padding is drawn outside the text box: the plain-span title (catalog
      and rename-disabled panes) has none, and without the pull-back the same
@@ -211,16 +217,43 @@ openclaw-chat-pane {
   border-radius: var(--radius-sm);
   background: transparent;
   text-align: left;
+}
+
+.chat-pane__session-title-button {
   cursor: text;
 }
 
 .chat-pane__session-title-button:hover,
-.chat-pane__session-title-button:focus-visible {
+.chat-pane__session-title-button:focus-visible,
+.chat-pane__parent-session:hover,
+.chat-pane__parent-session:focus-visible {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   outline: none;
 }
 
-.chat-pane__session-title-text {
+.chat-pane__parent-session {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__parent-session:hover,
+.chat-pane__parent-session:focus-visible {
+  color: var(--text);
+}
+
+/* Keep nested identity contextual rather than letting it become the header.
+   The two titles share at most half the container after separator spacing. */
+.chat-pane__crumbs:has(.chat-pane__parent-session) .chat-pane__parent-session,
+.chat-pane__crumbs:has(.chat-pane__parent-session) .chat-pane__session-title {
+  max-width: min(18ch, calc((50cqw - 20px) / 2));
+}
+
+.chat-pane__session-title-text,
+.chat-pane__parent-session-text {
   display: block;
   overflow: hidden;
   white-space: nowrap;
@@ -253,7 +286,6 @@ openclaw-chat-pane {
   }
 }
 
-.chat-pane__cloud,
 .chat-pane__incognito {
   display: inline-flex;
   flex: 0 0 auto;
@@ -261,7 +293,6 @@ openclaw-chat-pane {
   color: var(--muted);
 }
 
-.chat-pane__cloud svg,
 .chat-pane__incognito svg,
 .chat-pane__workspace-chip svg {
   width: 14px;
@@ -295,12 +326,12 @@ openclaw-chat-pane {
   min-width: 0;
 }
 
-.chat-pane__gateway-menu {
-  flex: 0 1 auto;
-  min-width: 0;
+.chat-pane__placement-menu {
+  flex: 0 0 auto;
 }
 
-.chat-pane__gateway-menu::part(menu) {
+.chat-pane__placement-menu::part(menu) {
+  width: 250px;
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: 8px;
@@ -308,10 +339,46 @@ openclaw-chat-pane {
   box-shadow: var(--shadow-lg);
 }
 
+.chat-pane__placement-chip {
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__placement-chip:hover,
+.chat-pane__placement-chip:focus-visible {
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__placement-state {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__gateway-menu {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__gateway-menu::part(menu) {
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+
 .chat-pane__gateway-menu-item {
-  min-height: 30px;
+  min-height: var(--menu-item-height);
   padding: 0 8px;
-  border-radius: 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -507,12 +574,77 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__sharing-menu::part(menu) {
+  width: 260px;
+  min-width: min(260px, calc(100vw - 24px));
+  max-width: min(260px, calc(100vw - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.chat-pane__sharing-menu--capped::part(menu) {
+  height: min(420px, 60vh);
+}
+
 .chat-pane__sharing-title,
 .chat-pane__sharing-status {
-  padding: 6px 12px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.chat-pane__sharing-title {
+  padding: 5px 8px 7px;
+}
+
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+}
+
+.chat-pane__sharing-visibility-item[disabled] {
+  opacity: 1;
+  color: var(--muted);
+}
+
+.chat-pane__sharing-members-title {
+  margin-top: 8px;
+}
+
+.chat-pane__sharing-member {
+  gap: 0;
+  font-size: 12px;
+}
+
+.chat-pane__sharing-member::part(icon) {
+  display: flex;
+  align-items: center;
+}
+
+.chat-pane__sharing-member-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-pane__sharing-channel-icon {
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  color: var(--muted);
+}
+
+.chat-pane__sharing-channel-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-pane__sharing-member-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-pane__sharing-status--error {
@@ -557,7 +689,7 @@ openclaw-chat-pane {
 
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
-  .chat-pane__crumb-sep {
+  .chat-pane__workspace-menu + .chat-pane__crumb-sep {
     display: none;
   }
 
@@ -582,13 +714,42 @@ openclaw-chat-pane {
   overflow-y: auto;
 }
 
+.continue-in-terminal-dialog__card {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+}
+
+.continue-in-terminal-dialog__header h2,
+.continue-in-terminal-dialog__header p,
+.continue-in-terminal-dialog__note {
+  margin: 0;
+}
+
+.continue-in-terminal-dialog__header p,
+.continue-in-terminal-dialog__note {
+  margin-block-start: 6px;
+  color: var(--muted);
+}
+
+.continue-in-terminal-dialog .login-gate__command {
+  min-width: 0;
+}
+
+.continue-in-terminal-dialog .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 /* Plain web shell chrome overlays the first pane header. Expanded navigation
    shows toggle + search; collapsed navigation adds new-thread between them. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-pane__header {
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
+  > .chat-pane__header {
   padding-left: 88px;
 }
 
@@ -596,7 +757,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-pane__header {
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
+  > .chat-pane__header {
   padding-left: 124px;
 }
 
@@ -631,7 +793,8 @@ html.openclaw-native-macos
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-pane__header {
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
+  > .chat-pane__header {
   padding-left: 90px;
 }
 
@@ -645,7 +808,8 @@ html.openclaw-native-nav
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-pane__header {
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
+  > .chat-pane__header {
   padding-left: 204px;
 }
 
@@ -661,6 +825,7 @@ html.openclaw-native-web-chrome
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-pane__header {
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
+  > .chat-pane__header {
   padding-left: 246px;
 }

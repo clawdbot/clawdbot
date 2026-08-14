@@ -13,12 +13,27 @@ import {
 type HybridSource = string;
 type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
-type HybridVectorResult = {
+export type HybridSearchResult<TSource extends HybridSource = HybridSource> = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  score: number;
+  vectorScore: number;
+  textScore: number;
+  snippet: string;
+  source: TSource;
+  importance?: number;
+  triggers?: string;
+  projectKey?: string;
+  provenance?: MemoryEntryProvenance;
+};
+
+type HybridVectorResult<TSource extends HybridSource = HybridSource> = {
   id: string;
   path: string;
   startLine: number;
   endLine: number;
-  source: HybridSource;
+  source: TSource;
   snippet: string;
   vectorScore: number;
   importance?: number;
@@ -28,12 +43,12 @@ type HybridVectorResult = {
   provenance?: MemoryEntryProvenance;
 };
 
-type HybridKeywordResult = {
+type HybridKeywordResult<TSource extends HybridSource = HybridSource> = {
   id: string;
   path: string;
   startLine: number;
   endLine: number;
-  source: HybridSource;
+  source: TSource;
   snippet: string;
   textScore: number;
   importance?: number;
@@ -69,9 +84,9 @@ export function scoreExactPathTieForTemporalDecay(contentScore: number): number 
   return (1 + Math.max(0, Math.min(1, contentScore))) / 2;
 }
 
-export async function mergeHybridResults(params: {
-  vector: HybridVectorResult[];
-  keyword: HybridKeywordResult[];
+export async function mergeHybridResults<TSource extends HybridSource>(params: {
+  vector: HybridVectorResult<TSource>[];
+  keyword: HybridKeywordResult<TSource>[];
   vectorWeight: number;
   textWeight: number;
   isNonTextMediaPath?: (path: string) => boolean;
@@ -83,22 +98,7 @@ export async function mergeHybridResults(params: {
   activeProjectKeys?: readonly string[];
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
-}): Promise<
-  Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    score: number;
-    vectorScore: number;
-    textScore: number;
-    snippet: string;
-    source: HybridSource;
-    importance?: number;
-    triggers?: string;
-    projectKey?: string;
-    provenance?: MemoryEntryProvenance;
-  }>
-> {
+}): Promise<HybridSearchResult<TSource>[]> {
   const byId = new Map<
     string,
     {
@@ -106,7 +106,7 @@ export async function mergeHybridResults(params: {
       path: string;
       startLine: number;
       endLine: number;
-      source: HybridSource;
+      source: TSource;
       snippet: string;
       vectorScore: number;
       textScore: number;
@@ -316,4 +316,55 @@ export async function mergeHybridResults(params: {
       ...entry
     }) => entry,
   );
+}
+
+type HybridResultRange<TSource extends HybridSource = HybridSource> = Pick<
+  HybridSearchResult<TSource>,
+  "source" | "path" | "startLine" | "endLine"
+>;
+
+function hybridResultRangeKey(entry: HybridResultRange): string {
+  return `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`;
+}
+
+export function selectHybridSearchResults<TSource extends HybridSource>(params: {
+  merged: HybridSearchResult<TSource>[];
+  keyword: HybridResultRange<TSource>[];
+  maxResults: number;
+  minScore: number;
+}): HybridSearchResult<TSource>[] {
+  const strict = params.merged.filter((entry) => entry.score >= params.minScore);
+  const selected = strict.slice(0, params.maxResults);
+  if (params.keyword.length === 0 || selected.length === params.maxResults) {
+    return selected;
+  }
+
+  const keywordKeys = new Set(params.keyword.map((entry) => hybridResultRangeKey(entry)));
+  if (strict.length === 0) {
+    // Preserve the established all-lexical fallback when every weighted score
+    // is below the configured threshold.
+    return params.merged
+      .filter((entry) => entry.score >= 0 && keywordKeys.has(hybridResultRangeKey(entry)))
+      .slice(0, params.maxResults);
+  }
+
+  // Strict recall owns the result window. MMR-ranked keyword-only hits may use
+  // spare capacity, but must never displace a qualifying result.
+  const seen = new Set(selected.map((entry) => hybridResultRangeKey(entry)));
+  for (const entry of params.merged) {
+    if (selected.length === params.maxResults) {
+      break;
+    }
+    const key = hybridResultRangeKey(entry);
+    if (
+      entry.score < params.minScore &&
+      entry.vectorScore === 0 &&
+      keywordKeys.has(key) &&
+      !seen.has(key)
+    ) {
+      seen.add(key);
+      selected.push(entry);
+    }
+  }
+  return selected;
 }

@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   type SessionTranscriptRuntimeTarget,
@@ -311,7 +311,7 @@ export const freezeRunResultAtCompletion = async (
     const sessionKey = transcriptTarget?.sessionKey ?? entry.childSessionKey;
     const configuredStorePath = agentId
       ? (transcriptTarget?.storePath ??
-        resolveStorePath(params.getRuntimeConfig().session?.store, { agentId }))
+        resolveSessionStorePathCore(params.getRuntimeConfig().session?.store, { agentId }))
       : undefined;
     const storePath = configuredStorePath
       ? resolveSessionStorePathForScope({

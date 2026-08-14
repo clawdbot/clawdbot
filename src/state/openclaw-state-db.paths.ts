@@ -2,8 +2,8 @@
 import os from "node:os";
 import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../config/paths.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 
 /**
  * Path helpers for the shared OpenClaw SQLite state database.

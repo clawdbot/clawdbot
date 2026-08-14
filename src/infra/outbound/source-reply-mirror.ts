@@ -12,7 +12,7 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   beginRestartRecoveryTerminalDelivery,
   cancelRestartRecoveryTerminalDelivery,
@@ -234,7 +234,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sourceTurnId,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     toolCallId,
   };
 }

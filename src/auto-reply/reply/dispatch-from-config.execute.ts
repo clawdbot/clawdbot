@@ -11,6 +11,7 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
@@ -22,7 +23,6 @@ import {
 import {
   hasAskUserPayload,
   prepareReplyPayloadForSideEffects as preparePayload,
-  readAskUserQuestionId,
   requiresDurableToolResultDelivery,
   shouldDeliverDespiteSourceReplySuppression,
 } from "./dispatch-from-config.payloads.js";
@@ -622,7 +622,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ) {
       throw error;
     }
-    failDispatchReplyOperation(error);
+    failDispatchReplyOperation(error, "failed");
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
       sessionCtx: ctx,

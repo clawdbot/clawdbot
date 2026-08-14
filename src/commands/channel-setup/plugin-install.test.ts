@@ -57,9 +57,9 @@ vi.mock("../../channels/plugins/catalog.js", () => {
   };
 });
 
-const loadPluginManifestRegistry = vi.fn();
+const loadPluginManifestRegistryCore = vi.fn();
 vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistry(...args),
+  loadPluginManifestRegistryCore: (...args: unknown[]) => loadPluginManifestRegistryCore(...args),
 }));
 
 vi.mock("../../plugins/bundled-sources.js", () => ({
@@ -165,7 +165,7 @@ function mockActivationOnlyPlugin(plugin: {
   id: string;
   origin?: "bundled" | "global" | "workspace";
 }) {
-  loadPluginManifestRegistry.mockReturnValue({
+  loadPluginManifestRegistryCore.mockReturnValue({
     plugins: [
       createManifestRecord({
         id: plugin.id,
@@ -231,7 +231,7 @@ beforeEach(() => {
   discoverOpenClawPlugins.mockReturnValue({ candidates: [], diagnostics: [] });
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
   listChannelPluginCatalogEntries.mockReturnValue([]);
-  loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+  loadPluginManifestRegistryCore.mockReturnValue({ plugins: [], diagnostics: [] });
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -850,7 +850,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("scopes snapshots by a unique discovered manifest match when catalog mapping is missing", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         createManifestRecord({
           id: "custom-external-chat-plugin",
@@ -894,7 +894,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       ],
       diagnostics: [],
     });
-    loadPluginManifestRegistry.mockImplementation((args: unknown) => {
+    loadPluginManifestRegistryCore.mockImplementation((args: unknown) => {
       if (
         isRecord(args) &&
         args.config === cfg &&
@@ -944,9 +944,9 @@ describe("ensureChannelSetupPluginInstalled", () => {
       workspaceDir: "/tmp/openclaw-workspace",
     });
 
-    expect(loadPluginManifestRegistry).toHaveBeenCalled();
+    expect(loadPluginManifestRegistryCore).toHaveBeenCalled();
     expect(
-      loadPluginManifestRegistry.mock.calls.every(
+      loadPluginManifestRegistryCore.mock.calls.every(
         ([params]) => !Object.hasOwn(params ?? {}, "cache"),
       ),
     ).toBe(true);

@@ -315,7 +315,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { sendDurableMessageBatch } = await loadDeliverRuntime();
+    const { sendDurableMessageBatchCore } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,
@@ -329,7 +329,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    const send = await sendDurableMessageBatch({
+    const send = await sendDurableMessageBatchCore({
       cfg,
       channel: channelId,
       to,

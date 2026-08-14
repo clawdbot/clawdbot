@@ -4,7 +4,7 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadTranscriptEventsSync,
   replaceTranscriptEventsSync,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -70,7 +70,7 @@ describe("doctor SQLite session transcript header repair", () => {
     events: readonly unknown[],
     options: { spawnedCwd?: string } = { spawnedCwd: SPAWNED_CWD },
   ): Promise<void> {
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: SESSION_ID,
       ...(options.spawnedCwd ? { spawnedCwd: options.spawnedCwd } : {}),
       updatedAt: 10,

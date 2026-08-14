@@ -55,7 +55,7 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -127,8 +127,8 @@ function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCod
 }
 
 function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAllow: string[]) {
-  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
-  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolPolicyName(name)));
+  return tools.filter((tool) => allowSet.has(normalizeToolPolicyName(tool.name)));
 }
 
 type OpenClawCodingTool = ReturnType<typeof createOpenClawCodingTools>[number];

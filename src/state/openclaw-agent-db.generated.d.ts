@@ -246,6 +246,7 @@ export interface SessionNodes {
   last_read_at: number | null;
   parent_session_key: string | null;
   pinned_at: number | null;
+  project_id: string | null;
   session_key: string;
   spawned_by: string | null;
   status: string | null;

@@ -425,7 +425,6 @@ function applyWindowsPackageInstallEnv(env: Record<string, string>) {
   env.NPM_CONFIG_UPDATE_NOTIFIER = "false";
   env.NPM_CONFIG_FUND = "false";
   env.NPM_CONFIG_AUDIT = "false";
-  env.NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1";
 }
 
 function applyCorepackDownloadPromptEnv(env: Record<string, string>) {

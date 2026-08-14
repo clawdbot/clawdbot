@@ -1055,6 +1055,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       call_id: "call_1",
       arguments: JSON.stringify({ question: "delegate this" }),
     });
+    socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     expect(onToolCall).toHaveBeenCalledTimes(1);
     expect(onToolCall).toHaveBeenCalledWith({
@@ -1107,6 +1108,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         name: "lookup_weather",
         arguments: finalArguments,
       });
+      socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
       expect(onToolCall).toHaveBeenCalledWith({
         itemId: "item_tool_1",
@@ -1161,6 +1163,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         socket.emitServer(event);
       }
       socket.emitServer(invalidEvents[0]);
+      socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
       expect(onToolCall).not.toHaveBeenCalled();
       expect(
@@ -1197,7 +1200,9 @@ describe("buildXaiRealtimeVoiceProvider", () => {
           },
         })),
       );
-      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
+        { type: "response.create" },
+      ]);
 
       socket.emitServer({ type: "response.done" });
       expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
@@ -1238,6 +1243,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: rawArgs,
       });
     }
+    socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     expect(onToolCall).not.toHaveBeenCalled();
     expect(
@@ -1386,6 +1392,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: JSON.stringify({ question: callId }),
       });
     }
+    socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     await bridge.submitToolResult("call_1", { text: "first" });
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
@@ -1534,6 +1541,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: JSON.stringify({ question: callId }),
       });
     }
+    firstSocket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
@@ -1587,7 +1595,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: JSON.stringify({ question: "recover me" }),
       },
     });
-
     expect(onToolCall).toHaveBeenCalledWith({
       itemId: "item_replayed_call",
       callId: "call_replayed",
@@ -1669,6 +1676,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       name: "openclaw_agent_consult",
       arguments: JSON.stringify({ question: "recover output" }),
     });
+    firstSocket.emitServer({ type: "response.done", response: { status: "completed" } });
     await bridge.submitToolResult("call_lost_output", { text: "recovered" });
 
     firstSocket.close(1006, "output acknowledgement lost");
@@ -1702,6 +1710,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       name: "openclaw_agent_consult",
       arguments: JSON.stringify({ question: "saved output" }),
     });
+    firstSocket.emitServer({ type: "response.done", response: { status: "completed" } });
     await bridge.submitToolResult("call_saved_output", { text: "saved" });
     firstSocket.emitServer({
       type: "conversation.item.added",
@@ -1766,6 +1775,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: JSON.stringify({ question: callId }),
       });
     }
+    firstSocket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);

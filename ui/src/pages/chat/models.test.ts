@@ -19,6 +19,17 @@ describe("loadModels", () => {
     ]);
   });
 
+  it("requests only the prepared catalog for automatic reads", async () => {
+    const request = vi.fn(async () => ({ models: [] }));
+
+    await loadModels({ request } as unknown as GatewayBrowserClient, { preparedOnly: true });
+
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      preparedOnly: true,
+    });
+  });
+
   it("reuses the configured model list while the cache is fresh", async () => {
     const request = vi.fn(async () => ({
       models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
@@ -30,6 +41,46 @@ describe("loadModels", () => {
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
+  });
+
+  it("keeps model catalogs scoped by agent", async () => {
+    const request = vi.fn(async (_method: string, params: { agentId?: string }) => ({
+      models: [
+        {
+          id: params.agentId ?? "default-model",
+          name: params.agentId ?? "Default Model",
+          provider: "openai",
+        },
+      ],
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const writer = await loadModels(client, { agentId: "writer" });
+    const reviewer = await loadModels(client, { agentId: "reviewer" });
+    await loadModels(client, { agentId: "writer" });
+
+    expect(writer[0]?.id).toBe("writer");
+    expect(reviewer[0]?.id).toBe("reviewer");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "writer",
+    });
+  });
+
+  it("keeps a Models refresh visible when route re-entry uses a prepared read", async () => {
+    const prepared = [{ id: "prepared", name: "Prepared", provider: "openai" }];
+    const exact = [{ id: "exact", name: "Exact", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: prepared })
+      .mockResolvedValueOnce({ models: exact });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { preparedOnly: true })).toEqual(prepared);
+    expect(await loadModels(client, { refresh: true })).toEqual(exact);
+    expect(await loadModels(client, { preparedOnly: true })).toEqual(exact);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a late stale response from clobbering a fresher refresh result", async () => {
@@ -55,6 +106,28 @@ describe("loadModels", () => {
 
     expect(freshModels).toEqual(fresh);
     expect(await loadModels(client)).toEqual(fresh);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent refreshes without reusing a completed refresh", async () => {
+    let releaseRefresh: (() => void) | undefined;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const request = vi.fn(async () => {
+      await refreshGate;
+      return { models: [{ id: "fresh", name: "Fresh", provider: "openai" }] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const first = loadModels(client, { agentId: "writer", refresh: true });
+    const concurrent = loadModels(client, { agentId: "writer", refresh: true });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    releaseRefresh?.();
+    expect(await concurrent).toBe(await first);
+
+    await loadModels(client, { agentId: "writer", refresh: true });
+
     expect(request).toHaveBeenCalledTimes(2);
   });
 });

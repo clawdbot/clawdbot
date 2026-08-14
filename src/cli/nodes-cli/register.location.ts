@@ -9,7 +9,7 @@ import {
   nodesCallOpts,
   parseOptionalNodeNonNegativeInteger,
   parseOptionalNodePositiveInteger,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -31,7 +31,7 @@ export function registerNodesLocationCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("location get", async () => {
-          const nodeId = await resolveNodeId(opts, opts.node ?? "");
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
           const maxAgeMs = parseOptionalNodeNonNegativeInteger(opts.maxAge, "--max-age");
           const desiredAccuracyRaw = normalizeOptionalLowercaseString(opts.accuracy);
           const desiredAccuracy =

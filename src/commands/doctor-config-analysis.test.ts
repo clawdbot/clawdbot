@@ -6,6 +6,7 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   formatConfigKeyPath,
   noteImplicitFallbackClobberWarnings,
+  noteMcpOriginWarning,
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
   resolveConfigPathTarget,
@@ -495,5 +496,65 @@ describe("noteSandboxOriginProxyWarning", () => {
   it("stays silent for non-proxy auth modes", () => {
     expect(warningsFor({ gateway: { auth: { mode: "token" } } } as OpenClawConfig)).toHaveLength(0);
     expect(warningsFor({} as OpenClawConfig)).toHaveLength(0);
+  });
+});
+
+describe("noteMcpOriginWarning", () => {
+  function warningsFor(cfg: OpenClawConfig): string[] {
+    noteMock.mockClear();
+    noteMcpOriginWarning(cfg);
+    return noteMock.mock.calls.map((call) => String(call[0]));
+  }
+
+  it("warns for per-requester MCP OAuth without a public Gateway origin", () => {
+    const warnings = warningsFor({
+      mcp: {
+        servers: {
+          docs: {
+            url: "https://mcp.example.com",
+            auth: "oauth",
+            oauth: { identity: "per-requester" },
+          },
+        },
+      },
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("gateway.publicOrigin is not set");
+    expect(warnings[0]).toContain("senders can complete MCP sign-in");
+  });
+
+  it("stays silent when the public origin is configured", () => {
+    expect(
+      warningsFor({
+        gateway: { publicOrigin: "https://gateway.example.com" },
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }),
+    ).toHaveLength(0);
+  });
+
+  it("stays silent for shared or absent MCP OAuth identity", () => {
+    expect(
+      warningsFor({
+        mcp: {
+          servers: {
+            shared: {
+              url: "https://shared.example.com",
+              auth: "oauth",
+              oauth: { identity: "shared" },
+            },
+            implicit: { url: "https://implicit.example.com", auth: "oauth" },
+          },
+        },
+      }),
+    ).toHaveLength(0);
+    expect(warningsFor({})).toHaveLength(0);
   });
 });

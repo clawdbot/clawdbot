@@ -272,12 +272,14 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 vi.mock("../utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../utils.js")>();
+  const [actual, { isRecord }] = await Promise.all([
+    importOriginal<typeof import("../utils.js")>(),
+    import("@openclaw/normalization-core/record-coerce"),
+  ]);
   return {
     ...actual,
     displayString: (input: string) => input,
-    isRecord: (value: unknown) =>
-      typeof value === "object" && value !== null && !Array.isArray(value),
+    isRecord,
     pathExists: (...args: unknown[]) => pathExists(...args),
     resolveConfigDir: () => "/tmp/openclaw-config",
     sleep: vi.fn(async () => undefined),
@@ -499,6 +501,8 @@ const { defaultRuntime } = await import("../runtime.js");
 const postCorePluginConvergence = await import("./update-cli/post-core-plugin-convergence.js");
 const { completePostCorePluginUpdate } =
   await import("./update-cli/update-command-fresh-doctor.js");
+const { continuePostCoreUpdateInFreshProcess } =
+  await import("./update-cli/update-command-post-core.js");
 const runPostCorePluginConvergenceSpy = vi.spyOn(
   postCorePluginConvergence,
   "runPostCorePluginConvergence",
@@ -1609,6 +1613,41 @@ describe("update-cli", () => {
     expectNoSideEffects(updateNpmInstalledPlugins, runDaemonInstall, runDaemonRestart);
   });
 
+  it("isolates stale handoff values at the post-core CLI spawn boundary", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    readPackageVersion.mockResolvedValueOnce(null);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "stale-version",
+        OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: "beta",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: "/tmp/stale-config.json",
+        OPENCLAW_UNRELATED: "preserved",
+      },
+      async () => {
+        await continuePostCoreUpdateInFreshProcess({
+          root: "/tmp/openclaw-updated-root",
+          channel: "stable",
+          requestedChannel: null,
+          opts: {},
+          pluginInstallRecords: {},
+          updateStartedAtMs: 123,
+        });
+
+        const env = spawnCall()?.[2]?.env;
+        expect(env?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
+        expect(env?.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBeUndefined();
+        expect(env?.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBeUndefined();
+        expect(env?.OPENCLAW_UNRELATED).toBe("preserved");
+        expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("stale-version");
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBe("beta");
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBe(
+          "/tmp/stale-config.json",
+        );
+      },
+    );
+  });
+
   it("keeps stopped owned-service config and plugin state through fresh post-core handoff", async () => {
     const { root, entrypoints } = setupUpdatedRootRefresh();
     mockOwnedGitService();
@@ -2409,6 +2448,32 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("runs the final fresh doctor for convergence-only current-process changes", async () => {
+    mockGitUpdateAfterMutation();
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      changes: ["Repaired configured plugin install records."],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: {},
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    const doctorCall = vi.mocked(runExec).mock.calls.find(([, args]) => args[1] === "doctor");
+    expect(doctorCall?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    });
+    const strictValidationCall = vi
+      .mocked(runExec)
+      .mock.calls.find(([, args]) => args[1] === "config" && args[2] === "validate");
+    expect(strictValidationCall?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+    });
+  });
+
   it("runs the fresh plugin doctor with the selected Node runner", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
@@ -2500,7 +2565,7 @@ describe("update-cli", () => {
   });
 
   it("post-core resume mode skips the core update and only runs post-update tasks", async () => {
-    await runPostCoreCommand({ restart: false });
+    await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     const installCall = (
@@ -2523,12 +2588,72 @@ describe("update-cli", () => {
         ([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT && args[1] === "doctor",
       );
     expect(freshDoctorCall).toBeDefined();
+    expect(freshDoctorCall?.[2]).toMatchObject({
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+    });
+    expect(
+      (freshDoctorCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env
+        ?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE,
+    ).toBeUndefined();
+    expect(
+      (freshDoctorCall?.[2] as { baseEnv?: NodeJS.ProcessEnv } | undefined)?.baseEnv
+        ?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE,
+    ).toBeUndefined();
     expect(vi.mocked(runExec).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       syncPluginsForUpdateChannel.mock.invocationCallOrder[0] ?? 0,
     );
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("stages plugin-changing post-core config before updated plugin migrations run", async () => {
+    syncPluginsForUpdateChannel.mockImplementationOnce(async ({ config }) =>
+      pluginSyncResult(config, true),
+    );
+
+    await runPostCoreCommand({ restart: false });
+
+    expect(lastReplaceConfigCall()).toMatchObject({
+      writeOptions: { skipPluginValidation: true },
+    });
+  });
+
+  it("runs the final fresh doctor for convergence-only post-core changes", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      changes: ["Repaired configured plugin install records."],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: {},
+    });
+
+    await runPostCoreCommand({ restart: false });
+
+    expect(syncPluginCall()?.config).toBeDefined();
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    const doctorCalls = vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor");
+    expect(doctorCalls).toHaveLength(2);
+    expect(doctorCalls[1]?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    });
+    const strictValidationCall = vi
+      .mocked(runExec)
+      .mock.calls.find(
+        ([, args]) =>
+          args[0] === FRESH_POST_UPDATE_ENTRYPOINT &&
+          args[1] === "config" &&
+          args[2] === "validate" &&
+          args[3] === "--json",
+      );
+    expect(strictValidationCall?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+    });
   });
 
   it("keeps fresh doctor output off stdout during json post-core resume", async () => {
@@ -5476,7 +5601,6 @@ describe("update-cli", () => {
       portableGitUsr,
     ]);
     expect(updateOptions?.env?.NPM_CONFIG_SCRIPT_SHELL).toBeUndefined();
-    expect(updateOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
   it.each([
@@ -7247,13 +7371,13 @@ describe("update-cli", () => {
     });
   });
 
-  it("updateFinalizeCommand runs doctor and plugin convergence with full update env", async () => {
+  it("updateFinalizeCommand defers plugin installation during pre-plugin doctor", async () => {
     await withEnvAsync(
       {
         OPENCLAW_UPDATE_IN_PROGRESS: undefined,
         OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
       async () => {
         let doctorEnv: NodeJS.ProcessEnv | undefined;
@@ -7273,11 +7397,11 @@ describe("update-cli", () => {
         expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
-        expect(doctorEnv?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
+        expect(doctorEnv?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();
-        expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBeUndefined();
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
         expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
           nonInteractive: true,
           repair: true,

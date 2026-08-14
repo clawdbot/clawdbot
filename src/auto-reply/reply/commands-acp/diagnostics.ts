@@ -191,7 +191,11 @@ export async function handleAcpSessionsAction(
   const bindingService = getSessionBindingService();
   const currentEntry = params.command.senderIsOwner
     ? null
-    : readAcpSessionEntry({ cfg: params.cfg, sessionKey: currentSessionKey });
+    : readAcpSessionEntry({
+        cfg: params.cfg,
+        sessionKey: currentSessionKey,
+        agentId: params.agentId,
+      });
   const visibleEntries = params.command.senderIsOwner
     ? await listAcpSessionEntries({ cfg: params.cfg })
     : currentEntry?.entry && currentEntry.acp

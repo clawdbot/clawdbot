@@ -19,7 +19,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -319,7 +319,7 @@ function resolveInitSessionStateAttemptContext(
     storePath: resolveSessionStorePathForScope({
       agentId,
       sessionKey: sessionCtxForState.SessionKey,
-      storePath: resolveStorePath(cfg.session?.store, { agentId }),
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     }),
   };
 }
@@ -1102,7 +1102,12 @@ async function initSessionStateAttemptLocked(
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
     const runtimePolicySessionKey =
-      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
+      resolveRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        ctx: sessionCtxForState,
+        sessionKey,
+      }) ?? sessionKey;
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
@@ -1138,7 +1143,7 @@ async function initSessionStateAttemptLocked(
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
-          cfg,
+          agentId,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
@@ -1168,7 +1173,7 @@ async function initSessionStateAttemptLocked(
       const payload = buildSessionStartHookPayload({
         sessionId: effectiveSessionId,
         sessionKey,
-        cfg,
+        agentId,
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {
