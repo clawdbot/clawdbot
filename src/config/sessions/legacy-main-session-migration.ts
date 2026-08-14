@@ -407,6 +407,7 @@ function writeLedger(params: {
 async function migrateLegacyMainSessionKeysInternal(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  forceScan?: boolean;
   legacyAgentId?: string;
   mode: LegacyMainSessionMigrationMode;
   now?: () => number;
@@ -465,18 +466,22 @@ async function migrateLegacyMainSessionKeysInternal(params: {
   }
   const identityBase = { legacyAgentId, mainKey, ownerAgentId };
   const identity = { ...identityBase, sourceLayout: resolveSourceLayout(resolved) };
+  let matchingCompletedLedger = false;
   if (params.mode !== "doctor-fix" && outcomes.length === 0) {
     try {
       const ledger = readLedger(env);
       if (ledgerMatches(ledger, identity)) {
-        return {
-          ...base,
-          armed: true,
-          complete: true,
-          ledgerComplete: true,
-          ownerAgentId,
-          outcomes: [{ kind: "no-legacy-rows", detail: "matching completed ledger" }],
-        };
+        matchingCompletedLedger = true;
+        if (!params.forceScan) {
+          return {
+            ...base,
+            armed: true,
+            complete: true,
+            ledgerComplete: true,
+            ownerAgentId,
+            outcomes: [{ kind: "no-legacy-rows", detail: "matching completed ledger" }],
+          };
+        }
       }
     } catch (error) {
       return {
@@ -658,7 +663,8 @@ async function migrateLegacyMainSessionKeysInternal(params: {
     armed: true,
     changes,
     complete,
-    ledgerComplete: complete && params.mode !== "detect",
+    ledgerComplete:
+      complete && (params.mode !== "detect" || (matchingCompletedLedger && allLegacy.length === 0)),
     legacyAgentId,
     mainKey,
     outcomes,
@@ -670,6 +676,8 @@ async function migrateLegacyMainSessionKeysInternal(params: {
 export async function migrateLegacyMainSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  /** Bypass the startup ledger shortcut and verify the physical legacy stores. */
+  forceScan?: boolean;
   legacyAgentId?: string;
   mode: LegacyMainSessionMigrationMode;
   now?: () => number;

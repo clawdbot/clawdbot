@@ -245,6 +245,7 @@ describe("createAgent", () => {
       cfg: expect.objectContaining({
         agents: { entries: { robby: { id: "robby" } } },
       }),
+      forceScan: true,
       legacyAgentId: "main",
       mode: "detect",
     });

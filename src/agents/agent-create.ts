@@ -171,6 +171,7 @@ async function evaluateMainCreationGate(
 
   const migration = await migrateLegacyMainSessionKeys({
     cfg: config,
+    forceScan: true,
     legacyAgentId: BOOTSTRAP_AGENT_ID,
     mode: "detect",
   });

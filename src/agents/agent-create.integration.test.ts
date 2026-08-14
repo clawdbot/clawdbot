@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { mutateConfigFileWithRetry } from "../config/config.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -142,6 +143,8 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
   const ownerDatabasePath = path.join(state.agentDir("robby"), "openclaw-agent.sqlite");
   const legacyKey = "agent:main:main";
   const canonicalKey = "agent:robby:main";
+  const lateLegacyKey = "agent:main:late";
+  const lateCanonicalKey = "agent:robby:late";
 
   try {
     await state.writeConfig(cfg);
@@ -158,6 +161,31 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
     );
     await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "doctor-fix" });
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        writeSessionEntry(
+          database,
+          lateLegacyKey,
+          { sessionId: "late-legacy-before-main-reuse", updatedAt: 200 },
+          { allowStoredAliases: true, previousEntry: null },
+        );
+      },
+      { agentId: "main", env: state.env, path: legacyDatabasePath },
+    );
+
+    const blocked = await createAgent({ name: "main", workspace: state.path("workspace-main") });
+    expect(blocked).toMatchObject({
+      status: "error",
+      reason: "legacy-session-migration-required",
+    });
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => readExactSessionEntryRowForCanonicalRepair(database, lateLegacyKey)?.entry,
+        { agentId: "main", env: state.env, path: legacyDatabasePath },
+      ),
+    ).toMatchObject({ sessionId: "late-legacy-before-main-reuse" });
+
+    await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "doctor-fix" });
 
     const created = await createAgent({ name: "main", workspace: state.path("workspace-main") });
 
@@ -177,17 +205,24 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
       resolveSharedAuthStorePath(state.env),
     );
     expect(
-      runOpenClawAgentWriteTransaction(
-        (database) => readExactSessionEntryRowForCanonicalRepair(database, legacyKey),
-        { agentId: "main", env: state.env, path: legacyDatabasePath },
-      ),
-    ).toBeUndefined();
+      listSessionEntriesReadOnly({
+        agentId: "main",
+        env: state.env,
+        storePath: legacyDatabasePath,
+      }).filter((entry) => entry.sessionKey.startsWith("agent:main:")),
+    ).toEqual([]);
     expect(
       runOpenClawAgentWriteTransaction(
         (database) => readExactSessionEntryRowForCanonicalRepair(database, canonicalKey)?.entry,
         { agentId: "robby", env: state.env, path: ownerDatabasePath },
       ),
     ).toMatchObject({ sessionId: "legacy-before-main-reuse" });
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => readExactSessionEntryRowForCanonicalRepair(database, lateCanonicalKey)?.entry,
+        { agentId: "robby", env: state.env, path: ownerDatabasePath },
+      ),
+    ).toMatchObject({ sessionId: "late-legacy-before-main-reuse" });
   } finally {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
