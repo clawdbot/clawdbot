@@ -2729,7 +2729,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
 });
 
 describe("recordCliCompactionInStore", () => {
-  it("persists native compaction token counts and clears stale CLI usage breakdown", async () => {
+  it("persists native compaction token counts without clearing its CLI binding", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-record-cli-compaction";
       const sessionId = "test-record-cli-compaction-session";
@@ -2775,6 +2775,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
+        compactionKind: "native-harness",
         provider: "codex",
         sessionKey,
         sessionStore,
@@ -2791,11 +2792,17 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
       expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toEqual({
+        sessionId: "stale-cli-session",
+      });
+      expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBe("stale-cli-session");
       expect(persisted[sessionKey]?.totalTokens).toBe(0);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
       expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
+      expect(persisted[sessionKey]?.cliSessionBindings?.codex).toEqual({
+        sessionId: "stale-cli-session",
+      });
+      expect(persisted[sessionKey]?.cliSessionIds?.codex).toBe("stale-cli-session");
     });
   });
 
@@ -2837,6 +2844,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
+        compactionKind: "native-harness",
         provider: "codex",
         sessionKey,
         sessionStore,
@@ -2872,6 +2880,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
+        compactionKind: "native-harness",
         provider: "codex",
         sessionKey,
         sessionStore,
@@ -2890,7 +2899,7 @@ describe("recordCliCompactionInStore", () => {
     });
   });
 
-  it("recreates a complete persisted row when the caller snapshot survived a missing store row", async () => {
+  it("recreates a complete persisted row and clears its context-engine CLI binding", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-record-cli-compaction-missing-row";
       const sessionId = "test-record-cli-compaction-missing-row-session";
@@ -2918,6 +2927,7 @@ describe("recordCliCompactionInStore", () => {
       };
 
       await recordCliCompactionInStore({
+        compactionKind: "context-engine",
         provider: "codex",
         sessionKey,
         sessionStore,
@@ -2938,6 +2948,7 @@ describe("recordCliCompactionInStore", () => {
       expect(persisted?.compactionCount).toBe(1);
       expect(persisted?.totalTokens).toBe(42);
       expect(persisted?.cliSessionBindings?.codex).toBeUndefined();
+      expect(persisted?.cliSessionIds?.codex).toBeUndefined();
     });
   });
 
@@ -2956,6 +2967,7 @@ describe("recordCliCompactionInStore", () => {
       };
 
       const result = await recordCliCompactionInStore({
+        compactionKind: "context-engine",
         provider: "codex",
         sessionKey,
         sessionStore,

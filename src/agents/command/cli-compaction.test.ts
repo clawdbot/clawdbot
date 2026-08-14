@@ -391,6 +391,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
+        compactionKind: "context-engine",
         newSessionId: successorSessionId,
         tokensAfter: 100,
       }),
@@ -494,12 +495,12 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it.each([
-    ["agent", { agentId: "other" }],
-    ["session key", { sessionKey: "agent:main:other" }],
-    ["store", { storePath: "/tmp/other-openclaw-sessions.sqlite" }],
-  ])("rejects a CLI successor outside the active %s binding", async (_label, override) => {
+    ["agent", () => ({ agentId: "other" })],
+    ["session key", () => ({ sessionKey: "agent:main:other" })],
+    ["store", () => ({ storePath: path.join(tmpDir, "other-openclaw-sessions.sqlite") })],
+  ])("rejects a CLI successor outside the active %s binding", async (label, buildOverride) => {
     const scenario = await prepareContextSuccessorScenario({
-      suffix: `outside-${_label.replace(" ", "-")}`,
+      suffix: `outside-${label.replace(" ", "-")}`,
       tmpDir,
       result: ({ sessionKey, storePath }) => ({
         ok: true,
@@ -511,7 +512,7 @@ describe("runCliTurnCompactionLifecycle", () => {
             sessionId: "outside-successor",
             sessionKey,
             storePath,
-            ...override,
+            ...buildOverride(),
           },
         },
       }),
@@ -672,6 +673,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
+        compactionKind: "native-harness",
         provider: "openai",
         sessionKey,
         tokensAfter: 100,
@@ -924,6 +926,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
+        compactionKind: "context-engine",
         provider: "external-harness",
         sessionKey,
         tokensAfter: 100,
