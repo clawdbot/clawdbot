@@ -9,7 +9,7 @@ export type {
 export {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
-  preemptEmbeddedHeartbeatRun,
+  preemptAndDrainEmbeddedHeartbeatRun,
   compactEmbeddedAgentSession,
   isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunActive,
