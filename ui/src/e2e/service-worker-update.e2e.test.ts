@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildProductionControlUiE2e,
   canRunPlaywrightChromium,
+  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
   type ControlUiE2eServer,
@@ -29,8 +30,8 @@ let browser: Browser;
 let outDir: string;
 let server: ControlUiE2eServer;
 
-async function findBuildAsset(buildId: string): Promise<BuildAsset> {
-  const assetsDir = path.join(outDir, "assets");
+async function findBuildAsset(buildId: string, buildDir = outDir): Promise<BuildAsset> {
+  const assetsDir = path.join(buildDir, "assets");
   for (const fileName of await readdir(assetsDir)) {
     if (!fileName.endsWith(".js")) {
       continue;
@@ -44,6 +45,23 @@ async function findBuildAsset(buildId: string): Promise<BuildAsset> {
     }
   }
   throw new Error(`Production Control UI output did not contain build id ${buildId}`);
+}
+
+async function holdReplacementWorkerInstalling(buildDir: string, delayMs: number): Promise<void> {
+  const workerPath = path.join(buildDir, "sw.js");
+  const source = await readFile(workerPath, "utf8");
+  const install =
+    "event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)));";
+  if (!source.includes(install)) {
+    throw new Error("Production service worker did not contain the expected install lifetime");
+  }
+  await writeFile(
+    workerPath,
+    source.replace(
+      install,
+      `event.waitUntil(Promise.all([new Promise((resolve) => setTimeout(resolve, ${delayMs})), caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))]));`,
+    ),
+  );
 }
 
 async function ensureControlledPage(page: Page, pageErrors: string[], expectedBuildId: string) {
@@ -115,7 +133,7 @@ async function fetchControlledAsset(
   assetPath: string,
 ): Promise<{ controllerState: string | null; sha256: string }> {
   return page.evaluate(async (relativePath) => {
-    const response = await fetch(new URL(relativePath, window.location.href));
+    const response = await fetch(new URL(`/${relativePath}`, window.location.origin));
     if (!response.ok) {
       throw new Error(`Build asset request failed with HTTP ${response.status}`);
     }
@@ -154,7 +172,13 @@ describe("Control UI service-worker production update E2E", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-service-worker-update-"));
-    server = await startProductionControlUiE2eServer(outDir, buildA);
+    server = await startProductionControlUiE2eServer(outDir, buildA, {
+      assistantAgentId: "research",
+      assistantAvatar: "",
+      assistantName: "OpenClaw",
+      basePath: "/",
+      terminalEnabled: true,
+    });
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   }, 120_000);
 
@@ -162,11 +186,15 @@ describe("Control UI service-worker production update E2E", () => {
     await browser?.close();
     await server?.close();
     if (outDir) {
-      await rm(outDir, { force: true, recursive: true });
+      await Promise.all(
+        [outDir, `${outDir}-next`, `${outDir}-previous`].map((dir) =>
+          rm(dir, { force: true, recursive: true }),
+        ),
+      );
     }
   });
 
-  it("activates the next production worker and serves its refreshed build asset", async () => {
+  it("refreshes a same-version build on reconnect before restoring an owned terminal", async () => {
     if (captureUiProof) {
       await mkdir(artifactDir, { recursive: true });
     }
@@ -196,6 +224,21 @@ describe("Control UI service-worker production update E2E", () => {
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
+    const gateway = await installMockGateway(page, {
+      assistantAgentId: "research",
+      defaultAgentId: "research",
+      featureMethods: ["terminal.open"],
+      methodResponses: {
+        "terminal.open": {
+          agentId: "research",
+          confined: false,
+          cwd: "/workspace/research",
+          sessionId: "terminal-after-worker-refresh",
+          shell: "/bin/bash",
+        },
+      },
+      terminalEnabled: true,
+    });
 
     try {
       expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
@@ -212,24 +255,69 @@ describe("Control UI service-worker production update E2E", () => {
         .poll(() => page.evaluate(() => caches.keys()))
         .toContain(`openclaw-control-${buildA}`);
 
-      await buildProductionControlUiE2e(outDir, buildB);
-      const assetB = await findBuildAsset(buildB);
+      const nextOutDir = `${outDir}-next`;
+      const previousOutDir = `${outDir}-previous`;
+      await buildProductionControlUiE2e(nextOutDir, buildB);
+      await holdReplacementWorkerInstalling(nextOutDir, 1_200);
+      const assetB = await findBuildAsset(buildB, nextOutDir);
       expect(assetB.path).not.toBe(assetA.path);
       expect(assetB.sha256).not.toBe(assetA.sha256);
 
-      const reloaded = page.waitForEvent("domcontentloaded");
       await page.evaluate(() => {
-        void navigator.serviceWorker.ready.then((registration) => registration.update());
+        localStorage.setItem(
+          "openclaw.terminal.panel.v1",
+          JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+        );
       });
+      await gateway.setOnline(false);
+      await rename(outDir, previousOutDir);
+      await rename(nextOutDir, outDir);
+      await rm(previousOutDir, { force: true, recursive: true });
+      // The production preview serves static files directly instead of applying
+      // the Gateway's deep-link canonicalization before returning index.html.
+      await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));
+      const reloaded = page.waitForEvent("domcontentloaded");
+      await gateway.setOnline(true);
+      await page.waitForFunction(async () => {
+        const registration = await navigator.serviceWorker.getRegistration();
+        return registration?.installing?.state === "installing";
+      });
+      await page.waitForTimeout(300);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);
       await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildB);
+
+      const terminal = page.locator("openclaw-terminal-panel");
+      await terminal.waitFor({ state: "attached" });
+      await expect
+        .poll(() =>
+          terminal.evaluate((element) => {
+            const panel = element as HTMLElement & {
+              agentId: string | null;
+              available: boolean;
+              terminalPanelOpen: boolean;
+            };
+            return {
+              agentId: panel.agentId,
+              available: panel.available,
+              open: panel.terminalPanelOpen,
+            };
+          }),
+        )
+        .toEqual({ agentId: "research", available: true, open: true });
+      const terminalOpen = await gateway.waitForRequest("terminal.open");
+      expect(terminalOpen.params).toMatchObject({
+        agentId: "research",
+        cols: expect.any(Number),
+        rows: expect.any(Number),
+      });
 
       await expect
         .poll(() => page.evaluate(() => caches.keys()))
         .toContain(`openclaw-control-${buildB}`);
       const refreshedAsset = await fetchControlledAsset(page, assetB.path);
-      expect(refreshedAsset).toEqual({
+      expect(refreshedAsset).toMatchObject({
         controllerState: "activated",
         sha256: assetB.sha256,
       });

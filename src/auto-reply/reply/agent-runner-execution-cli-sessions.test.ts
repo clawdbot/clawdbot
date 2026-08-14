@@ -193,13 +193,13 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI runtime", {
       sessionKey: "main",
-      agentId: "agent",
+      agentId: "main",
       sessionId: "session",
       suppressNextUserMessagePersistence: false,
       persistAssistantTranscript: true,
       storePath: "/tmp/sessions.json",
       sessionTarget: {
-        agentId: "agent",
+        agentId: "main",
         sessionId: "session",
         sessionKey: "main",
         storePath: "/tmp/sessions.json",

@@ -18,8 +18,13 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
             pathEnv: "/usr/bin:/bin")
     }
 
-    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest { self.manifest }
-    func supports(_ command: String) async -> Bool { self.manifest.commands.contains(command) }
+    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
+        self.manifest
+    }
+
+    func supports(_ command: String) async -> Bool {
+        self.manifest.commands.contains(command)
+    }
 
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         self.requests.append(request)
@@ -29,10 +34,15 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
     func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
     func cancel(invokeId _: String) async {}
 
-    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
+    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool {
+        true
+    }
+
     func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
-    func invokedCommands() -> [String] { self.requests.map(\.command) }
+    func invokedCommands() -> [String] {
+        self.requests.map(\.command)
+    }
 }
 
 @Suite(.serialized)
@@ -167,24 +177,19 @@ struct MacNodeHostWorkerTests {
     @Test(arguments: [
         (
             MacNodeCodexThreadCatalogContract.listCommand,
-            "UNAVAILABLE: Codex session catalog is disabled"
-        ),
+            "UNAVAILABLE: Codex session catalog is disabled"),
         (
             MacNodeCodexThreadCatalogContract.turnsCommand,
-            "UNAVAILABLE: Codex session catalog is disabled"
-        ),
+            "UNAVAILABLE: Codex session catalog is disabled"),
         (
             MacNodeClaudeSessionCatalogContract.listCommand,
-            "UNAVAILABLE: Claude session catalog is disabled"
-        ),
+            "UNAVAILABLE: Claude session catalog is disabled"),
         (
             MacNodeClaudeSessionCatalogContract.readCommand,
-            "UNAVAILABLE: Claude session catalog is disabled"
-        ),
+            "UNAVAILABLE: Claude session catalog is disabled"),
         (
             OpenClawComputerCommand.act.rawValue,
-            "COMPUTER_DISABLED: enable Computer Control in Settings"
-        ),
+            "COMPUTER_DISABLED: enable Computer Control in Settings"),
     ])
     func `worker cannot bypass native capability consent`(command: String, expectedMessage: String) async {
         let worker = StubMacNodeHostWorker(commands: [command])
@@ -310,6 +315,36 @@ struct MacNodeHostWorkerTests {
         }
     }
 
+    @Test func `worker deinit terminates its owned process`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-worker-deinit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let pidFile = directory.appendingPathComponent("worker.pid")
+        defer {
+            TestProcessSupport.killLeakedProcesses(in: [pidFile])
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var worker: MacNodeHostWorker? = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = """
+        printf '%s\n' "$$" > "$1"
+        printf '%s\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        while :; do /bin/sleep 1; done
+        """
+
+        _ = try await #require(worker).start(launch: MacNodeHostWorkerLaunch(command: [
+            "/bin/sh",
+            "-c",
+            script,
+            "worker",
+            pidFile.path,
+        ]))
+        let pid = try await TestProcessSupport.waitForPID(in: pidFile)
+
+        worker = nil
+
+        #expect(await TestProcessSupport.waitUntilGone(pid))
+    }
+
     @Test func `changed worker command replaces the running process`() async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let firstScript = """
@@ -329,6 +364,47 @@ struct MacNodeHostWorkerTests {
         #expect(first.version == "first")
         #expect(second.version == "second")
         await worker.stop()
+    }
+
+    @Test func `stop waits for the worker leader and reaps its descendants`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-worker-stop-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let leaderPIDFile = directory.appendingPathComponent("leader.pid")
+        let descendantPIDFile = directory.appendingPathComponent("descendant.pid")
+        let termCompleteFile = directory.appendingPathComponent("term-complete")
+        defer {
+            TestProcessSupport.killLeakedProcesses(in: [descendantPIDFile, leaderPIDFile])
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = """
+        printf '%s\n' "$$" > "$1"
+        /bin/sh -c 'trap "" HUP TERM; printf "%s\\n" "$$" > "$1"; while :; do /bin/sleep 1; done' \
+          descendant "$2" </dev/null >/dev/null 2>&1 &
+        while [ ! -s "$2" ]; do /bin/sleep 0.01; done
+        trap 'touch "$3"; /bin/sleep 0.2; exit 0' TERM
+        printf '%s\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        while :; do /bin/sleep 1; done
+        """
+
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: [
+            "/bin/sh",
+            "-c",
+            script,
+            "worker",
+            leaderPIDFile.path,
+            descendantPIDFile.path,
+            termCompleteFile.path,
+        ]))
+        let leaderPID = try await TestProcessSupport.waitForPID(in: leaderPIDFile)
+        let descendantPID = try await TestProcessSupport.waitForPID(in: descendantPIDFile)
+
+        await worker.stop()
+
+        #expect(FileManager.default.fileExists(atPath: termCompleteFile.path))
+        #expect(TestProcessSupport.processIsGone(leaderPID))
+        #expect(TestProcessSupport.processIsGone(descendantPID))
     }
 
     @Test func `worker drains stdout while a large stdin frame is backpressured`() async throws {
@@ -364,9 +440,10 @@ struct MacNodeHostWorkerTests {
             let responses = try await AsyncTimeout.withTimeout(
                 seconds: 5,
                 onTimeout: { WorkerBackpressureTimeout() },
-                operation: { [first, second] in [await first.value, await second.value] })
+                operation: { [first, second] in await [first.value, second.value] })
             await worker.stop()
-            #expect(responses.allSatisfy { $0.ok })
+            let allResponsesSucceeded = responses.allSatisfy(\.ok)
+            #expect(allResponsesSucceeded)
         } catch {
             await worker.stop()
             throw error
