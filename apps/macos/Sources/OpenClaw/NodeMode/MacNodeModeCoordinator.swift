@@ -946,8 +946,7 @@ extension MacNodeModeCoordinator {
         }
         var workerEnvironment: [String: String] = [:]
         if provider == .cua, let endpoint = CuaDriverHostCoordinator.shared.workerEndpoint {
-            workerEnvironment[CuaDriverWorkerEnvironment.socketPath] = endpoint.socketPath
-            workerEnvironment[CuaDriverWorkerEnvironment.binaryPath] = endpoint.binaryPath
+            workerEnvironment[CuaDriverWorkerEnvironment.endpoint] = try endpoint.environmentValue()
         }
         let effectiveLaunch = MacNodeHostWorkerLaunch(
             command: launch.command,

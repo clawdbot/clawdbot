@@ -22,6 +22,19 @@ const geometry = {
   scale_factor: 1,
 };
 
+const CUA_DRIVER_ENDPOINT_ENV = "OPENCLAW_CUA_DRIVER_ENDPOINT";
+
+function macOsEndpoint(overrides: Record<string, unknown> = {}): NodeJS.ProcessEnv {
+  return {
+    [CUA_DRIVER_ENDPOINT_ENV]: JSON.stringify({
+      v: 1,
+      socketPath: "/tmp/openclaw-cua-test/driver.sock",
+      binaryPath: process.execPath,
+      ...overrides,
+    }),
+  };
+}
+
 function result(structured: Record<string, unknown>, image = false): CuaToolResult {
   return {
     text: "ok",
@@ -171,12 +184,9 @@ describe("cua-computer provider", () => {
     expect(actions).toContain("get_window_state");
   });
 
-  it("advertises the macOS mapping only with a complete app-provided endpoint", () => {
+  it("advertises the macOS mapping only with a valid atomic app-provided endpoint", () => {
     const { session } = driver();
-    const endpoint = {
-      CUA_DRIVER_SOCKET_PATH: "/tmp/openclaw-cua-test/driver.sock",
-      CUA_DRIVER_BINARY_PATH: process.execPath,
-    };
+    const endpoint = macOsEndpoint();
     const provider = createCuaComputerProvider({
       platform: "darwin",
       env: endpoint,
@@ -202,15 +212,30 @@ describe("cua-computer provider", () => {
     ).toBe(true);
     expect(createDriver).not.toHaveBeenCalled();
 
-    for (const env of [
-      {},
-      { CUA_DRIVER_SOCKET_PATH: endpoint.CUA_DRIVER_SOCKET_PATH },
-      { CUA_DRIVER_BINARY_PATH: endpoint.CUA_DRIVER_BINARY_PATH },
-      { ...endpoint, CUA_DRIVER_SOCKET_PATH: "relative.sock" },
-      { ...endpoint, CUA_DRIVER_BINARY_PATH: "/missing/cua-driver" },
-    ]) {
+    const invalidEndpoints: Array<[string, NodeJS.ProcessEnv]> = [
+      ["missing", {}],
+      ["malformed JSON", { [CUA_DRIVER_ENDPOINT_ENV]: "{" }],
+      [
+        "partial",
+        {
+          [CUA_DRIVER_ENDPOINT_ENV]: JSON.stringify({
+            v: 1,
+            socketPath: "/tmp/openclaw-cua-test/driver.sock",
+          }),
+        },
+      ],
+      ["unsupported version", macOsEndpoint({ v: 2 })],
+      ["extra field", macOsEndpoint({ extra: true })],
+      ["relative socket", macOsEndpoint({ socketPath: "relative.sock" })],
+      ["relative binary", macOsEndpoint({ binaryPath: "cua-driver" })],
+      ["nul socket", macOsEndpoint({ socketPath: "/tmp/cua\0.sock" })],
+      ["missing binary", macOsEndpoint({ binaryPath: "/missing/cua-driver" })],
+      ["oversized", macOsEndpoint({ socketPath: `/${"x".repeat(4_096)}` })],
+    ];
+    for (const [label, env] of invalidEndpoints) {
       expect(
         createCuaComputerProvider({ platform: "darwin", env, driver: session }).isAvailable(),
+        label,
       ).toBe(false);
     }
   });
@@ -230,10 +255,7 @@ describe("cua-computer provider", () => {
     });
     const computer = await createCuaComputerProvider({
       platform: "darwin",
-      env: {
-        CUA_DRIVER_SOCKET_PATH: "/tmp/openclaw-cua-test/driver.sock",
-        CUA_DRIVER_BINARY_PATH: process.execPath,
-      },
+      env: macOsEndpoint(),
       driver: retina.session,
       imageProcessor: {
         encode: vi.fn(async () => ({ data: Buffer.from("png"), width: 100, height: 50 })),

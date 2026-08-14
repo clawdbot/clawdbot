@@ -345,22 +345,63 @@ struct MacNodeHostWorkerTests {
         await worker.stop()
     }
 
-    @Test func `worker receives only the app-provided CUA endpoint`() async throws {
+    @Test func `worker strips inherited CUA values and receives only the app-provided endpoint`() async throws {
+        let endpoint = CuaDriverWorkerEndpoint(
+            socketPath: "/private/test/cua.sock",
+            binaryPath: "/Applications/OpenClaw.app/Contents/Resources/cua-driver")
+        let endpointValue = try endpoint.environmentValue()
+        let inheritedKeys = [
+            CuaDriverWorkerEnvironment.endpoint,
+            CuaDriverWorkerEnvironment.familyPrefix + "SOCKET_PATH",
+            CuaDriverWorkerEnvironment.familyPrefix + "BINARY_PATH",
+        ]
+        for key in inheritedKeys {
+            setenv(key, "inherited", 1)
+        }
+        defer {
+            for key in inheritedKeys {
+                unsetenv(key)
+            }
+        }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
-        test "$CUA_DRIVER_SOCKET_PATH" = "/private/test/cua.sock" || exit 41
-        test "$CUA_DRIVER_BINARY_PATH" = "/Applications/OpenClaw.app/Contents/Resources/cua-driver" || exit 42
+        test "$OPENCLAW_CUA_DRIVER_ENDPOINT" = "$1" || exit 41
+        test "$(env | grep -c '^OPENCLAW_CUA_DRIVER_')" = 1 || exit 42
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script],
+            command: ["/bin/sh", "-c", script, "worker", endpointValue],
             environment: [
-                CuaDriverWorkerEnvironment.socketPath: "/private/test/cua.sock",
-                CuaDriverWorkerEnvironment.binaryPath:
-                    "/Applications/OpenClaw.app/Contents/Resources/cua-driver",
+                CuaDriverWorkerEnvironment.endpoint: endpointValue,
             ]))
+        await worker.stop()
+    }
+
+    @Test func `unbound worker strips every inherited CUA endpoint value`() async throws {
+        let inheritedKeys = [
+            CuaDriverWorkerEnvironment.endpoint,
+            CuaDriverWorkerEnvironment.familyPrefix + "SOCKET_PATH",
+            CuaDriverWorkerEnvironment.familyPrefix + "BINARY_PATH",
+        ]
+        for key in inheritedKeys {
+            setenv(key, "inherited", 1)
+        }
+        defer {
+            for key in inheritedKeys {
+                unsetenv(key)
+            }
+        }
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = """
+        test "$(env | grep -c '^OPENCLAW_CUA_DRIVER_')" = 0 || exit 41
+        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        while IFS= read -r line; do :; done
+        """
+
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
         await worker.stop()
     }
 

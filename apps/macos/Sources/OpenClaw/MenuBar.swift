@@ -406,11 +406,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var profileInstanceLock: AppInstanceLock?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     var nodeTerminationCleanup: @MainActor () async -> Void = {
+        // CUA shutdown drains the worker before closing the daemon socket; run it
+        // first so other cleanup cannot consume the app termination deadline.
+        await CuaDriverHostCoordinator.shared.shutdown()
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
-        // The worker owns the MCP proxy. Stop it before closing the app-owned
-        // daemon socket so an in-flight completion cannot be mistaken for retryable.
-        await CuaDriverHostCoordinator.shared.shutdown()
     }
 
     var peekabooBridgeTerminationCleanup: @MainActor () async -> Void = {
