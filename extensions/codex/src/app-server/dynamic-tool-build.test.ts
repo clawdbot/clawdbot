@@ -162,6 +162,7 @@ async function buildDynamicToolsForTest(
     sandboxSessionKey,
     sandbox: { enabled: false, backendId: "docker" } as never,
     nativeToolSurfaceEnabled: true,
+    nativeContainmentConfirmed: true,
     runAbortController: new AbortController(),
     sessionAgentId: "main",
     pluginConfig: {},

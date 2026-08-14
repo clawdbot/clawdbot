@@ -90,6 +90,8 @@ type DynamicToolBuildParams = {
   sandboxSessionKey: string;
   sandbox: OpenClawSandboxContext;
   nativeToolSurfaceEnabled?: boolean;
+  /** Must be set only after the managed Codex binary passes containment gates. */
+  nativeContainmentConfirmed?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   runAbortController: AbortController;
   sessionAgentId: string;
@@ -569,6 +571,7 @@ function isCodexNativeExecutionBlockedByNodeExecHost(
     agentId?: string;
     runtimeSessionKey?: string;
     sandbox?: OpenClawSandboxContext;
+    nativeContainmentConfirmed?: boolean;
   } = {},
 ): boolean {
   return !resolveCodexNativeExecutionPolicy({
@@ -578,6 +581,7 @@ function isCodexNativeExecutionBlockedByNodeExecHost(
     agentId: options.agentId,
     execOverrides: params.execOverrides,
     sandboxAvailable: options.sandbox?.enabled,
+    nativeContainmentConfirmed: options.nativeContainmentConfirmed,
     readRuntimeSessionEntry: true,
   }).nativeToolSurfaceAllowed;
 }
@@ -759,6 +763,7 @@ function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): bool
       agentId: input.sessionAgentId,
       runtimeSessionKey: input.sandboxSessionKey,
       sandbox: input.sandbox,
+      nativeContainmentConfirmed: input.nativeContainmentConfirmed,
     })
   ) {
     return false;
@@ -836,6 +841,7 @@ function resolveCodexNativeExecutionPolicyForDynamicTools(
     agentId: input.sessionAgentId,
     execOverrides: input.params.execOverrides,
     sandboxAvailable: input.sandbox?.enabled,
+    nativeContainmentConfirmed: input.nativeContainmentConfirmed,
     readRuntimeSessionEntry: true,
   });
 }

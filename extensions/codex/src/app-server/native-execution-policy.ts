@@ -46,6 +46,8 @@ export function resolveCodexNativeExecutionPolicy(params: {
   agentId?: string;
   execOverrides?: ExecHostOverride;
   sandboxAvailable?: boolean;
+  /** Explicit capability from a command-containment-verified Codex runtime. */
+  nativeContainmentConfirmed?: boolean;
   readRuntimeSessionEntry?: boolean;
 }): CodexNativeExecutionPolicy {
   const config = params.config ?? {};
@@ -81,7 +83,7 @@ export function resolveCodexNativeExecutionPolicy(params: {
   });
   const node =
     params.execOverrides?.node ?? sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node;
-  if (effectiveExecHost !== "node") {
+  if (effectiveExecHost !== "node" && params.nativeContainmentConfirmed === true) {
     return {
       nativeToolSurfaceAllowed: true,
       requestedExecHost,
@@ -95,7 +97,9 @@ export function resolveCodexNativeExecutionPolicy(params: {
     effectiveExecHost,
     node,
     blockReason:
-      "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node.",
+      effectiveExecHost === "node"
+        ? "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node."
+        : "Codex app-server native execution is fail-closed until the runtime proves per-invocation process-group containment, finite deadlines, bounded output, and descendant cleanup.",
   };
 }
 

@@ -159,6 +159,8 @@ export async function startCodexAttemptThread(params: {
   /** OpenClaw owns configured MCP dynamically for this scheduled turn. */
   configuredMcpOwnershipVersion?: 1;
   nativeToolSurfaceEnabled: boolean;
+  /** Must be true only after the managed Codex runtime passes containment gates. */
+  nativeContainmentConfirmed?: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
@@ -168,6 +170,11 @@ export async function startCodexAttemptThread(params: {
   onStartupTimeout: () => void | Promise<void>;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
+  // Keep native Code Mode disabled until the managed runtime proves finite,
+  // descendant-safe command execution. This is the local fail-closed fence;
+  // the capability is intentionally absent until the upstream patch lands.
+  const nativeToolSurfaceEnabled =
+    params.nativeToolSurfaceEnabled && params.nativeContainmentConfirmed === true;
   let pluginAppServer = params.appServer;
   const startupRuntimeAuthProfileId =
     params.startupPreparedAuth?.kind === "profile"
@@ -204,7 +211,7 @@ export async function startCodexAttemptThread(params: {
         );
         const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
           pluginConfig: params.pluginConfig,
-          nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
+          nativeToolSurfaceEnabled,
           scheduledRuntimeAuthority: params.buildAttemptParams().scheduledRuntimeAuthority,
         });
         const {
@@ -392,7 +399,7 @@ export async function startCodexAttemptThread(params: {
             try {
               startupSandboxEnvironment = shouldRequireCodexSandboxExecServerEnvironment({
                 sandbox: params.sandbox,
-                nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
+                nativeToolSurfaceEnabled,
                 sandboxExecServerEnabled: params.sandboxExecServerEnabled,
               })
                 ? await ensureCodexSandboxExecServerEnvironment({
@@ -410,7 +417,7 @@ export async function startCodexAttemptThread(params: {
               }
               if (
                 params.sandbox?.enabled &&
-                params.nativeToolSurfaceEnabled &&
+                nativeToolSurfaceEnabled &&
                 params.sandboxExecServerEnabled &&
                 !startupSandboxEnvironment
               ) {
@@ -424,13 +431,13 @@ export async function startCodexAttemptThread(params: {
             }
             const startupEnvironmentSelection = resolveCodexSandboxEnvironmentSelection(
               startupSandboxEnvironment,
-              params.nativeToolSurfaceEnabled,
+              nativeToolSurfaceEnabled,
             );
             const startupExecutionCwd = resolveCodexAppServerExecutionCwd({
               effectiveCwd: params.effectiveCwd,
               localWorkspaceRoot: params.effectiveWorkspace,
               environment: startupSandboxEnvironment,
-              nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
+              nativeToolSurfaceEnabled,
               remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot,
             });
             const startupSandboxPolicy = startupSandboxEnvironment
@@ -480,13 +487,13 @@ export async function startCodexAttemptThread(params: {
                 finalConfigPatch: params.finalConfigPatch,
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-                nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
+                nativeCodeModeEnabled: nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
                 userMcpServersEnabled:
                   params.configuredMcpOwnershipVersion === 1
                     ? false
-                    : params.nativeToolSurfaceEnabled,
+                    : nativeToolSurfaceEnabled,
                 mcpServersFingerprint:
                   params.configuredMcpOwnershipVersion === 1
                     ? undefined

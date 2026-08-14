@@ -154,6 +154,7 @@ function startThreadWithHarness(
     finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
+    nativeContainmentConfirmed: true,
     nativeProviderWebSearchSupport: "supported",
     sandboxExecServerEnabled: false,
     sandbox: null,

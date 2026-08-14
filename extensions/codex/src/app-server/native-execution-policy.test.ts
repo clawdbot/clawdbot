@@ -20,11 +20,24 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     sessionStoreMocks.getSessionEntry.mockReset();
   });
 
+  it("fails closed until the Codex runtime proves native containment", () => {
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: { tools: { exec: { host: "gateway" } } },
+        sessionKey: "session-unsafe",
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      effectiveExecHost: "gateway",
+    });
+  });
+
   it("allows Codex native execution for gateway exec hosts", () => {
     expect(
       resolveCodexNativeExecutionPolicy({
         config: { tools: { exec: { host: "gateway" } } },
         sessionKey: "session-1",
+        nativeContainmentConfirmed: true,
       }),
     ).toMatchObject({
       nativeToolSurfaceAllowed: true,
@@ -39,6 +52,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
         config: { tools: { exec: { host: "auto" } } },
         sessionKey: "session-1",
         sandboxAvailable: false,
+        nativeContainmentConfirmed: true,
       }),
     ).toMatchObject({
       nativeToolSurfaceAllowed: true,
@@ -53,6 +67,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
         config: { tools: { exec: { host: "auto" } } },
         sessionKey: "session-1",
         sandboxAvailable: true,
+        nativeContainmentConfirmed: true,
       }),
     ).toMatchObject({
       nativeToolSurfaceAllowed: true,
