@@ -258,7 +258,7 @@ describe("Control UI service-worker production update E2E", () => {
       const nextOutDir = `${outDir}-next`;
       const previousOutDir = `${outDir}-previous`;
       await buildProductionControlUiE2e(nextOutDir, buildB);
-      await holdReplacementWorkerInstalling(nextOutDir, 1_200);
+      await holdReplacementWorkerInstalling(nextOutDir, 2_500);
       const assetB = await findBuildAsset(buildB, nextOutDir);
       expect(assetB.path).not.toBe(assetA.path);
       expect(assetB.sha256).not.toBe(assetA.sha256);
@@ -282,6 +282,29 @@ describe("Control UI service-worker production update E2E", () => {
         const registration = await navigator.serviceWorker.getRegistration();
         return registration?.installing?.state === "installing";
       });
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean; terminalPanelOpen: boolean })
+          | null;
+        return panel?.available === true && panel.terminalPanelOpen;
+      });
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:terminal-toggle", {
+            detail: {
+              open: true,
+              catalog: {
+                catalogId: "codex",
+                hostId: "gateway:local",
+                threadId: "thread-during-worker-refresh",
+              },
+            },
+          }),
+        );
+      });
+      await expect
+        .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
+        .toContain("thread-during-worker-refresh");
       await page.waitForTimeout(300);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
       await reloaded;
@@ -311,7 +334,13 @@ describe("Control UI service-worker production update E2E", () => {
         agentId: "research",
         cols: expect.any(Number),
         rows: expect.any(Number),
+        catalog: {
+          catalogId: "codex",
+          hostId: "gateway:local",
+          threadId: "thread-during-worker-refresh",
+        },
       });
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
 
       await expect
         .poll(() => page.evaluate(() => caches.keys()))

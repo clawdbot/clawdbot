@@ -211,6 +211,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   closeTerminalPanel(): void {
     this.closeSessionPicker(false);
+    this.terminalSessions.cancelPendingActions();
     this.dockLayout.setOpen(false);
   }
 
@@ -346,6 +347,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       (tab) => tab.id === this.terminalSessions.activeId,
     );
     const connecting =
+      this.terminalSessions.waitingForRefresh ||
       (this.terminalSessions.booting && this.terminalSessions.tabs.length === 0) ||
       activeTab?.status === "connecting";
     const sessionPicker = renderTerminalSessionPicker({

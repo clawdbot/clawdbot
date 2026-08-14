@@ -35,6 +35,13 @@ export type TerminalPanelCatalogReference = {
   threadId: string;
 };
 
+/** Explicit terminal work retained until it either runs or reports a visible failure. */
+export type TerminalPanelAction =
+  | { kind: "restore"; agentId: string | null }
+  | { kind: "open"; agentId: string | null }
+  | { kind: "catalog"; agentId: string | null; catalog: TerminalPanelCatalogReference }
+  | { kind: "attach"; sessionId: string; agentOwned: boolean };
+
 export type TerminalPanelSessionControllerState = {
   tabs: TerminalPanelSessionTab[];
   activeId: string | null;
