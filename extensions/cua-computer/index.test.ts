@@ -24,6 +24,15 @@ function validateManifestConfig(value: unknown) {
 }
 
 describe("cua-computer plugin registration", () => {
+  it("defaults on only for the app-gated macOS provider path", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { enabledByDefault?: boolean; enabledByDefaultOnPlatforms?: string[] };
+
+    expect(manifest.enabledByDefault).toBe(false);
+    expect(manifest.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
+  });
+
   it("registers the screen and dangerous computer node-host commands", () => {
     const commands: OpenClawPluginNodeHostCommand[] = [];
     const policies: OpenClawPluginNodeInvokePolicy[] = [];

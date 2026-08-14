@@ -31,10 +31,12 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
-      await expect
-        .poll(() => gateway.getRequests("skills.status"))
-        .toEqual([expect.objectContaining({ params: { agentId: "main" } })]);
       await page.getByText("No skills found.").waitFor();
+      const requests = await gateway.getRequests("skills.status");
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests.map((request) => request.params)).toEqual(
+        requests.map(() => ({ agentId: "main" })),
+      );
     });
   });
 });

@@ -389,7 +389,7 @@ export type CronAddInput = CronJobCreate;
 export type CronAddOptions = {
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
-  /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
+  /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
   systemOwned?: boolean;
   /** Authenticated caller provenance stamped by the service, never public input. */
   scheduledToolPolicy?: CronScheduledToolPolicy;

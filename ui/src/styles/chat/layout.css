@@ -4126,6 +4126,11 @@ button.chat-reply-preview--message:disabled {
   object-fit: cover;
 }
 
+.chat-attachment-image-button {
+  width: 100%;
+  height: 100%;
+}
+
 .chat-attachment-remove {
   position: absolute;
   top: 4px;

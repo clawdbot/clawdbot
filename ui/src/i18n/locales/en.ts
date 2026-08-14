@@ -3687,6 +3687,9 @@ export const en: TranslationMap = {
       limited: "This browser has limited access.",
       guidance:
         "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.",
+      status: "Limited access",
+      showDetails: "Show limited access details",
+      dismiss: "Collapse limited access banner",
       request: "Request admin",
       requesting: "Requesting administrator access…",
       requestingAction: "Requesting…",

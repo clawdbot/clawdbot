@@ -19,6 +19,7 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
+import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import { deviceHandlers } from "./devices.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -255,6 +256,35 @@ describe("deviceHandlers", () => {
 
     expect(respond).toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledWith("device-1");
+  });
+
+  it("reconciles device worker authority before reporting pairing removal", async () => {
+    removePairedDeviceMock.mockResolvedValue({ deviceId: "device-1" });
+    const opts = createOptions("device.pair.remove", { deviceId: "device-1" });
+    const order: string[] = [];
+    const workerEnvironmentService = {};
+    bindDeviceWorkerReconciliation(workerEnvironmentService, async () => {
+      order.push("environment");
+      return ["environment-1"];
+    });
+    const reconcileActive = vi.fn(async () => {
+      order.push("placement");
+    });
+    Object.assign(opts.context, {
+      workerEnvironmentService,
+      workerPlacementDispatchService: { reconcileActive },
+    });
+    vi.mocked(opts.respond).mockImplementation(() => {
+      order.push("respond");
+    });
+
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
+
+    expect(reconcileActive).toHaveBeenCalledWith("environment-1");
+    expect(order).toEqual(["environment", "placement", "respond"]);
   });
 
   it("does not disconnect clients when device removal fails", async () => {

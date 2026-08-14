@@ -318,23 +318,30 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     withLock,
   });
 
+  const reconcileEnvironment = async (environmentId: string) => {
+    if (stopping) {
+      return;
+    }
+    await withLock(environmentId, async () => {
+      const current = store.get(environmentId);
+      if (!current || inState(current, "destroyed", "failed", "orphaned")) {
+        return;
+      }
+      await providerLifecycle.reconcileRecord(current);
+    });
+  };
+
   const reconcilePass = async () => {
-    const tasks = store.listForReconcile().map(
-      (candidate) => () =>
-        withLock(candidate.environmentId, async () => {
-          const current = store.get(candidate.environmentId);
-          if (!current || inState(current, "destroyed", "failed")) {
-            return;
-          }
-          await providerLifecycle
-            .reconcileRecord(current)
-            .catch(() =>
-              warn(
-                `Worker environment reconcile failed (${current.environmentId}, ${current.providerId})`,
-              ),
-            );
-        }),
-    );
+    const tasks = store
+      .listForReconcile()
+      .map(
+        (candidate) => () =>
+          reconcileEnvironment(candidate.environmentId).catch(() =>
+            warn(
+              `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
+            ),
+          ),
+      );
     await runTasksWithConcurrency({ tasks, limit: 8 });
     store.pruneTerminalEnvironments();
   };
@@ -430,6 +437,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
     startTunnel: environmentAccess.startTunnel,
     stopTunnel: environmentAccess.stopTunnel,
+    reconcileEnvironment,
     reconcileOnce,
     start,
     stop,

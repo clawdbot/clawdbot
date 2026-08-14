@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
@@ -13,6 +14,7 @@ import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
   bindDeviceWorkerAvailability,
+  bindDeviceWorkerReconciliation,
   createDeviceWorkerRuntime,
   DEVICE_WORKER_PROVIDER_ID,
 } from "./worker-environments/device-provider.js";
@@ -193,6 +195,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
+  const workerEnvironmentLog = params.log.child("worker-environments");
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
     store: params.startup.store,
     getConfig: getRuntimeConfig,
@@ -253,10 +256,37 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         { signal, resolveIdentity },
       );
     },
-    logger: params.log.child("worker-environments"),
+    logger: workerEnvironmentLog,
   });
   const workerEnvironmentService = workerEnvironmentServiceBase;
   bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.isAvailable);
+  bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
+    const environmentIds = params.startup.store
+      .listForReconcile()
+      .filter((record) => {
+        const settings = record.profileSnapshot.settings;
+        const profileDeviceId = isRecord(settings) ? settings.device : undefined;
+        return (
+          record.providerId === DEVICE_WORKER_PROVIDER_ID &&
+          typeof profileDeviceId === "string" &&
+          profileDeviceId.trim() === deviceId
+        );
+      })
+      .map((record) => record.environmentId);
+    for (const environmentId of environmentIds) {
+      params.startup.store.revokeEnvironmentCredential(environmentId);
+    }
+    await Promise.all(
+      environmentIds.map(async (environmentId) => {
+        await workerEnvironmentService.reconcileEnvironment(environmentId).catch(() => {
+          workerEnvironmentLog.warn(
+            `Device worker reconcile failed (${deviceId}, ${environmentId}); periodic cleanup will retry`,
+          );
+        });
+      }),
+    );
+    return environmentIds;
+  });
   executeSessionTool = createWorkerSessionToolExecutor({
     placements: params.startup.placementStore,
     environments: workerEnvironmentService,
