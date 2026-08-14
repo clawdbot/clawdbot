@@ -28,6 +28,35 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
+  it("shows a newly discovered session above the created-sort pagination boundary", async () => {
+    const olderKeys = Array.from({ length: 10 }, (_, index) => `agent:main:older-${index}`);
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", olderKeys);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    const refreshed = createSessionState("main", [...olderKeys, "agent:main:external-new"]);
+    const rows = refreshed.result?.sessions;
+    if (!rows) {
+      throw new Error("expected refreshed session rows");
+    }
+    const newestRow = rows.at(-1);
+    if (!newestRow) {
+      throw new Error("expected newest session row");
+    }
+    newestRow.createdAt = 2_000;
+
+    sessions.publishList({ result: refreshed.result, agentId: refreshed.agentId });
+    await sidebar.updateComplete;
+
+    expect(
+      Array.from(
+        sidebar.querySelectorAll<HTMLElement>("[data-session-key]"),
+        (row) => row.dataset.sessionKey,
+      ),
+    ).toEqual(["agent:main:external-new", ...olderKeys.slice(0, 9)]);
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(sidebar.querySelector('button[aria-label="Show more"]')).not.toBeNull();
+  });
+
   it("reveals sessions ten at a time and offers Collapse after thirty", async () => {
     const keys = [
       "agent:main:session-0",

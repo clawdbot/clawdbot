@@ -82,8 +82,7 @@ export function compareSidebarSessionRowsByMode(input: {
   if (input.sortMode !== "people") {
     return input.sortMode === "updated"
       ? compareSessionRowsByUpdatedAt(a, b)
-      : (input.createdOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
-          (input.createdOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER);
+      : compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
   }
   const creators = input.creators ?? [];
   const idA = a.createdActor?.id?.trim() ?? "";
@@ -98,10 +97,38 @@ export function compareSidebarSessionRowsByMode(input: {
       return byCreator;
     }
   }
-  const byCreated =
-    (input.createdOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
-    (input.createdOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER);
-  return byCreated || a.key.localeCompare(b.key);
+  return compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
+}
+
+function compareSidebarSessionRowsByCreatedAt(
+  a: SessionRow,
+  b: SessionRow,
+  createdOrder: ReadonlyMap<string, number>,
+): number {
+  const createdAtA =
+    typeof a.createdAt === "number" && Number.isFinite(a.createdAt) && a.createdAt >= 0
+      ? a.createdAt
+      : null;
+  const createdAtB =
+    typeof b.createdAt === "number" && Number.isFinite(b.createdAt) && b.createdAt >= 0
+      ? b.createdAt
+      : null;
+  if (createdAtA !== null || createdAtB !== null) {
+    if (createdAtA === null) {
+      return 1;
+    }
+    if (createdAtB === null) {
+      return -1;
+    }
+    const byCreatedAt = createdAtB - createdAtA;
+    if (byCreatedAt !== 0) {
+      return byCreatedAt;
+    }
+  }
+  const byObservedOrder =
+    (createdOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
+    (createdOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER);
+  return byObservedOrder || a.key.localeCompare(b.key);
 }
 
 function isSidebarDraftOwnedBySelf(
