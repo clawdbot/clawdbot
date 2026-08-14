@@ -115,6 +115,52 @@ describe("compileMemoryWikiVault", () => {
     expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
   });
 
+  it("uses claim evidence source IDs before page-level provenance in compiled claims", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "claim-sources.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.claim-sources",
+          title: "Claim Sources",
+          sourceIds: ["source.page"],
+          claims: [
+            {
+              id: "claim.evidence-source",
+              text: "Evidence provenance is claim-specific.",
+              evidence: [
+                { sourceId: "source.claim", lines: "1-3" },
+                { sourceId: "source.claim", lines: "5-7" },
+              ],
+            },
+            {
+              id: "claim.page-fallback",
+              text: "Page provenance remains the fallback.",
+              evidence: [{ path: "memory/example.md", lines: "1-2" }],
+            },
+          ],
+        },
+        body: "# Claim Sources\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const { claims } = await expectCompiledCache(config);
+    expect(claims.find((claim) => claim.id === "claim.evidence-source")?.sourceIds).toEqual([
+      "source.claim",
+    ]);
+    expect(claims.find((claim) => claim.id === "claim.page-fallback")?.sourceIds).toEqual([
+      "source.page",
+    ]);
+  });
+
   it("preserves source page bytes while rebuilding derived artifacts", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

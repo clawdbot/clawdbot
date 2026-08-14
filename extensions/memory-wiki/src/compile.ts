@@ -1124,6 +1124,13 @@ function sortClaims(page: WikiPageSummary): WikiClaim[] {
   });
 }
 
+function resolveClaimSourceIds(page: WikiPageSummary, claim: WikiClaim): string[] {
+  const evidenceSourceIds = uniqueStrings(
+    claim.evidence.flatMap((entry) => entry.sourceId?.trim() || []),
+  );
+  return evidenceSourceIds.length > 0 ? evidenceSourceIds : page.sourceIds;
+}
+
 function buildCompiledCacheSnapshot(
   pagesInput: WikiPageSummary[],
 ): MemoryWikiCompiledCacheSnapshot {
@@ -1189,7 +1196,7 @@ function buildCompiledCacheSnapshot(
           text: claim.text,
           status: normalizeClaimStatus(claim.status),
           confidence: claim.confidence,
-          sourceIds: page.sourceIds,
+          sourceIds: resolveClaimSourceIds(page, claim),
           evidenceKinds: uniqueStrings(claim.evidence.flatMap((entry) => entry.kind ?? [])),
           privacyTiers: [
             ...new Set(
