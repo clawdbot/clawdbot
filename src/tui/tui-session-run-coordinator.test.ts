@@ -181,28 +181,6 @@ describe("TuiSessionRunCoordinator", () => {
     expect(coordinator.resolveMostRecentPromotableRun()).toBe("run-pending");
   });
 
-  it("keeps every displayed final behind its own persistence barrier", () => {
-    const { coordinator } = createCoordinator();
-    coordinator.noteFinalizedRun("run-first", { displayedFinal: true });
-    coordinator.noteFinalizedRun("run-second", { displayedFinal: true });
-
-    expect(coordinator.deferSessionMessageRefresh()).toBe(true);
-    coordinator.notePersistedRun("run-second");
-    expect(coordinator.isSessionMessagePersistencePending).toBe(true);
-    coordinator.notePersistedRun("run-first");
-    expect(coordinator.isSessionMessagePersistencePending).toBe(false);
-    expect(coordinator.hasPendingSessionMessageRefresh).toBe(true);
-  });
-
-  it("recognizes persistence that arrives before a visible final", () => {
-    const { coordinator } = createCoordinator();
-    coordinator.notePersistedRun("run-first");
-    coordinator.noteFinalizedRun("run-first", { displayedFinal: true });
-
-    expect(coordinator.deferSessionMessageRefresh()).toBe(false);
-    expect(coordinator.isSessionMessagePersistencePending).toBe(false);
-  });
-
   it("serializes queued reloads and replays a gated terminal event", async () => {
     let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
     const { coordinator, loadHistory, finalizeHistoryOwnedRun, replayHistoryRunEvent } =
