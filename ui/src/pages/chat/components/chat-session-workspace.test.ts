@@ -41,6 +41,26 @@ describe("toggleSessionWorkspace", () => {
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
   });
+
+  it("carries the saved bottom dock across session workspace state", () => {
+    const state = {
+      client: null,
+      connected: false,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      settings: { chatWorkspaceDock: "bottom" },
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+
+    const workspace = createSessionWorkspaceProps(state);
+    expect(workspace.dock).toBe("bottom");
+
+    workspace.onSetDock("right");
+    expect(createSessionWorkspaceProps(state).dock).toBe("right");
+    expect(state.settings?.chatWorkspaceDock).toBe("right");
+  });
 });
 
 describe("session workspace artifacts", () => {

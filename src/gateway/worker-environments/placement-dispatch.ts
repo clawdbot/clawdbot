@@ -79,7 +79,7 @@ function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
   expectedEnvironmentId: string,
 ):
-  | { transport: "node"; environmentId: string; ownerEpoch: number }
+  | { transport: "node"; environmentId: string; ownerEpoch: number; bundleHash: string }
   | { transport: "ssh"; environmentId: string; ownerEpoch: number; bundleHash: string } {
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
@@ -92,12 +92,14 @@ function requireProvisionedEnvironment(
   if (
     environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
     !environment.sshEndpoint &&
-    !environment.bootstrapReceipt
+    environment.bootstrapReceipt?.installKind === "local" &&
+    supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
     return {
       transport: "node",
       environmentId: environment.environmentId,
       ownerEpoch: environment.ownerEpoch,
+      bundleHash: environment.bootstrapReceipt.bundleHash,
     };
   }
   if (
@@ -200,10 +202,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       const provisioned = requireProvisionedEnvironment(environment, expectedEnvironmentId);
       environmentId = provisioned.environmentId;
       ownerEpoch = provisioned.ownerEpoch;
-      if (provisioned.transport === "node") {
-        await environments.startTunnel({ environmentId, ownerEpoch });
-        throw new Error("Device worker transport unexpectedly started before launch support");
-      }
       placement = placements.transition({
         sessionId: request.sessionId,
         from: "provisioning",

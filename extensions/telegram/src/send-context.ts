@@ -7,6 +7,7 @@ import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-s
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -427,6 +428,7 @@ export async function withTelegramNativeQuoteFallback<T>(params: {
 export type TelegramApiContext = {
   cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
+  ownerAgentId: string;
   api: TelegramApi;
   clientOptionsLease?: TelegramClientOptionsLease | undefined;
 };
@@ -459,6 +461,7 @@ export function resolveTelegramApiContext(opts: {
   return {
     cfg,
     account,
+    ownerAgentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
     api,
     ...(clientOptionsLease ? { clientOptionsLease } : {}),
   };

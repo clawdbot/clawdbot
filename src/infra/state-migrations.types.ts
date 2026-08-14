@@ -7,6 +7,7 @@ import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-appro
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
+import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
 
 export type LegacyRescuePendingDetection = {
@@ -64,6 +65,7 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     preview: string[];
   };
+  sharedAuthStore: SharedAuthStoreMigrationDetection;
   worktrees: {
     hasLegacy: boolean;
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;

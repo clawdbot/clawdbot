@@ -8,6 +8,10 @@ import { resolveStateDir } from "../../config/paths.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import {
+  hashWorkerBundleManifest,
+  WORKER_BUNDLE_MANIFEST_VERSION,
+} from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
 import {
   collectWorkerBundleManifest,
@@ -15,7 +19,7 @@ import {
   type WorkerBundleManifestEntry,
 } from "./bundle-staging.js";
 
-export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
+export { WORKER_BUNDLE_MANIFEST_VERSION };
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
@@ -269,15 +273,6 @@ async function verifyPublishedNpmRelease(params: {
   } finally {
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   }
-}
-
-function hashWorkerBundleManifest(entries: readonly WorkerBundleManifestEntry[]): string {
-  const hash = createHash("sha256");
-  hash.update(`${WORKER_BUNDLE_MANIFEST_VERSION}\0`);
-  for (const entry of entries) {
-    hash.update(`${entry.path}\0${entry.mode.toString(8)}\0${entry.size}\0${entry.sha256}\0`);
-  }
-  return hash.digest("hex");
 }
 
 function manifestsMatch(

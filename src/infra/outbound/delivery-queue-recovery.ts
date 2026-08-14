@@ -345,13 +345,16 @@ async function applyRecoveryDeliveryAdmission(params: {
   stateDir?: string;
   logLabel: string;
 }): Promise<"allowed" | "failed" | "not_pending"> {
-  const admission = resolveDeferredDeliveryAdmission({
-    cfg: params.cfg,
-    channel: params.entry.channel,
-    to: params.entry.to,
-    accountId: params.entry.accountId,
-    phase: "recovery",
-  });
+  const admission = resolveDeferredDeliveryAdmission(
+    {
+      cfg: params.cfg,
+      channel: params.entry.channel,
+      to: params.entry.to,
+      accountId: params.entry.accountId,
+      phase: "recovery",
+    },
+    { agentId: params.entry.session?.agentId },
+  );
   if (admission.status === "allowed") {
     return "allowed";
   }
@@ -395,6 +398,7 @@ async function runUnknownSendTerminalCleanup(params: {
   const adapter = resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
+    agentId: params.entry.session?.agentId,
     allowBootstrap: true,
   });
   const cleanup = adapter?.durableFinal?.afterUnknownSendTerminal;
@@ -519,6 +523,7 @@ async function runReconciledSentCommitHooks(params: {
   const adapter = resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
+    agentId: params.entry.session?.agentId,
     allowBootstrap: true,
   });
   const afterCommit = adapter?.send?.lifecycle?.afterCommit;

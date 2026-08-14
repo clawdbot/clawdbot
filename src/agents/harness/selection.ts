@@ -134,6 +134,8 @@ type AgentHarnessSelectionDecision = {
     | "implicit_plugin_unavailable_openclaw"
     // Implicit Codex preference cannot reproduce the prepared transport, so OpenClaw handled it.
     | "implicit_plugin_unsupported_openclaw"
+    // The requested plugin declared OpenClaw as a lossless fallback for this prepared request.
+    | "plugin_declared_fallback_openclaw"
     // Provider-owned CLI runtime aliases have no agent harness plugin counterpart.
     | "cli_runtime_passthrough_openclaw"
     // Auto mode chose a registered plugin harness that supports the provider/model.
@@ -262,8 +264,8 @@ export function selectAgentHarnessForPreparedModelProviders(
   ) {
     return first?.harness ?? selectAgentHarness(selectionParams);
   }
-  // Only implicit/auto selection can produce different supported harnesses. One embedded
-  // runtime owns the complete retry set; explicit and pinned plugins fail during probing above.
+  // One embedded runtime owns the complete retry set. Auto selection and plugin-declared
+  // fallbacks may resolve individual prepared routes to different harnesses.
   return (
     decisions.find((decision) => decision.selectedHarnessId === "openclaw")?.harness ??
     createOpenClawAgentHarness()
@@ -312,7 +314,7 @@ function selectAgentHarnessDecision(
       } as AgentHarnessPolicy)
     : resolvedPolicy;
   // OpenClaw's built-in harness is intentionally not part of the plugin candidate list. Explicit plugin
-  // runtimes fail closed; only `auto` may route an unmatched turn to OpenClaw.
+  // runtimes fail closed unless the selected plugin declares OpenClaw as a lossless fallback.
   const pluginHarnesses = listPluginAgentHarnesses();
   const openClawHarness = createOpenClawAgentHarness();
   const runtime = policy.runtime;
@@ -364,6 +366,14 @@ function selectAgentHarnessDecision(
           harness: forced,
           policy,
           selectedReason: "forced_plugin",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
+      if (support.fallbackRuntime === "openclaw") {
+        return buildSelectionDecision({
+          harness: openClawHarness,
+          policy: { ...policy, runtime: "openclaw" },
+          selectedReason: "plugin_declared_fallback_openclaw",
           candidates: listHarnessCandidates(pluginHarnesses),
         });
       }

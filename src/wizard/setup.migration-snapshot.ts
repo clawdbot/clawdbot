@@ -29,7 +29,6 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
   "skills",
 ] as const;
 const IMPORT_BLOCKING_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
-const MIGRATION_TARGET_STATE_ENTRIES = [...IMPORT_BLOCKING_STATE_ENTRIES, "state"] as const;
 
 export class SetupTargetLockedError extends Error {
   readonly code = "setup_target_locked";
@@ -254,7 +253,7 @@ export async function buildSetupMigrationTargetSnapshot(params: {
   const targetConfig = buildSetupMigrationSnapshotConfig(params.config);
   hash.update(`config:${JSON.stringify(canonicalizeSetupMigrationValue(targetConfig))}\0`);
   await hashTargetPath(hash, params.workspaceDir, "workspace");
-  for (const entry of MIGRATION_TARGET_STATE_ENTRIES) {
+  for (const entry of IMPORT_BLOCKING_STATE_ENTRIES) {
     await hashTargetPath(hash, path.join(params.stateDir, entry), `state/${entry}`);
   }
   return hash.digest("hex");
@@ -306,7 +305,9 @@ export async function prepareSetupMigrationAttemptBoundary(params: {
     workspaceDir: params.workspaceDir,
   });
   if (currentTargetSnapshotHash !== params.expectedTargetSnapshotHash) {
-    throw new Error("Migration target changed while preparing the import. Review it and retry.");
+    throw new SetupMigrationTargetChangedError(
+      "Migration target changed while preparing the import. Review it and retry.",
+    );
   }
   const sourceSnapshotHash = await buildSetupMigrationPlanSourceSnapshot(params.plan);
   if (sourceSnapshotHash !== params.expectedSourceSnapshotHash) {
@@ -378,3 +379,4 @@ export function assertFreshSetupMigrationTarget(freshness: {
 }
 
 export class SetupMigrationFreshnessError extends Error {}
+export class SetupMigrationTargetChangedError extends Error {}

@@ -9,6 +9,7 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "packages/normalization-core/**"
       - "scripts/generate-npm-package-lock.mjs"
       - "scripts/generate-npm-package-lock.mts"
       - "scripts/lib/npm-publish-plan.mjs"
@@ -340,7 +341,9 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
-          sparse-checkout: scripts
+          sparse-checkout: |
+            packages/normalization-core
+            scripts
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

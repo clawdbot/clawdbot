@@ -8,6 +8,7 @@ import {
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 
@@ -44,8 +45,13 @@ export function renderChatPaneComposerControls(params: {
   agentDefaultModel: string | undefined;
   modelAccess: SessionMethodAccess;
   effortAccess: SessionMethodAccess;
+  onModelSetup: () => void;
 }) {
-  const { state, selectedSession, agentDefaultModel, modelAccess, effortAccess } = params;
+  const { state, selectedSession, agentDefaultModel, modelAccess, effortAccess, onModelSetup } =
+    params;
+  const hasModelSnapshot =
+    state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
+  const refreshModelCatalog = () => refreshChatModelCatalogOnDemand(state);
   return html`
     <div class="chat-composer-model-control">
       ${renderChatModelControls({
@@ -55,6 +61,17 @@ export function renderChatPaneComposerControls(params: {
         gatewayAvailable: Boolean(state.client),
         loading: state.chatLoading,
         modelCatalog: state.chatModelCatalog,
+        modelCatalogState: {
+          hasSnapshot: hasModelSnapshot,
+          onRetry: () => void refreshModelCatalog(),
+          status: state.chatModelCatalogError
+            ? "error"
+            : state.chatModelsLoading
+              ? hasModelSnapshot
+                ? "refreshing"
+                : "loading"
+              : "ready",
+        },
         modelOverrides: state.sessions.state.modelOverrides,
         modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
         modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
@@ -67,10 +84,12 @@ export function renderChatPaneComposerControls(params: {
         sessionsResult: state.sessionsResult,
         stream: state.chatStream,
         onRequestUpdate: () => state.requestUpdate?.(),
+        onModelSetup,
         onFastModeSelect: (next, targetSessionKey) =>
           effortAccess.allowed
             ? switchChatFastMode(state, next, targetSessionKey)
             : Promise.resolve(false),
+        onModelPickerOpen: refreshModelCatalog,
         onModelSelect: (next, targetSessionKey) =>
           modelAccess.allowed
             ? switchChatModel(state, next, targetSessionKey)

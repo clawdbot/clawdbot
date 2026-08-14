@@ -38,6 +38,7 @@ type GatewayRequestContextParams = {
   sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
+  getPortalService?: () => GatewayRequestContext["portalService"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
@@ -85,6 +86,7 @@ type GatewayRequestContextParams = {
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   hostDesktopService?: GatewayRequestContext["hostDesktopService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
+  workerPlacementDiskSpaceReader?: GatewayRequestContext["workerPlacementDiskSpaceReader"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
@@ -187,6 +189,9 @@ export function createGatewayRequestContext(
     notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,
+    get portalService() {
+      return params.getPortalService?.();
+    },
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
@@ -379,6 +384,9 @@ export function createGatewayRequestContext(
     ...(params.hostDesktopService ? { hostDesktopService: params.hostDesktopService } : {}),
     ...(params.workerSessionPlacementService
       ? { workerSessionPlacementService: params.workerSessionPlacementService }
+      : {}),
+    ...(params.workerPlacementDiskSpaceReader
+      ? { workerPlacementDiskSpaceReader: params.workerPlacementDiskSpaceReader }
       : {}),
     validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     ...(params.workerPlacementDispatchService

@@ -4,10 +4,20 @@ import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import type { WorkerLaunchPlan } from "../worker/launch-descriptor.js";
+import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import {
+  nodeWorkerPlanHash,
+  type NodeWorkerLaunchInput,
+  type NodeWorkerSupervisorIdentity,
+} from "./node-worker-supervisor-contract.js";
 
 const TEST_BUNDLE_HASH = "a".repeat(64);
 export const TEST_WORKER_CREDENTIAL = 'node worker/"credential\\secret?';
+export const TEST_WORKER_ENDPOINT: WorkerConnectionEndpoint = {
+  kind: "unix",
+  socketPath: "/tmp/openclaw-worker/gateway.sock",
+};
 
 export const TEST_WORKER_SOURCE = String.raw`
 import fs from "node:fs";
@@ -124,13 +134,9 @@ if (mode === "wait") {
 }
 `;
 
-export function testWorkerDescriptor(
-  workspaceDir: string,
-  prompt = "success",
-): WorkerLaunchDescriptor {
+export function testWorkerDescriptor(workspaceDir: string, prompt = "success"): WorkerLaunchPlan {
   return {
     version: 3,
-    connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
     admission: {
       environmentId: "environment-1",
       credential: TEST_WORKER_CREDENTIAL,
@@ -162,6 +168,20 @@ export function testWorkerDescriptor(
   };
 }
 
+export function testNodeWorkerLaunchIdentity(
+  input: NodeWorkerLaunchInput,
+): NodeWorkerSupervisorIdentity {
+  return {
+    launchId: input.launchId,
+    planHash: nodeWorkerPlanHash(input),
+    environmentId: input.descriptor.admission.environmentId,
+    sessionId: input.descriptor.admission.sessionId,
+    ownerEpoch: input.descriptor.admission.ownerEpoch,
+    placementGeneration: input.placementGeneration,
+    runId: input.descriptor.assignment.runId,
+  };
+}
+
 export function writeNodeWorkerFixture(root: string) {
   const stateDir = path.join(root, "state-root");
   const bundleRoot = path.join(root, "bundles-root");
@@ -173,11 +193,16 @@ export function writeNodeWorkerFixture(root: string) {
   return { bundleRoot, env: { OPENCLAW_STATE_DIR: stateDir }, root, stateDir, workspaceDir };
 }
 
-export function testWorkerLaunchInput(workspaceDir: string, launchId: string, prompt = "success") {
+export function testWorkerLaunchInput(
+  workspaceDir: string,
+  launchId: string,
+  prompt = "success",
+): NodeWorkerLaunchInput {
   return {
     launchId,
     gatewayNamespace: "gateway-1",
-    bundleHash: TEST_BUNDLE_HASH,
+    installKind: "bundle",
+    expectedBundleHash: TEST_BUNDLE_HASH,
     placementGeneration: 4,
     descriptor: testWorkerDescriptor(workspaceDir, prompt),
   };

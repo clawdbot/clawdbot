@@ -6,6 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
@@ -15,6 +17,10 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-registry.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -739,6 +745,7 @@ afterEach(() => {
   pluginDoctorStateMigrationEntries.entries = [];
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -812,13 +819,63 @@ describe("state migrations", () => {
     const writer = new DatabaseSync(databasePath);
     writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
     try {
+      const cfg = createConfig();
+      cfg.agents = { list: [{ id: "main" }] };
       await expect(
-        autoMigrateLegacyState({ cfg: createConfig(), env, homedir: () => root }),
+        autoMigrateLegacyState({ cfg, env, homedir: () => root }),
       ).resolves.toMatchObject({ changes: [], warnings: [] });
     } finally {
       writer.exec("ROLLBACK;");
       writer.close();
     }
+  });
+
+  it("runs legacy-main session migration when the other automatic detectors are empty", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        writeSessionEntry(
+          database,
+          "agent:main:chat",
+          { sessionId: "legacy-main-session", updatedAt: 100 },
+          { allowStoredAliases: true, previousEntry: null },
+        );
+      },
+      { agentId: "main", env },
+    );
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const source = runOpenClawAgentWriteTransaction(
+      (database) => readExactSessionEntryRowForCanonicalRepair(database, "agent:main:chat"),
+      { agentId: "main", env },
+    );
+    const destination = runOpenClawAgentWriteTransaction(
+      (database) => readExactSessionEntryRowForCanonicalRepair(database, "agent:worker-1:chat"),
+      { agentId: "worker-1", env },
+    );
+
+    expect(result.changes).toContain("Migrated legacy main session claim agent:worker-1:chat.");
+    expect(source).toBeUndefined();
+    expect(destination?.entry.sessionId).toBe("legacy-main-session");
+  });
+
+  it("reports unresolved legacy-main ownership as a nonblocking automatic notice", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    };
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([
+      expect.stringContaining("legacy main rows have no unambiguous configured owner"),
+    ]);
   });
 
   it("detects no plugin-state migration warnings after the startup lease creates fresh state", async () => {

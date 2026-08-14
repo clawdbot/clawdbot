@@ -144,7 +144,7 @@ type ChatDetailContent =
   | FileSidebarContent
   | SessionDiffSidebarContent;
 
-export type SidebarContent = ChatDetailContent | { kind: "subagent"; taskId: string };
+export type SidebarContent = ChatDetailContent | { kind: "task"; taskId: string };
 
 function hasFullMessageRequest(content: ChatDetailContent): content is ChatDetailContent & {
   fullMessageRequest: SidebarFullMessageRequest;

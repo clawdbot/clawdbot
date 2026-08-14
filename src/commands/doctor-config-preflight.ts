@@ -44,6 +44,7 @@ import {
   refreshStartupPluginQuarantine,
   runStartupUpgradeConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
+import * as cronMigration from "./doctor-config-preflight.cron.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
@@ -55,23 +56,6 @@ const loadDoctorStateMigrations = createLazyRuntimeModule(
 const loadLegacyCronRepair = createLazyRuntimeModule(
   () => import("./doctor/cron/legacy-repair.js"),
 );
-
-function withLegacyCronWebhook(
-  config: OpenClawConfig,
-  legacyConfig: OpenClawConfig | undefined,
-): OpenClawConfig {
-  const legacyCron = legacyConfig?.cron as Record<string, unknown> | undefined;
-  if (!legacyCron || !Object.hasOwn(legacyCron, "webhook")) {
-    return config;
-  }
-  return {
-    ...config,
-    cron: {
-      ...config.cron,
-      webhook: legacyCron.webhook,
-    },
-  } as OpenClawConfig;
-}
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
@@ -218,7 +202,7 @@ export async function runDoctorConfigPreflight(
   const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
   const migrationCheckpointRequired =
     gatewayStartupCheckpointRequired || options.requireStateMigrationCheckpoint === true;
-  const migrationCheckpoint = migrationCheckpointRequired
+  let migrationCheckpoint = migrationCheckpointRequired
     ? await measurePreflightStep(
         "startup-checkpoint-import",
         () => import("../infra/startup-migration-checkpoint.js"),
@@ -341,6 +325,11 @@ export async function runDoctorConfigPreflight(
       );
       skipPristineStartupStateMigrations = pristineStatePlan.skipAllStateMigrations;
       skipPristineCoreStateMigrations ||= pristineStatePlan.skipCoreStateMigrations;
+    }
+    if (skipPristineStartupStateMigrations && !gatewayStartupCheckpointRequired) {
+      // A pristine non-Gateway command has nothing to checkpoint. Leave the state root absent
+      // until command execution reaches a real state consumer.
+      migrationCheckpoint = undefined;
     }
     // The gateway uses this last-moment guard to ensure its prepared config did not change before
     // any automatic migration mutates state. A rejected guard skips every state migration stage.
@@ -495,11 +484,18 @@ export async function runDoctorConfigPreflight(
         autoMigrateLegacyState,
         autoMigrateLegacyPluginDoctorState,
         autoMigrateLegacyTaskStateSidecars,
+        migrateLegacyConfigMachineState,
       } = stateMigrations;
       if (stateMigrationInput) {
         const pluginDoctorOnlyConfig =
           stateMigrationInput.pluginDoctorConfig ?? stateMigrationInput.cfg;
-        if (skipPristineCoreStateMigrations && pluginDoctorOnlyConfig) {
+        // Retired cron.store selects a persisted SQLite partition. Preserve it in machine state
+        // before config repair removes the only custom-partition evidence.
+        if (
+          skipPristineCoreStateMigrations &&
+          pluginDoctorOnlyConfig &&
+          !cronMigration.retainStoreConfig(pluginDoctorOnlyConfig)
+        ) {
           // Core state is absent, but plugin paths may own external migration state.
           // Keep their doctor owner active without loading channel/session detectors.
           noteStartupStateMigrationResult(
@@ -524,7 +520,7 @@ export async function runDoctorConfigPreflight(
           } = await measurePreflightStep("cron-repair-import", loadLegacyCronRepair);
           const cronResult = await measurePreflightStep("cron-repair", () =>
             repairLegacyCronStoreWithoutPrompt({
-              cfg: withLegacyCronWebhook(migrationConfig, pluginDoctorConfig),
+              cfg: cronMigration.withLegacyConfig(migrationConfig, pluginDoctorConfig),
               migrateCodexModelRefs: false,
             }),
           );
@@ -553,6 +549,26 @@ export async function runDoctorConfigPreflight(
           noteStartupStateMigrationResult(legacyStateResult);
         } else if (stateMigrationInput.pluginDoctorConfig) {
           const pluginDoctorConfig = stateMigrationInput.pluginDoctorConfig;
+          const cronMigrationConfig = cronMigration.retainStoreConfig(pluginDoctorConfig);
+          if (cronMigrationConfig) {
+            // A partially valid config cannot drive general core migrations, but its retired
+            // cron.store is still the sole authority for selecting and preserving that partition.
+            const { repairLegacyCronStoreWithoutPrompt } = await measurePreflightStep(
+              "cron-repair-import",
+              loadLegacyCronRepair,
+            );
+            noteStartupStateMigrationResult(
+              await measurePreflightStep("cron-repair", () =>
+                repairLegacyCronStoreWithoutPrompt({
+                  cfg: cronMigrationConfig,
+                  migrateCodexModelRefs: false,
+                }),
+              ),
+            );
+            noteStartupStateMigrationResult(
+              migrateLegacyConfigMachineState({ config: pluginDoctorConfig, env: process.env }),
+            );
+          }
           noteStartupStateMigrationResult(
             await measurePreflightStep("plugin-doctor-migrations", () =>
               runWithPluginMetadataSnapshot({ config: pluginDoctorConfig }, () =>
@@ -661,23 +677,21 @@ export async function runDoctorConfigPreflight(
       });
     }
     if (gatewayStartupCheckpointRequired) {
-      if (shouldRecordStartupCheckpoint) {
-        if (startupMigrationWarnings.length > 0) {
-          throwStartupMigrationRefusal(
-            formatStartupMigrationFailure({
-              warnings: startupMigrationWarnings,
-              blockers: [],
-            }),
-          );
-        }
-        if (!snapshot.valid) {
-          throwStartupMigrationRefusal(
-            formatStartupMigrationFailure({
-              warnings: [],
-              blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-            }),
-          );
-        }
+      if (startupMigrationWarnings.length > 0) {
+        throwStartupMigrationRefusal(
+          formatStartupMigrationFailure({
+            warnings: startupMigrationWarnings,
+            blockers: [],
+          }),
+        );
+      }
+      if (shouldRecordStartupCheckpoint && !snapshot.valid) {
+        throwStartupMigrationRefusal(
+          formatStartupMigrationFailure({
+            warnings: [],
+            blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
+          }),
+        );
       }
       // This state is established before the first Gateway plugin load and remains
       // fixed for the boot. Refresh it on every process start because migration

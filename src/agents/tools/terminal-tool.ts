@@ -82,18 +82,21 @@ type TerminalToolOptions = {
   agentId?: string;
   agentSessionKey?: string;
   runId?: string;
-  lookupTaskByRunId?: (
+  lookupTaskByRunIdForChildSession?: (
     runId: string,
+    childSessionKey: string,
   ) => Promise<Pick<TaskRecord, "taskId" | "status" | "childSessionKey"> | undefined>;
   callGateway?: InProcessGatewayCaller;
   getGatewayContext?: () => TerminalToolGatewayContext | undefined;
 };
 
-async function lookupTaskByRunId(
+async function lookupTaskByRunIdForChildSession(
   runId: string,
+  childSessionKey: string,
 ): Promise<Pick<TaskRecord, "taskId" | "status" | "childSessionKey"> | undefined> {
-  const { findTaskByRunIdForStatus } = await import("../../tasks/task-status-access.js");
-  return findTaskByRunIdForStatus(runId);
+  const { findTaskByRunIdForChildSessionForStatus } =
+    await import("../../tasks/task-status-access.js");
+  return findTaskByRunIdForChildSessionForStatus(runId, childSessionKey);
 }
 
 function readDimension(
@@ -155,13 +158,16 @@ function launchBlockMessage(
   if (block.kind === "unknown-agent") {
     return `unknown agent: ${block.agentId}`;
   }
+  if (block.kind === "owner-required") {
+    return block.message;
+  }
   return `terminal unavailable: agent sandboxed (${block.mode})`;
 }
 
 export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool {
   const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   const getContext = opts.getGatewayContext ?? getInProcessGatewayToolContext;
-  const findOwnerTask = opts.lookupTaskByRunId ?? lookupTaskByRunId;
+  const findOwnerTask = opts.lookupTaskByRunIdForChildSession ?? lookupTaskByRunIdForChildSession;
   return {
     label: "Terminal",
     name: "terminal",
@@ -206,9 +212,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         });
         const runId = opts.runId?.trim();
         const taskLookupId = runId ? (getAgentRunTaskRunId(runId) ?? runId) : undefined;
-        const candidateTask = taskLookupId ? await findOwnerTask(taskLookupId) : undefined;
-        const task =
-          candidateTask?.childSessionKey?.trim() === agentSessionKey ? candidateTask : undefined;
+        const task = taskLookupId ? await findOwnerTask(taskLookupId, agentSessionKey) : undefined;
         if (task && isTerminalTaskStatus(task.status)) {
           throw new ToolInputError("terminal task already ended");
         }

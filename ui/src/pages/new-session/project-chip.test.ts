@@ -63,6 +63,26 @@ describe("What chip state", () => {
     },
   );
 
+  it("omits project recents already shown in the project list", () => {
+    const folderRecent = {
+      kind: "folder" as const,
+      folder: "/workspace/scratch",
+      displayName: "scratch",
+    };
+    const state = resolveProjectChip({
+      folder: "",
+      workspace: "/workspace",
+      projectId: "",
+      selectedRemoteProject: null,
+      projects,
+      recents: [{ kind: "project", projectId: "openclaw", displayName: "OpenClaw" }, folderRecent],
+      projectQuery: "",
+      execNode: "",
+    });
+
+    expect(state.recents).toEqual([folderRecent]);
+  });
+
   it.each([
     ["https://github.com/openclaw/openclaw.git", true],
     ["git@github.com:openclaw/openclaw.git", true],

@@ -124,11 +124,22 @@ async function resolveServiceLoadedOrFail(params: {
   serviceNoun: string;
   service: GatewayService;
   fail: ReturnType<typeof createDaemonActionContext>["fail"];
+  acceptInstalledDefinition?: boolean;
 }): Promise<boolean | null> {
   // Returning null keeps failure emission centralized in the caller's action context.
   try {
     return await params.service.isLoaded({ env: process.env });
   } catch (err) {
+    if (params.acceptInstalledDefinition) {
+      // The adapter owns platform-specific install discovery; systemd spans
+      // user, system, marker-owned, and dueling definitions.
+      const installed = params.service.hasInstalledDefinition
+        ? await params.service.hasInstalledDefinition({ env: process.env }).catch(() => false)
+        : Boolean(await params.service.readCommand(process.env).catch(() => null));
+      if (installed) {
+        return true;
+      }
+    }
     params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;
   }
@@ -514,6 +525,7 @@ export async function runServiceRestart(params: {
     serviceNoun: params.serviceNoun,
     service: params.service,
     fail,
+    acceptInstalledDefinition: true,
   });
   if (loaded === null) {
     return false;
@@ -679,21 +691,11 @@ export async function runServiceRestart(params: {
         }
       }
     }
-    let restarted = loaded;
-    if (loaded) {
-      try {
-        restarted = await params.service.isLoaded({ env: process.env });
-      } catch {
-        restarted = true;
-      }
-    } else if (recoveredLoadedState !== null) {
-      restarted = recoveredLoadedState;
-    }
     emit({
       ok: true,
       result: "restarted",
       message: handledRecovery?.message ?? handledRepair?.message,
-      service: buildDaemonServiceSnapshot(params.service, restarted),
+      service: buildDaemonServiceSnapshot(params.service, loaded || recoveredLoadedState === true),
       warnings: warnings.length ? warnings : undefined,
     });
     const actionMessage = handledRecovery?.message ?? handledRepair?.message;

@@ -1205,11 +1205,7 @@ describe("sessions tools", () => {
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });
-      expect(calls.map((call) => call.method)).toEqual([
-        "sessions.resolve",
-        "sessions.list",
-        "agent",
-      ]);
+      expect(calls.map((call) => call.method)).toEqual(["agent"]);
     } finally {
       unregister();
       fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -26,12 +27,8 @@ describe("device worker placement dispatch", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("provisions the environment and surfaces the honest transport gate", async () => {
+  it("provisions, syncs, and activates a local-install device environment", async () => {
     const harness = createHarness(placementStore);
-    const transportError = Object.assign(
-      new Error("device-runner-transport-unimplemented: launch is pending"),
-      { code: "device-runner-transport-unimplemented" },
-    );
     vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
       ...harness.ready,
       providerId: "device",
@@ -39,11 +36,15 @@ describe("device worker placement dispatch", () => {
       profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
       leaseId: "device-lease-1",
       sshEndpoint: null,
-      bootstrapReceipt: null,
+      bootstrapReceipt: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.12",
+        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        installKind: "local",
+      },
       sharedHost: true,
       tunnelStatus: "stopped",
     });
-    vi.mocked(harness.environments.startTunnel).mockRejectedValue(transportError);
     const request = {
       ...REQUEST,
       profileId: "device:device-1",
@@ -54,8 +55,10 @@ describe("device worker placement dispatch", () => {
       },
     };
 
-    await expect(harness.service.dispatch(request)).rejects.toMatchObject({
-      code: "device-runner-transport-unimplemented",
+    await expect(harness.service.dispatch(request)).resolves.toMatchObject({
+      state: "active",
+      workerBundleHash: "a".repeat(64),
+      remoteWorkspaceDir: "/worker/workspace",
     });
 
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
@@ -64,13 +67,14 @@ describe("device worker placement dispatch", () => {
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
+      ownerEpoch: expect.any(Number),
+    });
+    expect(harness.environments.attachSession).toHaveBeenCalledWith({
+      environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
     });
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.destroy).toHaveBeenCalledWith(harness.ready.environmentId);
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining("device-runner-transport-unimplemented"),
-    });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
   });
 });

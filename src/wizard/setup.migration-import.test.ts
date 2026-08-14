@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSetupMigrationOptions } from "./setup.migration-import.js";
 import {
   assertFreshSetupMigrationTarget,
+  buildSetupMigrationTargetSnapshot,
   inspectSetupMigrationFreshness,
   preserveSetupMigrationSecurityAcknowledgement,
 } from "./setup.migration-snapshot.js";
@@ -55,6 +56,27 @@ describe("setup migration import freshness", () => {
     });
 
     expect(result).toEqual({ fresh: true, reasons: [] });
+  });
+
+  it("ignores runtime state churn while still detecting workspace changes", async () => {
+    const root = tempRoots.make("openclaw-setup-migration-");
+    const stateDir = path.join(root, "state");
+    const workspaceDir = path.join(root, "workspace");
+    const initial = await buildSetupMigrationTargetSnapshot({
+      config: {},
+      stateDir,
+      workspaceDir,
+    });
+
+    await writeFile(path.join(stateDir, "state", "openclaw.sqlite"), "runtime database\n");
+    expect(await buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir })).toBe(
+      initial,
+    );
+
+    await writeFile(path.join(workspaceDir, "external.txt"), "concurrent write\n");
+    expect(
+      await buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir }),
+    ).not.toBe(initial);
   });
 
   it("preserves the first-launch acknowledgement across the lock-time config reread", () => {

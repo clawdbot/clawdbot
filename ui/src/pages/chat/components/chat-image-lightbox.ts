@@ -4,6 +4,14 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 
+export function isImageLightboxEvent(event: Event): boolean {
+  return event
+    .composedPath()
+    .some(
+      (target) => target instanceof HTMLElement && target.localName === "openclaw-image-lightbox",
+    );
+}
+
 export function inlineChatImageFromEvent(event: Event): HTMLImageElement | null {
   const target = event
     .composedPath()

@@ -206,7 +206,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
   return {
     targetAgentId: "main",
     targetMainKey: "main",
-    targetScope: undefined,
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
     deviceAuth: {
@@ -266,6 +265,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
     stateSchema: {
       hasLegacy: false,
       preview: [],
+    },
+    sharedAuthStore: {
+      sourcePath: "/tmp/state/agents/main/agent/openclaw-agent.sqlite",
+      hasLegacy: false,
     },
     worktrees: { hasLegacy: false, pathRewrites: [] },
     taskStateSidecars: {

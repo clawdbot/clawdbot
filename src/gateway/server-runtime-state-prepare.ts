@@ -162,8 +162,13 @@ export async function prepareGatewayKernelState(params: {
           });
         })
       : {};
-  const { workerEnvironmentService, workerLiveEvents, bindDeviceNodeRegistry } =
-    workerEnvironmentRuntime;
+  const {
+    workerEnvironmentService,
+    workerLiveEvents,
+    bindDeviceNodeControl,
+    bindNodeWorkspaceBindingResolver,
+    handleNodeWorkspaceTransferRequest,
+  } = workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
     revoke: (_params: { sessionId: string; sessionKeys: readonly string[] }): void => {
@@ -184,6 +189,7 @@ export async function prepareGatewayKernelState(params: {
         })
       : undefined;
   if (workerPlacementRuntime) {
+    bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
       workerPlacementRuntime.dispatchService.dispatch,
     );
@@ -450,6 +456,7 @@ export async function prepareGatewayKernelState(params: {
     getStartup,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+    handleNodeWorkspaceTransferRequest,
     workerIngressEnabled: Boolean(workerEnvironmentService),
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
@@ -478,7 +485,7 @@ export async function prepareGatewayKernelState(params: {
     pluginRuntime,
     workerEnvironmentService,
     workerLiveEvents,
-    bindDeviceNodeRegistry,
+    bindDeviceNodeControl,
     workerDispatchAuthority,
     workerPlacementRuntime,
     workerPlacementControlAvailable,
@@ -556,6 +563,7 @@ export async function prepareGatewayKernelState(params: {
     getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
     getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
+    getPortalService: transportBridge.getPortalService,
     workerGatewayEndpoint,
   };
 }

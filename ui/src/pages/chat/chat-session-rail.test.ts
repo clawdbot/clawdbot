@@ -58,7 +58,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
       taskIds: new Set<string>(),
       nextExpiryAt: null,
     },
-    view: { kind: "list" },
     taskDetails: new Map(),
     taskDetailErrors: new Map(),
     taskDetailLoadingIds: new Set(),
@@ -68,9 +67,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
     onToggleFinished: () => {},
     onRefresh: () => {},
     onCancel: () => {},
-    onSelectTask: () => {},
-    onBack: () => {},
-    onOpenTranscript: () => {},
   };
 }
 
@@ -562,6 +558,17 @@ describe("ChatSessionRailElement", () => {
       ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
+  });
+
+  it("keeps the ticking rail section out of screen-reader live regions", async () => {
+    const element = await mount();
+    const section = element.querySelector(".chat-session-rail--expanded");
+    // The section wraps a 1Hz elapsed clock; aria-live here would announce
+    // every tick. The message thread owns the polite region instead.
+    expect(section?.hasAttribute("aria-live")).toBe(false);
+    expect(element.querySelector(".chat-session-rail__thread")?.getAttribute("aria-live")).toBe(
+      "polite",
+    );
   });
 
   it("does not reopen or report visible after hide when an automatic open arrives", async () => {
