@@ -11,8 +11,8 @@ import {
   loadPendingSessionDeliveries,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
+  enqueueSessionDelivery,
 } from "./session-delivery-queue-storage.js";
-import { enqueueSessionDelivery } from "./session-delivery-queue.js";
 
 describe("session-delivery queue storage", () => {
   async function settleSessionDelivery(id: string, stateDir: string): Promise<void> {

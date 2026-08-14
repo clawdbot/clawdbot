@@ -119,6 +119,7 @@ export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
@@ -170,24 +171,38 @@ export async function runSubagentAnnounceFlow(params: {
   let childSessionLifecycleRevision: string | undefined;
   try {
     const sessionEntryCache = new Map<string, ReturnType<typeof loadSessionEntryByKey>>();
-    const requesterEntryCache = new Map<string, ReturnType<typeof loadRequesterSessionEntry>>();
+    const requesterEntryCache = new Map<
+      string,
+      Map<string, ReturnType<typeof loadRequesterSessionEntry>>
+    >();
     const readSessionEntryByKey = (sessionKey: string, options?: { refresh?: boolean }) => {
       if (options?.refresh || !sessionEntryCache.has(sessionKey)) {
         sessionEntryCache.set(sessionKey, loadSessionEntryByKey(sessionKey));
       }
       return sessionEntryCache.get(sessionKey);
     };
-    const readRequesterSessionEntry = (sessionKey: string, options?: { refresh?: boolean }) => {
-      if (options?.refresh || !requesterEntryCache.has(sessionKey)) {
-        requesterEntryCache.set(sessionKey, loadRequesterSessionEntry(sessionKey));
+    const readRequesterSessionEntry = (
+      sessionKey: string,
+      agentId?: string,
+      options?: { refresh?: boolean },
+    ) => {
+      let entriesByAgent = requesterEntryCache.get(sessionKey);
+      if (!entriesByAgent) {
+        entriesByAgent = new Map();
+        requesterEntryCache.set(sessionKey, entriesByAgent);
       }
-      return requesterEntryCache.get(sessionKey)!;
+      const ownerKey = agentId ?? "";
+      if (options?.refresh || !entriesByAgent.has(ownerKey)) {
+        entriesByAgent.set(ownerKey, loadRequesterSessionEntry(sessionKey, agentId));
+      }
+      return entriesByAgent.get(ownerKey)!;
     };
     const invalidateSessionEntry = (sessionKey: string) => {
       sessionEntryCache.delete(sessionKey);
       requesterEntryCache.delete(sessionKey);
     };
     let targetRequesterSessionKey = params.requesterSessionKey;
+    let targetRequesterAgentId = params.requesterAgentId;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
     const childSessionEntry = !childSessionEffectsAllowed()
       ? undefined
@@ -242,7 +257,10 @@ export async function runSubagentAnnounceFlow(params: {
       childSessionEffectsAllowed() &&
       params.childRunId.startsWith("continuation-delegate-") &&
       isDelegateArtifactReturnConfigured(params.childRunId);
-    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
+      cfg: subagentAnnounceDeps.getRuntimeConfig(),
+      agentId: targetRequesterAgentId,
+    });
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
     // Keep this aligned with the targeted-return router. Any explicit target,
@@ -281,9 +299,13 @@ export async function runSubagentAnnounceFlow(params: {
               return "retryable";
             }
             targetRequesterSessionKey = fallback.requesterSessionKey;
+            targetRequesterAgentId = fallback.requesterAgentId;
             targetRequesterOrigin =
               normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-            requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+            requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
+              cfg: subagentAnnounceDeps.getRuntimeConfig(),
+              agentId: targetRequesterAgentId,
+            });
           }
         }
       }
@@ -629,7 +651,10 @@ export async function runSubagentAnnounceFlow(params: {
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
     if (!requesterIsSubagent) {
-      const { entry } = readRequesterSessionEntry(targetRequesterSessionKey);
+      const { entry } = readRequesterSessionEntry(
+        targetRequesterSessionKey,
+        targetRequesterAgentId,
+      );
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
     const candidateCompletionDirectOrigin =
@@ -659,6 +684,7 @@ export async function runSubagentAnnounceFlow(params: {
     };
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
+      requesterAgentId: targetRequesterAgentId,
       announceId,
       triggerMessage,
       steerMessage: triggerMessage,

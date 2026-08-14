@@ -5,9 +5,11 @@ import { settleCorrelatedSubagentDelivery } from "../agents/subagents/completion
 import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   clearRestartSentinelIfRevision,
@@ -20,14 +22,19 @@ import {
 } from "../infra/restart-sentinel.js";
 import {
   drainPendingSessionDeliveries,
+  recoverPendingSessionDeliveries,
+  type SessionDeliveryRecoveryLogger,
+  type SettleSessionDeliveryFn,
+} from "../infra/session-delivery-queue-recovery.js";
+import {
   enqueueSessionDelivery,
   loadPendingSessionDelivery,
-  recoverPendingSessionDeliveries,
+  type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
-  type SettleSessionDeliveryFn,
-  type SessionDeliveryRecoveryLogger,
   type SessionDeliveryRoute,
-} from "../infra/session-delivery-queue.js";
+} from "../infra/session-delivery-queue-storage.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -39,7 +46,7 @@ import {
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 import {
-  deliverQueuedSessionDelivery,
+  deliverQueuedSessionDelivery as deliverQueuedSessionDeliveryCore,
   isRestartContinuationBusyRetry,
 } from "./server-restart-sentinel-delivery.js";
 import {
@@ -48,7 +55,6 @@ import {
 } from "./server-restart-sentinel-notice.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
-export { deliverQueuedSessionDelivery };
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
@@ -56,6 +62,51 @@ const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 20;
 const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = process.env.VITEST ? 1 : 2_000;
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
+
+type AgentOwnedQueuedSystemEventFields = {
+  agentId?: string;
+  awaitPromptAdoption?: boolean;
+  expectedSessionId?: string;
+  managedDelegateArtifactDelivery?: unknown;
+  traceparent?: string;
+};
+
+export async function deliverQueuedSessionDelivery(params: {
+  deps: CliDeps;
+  entry: QueuedSessionDelivery;
+  stateDir?: string;
+}) {
+  const entry = params.entry as QueuedSessionDelivery & AgentOwnedQueuedSystemEventFields;
+  // Only owner-tagged targetless wakes bypass the fork delivery owner. Session-bound or
+  // managed rows stay on the claim-validating path so restart cannot widen their authority.
+  if (
+    entry.kind !== "systemEvent" ||
+    !entry.agentId ||
+    entry.expectedSessionId ||
+    entry.managedDelegateArtifactDelivery
+  ) {
+    return deliverQueuedSessionDeliveryCore(params);
+  }
+
+  const { canonicalKey } = loadSessionEntry(entry.sessionKey);
+  const eventOptions = {
+    sessionKey: canonicalKey,
+    trusted: true,
+    ...(entry.awaitPromptAdoption ? { sessionDeliveryAwaitsTurnAdoption: true } : {}),
+    ...(entry.deliveryContext ? { deliveryContext: entry.deliveryContext } : {}),
+    ...(entry.traceparent ? { traceparent: entry.traceparent } : {}),
+    sessionDeliveryAckId: entry.id,
+    ...(params.stateDir ? { sessionDeliveryAckStateDir: params.stateDir } : {}),
+  };
+  enqueueSystemEvent(entry.text, withSystemEventOwner(eventOptions, entry.agentId));
+  requestHeartbeat({
+    source: "restart-sentinel",
+    intent: "immediate",
+    reason: "wake",
+    agentId: entry.agentId,
+    sessionKey: canonicalKey,
+  });
+}
 
 /** Settles every queue entry through its durable producer before cron cleanup. */
 export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (entry, outcome) => {
@@ -117,6 +168,7 @@ function resolveRestartContinuationRoute(params: {
 
 function buildQueuedRestartContinuation(params: {
   sessionKey: string;
+  agentId?: string;
   continuation: RestartSentinelContinuation;
   route?: SessionDeliveryRoute;
   expectedSessionId?: string | undefined;
@@ -140,13 +192,14 @@ function buildQueuedRestartContinuation(params: {
     return {
       kind: "systemEvent",
       sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       text: params.continuation.text,
       ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
       ...(params.continuation.traceparent ? { traceparent: params.continuation.traceparent } : {}),
       idempotencyKey,
       maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
       completionRetention: "permanent",
-    };
+    } as QueuedSessionDeliveryPayload;
   }
   return {
     kind: "agentTurn",
@@ -280,10 +333,12 @@ async function loadRestartSentinelStartupTask(params: {
         }
         return { status: "ran" as const };
       }
-      const mainSessionKey = resolveMainSessionKeyFromConfig();
+      const systemTarget = resolveSystemMainSessionTarget(getRuntimeConfig());
+      const mainSessionKey = systemTarget.sessionKey;
       const wakeQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
           sessionKey: mainSessionKey,
+          agentId: systemTarget.agentId,
           continuation: { kind: "systemEvent", text: message },
           revision: sentinelRevision,
           idempotencyKey: `restart-sentinel-wake:${mainSessionKey}:${sentinelRevision}`,

@@ -190,10 +190,18 @@ describe("resolveVitestIsolation", () => {
       find: "@openclaw/retry",
       replacement: path.join(process.cwd(), "packages", "retry", "src", "index.ts"),
     });
-  });
-
-  it("defaults shared scoped configs to the non-isolated runner", () => {
-    expect(resolveVitestIsolation({})).toBe(false);
+    expect(
+      findAlias(sharedVitestConfig.resolve.alias, "@openclaw/gateway-client/scope-upgrade"),
+    ).toEqual({
+      find: "@openclaw/gateway-client/scope-upgrade",
+      replacement: path.join(
+        process.cwd(),
+        "packages",
+        "gateway-client",
+        "src",
+        "scope-upgrade.ts",
+      ),
+    });
   });
 
   it("ignores the legacy isolation escape hatches", () => {

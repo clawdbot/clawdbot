@@ -18,11 +18,15 @@ import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-li
 import { defaultSlotIdForKey } from "./slots.js";
 import {
   isUninstallPathInsideOrEqual,
-  removePluginFromConfig,
   resolveComparableUninstallPath,
   type PluginConfigUninstallActions,
 } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
+import {
+  removePluginInstallOwnerFromConfig,
+  removePluginRuntimePolicyFromConfig,
+} from "./uninstall-package-config.js";
+import { resolvePluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 
 export { resolveUninstallChannelConfigKeys } from "./uninstall-config.js";
 
@@ -58,26 +62,6 @@ export function formatUninstallActionLabels(actions: UninstallActions): string[]
   return UNINSTALL_ACTION_ORDER.flatMap((key) =>
     actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
   );
-}
-
-/** Keep a staged plugin disabled until its managed directory is removed. */
-export function prepareConfigForPendingPluginDirectoryRemoval(
-  config: OpenClawConfig,
-  pluginId: string,
-): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: {
-        ...config.plugins?.entries,
-        [pluginId]: {
-          ...config.plugins?.entries?.[pluginId],
-          enabled: false,
-        },
-      },
-    },
-  };
 }
 
 function hasUninstallAction(actions: PluginConfigUninstallActions): boolean {
@@ -321,6 +305,7 @@ function isLinkedPathInstallRecord(installRecord: PluginInstallRecord | undefine
 
 type UninstallPluginParams = {
   config: OpenClawConfig;
+  /** Package install-record key whose record and shared directory are removed once. */
   pluginId: string;
   channelIds?: string[];
   deleteFiles?: boolean;
@@ -334,18 +319,43 @@ type UninstallPluginParams = {
  */
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
+  const packagePlan = resolvePluginPackageUninstallPlan(params);
+  const runtimePluginIds = packagePlan?.runtimePluginIds ?? [pluginId];
 
   const entries = config.plugins?.entries ?? {};
   const installs = config.plugins?.installs ?? {};
-  const hasEntry = Object.hasOwn(entries, pluginId);
+  const hasEntry = runtimePluginIds.some((entryId) => Object.hasOwn(entries, entryId));
   const hasInstall = Object.hasOwn(installs, pluginId);
   const installRecord = hasInstall ? installs[pluginId] : undefined;
   const isLinked = isLinkedPathInstallRecord(installRecord);
 
-  // Remove from config
-  const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId, {
-    channelIds,
-  });
+  // Package lifecycle removes every child policy while the owner record/directory is handled once.
+  let newConfig = config;
+  const configActions: PluginConfigUninstallActions = {
+    entry: false,
+    install: false,
+    allowlist: false,
+    denylist: false,
+    loadPath: false,
+    memorySlot: false,
+    contextEngineSlot: false,
+    channelConfig: false,
+  };
+  for (const configPluginId of new Set(runtimePluginIds)) {
+    const removal = removePluginRuntimePolicyFromConfig(newConfig, configPluginId, {
+      channelIds,
+      loadPaths: packagePlan?.runtimeLoadPaths ? [...packagePlan.runtimeLoadPaths] : undefined,
+    });
+    newConfig = removal.config;
+    for (const key of Object.keys(configActions) as Array<keyof PluginConfigUninstallActions>) {
+      configActions[key] ||= removal.actions[key];
+    }
+  }
+  const ownerRemoval = removePluginInstallOwnerFromConfig(newConfig, pluginId);
+  newConfig = ownerRemoval.config;
+  for (const key of Object.keys(configActions) as Array<keyof PluginConfigUninstallActions>) {
+    configActions[key] ||= ownerRemoval.actions[key];
+  }
 
   if (!hasEntry && !hasInstall && !hasUninstallAction(configActions)) {
     return { ok: false, error: `Plugin not found: ${pluginId}` };

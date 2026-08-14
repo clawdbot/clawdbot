@@ -1,5 +1,6 @@
 import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { readClawManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName, portableClawPathKey } from "./schema-portability.js";
@@ -282,7 +283,7 @@ export async function validateClawProject(
         diagnostic(
           error instanceof ClawProjectError ? error.code : "project_discovery_failed",
           "$",
-          error instanceof Error ? error.message : String(error),
+          coerceErrorMessage(error),
         ),
       ],
     };
@@ -434,7 +435,7 @@ export async function validateClawProject(
         diagnostic(
           error instanceof ClawProjectError ? error.code : "project_enumeration_failed",
           "$",
-          error instanceof Error ? error.message : String(error),
+          coerceErrorMessage(error),
         ),
       ],
     };

@@ -28,6 +28,7 @@ type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "sin
 function resolveAvailableKnownChannel(params: {
   cfg: OpenClawConfig;
   value?: string | null;
+  agentId?: string;
 }): { channel: string; plugin: ChannelPlugin } | undefined {
   const normalized = normalizeDeliverableOutboundChannel(params.value);
   if (!normalized) {
@@ -45,6 +46,7 @@ function resolveAvailableKnownChannel(params: {
   const plugin = resolveOutboundChannelPlugin({
     channel: normalized,
     cfg: params.cfg,
+    agentId: params.agentId,
     allowBootstrap: true,
   });
   return plugin ? { channel: normalized, plugin } : undefined;
@@ -200,6 +202,7 @@ export async function resolveMessageChannelSelection(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   fallbackChannel?: string | null;
+  agentId?: string;
 }): Promise<{
   channel: string;
   plugin: ChannelPlugin;
@@ -211,11 +214,13 @@ export async function resolveMessageChannelSelection(params: {
     const availableExplicit = resolveAvailableKnownChannel({
       cfg: params.cfg,
       value: params.channel,
+      agentId: params.agentId,
     });
     if (!availableExplicit) {
       const fallback = resolveAvailableKnownChannel({
         cfg: params.cfg,
         value: params.fallbackChannel,
+        agentId: params.agentId,
       });
       if (fallback) {
         return {
@@ -250,6 +255,7 @@ export async function resolveMessageChannelSelection(params: {
   const fallback = resolveAvailableKnownChannel({
     cfg: params.cfg,
     value: params.fallbackChannel,
+    agentId: params.agentId,
   });
   if (fallback) {
     return {

@@ -97,6 +97,42 @@ describe("plugin node-host registry", () => {
     ]);
   });
 
+  it("publishes a validated Computer Use descriptor beside its command pair", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "computer",
+        pluginName: "Computer",
+        command: {
+          command: "computer.act",
+          cap: "computer",
+          computerUse: () => ({
+            contractVersion: 2,
+            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+            actions: ["screenshot", "left_click"],
+            targets: ["screen"],
+            deliveryModes: ["foreground"],
+            observations: ["image"],
+            features: { recording: false, agentCursor: false, multiDisplay: false },
+          }),
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toMatchObject({
+      caps: ["computer"],
+      commands: ["computer.act"],
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", generation: "generation-1" },
+        actions: ["screenshot", "left_click"],
+      },
+    });
+  });
+
   it("skips agent tool descriptors with provider-unsafe names", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [

@@ -22,6 +22,16 @@ struct SkillManagementTests {
         #expect(review.author == "Molly")
     }
 
+    @Test func `same-slug results keep separate publisher references`() throws {
+        let data = Data(
+            #"{"results":[{"slug":"email","installRef":"@alice/email","displayName":"Email"},{"slug":"email","installRef":"@bob/email","displayName":"Email"},{"slug":"orphan","displayName":"Orphan"}]}"#
+                .utf8)
+        let search = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data)
+
+        #expect(search.results.map(\.reference) == ["@alice/email", "@bob/email", "orphan"])
+        #expect(search.results.map(\.id) == ["@alice/email", "@bob/email", "orphan"])
+    }
+
     @Test func `risk acknowledgement stays bound to reviewed version`() {
         let matching = GatewayResponseError(
             method: "skills.install",

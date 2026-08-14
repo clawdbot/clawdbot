@@ -97,15 +97,25 @@ const PROBE_CASES = [
   { path: "/healthz", status: "live" },
   { path: "/ready", status: "ready" },
   { path: "/readyz", status: "ready" },
+  { path: "/startup", status: "started" },
+  { path: "/startupz", status: "started" },
 ] as const;
 
 async function expectProbeRoutesHealthy(server: Parameters<typeof sendRequest>[0]) {
   for (const probeCase of PROBE_CASES) {
     const response = await sendRequest(server, { path: probeCase.path });
     expect(response.res.statusCode, probeCase.path).toBe(200);
-    expect(response.getBody(), probeCase.path).toBe(
-      JSON.stringify({ ok: true, status: probeCase.status }),
-    );
+    const body = JSON.parse(response.getBody());
+    if (probeCase.status === "started") {
+      expect(body, probeCase.path).toMatchObject({
+        ok: true,
+        status: "started",
+        version: expect.any(String),
+        uptimeMs: expect.any(Number),
+      });
+    } else {
+      expect(body, probeCase.path).toEqual({ ok: true, status: probeCase.status });
+    }
   }
 }
 

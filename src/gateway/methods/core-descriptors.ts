@@ -17,12 +17,13 @@ type CoreGatewayMethodSpec = {
   startup?: true;
   controlPlaneWrite?: true;
   compatibilityRestored?: true;
+  description?: string;
 };
 
 type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
-  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored"
+  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
 >;
 type CoreGatewayMethodSpecRow = readonly [
   name: string,
@@ -235,6 +236,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Params-aware plus state-aware: the handler permits write-scoped cwd only
   // inside configured agent workspaces; execNode and other privileged modes stay admin.
   ["sessions.create", "sessions-create", "dynamic", "<=2026.7", { startup: true }],
+  ["sessions.recover", "sessions-recover", "operator.write", "2026.8", { startup: true }],
   ["sessions.send", "sessions-messaging", "operator.write", "<=2026.7", { startup: true }],
   ["sessions.abort", "sessions-abort", "operator.write", "<=2026.7", { startup: true }],
   // Dynamic mutation scope policy, including write-scoped model overrides, lives
@@ -280,6 +282,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["node.pluginSurface.refresh", "nodes", "node", "<=2026.7"],
   ["node.pluginTools.update", "nodes", "node", "<=2026.7"],
   ["node.skills.update", "nodes", "node", "<=2026.7"],
+  ["node.runnerInventory.update", "nodes", "node", "2026.8", { advertise: false }],
   ["node.pending.drain", "nodes-pending", "node", "<=2026.7"],
   ["node.pending.enqueue", "nodes-pending", "operator.write", "<=2026.7"],
   // Params-aware: host-sensitive commands raise direct invocation from write to admin.
@@ -505,6 +508,22 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Self-scoped preferences append so every older advertised index remains stable.
   ["users.prefs.get", "users", "operator.read", "2026.8"],
   ["users.prefs.set", "users", "operator.write", "2026.8"],
+  ["projects.add", "projects", "operator.write", "2026.8", { controlPlaneWrite: true }],
+  [
+    "projects.searchRemote",
+    "projects",
+    "operator.read",
+    "2026.8",
+    { description: "Search GitHub repositories that can be cloned as managed projects." },
+  ],
+  ["desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
+  ["desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
+  // Live device scope upgrades are additive so every older advertised index stays stable.
+  ["device.scopes.requestUpgrade", "devices", "operator.read", "2026.8"],
+  ["device.scopes.waitUpgrade", "devices", "operator.read", "2026.8"],
+  ["portal.list", "portals", "operator.read", "2026.8"],
+  ["portal.open", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
+  ["portal.close", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
@@ -527,6 +546,9 @@ const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
     }
     if (normalizedPolicy?.compatibilityRestored === true) {
       spec.compatibilityRestored = true;
+    }
+    if (normalizedPolicy?.description) {
+      spec.description = normalizedPolicy.description;
     }
     return spec;
   });
@@ -624,6 +646,7 @@ export function createCoreGatewayMethodDescriptors(
       ...(spec.advertise === false ? { advertise: false } : {}),
       ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),
       ...(spec.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
+      ...(spec.description ? { description: spec.description } : {}),
     });
   }
   for (const name of Object.keys(handlers)) {

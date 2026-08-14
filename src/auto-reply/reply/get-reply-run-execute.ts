@@ -12,6 +12,11 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
+import {
+  attachToolAllowlistIntersection,
+  readToolAllowlistIntersection,
+} from "../../agents/tool-policy.js";
+import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
@@ -21,6 +26,7 @@ import {
   resolvePersistedUserTurnText,
 } from "../../sessions/user-turn-transcript.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -28,6 +34,7 @@ import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
 import {
   buildPersistedMediaImageLayout,
   normalizeMessageTimestampMs,
+  suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -207,7 +214,17 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
-  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
+  const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
+  const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
+    unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
+  );
+  const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
+  const inboundMediaIndexes = buildInboundMediaNoteProjection(ctx).mediaIndexes ?? [];
+  const promptMediaForRun = suppressUnresolvedPromptMedia({
+    promptMedia: promptMedia ?? [],
+    inboundMediaIndexes,
+    unresolvedSourceIndexes,
+  });
   const mediaImageLayout = buildPersistedMediaImageLayout({
     ctx,
     media: userTurnMediaForPersistence,
@@ -335,6 +352,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     effectiveTurnAdoptionLifecycle === opts?.turnAdoptionLifecycle
       ? opts
       : { ...opts, turnAdoptionLifecycle: effectiveTurnAdoptionLifecycle };
+  const queuedToolsAllow = opts?.toolsAllow ? [...opts.toolsAllow] : opts?.toolsAllow;
+  const queuedToolIntersections = opts?.toolsAllow
+    ? readToolAllowlistIntersection(opts.toolsAllow)
+    : undefined;
+  if (queuedToolsAllow && queuedToolIntersections) {
+    attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
+  }
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -342,7 +366,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     currentInboundEventKind: inboundEventKind,
     ...(userTurnTimestamp ? { currentInboundEventTimestampMs: userTurnTimestamp } : {}),
     currentInboundAudio: hasInboundAudio(sessionCtx),
+    channelAdmissionEvidence:
+      readChannelContextAdmissionEvidence(ctx) ?? readChannelContextAdmissionEvidence(sessionCtx),
     currentInboundContext,
+    explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: effectiveTurnAdoptionLifecycle,
@@ -352,10 +379,12 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
+    ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
+    ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
-    media: promptMedia,
+    media: promptMediaForRun,
     // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
@@ -386,6 +415,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+      memberRoleIds: Array.isArray(sessionCtx.MemberRoleIds)
+        ? sessionCtx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
+            (roleId): roleId is string => Boolean(roleId),
+          )
+        : undefined,
       // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
       spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),

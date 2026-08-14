@@ -4,18 +4,17 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   completeSessionDelivery,
+  enqueueClaimedSessionDelivery,
   enqueuePostCompactionDelegateDelivery,
+  enqueueSessionDelivery,
+  failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
+  releaseSessionDeliveryClaim,
   type QueuedSessionDeliveryPayload,
 } from "./session-delivery-queue-storage.js";
-import {
-  enqueueClaimedSessionDelivery,
-  enqueueSessionDelivery,
-  releaseSessionDeliveryClaim,
-} from "./session-delivery-queue.js";
 
 describe("session-delivery queue storage", () => {
   async function settleSessionDelivery(id: string, stateDir: string): Promise<void> {
@@ -164,10 +163,8 @@ describe("session-delivery queue storage", () => {
           attachments: [widenedRef],
         },
       ];
-
       for (const payload of payloads) {
         const id = await enqueueSessionDelivery(payload, tempDir);
-        await moveSessionDeliveryToFailed(id, tempDir);
         const row = readSessionQueueRow(tempDir, id);
         expect(row?.entry_json).not.toContain(secret);
         expect(JSON.parse(row?.entry_json ?? "{}")).toMatchObject({
@@ -398,7 +395,7 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("lets an explicit enqueue revive a failed idempotency key", async () => {
+  it("lets an explicit enqueue replace a deleted ordinary failure", async () => {
     await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
         kind: "systemEvent" as const,
@@ -458,28 +455,25 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("atomically repairs unreadable pending JSON for an idempotent enqueue", async () => {
+  it("persists retry metadata and retains acked idempotency tombstones", async () => {
     await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      const payload = {
-        kind: "systemEvent" as const,
-        sessionKey: "agent:main:main",
-        text: "restart complete",
-        idempotencyKey: "restart:repair-corrupt-pending",
-      };
-      const id = await enqueueSessionDelivery(payload, tempDir);
-      const { db } = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-      });
-      db.prepare(
-        `UPDATE delivery_queue_entries
-            SET entry_json = '{corrupt'
-          WHERE queue_name = 'session' AND id = ?`,
-      ).run(id);
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "restart complete",
+        },
+        tempDir,
+      );
 
-      expect(await enqueueSessionDelivery(payload, tempDir)).toBe(id);
-      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
-        expect.objectContaining({ id, text: "restart complete" }),
-      ]);
+      await failSessionDelivery(id, "dispatch failed", tempDir);
+      const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
+      expect(failedEntry?.retryCount).toBe(1);
+      expect(failedEntry?.lastError).toBe("dispatch failed");
+
+      await settleSessionDelivery(id, tempDir);
+      expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
+      expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
     });
   });
 
@@ -1057,8 +1051,10 @@ describe("session-delivery queue storage", () => {
         expect(JSON.parse(row.entry_json)).toEqual({
           id,
           enqueuedAt: expect.any(Number),
+          failedAt: expect.any(Number),
           retryCount: 0,
-          lastError: "invalid postCompactionDelegate delivery payload: invalid shape",
+          completionRetention: "permanent",
+          recoveryState: "completed_permanent",
         });
       }
     });

@@ -4,6 +4,7 @@ import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
 } from "../../agents/agent-lifecycle-registry.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   type CronActiveJobMarker,
   isCronJobActive,
@@ -11,6 +12,7 @@ import {
   noteActiveCronJobScheduleMutation,
   noteActiveCronJobTriggerMutation,
   onCronJobInactive,
+  requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -37,6 +39,7 @@ import {
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
+import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
 import type {
   CronAddResult,
   CronAddOptions,
@@ -186,11 +189,23 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  await persistOrRestore(state, snapshot, { suppressScheduledJobId: nextJob.id });
+  const defaultAgentId = resolveCurrentDefaultAgentId(state);
+  const ownerChanged =
+    resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
+    resolveEffectiveJobAgentId(nextJob, defaultAgentId);
+  await persistOrRestore(state, snapshot, {
+    suppressScheduledJobId: nextJob.id,
+    transactionHooks: ownerChanged
+      ? cronRunReceiptOwnerMutationHooks({ state, jobId: nextJob.id })
+      : undefined,
+  });
   if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
     noteActiveCronJobScheduleMutation(nextJob.id);
+  }
+  if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+    requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
   }
   if (
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
@@ -372,8 +387,16 @@ export async function add(
     if (normalizedId && state.store?.jobs.some((job) => job.id === normalizedId)) {
       throw new Error(`cron job already exists: ${normalizedId}`);
     }
+    const explicitOwnerAgentId =
+      normalizeOptionalAgentId(normalizedInput.agentId) ??
+      parseAgentSessionKey(normalizeOptionalString(normalizedInput.sessionKey))?.agentId;
+    const retainedLegacyAgentId = normalizeOptionalAgentId(state.deps.legacyDefaultAgentId);
+    const creationInput =
+      !explicitOwnerAgentId && retainedLegacyAgentId === agentId
+        ? { ...normalizedInput, agentId }
+        : normalizedInput;
     const snapshot = snapshotStoreForRollback(state);
-    const job = createJob(state, normalizedInput, {
+    const job = createJob(state, creationInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
@@ -438,7 +461,7 @@ export async function removeStaleJobFamily(
   });
 }
 
-export async function updateLoadedJob(params: {
+async function updateLoadedJob(params: {
   state: CronServiceState;
   id: string;
   patch: CronJobPatch;

@@ -1,4 +1,6 @@
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
+import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
+import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
@@ -18,16 +20,65 @@ import {
 import {
   prepareHeartbeatRunStage,
   resolveHeartbeatWakeStage,
+  type HeartbeatDeps,
   type HeartbeatRunOptions,
+  type PreparedHeartbeatRun,
+  type ReadyHeartbeatWake,
 } from "./heartbeat-runner-execution.js";
-import { invokeHeartbeatAgentRun } from "./heartbeat-runner-invoke.js";
+import {
+  invokeHeartbeatAgentRun as invokeHeartbeatAgentRunInternal,
+} from "./heartbeat-runner-invoke.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import type { HeartbeatRunResult } from "./heartbeat-wake-contracts.js";
-import { HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_PREEMPTED,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+} from "./heartbeat-wake.js";
 import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 
 const log = heartbeatLog;
+
+class HeartbeatAgentRunPreemptedError extends Error {}
+
+async function invokeHeartbeatAgentRun(
+  opts: HeartbeatRunOptions,
+  wake: ReadyHeartbeatWake,
+  prepared: PreparedHeartbeatRun,
+) {
+  const getReplyFromConfig =
+    opts.deps?.getReplyFromConfig ??
+    (await import("./heartbeat-runner.runtime.js")).getReplyFromConfig;
+  const trackedGetReplyFromConfig: NonNullable<HeartbeatDeps["getReplyFromConfig"]> = async (
+    ...args
+  ) => {
+    const result = await getReplyFromConfig(...args);
+    if (resolveReplyOperationAgentTurn(resolveReplyOperationRunState(args[1])) === "superseded") {
+      // Stop before the relocated invoke stage can persist scratch or classify
+      // a source reply owned by the visible turn that superseded this heartbeat.
+      throw new HeartbeatAgentRunPreemptedError();
+    }
+    return result;
+  };
+  try {
+    return await invokeHeartbeatAgentRunInternal(
+      {
+        ...opts,
+        deps: {
+          ...opts.deps,
+          getReplyFromConfig: trackedGetReplyFromConfig,
+        } as HeartbeatDeps,
+      },
+      wake,
+      prepared,
+    );
+  } catch (error) {
+    if (error instanceof HeartbeatAgentRunPreemptedError) {
+      return { kind: "preempted" } as const;
+    }
+    throw error;
+  }
+}
 
 export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
   const wake = await resolveHeartbeatWakeStage(opts);
@@ -147,6 +198,14 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         durationMs: Date.now() - startedAt,
       });
       return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+    }
+    if (agentRun.kind === "preempted") {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_PREEMPTED,
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED };
     }
     const outcome = classifyHeartbeatAgentOutcome({
       agentRun,

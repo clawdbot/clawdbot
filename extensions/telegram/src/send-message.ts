@@ -68,7 +68,7 @@ async function sendMessageTelegramWithContext(
   opts: TelegramSendOpts,
   apiContext: TelegramApiContext,
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api } = apiContext;
+  const { cfg, account, api, ownerAgentId } = apiContext;
   const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
   const {
     chatId,
@@ -111,6 +111,7 @@ async function sendMessageTelegramWithContext(
     const projection = plan?.cursor.take(plan.finalPart && finalPart);
     const recorded = await recordOutboundMessageForPromptContext({
       cfg,
+      ownerAgentId,
       account,
       ...(botUserId !== undefined ? { botUserId } : {}),
       chatId,
@@ -165,6 +166,7 @@ async function sendMessageTelegramWithContext(
 
   const { sendChunkedText } = createTelegramTextSender({
     cfg,
+    ownerAgentId,
     account,
     api,
     chatId,
@@ -336,7 +338,10 @@ async function sendMessageTelegramWithContext(
     const acceptedMediaParams = toAcceptedThreadScopedParams(mediaDelivery.acceptedParams);
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
-    recordSentMessage(chatId, mediaMessageId, cfg);
+    recordSentMessage(chatId, mediaMessageId, cfg, {
+      accountId: account.accountId,
+      agentId: ownerAgentId,
+    });
     let mediaDeliveryResult: TelegramSendResult | undefined;
     let mediaPromptRecorded = false;
     const reportMediaDelivery = async (hasInlineKeyboard: boolean) => {

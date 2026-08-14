@@ -12,6 +12,7 @@ const sharedClientMocks = vi.hoisted(() => ({
 
 vi.mock("./src/app-server/shared-client.js", () => ({
   createIsolatedCodexAppServerClient: sharedClientMocks.createIsolatedCodexAppServerClient,
+  retireSharedCodexAppServerClientIfCurrent: () => undefined,
 }));
 
 function codexModel(inputModalities: string[] = ["text", "image"]) {

@@ -89,17 +89,21 @@ suite.define(() => {
     await expandCompletedWorkGroups(page);
 
     expect(await page.locator(".chat-tool-msg-summary__label").allTextContents()).toEqual([
-      "Tool error",
+      "Tool output",
       "Tool output",
     ]);
-    // The earlier failure must stay visibly marked as an error even though a
-    // later turn recovered; the recovered row must render neutral.
+    // Each failure keeps only its per-call badge even when its turn later
+    // recovers; both row summaries otherwise render neutral.
     const summaryClasses = await page
       .locator(".chat-tool-msg-summary")
       .evaluateAll((nodes) => nodes.map((node) => node.className));
     expect(summaryClasses).toHaveLength(2);
-    expect(summaryClasses[0]).toContain("chat-tool-msg-summary--error");
+    expect(summaryClasses[0]).not.toContain("chat-tool-msg-summary--error");
     expect(summaryClasses[1]).not.toContain("chat-tool-msg-summary--error");
+    expect(await page.locator(".chat-tool-row__badge").allTextContents()).toEqual([
+      "failed",
+      "failed",
+    ]);
     await context.close();
   });
 

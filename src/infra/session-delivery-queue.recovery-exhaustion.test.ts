@@ -9,15 +9,15 @@ vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 import {
   buildPostCompactionDelegateDeliveryPayload,
+  enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
   markSessionDeliveryAttemptStarted,
 } from "./session-delivery-queue-storage.js";
 import {
   drainPendingSessionDeliveries,
-  enqueueSessionDelivery,
   recoverPendingSessionDeliveries,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-recovery.js";
 
 describe("session-delivery queue recovery", () => {
   beforeEach(() => {
@@ -72,7 +72,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it.each(["runtime", "startup"] as const)(
-    "scrubs post-compaction snapshots after %s retry exhaustion",
+    "removes post-compaction snapshots after %s retry exhaustion",
     async (mode) => {
       await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
         const secret = `POST_COMPACTION_EXHAUSTED_${mode}`;
@@ -108,15 +108,7 @@ describe("session-delivery queue recovery", () => {
         }
 
         expect(deliver).not.toHaveBeenCalled();
-        const row = readSessionQueueRow(tempDir, id);
-        expect(row?.status).toBe("failed");
-        expect(row?.entry_json).not.toContain(secret);
-        if (!row) {
-          throw new Error(`Expected failed session delivery row ${id}`);
-        }
-        const failedEntry = JSON.parse(row.entry_json) as Record<string, unknown>;
-        expect(failedEntry).not.toHaveProperty("attachments");
-        expect(failedEntry).not.toHaveProperty("attachAs");
+        expect(readSessionQueueRow(tempDir, id)).toBeUndefined();
       });
     },
   );

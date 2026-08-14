@@ -128,6 +128,7 @@ export type ConfigProps = {
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
   hiddenSessionCatalogIds: ReadonlySet<string>;
+  hiddenSessionCatalogLabels: ReadonlyMap<string, string>;
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;

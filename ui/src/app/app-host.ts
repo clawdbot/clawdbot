@@ -28,7 +28,6 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -65,6 +64,7 @@ import {
   COMMAND_PALETTE_ELEMENT,
   CUSTODIAN_PANEL_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
+  DEVICE_PAIR_SETUP_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   preloadOptionalElement,
   TERMINAL_PANEL_ELEMENT,
@@ -135,6 +135,7 @@ class OpenClawShell
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
+  readonly devicePairSetupElement = DEVICE_PAIR_SETUP_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
@@ -241,6 +242,10 @@ class OpenClawShell
       .watch(
         () => this.context?.navigation,
         (navigation, notify) => navigation.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agentSelection,
+        (selection, notify) => selection.subscribe(notify),
       )
       .watch(
         () => this.context?.gateway,
@@ -476,8 +481,6 @@ class OpenClawShell
     this.shellChrome.handleDeferredTerminalToggle(event);
   readonly handleDeferredBrowserToggle = (event: Event) =>
     this.shellChrome.handleDeferredBrowserToggle(event);
-  readonly handleDeferredCustodianToggle = (event: Event) =>
-    this.shellChrome.handleDeferredCustodianToggle(event);
   readonly handleCommandPaletteSlashCommand = (command: string) =>
     this.shellChrome.handleCommandPaletteSlashCommand(command);
 
@@ -524,8 +527,7 @@ class OpenClawShell
     }
     const gatewaySnapshot = context.gateway?.snapshot;
     if (gatewaySnapshot) {
-      const activeSessionRow = findUiSessionRow(context, this.activeSessionKey);
-      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot, activeSessionRow);
+      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
       if (this.commandPalette) {
         this.commandPalette.desktopAvailable = desktopAvailable;
       }
@@ -544,6 +546,9 @@ class OpenClawShell
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
       preloadOptionalElement(this, this.execApprovalElement);
+    }
+    if (context.overlays?.snapshot.devicePairSetupOpen) {
+      preloadOptionalElement(this, this.devicePairSetupElement);
     }
     const navState = {
       collapsed: this.nativeNavCollapsed(),

@@ -17,6 +17,7 @@ import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { logWarn } from "../logger.js";
 import type {
   PluginHookChannelContext,
@@ -30,6 +31,7 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -41,6 +43,7 @@ import {
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { listChannelAgentTools } from "./channel-tools.js";
@@ -110,29 +113,6 @@ import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-contex
 import type { RequestCompactionToolOpts } from "./tools/request-compaction-tool.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
-
-/** Resolve the process-tool isolation key for exec/process session state. */
-export function resolveProcessToolScopeKey(params: {
-  scopeKey?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-}): string | undefined {
-  const explicitScopeKey = params.scopeKey?.trim();
-  if (explicitScopeKey) {
-    return explicitScopeKey;
-  }
-  const sessionKey = params.sessionKey?.trim();
-  if (sessionKey) {
-    return sessionKey;
-  }
-  const sessionId = params.sessionId?.trim();
-  if (sessionId) {
-    return sessionId;
-  }
-  const agentId = params.agentId?.trim();
-  return agentId ? `agent:${agentId}` : undefined;
-}
 
 function applyModelProviderToolPolicy(
   toolsInput: AnyAgentTool[],
@@ -219,6 +199,8 @@ type OpenClawCodingToolsOptions = {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /** Exact admitted run instance for lifecycle-bound subprocess capabilities. */
+  operationalRunInstance?: OperationalRunInstanceRef;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
@@ -614,7 +596,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
       trigger: options?.trigger,
       node: options?.exec?.node ?? execConfig.node,
-      pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
+      pathPrepend: mergeGatewayAgentCliPath(options?.exec?.pathPrepend ?? execConfig.pathPrepend),
       safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
       strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
       commandHighlighting: options?.exec?.commandHighlighting ?? execConfig.commandHighlighting,
@@ -625,6 +607,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       scopeKey,
       sessionKey: options?.sessionKey,
       runId: options?.runId,
+      operationalRunInstance: options?.operationalRunInstance,
       // Detached completions return to the live session, not the sandbox policy scope.
       notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
       sessionId: options?.sessionId,

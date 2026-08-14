@@ -251,6 +251,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
   const replyUsageState = buildReplyUsageState({
     config: cfg,
+    agentDir: followupRun.run.agentDir,
     provider: providerUsed,
     model: modelUsed,
     fallbackExhausted,
@@ -362,12 +363,14 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     storePath,
     sessionKey,
     cfg,
+    agentDir: followupRun.run.agentDir,
     usage,
     lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
     compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
     promptTokens,
     isHeartbeat,
-    preserveRuntimeModel: fallbackExhausted,
+    preserveRuntimeModel:
+      fallbackExhausted || fallbackTransition.nextState.selectedModel !== undefined,
     preserveUserFacingSessionModelState: preserveUserFacingSessionState,
     modelUsed,
     providerUsed,

@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Audits channel configuration for exposure, auth, and trust risks.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -155,11 +156,6 @@ export async function collectChannelSecurityFindingsCore(params: {
     });
   };
 
-  const asAccountRecord = (value: unknown): Record<string, unknown> | null =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-
   const resolveChannelAuditAccount = async (
     plugin: (typeof params.plugins)[number],
     accountId: string,
@@ -207,7 +203,7 @@ export async function collectChannelSecurityFindingsCore(params: {
     );
     const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
     const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
-    const accountRecord = asAccountRecord(account);
+    const accountRecord = asNullableRecord(account);
     let enabled =
       typeof selectedInspection?.enabled === "boolean"
         ? selectedInspection.enabled

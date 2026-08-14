@@ -182,6 +182,7 @@ function createExecution(
   } = {},
 ): FollowupExecutionResult {
   return {
+    commentaryPayloadsEnabled: false,
     execution: {
       runId: "run-1",
       outcome: {
@@ -494,6 +495,7 @@ describe("accountFollowupTurn", () => {
       sessionKey: "main",
     } satisfies FollowupRunnerParams;
     const execution = {
+      commentaryPayloadsEnabled: false,
       execution: {
         runId: "run-1",
         outcome: {

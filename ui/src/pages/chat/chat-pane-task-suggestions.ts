@@ -13,7 +13,7 @@ import {
   taskSuggestionAcceptParams,
   type TaskSuggestionAcceptMode,
 } from "../../lib/task-suggestion-acceptance.ts";
-import { discoverCloudProfiles } from "../new-session/cloud-profile-discovery.ts";
+import { discoverPlaceCatalog } from "../new-session/cloud-profile-discovery.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 
@@ -49,7 +49,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     try {
-      const profiles = await discoverCloudProfiles(scope.client, true);
+      const { profiles } = await discoverPlaceCatalog(scope.client, true);
       if (!this.isConnectionScopeCurrent(scope)) {
         return;
       }

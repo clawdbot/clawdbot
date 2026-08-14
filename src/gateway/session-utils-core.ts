@@ -1,4 +1,7 @@
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   countActiveDescendantRuns,
@@ -79,7 +82,7 @@ export function deriveSessionTitle(
 }
 
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asPositiveFiniteNumber(value);
 }
 
 export function deriveSessionUnread(

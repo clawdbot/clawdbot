@@ -24,13 +24,6 @@ export const terminalPanelStyles = css`
   .tp--fullscreen {
     inset: 0;
   }
-  .tp-header {
-    background: var(--bg, #0e1015);
-  }
-  .tp-icon.is-active {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
-  }
   .tp-dock-modes {
     display: flex;
     align-items: center;

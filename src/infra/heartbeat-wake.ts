@@ -1,6 +1,6 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Tracks heartbeat wake requests, busy skips, and retry timing.
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   getWakeCoalesceKey,
   isUnscopedWakeTargetKey,
@@ -39,16 +39,22 @@ export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_LANES_BUSY = "lanes-busy";
 export const HEARTBEAT_SKIP_NO_PENDING_EVENT = "no-pending-event";
-const RETRYABLE_BUSY_SKIP_REASONS = new Set([
+export const HEARTBEAT_SKIP_PREEMPTED = "preempted";
+const RETRYABLE_HEARTBEAT_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
+  HEARTBEAT_SKIP_PREEMPTED,
 ]);
 const RETRYABLE_GUARD_SKIP_REASONS = new Set(["not-due", "min-spacing", "flood"]);
 
-export function isRetryableHeartbeatBusySkipReason(reason: string): boolean {
-  return RETRYABLE_BUSY_SKIP_REASONS.has(reason);
+export function isRetryableHeartbeatSkipReason(reason: string): boolean {
+  return RETRYABLE_HEARTBEAT_SKIP_REASONS.has(reason);
 }
+
+// Continuation dispatch shares this retry gate; preemption now joins the same
+// retained-work contract as the previously busy-only reasons.
+export const isRetryableHeartbeatBusySkipReason = isRetryableHeartbeatSkipReason;
 
 const TRUSTED_CONTINUATION_ROUTING_MARKER = Symbol("trustedContinuationRouting");
 
@@ -101,6 +107,7 @@ let wakeEnqueueSequence = 0;
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
+export const HEARTBEAT_IDLE_RETRY_GRACE_MS = 60_000;
 // Heartbeat turns can start model/provider work; bound cross-target fan-out so
 // one aligned monitor tick cannot exhaust gateway or provider capacity.
 const MAX_CONCURRENT_HEARTBEAT_WAKE_TARGETS = 4;
@@ -336,9 +343,36 @@ function queuePendingWakeReason(params: {
   pendingWakes.set(wakeTargetKey, group);
 }
 
-function retryPendingWake(pendingWake: PendingWakeReason) {
+function resolveHeartbeatRetrySchedule(
+  pendingWake: PendingWakeReason,
+  result: Extract<HeartbeatRunResult, { status: "skipped" }>,
+): { delayMs: number; deferWakeOnly: boolean } {
+  const now = Date.now();
+  const deferWakeOnly =
+    result.reason === HEARTBEAT_SKIP_PREEMPTED ||
+    (result.reason === HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT &&
+      (pendingWake.intent === "scheduled" || pendingWake.intent === "task"));
+  return {
+    delayMs:
+      result.retryAtMs !== undefined
+        ? Math.max(0, result.retryAtMs - now)
+        : deferWakeOnly
+          ? HEARTBEAT_IDLE_RETRY_GRACE_MS
+          : DEFAULT_RETRY_MS,
+    deferWakeOnly,
+  };
+}
+
+function retryPendingWake(
+  pendingWake: PendingWakeReason,
+  retrySchedule: { delayMs: number; deferWakeOnly: boolean } = {
+    delayMs: DEFAULT_RETRY_MS,
+    deferWakeOnly: false,
+  },
+) {
   // A thrown or busy wake owns only its target; replaying the whole batch
   // duplicates completed reminders and stalls unrelated agents.
+  const retryAtMs = Date.now() + retrySchedule.delayMs;
   queuePendingWakeReason({
     source: pendingWake.source,
     intent: pendingWake.intent,
@@ -354,9 +388,11 @@ function retryPendingWake(pendingWake: PendingWakeReason) {
     requestedAt: pendingWake.requestedAt,
     enqueueSequence: pendingWake.enqueueSequence,
     immediateBarrierSequence: pendingWake.immediateBarrierSequence,
-    blockTargetUntilMs: Date.now() + DEFAULT_RETRY_MS,
+    ...(retrySchedule.deferWakeOnly
+      ? { notBeforeMs: retryAtMs, guardRetry: true }
+      : { blockTargetUntilMs: retryAtMs, guardRetry: pendingWake.guardRetry }),
   });
-  schedule(DEFAULT_RETRY_MS);
+  schedule(retrySchedule.delayMs);
 }
 
 function handOffPendingWakeBatch(pendingBatch: PendingWakeReason[], startIndex: number) {
@@ -421,7 +457,7 @@ async function dispatchPendingWakeGroup(params: {
       if (handlerGeneration !== generation) {
         const retainWake =
           result.status === "skipped" &&
-          (isRetryableHeartbeatBusySkipReason(result.reason) ||
+          (isRetryableHeartbeatSkipReason(result.reason) ||
             (RETRYABLE_GUARD_SKIP_REASONS.has(result.reason) &&
               (pendingWake.tasks?.length ||
                 pendingWake.intent === "task" ||
@@ -430,8 +466,8 @@ async function dispatchPendingWakeGroup(params: {
         handOffPendingWakeBatch(wakes, wakeIndex + (retainWake ? 0 : 1));
         return;
       }
-      if (result.status === "skipped" && isRetryableHeartbeatBusySkipReason(result.reason)) {
-        retryPendingWake(pendingWake);
+      if (result.status === "skipped" && isRetryableHeartbeatSkipReason(result.reason)) {
+        retryPendingWake(pendingWake, resolveHeartbeatRetrySchedule(pendingWake, result));
       } else if (
         result.status === "skipped" &&
         RETRYABLE_GUARD_SKIP_REASONS.has(result.reason) &&

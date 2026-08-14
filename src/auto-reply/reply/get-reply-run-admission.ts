@@ -30,7 +30,10 @@ import {
   loadSessionUpdatesRuntime,
   routeThreadIdsMatch,
 } from "./get-reply-run-helpers.js";
-import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import {
+  REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
+  resolvePreparedReplyQueueState,
+} from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
@@ -52,6 +55,7 @@ import {
   prepareFormattedSystemEvents,
   type PreparedManagedSystemEventDelivery,
 } from "./session-system-events.js";
+import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -132,53 +136,55 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : !isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const drainedSystemEventBlocks: Array<{ key?: string; text: string }> = [];
-  const seenSystemEventBlockKeys = new Set<string>();
+  const drainedSystemEventBlocks: string[] = [];
   const managedSystemEventDeliveries = new Map<string, PreparedManagedSystemEventDelivery>();
-  const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime) {
-      for (const deliveryId of managedSystemEventDeliveries.keys()) {
-        const blockKey = `session-delivery:${deliveryId}`;
-        seenSystemEventBlockKeys.delete(blockKey);
-        for (let index = drainedSystemEventBlocks.length - 1; index >= 0; index -= 1) {
-          if (drainedSystemEventBlocks[index]?.key === blockKey) {
-            drainedSystemEventBlocks.splice(index, 1);
-          }
+  const drainSystemEventBlocks = async () => {
+    if (useFastReplyRuntime) {
+      return;
+    }
+    const routeSystemEventSessionKey = normalizeOptionalString(getReplySystemEventSessionKey(opts));
+    const systemEventSessionKeys =
+      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+        ? [routeSystemEventSessionKey, sessionKey]
+        : [sessionKey];
+    const preparedBySession: Awaited<ReturnType<typeof prepareFormattedSystemEvents>>[] = [];
+    for (const systemEventSessionKey of systemEventSessionKeys) {
+      const isCurrentSession = systemEventSessionKey === sessionKey;
+      preparedBySession.push(
+        await prepareFormattedSystemEvents({
+          cfg,
+          agentId,
+          sessionKey: systemEventSessionKey,
+          isMainSession: isCurrentSession && isMainSession,
+          isNewSession: isCurrentSession && isNewSession,
+          suppressHeartbeatOwnedEvents: context.isHeartbeat,
+        }),
+      );
+    }
+    const managedDeliveryIds = preparedBySession.flatMap((prepared) =>
+      prepared.managedDeliveries.map((delivery) => delivery.id),
+    );
+    const suppliedRecorderAccepted =
+      !opts?.userTurnTranscriptRecorder ||
+      opts.userTurnTranscriptRecorder.replaceSessionDeliveryAckIds?.(managedDeliveryIds) === true;
+    const deferredManagedBlockKeys = suppliedRecorderAccepted
+      ? undefined
+      : new Set(managedDeliveryIds.map((id) => `session-delivery:${id}`));
+    for (const prepared of preparedBySession) {
+      if (suppliedRecorderAccepted) {
+        for (const delivery of prepared.managedDeliveries) {
+          managedSystemEventDeliveries.set(delivery.id, delivery);
         }
       }
-      managedSystemEventDeliveries.clear();
-      const preparedEvents = await prepareFormattedSystemEvents({
-        cfg,
-        agentId,
-        sessionKey,
-        isMainSession,
-        isNewSession,
-        suppressHeartbeatOwnedEvents: context.isHeartbeat,
-      });
-      const managedDeliveryIds = preparedEvents.managedDeliveries.map((delivery) => delivery.id);
-      const suppliedRecorderAccepted =
-        !opts?.userTurnTranscriptRecorder ||
-        opts.userTurnTranscriptRecorder.replaceSessionDeliveryAckIds?.(managedDeliveryIds) === true;
-      const managedDeliveries = suppliedRecorderAccepted ? preparedEvents.managedDeliveries : [];
-      const deferredManagedBlockKeys = suppliedRecorderAccepted
-        ? undefined
-        : new Set(managedDeliveryIds.map((id) => `session-delivery:${id}`));
-      for (const delivery of managedDeliveries) {
-        managedSystemEventDeliveries.set(delivery.id, delivery);
-      }
-      for (const block of preparedEvents.blocks) {
+      for (const block of prepared.blocks) {
         if (block.key && deferredManagedBlockKeys?.has(block.key)) {
           continue;
         }
-        if (block.key) {
-          if (seenSystemEventBlockKeys.has(block.key)) {
-            continue;
-          }
-          seenSystemEventBlockKeys.add(block.key);
-        }
-        drainedSystemEventBlocks.push(block);
+        drainedSystemEventBlocks.push(block.text);
       }
     }
+  };
+  const rebuildPromptBodies = () => {
     const { activeGoalContext, inboundUserContext } = context.getInboundContext();
     return buildReplyPromptEnvelope({
       ctx,
@@ -197,7 +203,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       inboundEventKind,
       sourceReplyDeliveryMode,
       threadContextNote,
-      systemEventBlocks: drainedSystemEventBlocks.map((block) => block.text),
+      systemEventBlocks: drainedSystemEventBlocks,
       media: opts?.media,
     });
   };
@@ -385,6 +391,23 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   )
     ? undefined
     : rawActiveSessionIdForInterrupt;
+  const shouldPreemptHeartbeat =
+    !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
+  const heartbeatPreemption =
+    shouldPreemptHeartbeat && embeddedAgentRuntime
+      ? await embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun(
+          rawActiveSessionIdForInterrupt,
+          REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+        )
+      : "not-heartbeat";
+  if (heartbeatPreemption === "timed-out") {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT },
+    } as const;
+  }
+  const visibleTurnPreemptsHeartbeat = heartbeatPreemption === "drained";
   if (
     activeRunQueueMode === "interrupt" &&
     !isRoomEvent &&
@@ -545,9 +568,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
     ((isRoomEvent && isActive) ||
       resolvedQueue.mode === "steer" ||
       resolvedQueue.mode === "followup" ||
@@ -600,6 +625,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       typing.cleanup();
       return { kind: "reply", reply: queueState.reply } as const;
     }
+  }
+  if (activeRunQueueAction !== "drop") {
+    await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+    ({
+      prefixedCommandBody,
+      queuedBody,
+      transcriptBody,
+      transcriptCommandBody,
+      media: promptMedia,
+      currentInboundContext,
+    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
   }
 
   return {

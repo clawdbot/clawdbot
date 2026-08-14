@@ -231,10 +231,14 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("rejects session sqlite selectors without session sqlite mode", async () => {
-    await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
+  it.each([
+    ["without JSON", ["--session-sqlite-agent", "main"]],
+    ["with JSON", ["--json", "--session-sqlite-agent", "main"]],
+  ])("rejects session sqlite selectors without session sqlite mode %s", async (_label, args) => {
+    await runMaintenanceCli(["doctor", ...args]);
 
     expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
     );
@@ -269,6 +273,54 @@ describe("registerMaintenanceCommands doctor action", () => {
       deep: false,
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("treats bare --json as lint mode and emits machine-readable output", async () => {
+    const output: string[] = [];
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    runDoctorLintCli.mockImplementationOnce(async () => {
+      process.stdout.write('{"ok":true,"checksRun":1,"checksSkipped":0,"findings":[]}\n');
+      return 0;
+    });
+
+    try {
+      await runMaintenanceCli(["doctor", "--json"]);
+
+      expect(doctorCommand).not.toHaveBeenCalled();
+      expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
+        json: true,
+        severityMin: undefined,
+        includeAllChecks: false,
+        skipIds: [],
+        onlyIds: [],
+        allowExec: false,
+        deep: false,
+      });
+      expect(JSON.parse(output.join(""))).toEqual({
+        ok: true,
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [],
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    } finally {
+      writeSpy.mockRestore();
+      runDoctorLintCli.mockReset();
+    }
+  });
+
+  it("rejects JSON repair mode before running doctor", async () => {
+    await runMaintenanceCli(["doctor", "--json", "--repair"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
   it("rejects lint selectors outside doctor lint mode", async () => {

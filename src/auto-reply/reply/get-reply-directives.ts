@@ -326,7 +326,12 @@ export async function resolveReplyDirectives(params: {
     typing.cleanup();
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg,
-      sessionKey: resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey: ctx.SessionKey }),
+      sessionKey: resolveRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        ctx,
+        sessionKey: ctx.SessionKey,
+      }),
     }).sandboxed;
     return {
       kind: "reply",
@@ -541,7 +546,7 @@ export async function resolveReplyDirectives(params: {
     provider,
     modelId: model,
     agentId,
-    sessionKey: resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey }),
+    sessionKey: resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey }),
     sessionEntry: targetSessionEntry,
   });
   const resolvedThinkLevelWithDefault =

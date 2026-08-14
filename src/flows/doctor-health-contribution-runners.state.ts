@@ -1,3 +1,4 @@
+import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -100,6 +101,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
+  noteBackupDoctorHint(ctx.env ?? process.env);
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {

@@ -264,7 +264,7 @@ function createFixture() {
         yieldMessage: "yield",
       }),
     },
-    getRepairedRejectedThinkingReplay: () => true,
+    getRepairedRejectedProviderReplay: () => true,
     preparedStreamRuntime,
   } as unknown as SettledInput;
 
@@ -554,6 +554,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
       requesterSessionKey: "agent:main",
+      requesterAgentId: "main",
       requesterTurnRunId: "run-1",
       requesterYielded: true,
       acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
@@ -637,6 +638,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
       requesterSessionKey: "agent:main",
+      requesterAgentId: "main",
       requesterTurnRunId: "run-1",
       requesterYielded: false,
       acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],

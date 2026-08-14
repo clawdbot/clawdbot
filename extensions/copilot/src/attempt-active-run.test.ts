@@ -99,6 +99,17 @@ describe("registerCopilotActiveRun", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("exposes pending-question cancellation for queued image fallback", async () => {
+    const { handle } = registerTestRun();
+
+    await expect(handle.cancelPendingUserInput?.("image-reply")).resolves.toBe(false);
+
+    expect(harnessMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
+      sessionKey: "session-1",
+      resolvedBy: "image-reply",
+    });
+  });
+
   it("reports pre-ownership validation failure as rejected", async () => {
     const onQueueAccepted = vi.fn();
     const { handle, send } = registerTestRun({ canAcceptSteering: () => false });

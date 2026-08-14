@@ -19,11 +19,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
-import { resolveAgentDir, resolveDefaultAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -56,6 +56,7 @@ import { resolveContextEngineCapabilities } from "./context-engine-capabilities.
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
@@ -338,7 +339,6 @@ async function compactEmbeddedAgentSessionImpl(
     config: params.config ?? {},
     agentId: agentIds.sessionAgentId,
     agentDir,
-    inheritedAuthDir: resolveDefaultAgentDir(params.config ?? {}),
     workspaceDir: resolvedWorkspaceDir,
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
     runtimePluginSelections: [
@@ -379,7 +379,7 @@ async function compactEmbeddedAgentSessionImpl(
     }
   };
   try {
-    return await withPluginRuntimeRegistryScope(lease.snapshot.pluginRegistry, run);
+    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
   } finally {
     lease.release();
   }
@@ -437,7 +437,6 @@ async function compactResolvedContextEngine(
   let preparedHarnessRuntime = selectedHarnessRuntime;
   let preparedParams = params;
   try {
-    const preparedStores = preparedModelRuntime.createStores();
     // Ensure the policy-selected harness plugin so selection can pick implicit codex.
     await ensureSelectedAgentHarnessPlugin({
       config: params.config,
@@ -450,15 +449,16 @@ async function compactResolvedContextEngine(
       workspaceDir: resolvedWorkspaceDir,
       pluginRegistry: requireActivePluginRegistry(),
     });
-    const {
-      model: ceModel,
-      authStorage,
-      modelRegistry,
-    } = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, params.config, {
+    const { resolution: modelResolution } = await resolveTieredModel({
+      provider: ceRuntimeProvider,
+      modelId: ceModelId,
+      agentDir,
+      config: params.config,
+      workspaceDir: resolvedWorkspaceDir,
       ...initialModelAuth,
-      ...preparedStores,
       preparedModelRuntime,
     });
+    const { model: ceModel, authStorage, modelRegistry } = modelResolution;
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
     // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
     // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
@@ -569,11 +569,13 @@ async function compactResolvedContextEngine(
         })
       : undefined;
   if (lockedNativeHarness) {
-    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+    return harnessResult
+      ? { ...harnessResult, compactionKind: "native-harness" }
+      : lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
-      return harnessResult;
+      return { ...harnessResult, compactionKind: "native-harness" };
     }
     log.warn(
       `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
@@ -833,14 +835,22 @@ async function compactResolvedContextEngine(
           normalizeOptionalAgentRuntimeId(preparedHarnessRuntime) === "codex"
             ? "codexNativeCompaction"
             : "nativeHarnessCompaction";
+        const serverEndpointCompaction =
+          (result.result?.details as { compactionKind?: unknown } | undefined)?.compactionKind ===
+            "server-endpoint" && typeof result.result?.tokensAfter === "number";
         return {
           ok: result.ok,
           compacted: result.compacted,
+          compactionKind: serverEndpointCompaction ? "server-endpoint" : "context-engine",
           reason: result.reason,
           result: result.result
             ? {
-                summary: result.result.summary ?? "",
-                firstKeptEntryId: result.result.firstKeptEntryId ?? "",
+                ...(serverEndpointCompaction
+                  ? { kind: "server-endpoint" as const }
+                  : {
+                      summary: result.result.summary ?? "",
+                      firstKeptEntryId: result.result.firstKeptEntryId ?? "",
+                    }),
                 tokensBefore: result.result.tokensBefore,
                 tokensAfter: result.result.tokensAfter,
                 details: mergeSecondaryNativeHarnessCompactionDetails({

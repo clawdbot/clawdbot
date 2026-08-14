@@ -25,11 +25,6 @@ import { callGatewayTool } from "../tools/gateway.js";
 import { resetClaudeLiveSessionsForTest } from "./claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
 
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));

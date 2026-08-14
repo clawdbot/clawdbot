@@ -119,8 +119,7 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  return isTruthyEnvValue(env[SKIP_STARTUP_MODEL_PREWARM_ENV]);
 }
 
 function schedulePostAttachUpdateSentinelRefresh(params: {
@@ -858,7 +857,12 @@ export async function startGatewaySidecars(params: {
                 defaultProvider: DEFAULT_PROVIDER,
                 defaultModel: DEFAULT_MODEL,
               });
-            const catalog = await loadPreparedModelCatalog({ config: params.cfg });
+            const catalog = await loadPreparedModelCatalog({
+              config: params.cfg,
+              readOnly: true,
+              providerDiscoveryProviderIds: [hooksModelRef.provider],
+              scopedLiveProviderDiscovery: true,
+            });
             const status = getModelRefStatus({
               cfg: params.cfg,
               catalog,

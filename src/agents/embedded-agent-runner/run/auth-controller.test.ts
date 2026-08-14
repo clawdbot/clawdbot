@@ -101,6 +101,8 @@ function createMutableEmbeddedRunAuthController(params: {
   profileCandidates?: string[];
   authStore?: AuthProfileStore;
   fallbackConfigured?: boolean;
+  lockedProfileId?: string;
+  allowTransientCooldownProbe?: boolean;
   warn?: (message: string) => void;
   prepareModelForAuthProfile?: Parameters<
     typeof createEmbeddedRunAuthController
@@ -118,10 +120,11 @@ function createMutableEmbeddedRunAuthController(params: {
       } as AuthProfileStore),
     authStorage: { setRuntimeApiKey: params.setRuntimeApiKey },
     profileCandidates: params.profileCandidates ?? ["default"],
+    lockedProfileId: params.lockedProfileId,
     initialThinkLevel: "medium",
     attemptedThinking: new Set(),
     fallbackConfigured: params.fallbackConfigured ?? false,
-    allowTransientCooldownProbe: false,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe ?? false,
     getProvider: () => "custom-openai",
     getModelId: () => "test-model",
     getRuntimeModel: () => params.harness.runtimeModel,
@@ -371,6 +374,36 @@ describe("createEmbeddedRunAuthController", () => {
     expect(setRuntimeApiKey).toHaveBeenLastCalledWith("custom-openai", "backup-source-key");
   });
 
+  it("exhausts the remaining auth profile after a non-cooling failure", async () => {
+    const harness = createMutableAuthControllerHarness();
+    mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
+      if (profileId === "backup") {
+        throw new Error("provider overloaded");
+      }
+      return {
+        apiKey: "default-key",
+        mode: "api-key" as const,
+        profileId,
+        source: `profile:${String(profileId)}`,
+      };
+    });
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: ["default", "backup"],
+    });
+
+    await controller.initializeAuthProfile();
+    await expect(controller.advanceAuthProfile()).resolves.toBe(false);
+    await expect(controller.advanceAuthProfile()).resolves.toBe(false);
+
+    expect(
+      mocks.getApiKeyForModelCore.mock.calls.filter(([params]) => params.profileId === "backup"),
+    ).toHaveLength(1);
+    expect(harness.profileIndex).toBe(2);
+  });
+
   it("unwraps a sentinel for runtime auth exchange but keeps auth storage opaque", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
@@ -533,29 +566,84 @@ describe("createEmbeddedRunAuthController", () => {
         allowTransientCooldownProbe: true,
       });
 
-    expect(
-      resolve(
-        createStore({
-          first: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
-        }),
-      ),
-    ).toEqual({ allowProbe: false, unavailableReason: null });
-    expect(
-      resolve(
-        createStore({
-          first: { disabledUntil: now + 60_000, disabledReason: "billing" },
-          second: { disabledUntil: now + 60_000, disabledReason: "billing" },
-        }),
-      ),
-    ).toEqual({ allowProbe: false, unavailableReason: "billing" });
-    expect(
-      resolve(
-        createStore({
-          first: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
-          second: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
-        }),
-      ),
-    ).toEqual({ allowProbe: true, unavailableReason: "rate_limit" });
+    const partiallyAvailable = resolve(
+      createStore({
+        first: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
+      }),
+    );
+    expect([...partiallyAvailable.probeProfileIds]).toEqual([]);
+    expect(partiallyAvailable.unavailableReason).toBeNull();
+
+    const billingDisabled = resolve(
+      createStore({
+        first: { disabledUntil: now + 60_000, disabledReason: "billing" },
+        second: { disabledUntil: now + 60_000, disabledReason: "billing" },
+      }),
+    );
+    expect([...billingDisabled.probeProfileIds]).toEqual([]);
+    expect(billingDisabled.unavailableReason).toBe("billing");
+
+    const rateLimited = resolve(
+      createStore({
+        first: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
+        second: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
+      }),
+    );
+    expect([...rateLimited.probeProfileIds]).toEqual(["first", "second"]);
+    expect(rateLimited.unavailableReason).toBe("rate_limit");
+
+    const mixedPinnedState = resolveEmbeddedAuthCooldownProbePolicy({
+      authStore: createStore({
+        first: { disabledUntil: now + 60_000, disabledReason: "billing" },
+        second: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
+      }),
+      profileCandidates: ["first", "second"],
+      lockedProfileId: "first",
+      modelId: "test-model",
+      allowTransientCooldownProbe: true,
+    });
+    expect([...mixedPinnedState.probeProfileIds]).toEqual(["second"]);
+    expect(mixedPinnedState.unavailableReason).toBe("rate_limit");
+  });
+
+  it("preserves the transient cooldown probe for a rate-limited backup after a billing-disabled pin", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const now = Date.now();
+    mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => ({
+      apiKey: `${String(profileId)}-key`,
+      mode: "api-key" as const,
+      profileId,
+      source: `profile:${String(profileId)}`,
+    }));
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: ["pinned", "backup"],
+      lockedProfileId: "pinned",
+      allowTransientCooldownProbe: true,
+      authStore: {
+        version: 1,
+        profiles: {
+          pinned: { type: "api_key", provider: "custom-openai", key: "pinned-key" },
+          backup: { type: "api_key", provider: "custom-openai", key: "backup-key" },
+        },
+        usageStats: {
+          pinned: { disabledUntil: now + 60_000, disabledReason: "billing" },
+          backup: { blockedUntil: now + 60_000 },
+        },
+      },
+    });
+
+    await controller.initializeAuthProfile();
+
+    expect(mocks.getApiKeyForModelCore).toHaveBeenCalledOnce();
+    expect(mocks.getApiKeyForModelCore).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "backup" }),
+    );
+    expect(harness.profileIndex).toBe(1);
+    expect(harness.lastProfileId).toBe("backup");
   });
 
   it("rejects privileged runtime transport overrides on the first auth exchange", async () => {

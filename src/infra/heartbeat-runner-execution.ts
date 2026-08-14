@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
@@ -40,6 +39,7 @@ import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   heartbeatLog,
+  resolveAmbientHeartbeatAgentId,
   resolveHeartbeatAckMaxChars,
   resolveHeartbeatForWake,
   shouldUseHeartbeatResponseToolPrompt,
@@ -133,7 +133,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   const forcedSessionAgentId =
     explicitAgentId.length > 0 ? undefined : parseAgentSessionKey(opts.sessionKey)?.agentId;
   const agentId = normalizeAgentId(
-    explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
+    explicitAgentId || forcedSessionAgentId || resolveAmbientHeartbeatAgentId(cfg),
   );
   const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({

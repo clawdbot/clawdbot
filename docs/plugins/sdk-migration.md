@@ -198,27 +198,23 @@ artifact reader count is zero.
 
 Audit the current migration queue with `pnpm plugins:boundary-report`:
 
-| Flag                                                    | Effect                                                                         |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `--summary` (or `pnpm plugins:boundary-report:summary`) | Compact counts instead of full detail.                                         |
-| `--json`                                                | Machine-readable report.                                                       |
-| `--owner <id>`                                          | Filter to one plugin or compatibility owner.                                   |
-| `--fail-on-cross-owner`                                 | Exit non-zero on cross-owner reserved SDK imports.                             |
-| `--fail-on-eligible-compat`                             | Exit non-zero when a deprecated compat record's `removeAfter` date has passed. |
-| `--fail-on-unclassified-unused-reserved`                | Exit non-zero on unused reserved SDK shims.                                    |
+| Flag                                                    | Effect                                                                     |
+| ------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `--summary` (or `pnpm plugins:boundary-report:summary`) | Compact counts instead of full detail.                                     |
+| `--json`                                                | Machine-readable report.                                                   |
+| `--owner <id>`                                          | Filter to one compatibility owner.                                         |
+| `--fail-on-eligible-compat`                             | Exit non-zero on or after a deprecated compat record's `removeAfter` date. |
 
-`pnpm plugins:boundary-report:ci` runs with all three fail flags. Deprecated
-records normally have an explicit `removeAfter` date. A contract tied to a
-version boundary instead declares a `removalGate`; `next-plugin-sdk-major` is an
-approved major-version gate, not a pending owner decision, and is never
-date-eligible. A record with neither field appears as `no-date` and remains
-ineligible until its owner publishes a gate. The report displays either the date
-or named gate, counts local code/doc references, lists `removal-pending` records
-with their blockers and surface-token reader references, surfaces cross-owner
-reserved SDK imports, and summarizes the private memory-host SDK bridge. Those
-reader references are triage signals, not published-artifact proof. Reserved SDK
-subpaths must have tracked owner usage; unused reserved exports should be removed
-from the public SDK.
+`pnpm plugins:boundary-report:ci` runs with the compatibility fail flag.
+Deprecated records normally have an explicit `removeAfter` date. A contract
+tied to a version boundary instead declares a `removalGate`;
+`next-plugin-sdk-major` is an approved major-version gate, not a pending owner
+decision, and is never date-eligible. A record with neither field appears as
+`no-date` and remains ineligible until its owner publishes a gate. The report
+displays either the date or named gate, counts local code/doc references, lists
+`removal-pending` records with their blockers and surface-token reader
+references, and summarizes the private memory-host SDK bridge. Those reader
+references are triage signals, not published-artifact proof.
 
 ### Media legacy projection
 
@@ -580,6 +576,23 @@ Provider plugins should register text-inference providers through
 `ApiRegistry` should register directly on that registry so provider ownership
 and teardown stay scoped to the prepared runtime.
 
+### Deactivate hook alias
+
+The `api.on("deactivate", handler)` compatibility alias was removed. Register
+the same shutdown cleanup with `gateway_stop`:
+
+```typescript
+// Before
+api.on("deactivate", async (event, ctx) => {
+  await stopPluginService(ctx);
+});
+
+// After
+api.on("gateway_stop", async (event, ctx) => {
+  await stopPluginService(ctx);
+});
+```
+
 ### Private testing barrel
 
 `openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package
@@ -664,29 +677,6 @@ timeline for current status.
 
     Affected areas: `inbound_claim`, `message_received`, and any custom
     channel plugin that post-processed the old envelope text.
-
-  </Accordion>
-
-  <Accordion title="deactivate hook -> gateway_stop">
-    **Old**: `api.on("deactivate", handler)`.
-
-    **New**: `api.on("gateway_stop", handler)`. Same shutdown cleanup
-    contract; only the hook name changes.
-
-    ```typescript
-    // Before
-    api.on("deactivate", async (event, ctx) => {
-      await stopPluginService(ctx);
-    });
-
-    // After
-    api.on("gateway_stop", async (event, ctx) => {
-      await stopPluginService(ctx);
-    });
-    ```
-
-    `deactivate` remains wired as a deprecated compatibility alias until it is
-    removed after 2026-08-16.
 
   </Accordion>
 
@@ -1069,7 +1059,7 @@ apps own device capture/playback UX.
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Now**                                     | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins. |
 | **Pending owner decision**                  | Records without `removeAfter` or `removalGate` remain deprecated and ineligible until their owner publishes a gate.                       |
-| **Each compat record's `removeAfter` date** | That dated surface becomes eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI once the date passes.  |
+| **Each compat record's `removeAfter` date** | That dated surface becomes eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI on or after that date. |
 | **Next Plugin SDK major**                   | `inbound-reply-dispatch` reaches its explicit `next-plugin-sdk-major` gate; it is not date-eligible before that version boundary.         |
 
 The remaining public SDK subpaths below have registry-backed removal windows.
@@ -1077,9 +1067,16 @@ The July 30 rows were removed after their early maintainer-authorized sweep:
 unused subpaths were deleted, earlier compatibility aliases were deleted, and
 bundled-only modules were demoted to private-local build mappings.
 
+The August 15 compatibility subpaths `agent-config-primitives`,
+`channel-logging`, `channel-secret-runtime`, `channel-streaming`,
+`group-access`, `matrix`, `text-runtime`, and `zod` were retired early by
+explicit SDK-owner approval in August 2026. Use the focused replacements in
+the [Plugin SDK subpath catalog](/plugins/sdk-subpaths), and import `zod`
+directly from the `zod` package. `inbound-reply-dispatch` remains available
+until the next Plugin SDK major.
+
 | Removal gate            | Tier                               | SDK subpaths                                                                                                                                                                        |
 | ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-08-15`            | Earlier compatibility deprecations | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `matrix`, `text-runtime`, `zod`                                        |
 | `2026-09-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
 | `next-plugin-sdk-major` | Major-version compatibility gate   | `inbound-reply-dispatch`                                                                                                                                                            |
 | `2026-10-01`            | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |

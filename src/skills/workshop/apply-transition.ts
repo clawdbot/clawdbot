@@ -448,12 +448,11 @@ export async function assertSkillProposalSupportTargetUnchanged(params: {
   }
 }
 
-export async function markSkillProposalStale(params: {
+export function transitionPendingSkillProposalToStale(params: {
   record: SkillProposalRecord;
   reason: string;
-  message: string;
   input: SkillProposalTransitionInput;
-}): Promise<never> {
+}): { record: SkillProposalRecord; event: SkillProposalEvent } {
   const now = new Date().toISOString();
   const stale: SkillProposalRecord = {
     ...params.record,
@@ -478,7 +477,17 @@ export async function markSkillProposalStale(params: {
   if (commit.state !== "committed" || !commit.event) {
     throw new Error("Failed to record stale Skill Workshop proposal.");
   }
-  throw new SkillProposalLifecycleError(params.message, stale, commit.event);
+  return { record: stale, event: commit.event };
+}
+
+export async function markSkillProposalStale(params: {
+  record: SkillProposalRecord;
+  reason: string;
+  message: string;
+  input: SkillProposalTransitionInput;
+}): Promise<never> {
+  const transition = transitionPendingSkillProposalToStale(params);
+  throw new SkillProposalLifecycleError(params.message, transition.record, transition.event);
 }
 
 function createSkillProposalRollback(params: {

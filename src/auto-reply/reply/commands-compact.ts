@@ -226,7 +226,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     }
   }
   const sessionAgentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: params.cfg,
+        agentId: params.agentId,
+      })
     : (params.agentId ?? "main");
   const currentAgentId = params.agentId ?? "main";
   const sessionAgentDir =
@@ -321,11 +325,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const compactLabel =
     result.ok || isBenignCompactionSkipResult(result)
       ? didCompact
-        ? typeof tokensAfterCompaction !== "number"
-          ? "Compaction finished (resulting context unknown)"
-          : result.result?.tokensBefore != null
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-            : "Compacted"
+        ? result.compactionKind === "server-endpoint" &&
+          typeof tokensAfterCompaction === "number" &&
+          result.result?.tokensBefore != null
+          ? `Server-side compaction (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+          : typeof tokensAfterCompaction !== "number"
+            ? "Compaction finished (resulting context unknown)"
+            : result.result?.tokensBefore != null
+              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+              : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
   if (didCompact) {
@@ -336,12 +344,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: compactionStorePath,
-      // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
+      compactionKind: result.compactionKind,
     });
   }
-  // Use the post-compaction token count for context summary if available
   const totalTokens = didCompact
     ? tokensAfterCompaction
     : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);

@@ -39,9 +39,14 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  replyRunRegistry,
+} from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
+import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -350,6 +355,7 @@ function createMinimalRun(params?: {
   sessionCtx?: Partial<TemplateContext>;
   sourceTurnId?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
+  bindActiveAuthority?: boolean;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -405,6 +411,12 @@ function createMinimalRun(params?: {
       ...params?.runOverrides,
     },
   } as unknown as FollowupRun;
+  const activeOperation = replyRunRegistry.get(sessionKey);
+  if (activeOperation && params?.bindActiveAuthority !== false) {
+    activeOperation.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(followupRun),
+    );
+  }
 
   return {
     followupRun,
@@ -521,6 +533,107 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
+  it("queues instead of steering when privilege facts differ on the active route", async () => {
+    const activeRoute = { provider: "openai", model: "gpt-fallback" };
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      bindActiveAuthority: false,
+    });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.bindToolAuthorityRoute(activeRoute);
+    active.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(
+        {
+          ...followupRun,
+          run: {
+            ...followupRun.run,
+            runtimePluginToolGrant: {
+              pluginId: "workboard",
+              toolNames: ["workboard_complete"],
+            },
+          },
+        },
+        activeRoute,
+      ),
+    );
+    active.setPhase("running");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    active.complete();
+  });
+
+  it("offers a route-only mismatch to the pending-input owner", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const activeRoute = { provider: "openai", model: "gpt-fallback" };
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      bindActiveAuthority: false,
+    });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.bindToolAuthorityRoute(activeRoute);
+    active.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(followupRun, activeRoute),
+    );
+    active.setPhase("running");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+      "session",
+      "hello",
+      expect.objectContaining({
+        pendingInputAuthorityFingerprint: active.toolAuthorityFingerprint,
+      }),
+    );
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    active.complete();
+  });
+
+  it("drains an authority-mismatched turn after its provided operation clears", async () => {
+    const provided = createReplyOperation({
+      sessionKey: "agent:main:telegram:slash:source",
+      sessionId: "provided-session",
+      resetTriggered: false,
+    });
+    provided.bindToolAuthorityFingerprint("different-authority");
+    provided.setPhase("running");
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      replyOperation: provided,
+      bindActiveAuthority: false,
+    });
+    const image = { type: "image" as const, data: "queued", mimeType: "image/png" };
+    followupRun.images = [image];
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    provided.complete();
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
+    await requireScheduledFollowupRunner()(followupRun);
+    expect(mockCallArgs(state.runEmbeddedAgentMock, "queued image drain")[0]).toMatchObject({
+      images: [image],
+    });
+  });
+
   it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const active = createReplyOperation({
@@ -559,6 +672,12 @@ describe("runReplyAgent active steering", () => {
 
   it("injects a steer without claiming a new agent reply", async () => {
     const runState: ReplyOperationRunState = {};
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -584,16 +703,22 @@ describe("runReplyAgent active steering", () => {
       },
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    try {
+      await expect(run()).resolves.toBeUndefined();
 
-    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
-      "session",
-      "hello",
-      expect.objectContaining({ steeringMode: "all" }),
-    );
+      expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
+      expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+        "session",
+        "hello",
+        expect.objectContaining({ steeringMode: "all" }),
+      );
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(replyRunRegistry.get("main")).toBe(active);
+    } finally {
+      active.complete();
+    }
   });
 
   it("does not let before_agent_reply claim an accepted steer", async () => {
@@ -3438,8 +3563,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     for (const testCase of cases) {
       const sessionEntry = makeSessionEntry({
         providerOverride: "openai",
-        modelOverride: "gpt-5.6-luna",
+        modelOverride: "gpt-5.6-sol",
         modelOverrideSource: "user",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
       });
       await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
       const sessionStore = { main: sessionEntry };
@@ -3450,10 +3577,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
         const { run, onFallbackStep } = args;
         expect(args.provider, testCase.name).toBe("openai");
-        expect(args.model, testCase.name).toBe("gpt-5.6-luna");
+        expect(args.model, testCase.name).toBe("gpt-5.6-sol");
         await onFallbackStep?.({
           fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-5.6-luna",
+          fallbackStepFromModel: "openai/gpt-5.6-sol",
           fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
           fallbackStepFromFailureReason: "rate_limit",
           fallbackStepFinalOutcome: "succeeded",
@@ -3466,7 +3593,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           attempts: [
             {
               provider: "openai",
-              model: "gpt-5.6-luna",
+              model: "gpt-5.6-sol",
               error: "Provider openai is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
@@ -3480,7 +3607,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
-        runOverrides: { provider: "openai", model: "gpt-5.6-luna" },
+        runOverrides: { provider: "openai", model: "gpt-5.6-sol" },
       });
       const phases: string[] = [];
       const off = onAgentEvent((evt) => {
@@ -3498,11 +3625,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload.text, testCase.name).toContain("Model Fallback:");
       expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
       expect(stored.providerOverride, testCase.name).toBe("openai");
-      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-luna");
+      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-sol");
       expect(stored.modelOverrideSource, testCase.name).toBe("user");
-      expect(stored.modelProvider, testCase.name).toBe("deepinfra");
-      expect(stored.model, testCase.name).toBe("moonshotai/Kimi-K2.5");
-      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
+      expect(stored.modelProvider, testCase.name).toBe("openai");
+      expect(stored.model, testCase.name).toBe("gpt-5.6-sol");
+      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-sol");
       expect(stored.fallbackNotice?.activeModel, testCase.name).toBe(
         "deepinfra/moonshotai/Kimi-K2.5",
       );

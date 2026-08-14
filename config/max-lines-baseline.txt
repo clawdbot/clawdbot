@@ -93,9 +93,6 @@ extensions/discord/src/monitor/provider.test.ts
 extensions/discord/src/monitor/thread-bindings.lifecycle.test.ts
 extensions/discord/src/outbound-adapter.test.ts
 extensions/discord/src/send.sends-basic-channel-messages.test.ts
-extensions/discord/src/voice/manager.e2e.test.ts
-extensions/discord/src/voice/manager.ts
-extensions/discord/src/voice/realtime.ts
 extensions/fal/image-generation-provider.ts
 extensions/feishu/src/bot.test.ts
 extensions/feishu/src/bot.ts
@@ -153,7 +150,6 @@ extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
 extensions/memory-core/src/memory/manager-search.ts
-extensions/memory-core/src/memory/manager.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts
@@ -182,8 +178,6 @@ extensions/openai/image-generation-provider.test.ts
 extensions/openai/image-generation-provider.ts
 extensions/openai/openai-provider.test.ts
 extensions/openai/openai-provider.ts
-extensions/openai/realtime-voice-provider.test.ts
-extensions/openai/realtime-voice-provider.ts
 extensions/openrouter/index.test.ts
 extensions/openshell/src/backend.ts
 extensions/openshell/src/openshell-core.test.ts
@@ -247,8 +241,6 @@ extensions/slack/src/send.ts
 extensions/telegram/src/action-runtime.test.ts
 extensions/telegram/src/action-runtime.ts
 extensions/telegram/src/bot-message-context.session.ts
-extensions/telegram/src/bot-native-commands.session-meta.test.ts
-extensions/telegram/src/bot-native-commands.ts
 extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
@@ -343,7 +335,6 @@ src/agents/btw.ts
 src/agents/cli-auth-epoch.test.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
-src/agents/cli-runner.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
@@ -397,7 +388,6 @@ src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openai-transport-stream.base.test.ts
 src/agents/openai-transport-stream.replay-and-tools.test.ts
-src/agents/openai-transport-stream.streaming.test.ts
 src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
@@ -536,7 +526,6 @@ src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/auth-choice.test.ts
 src/commands/backup-verify.test.ts
-src/commands/backup-verify.ts
 src/commands/channels.add.test.ts
 src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts
@@ -654,7 +643,6 @@ src/gateway/server-close.test.ts
 src/gateway/server-close.ts
 src/gateway/server-cron.test.ts
 src/gateway/server-cron.ts
-src/gateway/server-http.ts
 src/gateway/server-methods/agent.abort-integration.test-utils.ts
 src/gateway/server-methods/agent.base.test-utils.ts
 src/gateway/server-methods/agent.events-and-subagents.test-utils.ts
@@ -694,7 +682,6 @@ src/gateway/server-restart-sentinel.test.ts
 src/gateway/server-startup-config.secrets.test.ts
 src/gateway/server-startup-post-attach.test.ts
 src/gateway/server-startup-post-attach.ts
-src/gateway/server.auth.control-ui.suite.ts
 src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
@@ -720,7 +707,6 @@ src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
 src/gateway/worker-environments/inference-runtime.ts
 src/gateway/worker-environments/store.ts
-src/gateway/worker-environments/worker-turn-launcher.test.ts
 src/hooks/install.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
@@ -912,7 +898,6 @@ ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/components/chat-session-workspace.ts
 ui/src/pages/chat/components/chat-sidebar.ts
-ui/src/pages/chat/components/chat-thread.ts
 ui/src/pages/chat/components/chat-tool-cards.ts
 ui/src/pages/chat/composer-persistence.test.ts
 ui/src/pages/chat/composer-persistence.ts
@@ -921,7 +906,6 @@ ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts
-ui/src/pages/new-session/new-session-page.ts
 ui/src/pages/plugins/plugins-page.ts
 ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts

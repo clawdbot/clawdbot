@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  estimateStringChars,
+  estimateTokensFromChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 // Session filesystem utility tests cover transcript reading, usage extraction,
 // preview rows, message counts, title fields, and archive candidate resolution.
@@ -12,7 +16,6 @@ import {
   openFileBackedSessionManagerForTest,
 } from "../../test/helpers/session-manager-file-fixture.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
-import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {

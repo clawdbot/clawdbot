@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 328285,
-  "reason": "Gateway update outcome (#121686); Testbox-measured exact-head bytes",
-  "updatedAt": "2026-08-11"
+  "startupJsGzipBytes": 330586,
+  "reason": "cumulative 2026-08-14 growth (run 31798463207 baseline) plus redacted-rename guard i18n string (#123571); CI-measured build-artifacts bytes",
+  "updatedAt": "2026-08-14"
 }

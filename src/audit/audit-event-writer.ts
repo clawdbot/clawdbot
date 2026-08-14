@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -26,6 +27,8 @@ export type AuditEventWriter = {
   record: (input: AuditEventInput) => boolean;
   /** Reports only queue acceptance; persistence succeeds or fails asynchronously. */
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
+  /** For decision owners without a native durable record; approvals must not use this path. */
+  recordExecutionDecision: (receipt: DecisionReceiptV1) => boolean;
   stop: () => Promise<void>;
 };
 
@@ -80,6 +83,7 @@ export function createAuditEventWriter(
       ready: Promise.resolve(),
       record: () => false,
       recordExecutionIdentity: () => false,
+      recordExecutionDecision: () => false,
       stop: async () => {},
     };
   }
@@ -118,7 +122,8 @@ export function createAuditEventWriter(
   const enqueue = (
     message:
       | { type: "record-event"; input: AuditEventInput }
-      | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork },
+      | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork }
+      | { type: "record-execution-decision"; receipt: DecisionReceiptV1 },
   ): boolean => {
     if (stopped || unavailable || pending >= maxPending) {
       if (!stopped) {
@@ -138,8 +143,12 @@ export function createAuditEventWriter(
       return true;
     } catch (error) {
       pending -= 1;
-      if (message.type === "record-execution-identity") {
-        fail("audit execution identity envelope could not be queued");
+      if (message.type !== "record-event") {
+        fail(
+          message.type === "record-execution-identity"
+            ? "audit execution identity envelope could not be queued"
+            : "audit execution decision receipt could not be queued",
+        );
       } else {
         unavailable = true;
         void worker.terminate();
@@ -189,6 +198,7 @@ export function createAuditEventWriter(
     ready,
     record: (input) => enqueue({ type: "record-event", input }),
     recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
+    recordExecutionDecision: (receipt) => enqueue({ type: "record-execution-decision", receipt }),
     stop: async () => {
       if (stopped) {
         return;

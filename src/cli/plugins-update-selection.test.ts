@@ -147,6 +147,65 @@ describe("resolvePluginUpdateSelection", () => {
     });
   });
 
+  it("resolves a packed child update to its tracked package owner", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          pack: createNpmInstall({ spec: "@acme/pack", resolvedName: "@acme/pack" }),
+        },
+        installOwnerByPluginId: new Map([
+          ["pack/one", "pack"],
+          ["pack/two", "pack"],
+        ]),
+        rawId: "pack/two",
+      }),
+    ).toEqual({ pluginIds: ["pack"] });
+  });
+
+  it("does not infer a packed child owner when owner metadata is missing", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          pack: createNpmInstall({ spec: "@acme/pack", resolvedName: "@acme/pack" }),
+        },
+        rawId: "pack/two",
+      }),
+    ).toEqual({ pluginIds: [] });
+  });
+
+  it("rejects an ambiguous child before exact install-record selection", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "pack/one": createNpmInstall({ spec: "@acme/pack" }),
+          "pack/two": createNpmInstall({ spec: "@acme/pack" }),
+        },
+        rejectedPluginIds: new Map([
+          ["pack/one", "ambiguous pack/one"],
+          ["pack/two", "ambiguous pack/two"],
+        ]),
+        rawId: "pack/one",
+      }),
+    ).toEqual({ pluginIds: [], error: "ambiguous pack/one" });
+  });
+
+  it("rejects an ambiguous package owner for targeted and update-all selection", () => {
+    const installs = {
+      pack: createNpmInstall({ spec: "@acme/pack" }),
+      stable: createNpmInstall({ spec: "@acme/stable" }),
+    };
+    const rejectedPluginIds = new Map([["pack", "ambiguous pack"]]);
+
+    expect(resolvePluginUpdateSelection({ installs, rejectedPluginIds, rawId: "pack" })).toEqual({
+      pluginIds: [],
+      error: "ambiguous pack",
+    });
+    expect(resolvePluginUpdateSelection({ installs, rejectedPluginIds, all: true })).toEqual({
+      pluginIds: [],
+      error: "ambiguous pack",
+    });
+  });
+
   it("maps prototype-named npm packages by own install records", () => {
     expect(
       resolvePluginUpdateSelection({

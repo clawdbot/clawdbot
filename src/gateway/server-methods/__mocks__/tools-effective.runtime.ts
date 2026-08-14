@@ -10,7 +10,7 @@ export { getRegisteredAgentHarness } from "../../../agents/harness/registry.js";
 export { resolveReplyToMode } from "../../../auto-reply/reply/reply-threading.js";
 export { resolveRuntimeConfigCacheKey } from "../../../config/config.js";
 export { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
-export { loadSessionEntryReadOnly, resolveSessionModelRef } from "../../session-utils.js";
+export { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../../session-utils.js";
 
 export const toolsEffectiveGlobalAgentRuntimeMocks = {
   resolveEffectiveToolInventory: vi.fn(

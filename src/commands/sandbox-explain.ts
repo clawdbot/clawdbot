@@ -199,6 +199,7 @@ export async function sandboxExplainCommand(
     normalizeOptionalString(sessionEntry?.spawnedCwd) ?? effectiveAgentWorkspaceDir;
   const workspaceLayout = resolveSandboxWorkspaceLayoutPaths({
     cfg: sandboxCfg,
+    agentId: resolvedAgentId,
     rawSessionKey:
       sessionKey === "global"
         ? buildAgentMainSessionKey({

@@ -33,6 +33,10 @@ import {
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../../local-user-ingress.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
@@ -317,6 +321,20 @@ export async function attachAuthenticatedGatewayConnect(
             : {}),
         }
       : undefined;
+  const localUserIngress = prepareGatewayLocalUserIngress({
+    authMethod,
+    authenticatedUserExpected: Boolean(authenticatedUserId),
+    ...(authenticatedUserProfile
+      ? {
+          profile: {
+            profileId: authenticatedUserProfile.profileId,
+            displayName: authenticatedUserProfile.displayName,
+          },
+        }
+      : {}),
+    ...(device?.id ? { pairedDeviceId: device.id } : {}),
+    isLocalClient,
+  });
   if (usesLegacyNodeProtocol) {
     logWsControl.warn(
       `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
@@ -352,6 +370,7 @@ export async function attachAuthenticatedGatewayConnect(
       ? { pluginNodeCapabilitySurfaces }
       : {}),
   };
+  attachGatewayLocalUserIngress(nextClient, localUserIngress);
   for (const entry of pendingPluginNodeCapabilities) {
     setClientPluginNodeCapability({
       client: nextClient,

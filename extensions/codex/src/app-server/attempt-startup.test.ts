@@ -63,7 +63,7 @@ function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptParams {
     hostCapabilities: createCodexTestHostCapabilities(),
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey: "agent:agent-1:session-1",
     agentDir: paths.agentDir,
     sessionFile: paths.sessionFile,
     effectiveCwd: paths.cwd,

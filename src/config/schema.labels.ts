@@ -2,6 +2,7 @@
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
+import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
@@ -16,6 +17,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "env.shellEnv.enabled": "Shell Environment Import Enabled",
   "env.shellEnv.timeoutMs": "Shell Environment Import Timeout (ms)",
   "env.vars": "Environment Variable Overrides",
+  secrets: "Secrets",
+  "secrets.egressProxy": "Secret Egress Proxy",
+  "secrets.egressProxy.enabled": "Secret Egress Proxy Enabled",
+  "secrets.egressProxy.bypassHosts": "Secret Egress Proxy Bypass Hosts",
   wizard: "Setup Preferences",
   "wizard.accessMode": "Setup Discovery Access",
   "wizard.appRecommendations": "Setup App Recommendations",
@@ -83,6 +88,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.experimental": "Agent Experimental Flags",
   "agents.entries.*.experimental.localModelLean": "Agent Lean Local Model Mode",
   agents: "Agents",
+  "agents.ownership": "Agent Ownership Generation",
   "agents.defaults": "Agent Defaults",
   "agents.defaults.contextLimits": "Default Context Limits",
   "agents.defaults.contextLimits.memoryGetMaxChars": "Default memory_get Max Chars",
@@ -102,6 +108,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",
   cloudWorkers: "Cloud Workers",
   ...CLOUD_WORKER_FIELD_LABELS,
+  ...DESKTOP_FIELD_LABELS,
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
   "gateway.mode": "Gateway Mode",
@@ -386,6 +393,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.agentRuns": "Node Agent Runs",
   "nodeHost.agentRuns.claude": "Node Claude Agent Runs",
   "nodeHost.agentRuns.claude.enabled": "Node Claude Agent Runs Enabled",
+  "nodeHost.workerRuns": "Node Worker Runs",
+  "nodeHost.workerRuns.enabled": "Node Worker Runs Enabled",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
@@ -637,6 +646,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
   "agents.defaults.systemAgent": "System Agent Target",
   "agents.defaults.systemAgent.agentId": "System Agent Owner",
+  "agents.defaults.authInheritance": "Auth Inheritance Target",
+  "agents.defaults.authInheritance.agentId": "Auth Inheritance Owner",
+  "agents.defaults.sessionStore": "Legacy Session Store Target",
+  "agents.defaults.sessionStore.agentId": "Legacy Session Store Owner",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":

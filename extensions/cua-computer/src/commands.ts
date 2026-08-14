@@ -1,17 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  COMPUTER_USE_V2_ACTION_NAMES,
+  parseComputerActParamsJSON,
+  parseScreenSnapshotParamsJSON,
+  type ComputerActParams,
+  type ComputerUseProvider,
+} from "openclaw/plugin-sdk/computer-use";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createRastermill } from "rastermill";
 import { z } from "zod";
-import {
-  ComputerActParamsSchema,
-  normalizeModifiers,
-  parseKeyChord,
-  scalePoint,
-  type ComputerActParams,
-} from "./actions.js";
+import { normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
 import {
   ClickButton,
   ScrollDirection,
@@ -19,7 +19,9 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
+import { platformActions } from "./driver-result.js";
 import {
+  adoptGeneration,
   issueFrame,
   verifyFrame,
   verifyReferenceWidth,
@@ -28,19 +30,14 @@ import {
   type CuaLastFrame,
   type CuaScreenSize,
 } from "./frame.js";
+import { handleV2Act, type CuaComputerActParams } from "./v2-actions.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
+const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 // Rastermill enforces inputPixels before resizing, so this must clear the native
 // capture, not the delivered frame. 8K (7680x4320 = ~33.2M) is a valid primary
 // display; budget above it so full-resolution snapshots reach the downscaler.
 const MAX_IMAGE_PIXELS = 40_000_000;
-
-const SnapshotParamsSchema = z.strictObject({
-  screenIndex: z.number().int().nonnegative().optional(),
-  maxWidth: z.number().int().positive().optional(),
-  quality: z.number().finite().optional(),
-  format: z.enum(["jpeg", "png"]).optional(),
-});
 
 const DesktopStateSchema = z.object({
   platform: z.string().min(1),
@@ -69,7 +66,7 @@ type ImageProcessor = {
   ): Promise<{ data: Buffer; width: number; height: number }>;
 };
 
-type CuaComputerCommandsOptions = {
+type CuaComputerProviderOptions = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   driver?: CuaDriverSession;
@@ -95,22 +92,6 @@ class PromiseQueue {
       release();
     }
   }
-}
-
-function parseParams<T>(schema: z.ZodType<T>, paramsJSON: string | null | undefined): T {
-  let value: unknown;
-  try {
-    value = JSON.parse(paramsJSON ?? "{}");
-  } catch {
-    throw new Error("COMPUTER_INVALID_REQUEST: params must be valid JSON");
-  }
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) {
-    throw new Error(
-      `COMPUTER_INVALID_REQUEST: ${parsed.error.issues[0]?.message ?? "invalid params"}`,
-    );
-  }
-  return parsed.data;
 }
 
 function assertPrimaryDisplay(screenIndex: number | undefined): void {
@@ -215,7 +196,7 @@ function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
 
 function clickArgs(
   frame: CuaLastFrame,
-  params: ComputerActParams,
+  params: CuaComputerActParams,
   button: ClickButton,
   count: 1 | 2 | 3,
 ) {
@@ -236,7 +217,7 @@ function clickArgs(
 async function currentFrame(
   driver: CuaDriverSession,
   frameState: CuaFrameState,
-  params: ComputerActParams,
+  params: CuaComputerActParams,
   signal?: AbortSignal,
 ): Promise<CuaLastFrame> {
   const current = screenSize(await driver.getScreenSize(signal));
@@ -249,42 +230,46 @@ async function currentFrame(
   return frame;
 }
 
-async function handleAct(
+async function handleDesktopAct(
   driver: CuaDriverSession,
   frameState: CuaFrameState,
   params: ComputerActParams,
   signal?: AbortSignal,
 ): Promise<string> {
-  assertPrimaryDisplay(params.screenIndex);
+  if (!(CUA_WIRE_ACTION_NAMES as readonly string[]).includes(params.action)) {
+    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action}`);
+  }
+  const v1Params = params as CuaComputerActParams;
+  assertPrimaryDisplay(v1Params.screenIndex);
   // `wait` never reaches the wire: core sleeps locally and the Swift wire enum
   // has no wait case, so accepting it here would fork the computer.act contract.
   if (
-    params.action === "hold_key" ||
-    params.action === "left_mouse_down" ||
-    params.action === "left_mouse_up"
+    v1Params.action === "hold_key" ||
+    v1Params.action === "left_mouse_down" ||
+    v1Params.action === "left_mouse_up"
   ) {
     // Upstream has no desktop keyboard-down API, and its Linux mouse hold tools
     // are window-only, so these actions cannot preserve desktop-scope semantics.
-    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action}`);
+    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${v1Params.action}`);
   }
 
   // Every action uses scope:"desktop", a global SendInput/XTest/wayland_desktop
   // injection that is inherently foreground and ignores delivery_mode (that
   // background-vs-foreground contract is window-targeted only). We deliberately
   // never send delivery_mode.
-  switch (params.action) {
+  switch (v1Params.action) {
     case "type": {
-      if (!params.text) {
+      if (!v1Params.text) {
         throw new Error("COMPUTER_INVALID_REQUEST: text is required for type");
       }
-      assertToolSuccess(await driver.typeText(params.text, signal), "type_text");
+      assertToolSuccess(await driver.typeText(v1Params.text, signal), "type_text");
       break;
     }
     case "key": {
       // press_key applies the modifier array on every backend: X11 via XTest,
       // and native Wayland by internally promoting a modifier chord to
       // hotkey_focused. No separate hotkey call is needed for chords.
-      const chord = parseKeyChord(params.keys);
+      const chord = parseKeyChord(v1Params.keys);
       assertToolSuccess(
         await driver.pressKey(
           {
@@ -298,10 +283,10 @@ async function handleAct(
       break;
     }
     case "scroll": {
-      if (!params.scrollDirection) {
+      if (!v1Params.scrollDirection) {
         throw new Error("COMPUTER_INVALID_REQUEST: scrollDirection is required for scroll");
       }
-      if (normalizeModifiers(params.modifiers).length > 0) {
+      if (normalizeModifiers(v1Params.modifiers).length > 0) {
         throw new Error(
           "COMPUTER_UNSUPPORTED_ACTION: modifier-held scroll is unsupported by cua-driver",
         );
@@ -310,20 +295,20 @@ async function handleAct(
       // frame-authorized like clicks. We deliberately do not synthesize a point
       // from get_cursor_position: that mixes cursor and capture coordinate
       // spaces across X11/Wayland/Windows and would scroll an unverified target.
-      const frame = await currentFrame(driver, frameState, params, signal);
-      const point = scalePoint(frame, params.x, params.y, params.action);
+      const frame = await currentFrame(driver, frameState, v1Params, signal);
+      const point = scalePoint(frame, v1Params.x, v1Params.y, v1Params.action);
       const direction = {
         up: ScrollDirection.Up,
         down: ScrollDirection.Down,
         left: ScrollDirection.Left,
         right: ScrollDirection.Right,
-      }[params.scrollDirection];
+      }[v1Params.scrollDirection];
       assertToolSuccess(
         await driver.scroll(
           {
             direction,
             // Schema guarantees a positive amount; cap at the driver's max of 50.
-            amount: BigInt(Math.min(50, params.scrollAmount ?? 3)),
+            amount: BigInt(Math.min(50, v1Params.scrollAmount ?? 3)),
             ...point,
           },
           signal,
@@ -333,49 +318,49 @@ async function handleAct(
       break;
     }
     default: {
-      const frame = await currentFrame(driver, frameState, params, signal);
-      switch (params.action) {
+      const frame = await currentFrame(driver, frameState, v1Params, signal);
+      switch (v1Params.action) {
         case "left_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 1), signal),
             "click",
           );
           break;
         case "right_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Right, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Right, 1), signal),
             "click",
           );
           break;
         case "middle_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Middle, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Middle, 1), signal),
             "click",
           );
           break;
         case "double_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 2), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 2), signal),
             "click",
           );
           break;
         case "triple_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 3), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 3), signal),
             "click",
           );
           break;
         case "mouse_move": {
-          const point = scalePoint(frame, params.x, params.y, params.action);
+          const point = scalePoint(frame, v1Params.x, v1Params.y, v1Params.action);
           assertToolSuccess(await driver.moveCursor(point, signal), "move_cursor");
           break;
         }
         case "left_click_drag": {
-          const from = scalePoint(frame, params.fromX, params.fromY, "drag start");
-          const to = scalePoint(frame, params.x, params.y, "drag end");
+          const from = scalePoint(frame, v1Params.fromX, v1Params.fromY, "drag start");
+          const to = scalePoint(frame, v1Params.x, v1Params.y, "drag end");
           // The typed desktop drag API has no modifier field. Refuse instead of
           // silently widening a model request into an unmodified drag.
-          if (normalizeModifiers(params.modifiers).length > 0) {
+          if (normalizeModifiers(v1Params.modifiers).length > 0) {
             throw new Error(
               "COMPUTER_UNSUPPORTED_ACTION: modifier-held drag is unsupported by cua-driver",
             );
@@ -389,9 +374,9 @@ async function handleAct(
                 toY: to.y,
                 // CUA caps desktop drag duration at 10 seconds; clamp rather than
                 // rejecting a valid computer.act request at the SDK boundary.
-                ...(params.durationMs === undefined
+                ...(v1Params.durationMs === undefined
                   ? {}
-                  : { durationMs: BigInt(Math.min(10_000, params.durationMs)) }),
+                  : { durationMs: BigInt(Math.min(10_000, v1Params.durationMs)) }),
               },
               signal,
             ),
@@ -407,9 +392,9 @@ async function handleAct(
   return JSON.stringify({ ok: true });
 }
 
-export function createCuaComputerCommands(
-  options: CuaComputerCommandsOptions = {},
-): OpenClawPluginNodeHostCommand[] {
+export function createCuaComputerProvider(
+  options: CuaComputerProviderOptions = {},
+): ComputerUseProvider {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   let ownedDriver: CuaDriverSession | undefined;
@@ -429,17 +414,29 @@ export function createCuaComputerCommands(
     await current?.dispose();
   };
   const imageProcessor = options.imageProcessor ?? createImageProcessor(env);
-  const queue = new PromiseQueue();
-  const frameState: CuaFrameState = { generation: "uninitialized" };
   const interval = options.setInterval ?? setInterval;
   const clear = options.clearInterval ?? clearInterval;
   const isSupportedPlatform = platform === "linux" || platform === "win32";
   const isAvailable = () => isSupportedPlatform && driver().isAvailable();
 
-  const snapshot: OpenClawPluginNodeHostCommand = {
-    command: "screen.snapshot",
-    cap: "screen",
-    dangerous: false,
+  return {
+    id: "cua-computer",
+    label: "CUA Computer",
+    capabilities: () => ({
+      contractVersion: 2,
+      provider: {
+        id: "cua-computer",
+        label: "CUA Computer",
+        generation: isSupportedPlatform
+          ? `cua-computer-v2:${driver().generation}`
+          : "cua-computer-v2:unsupported",
+      },
+      actions: platformActions(platform),
+      targets: ["screen", "window", "element"],
+      deliveryModes: ["background", "foreground"],
+      observations: ["image", "accessibility"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    }),
     isAvailable,
     watchAvailability: (_context, onChange) => {
       let knownAvailable = isAvailable();
@@ -457,76 +454,80 @@ export function createCuaComputerCommands(
         void disposeOwnedDriver();
       };
     },
-    handle: async (paramsJSON, _io, context) =>
-      await queue.run(async () => {
-        if (!isSupportedPlatform) {
-          throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux");
-        }
-        const params = parseParams(SnapshotParamsSchema, paramsJSON);
-        assertPrimaryDisplay(params.screenIndex);
-        const format = params.format ?? "jpeg";
-        const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
-        const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
-        const desktop = await driver().getDesktopState(context?.signal);
-        const geometry = desktopGeometry(desktop);
-        // cua-driver desktop input consumes native get_desktop_state PNG pixels,
-        // and on every supported backend the driver reports screen geometry in
-        // that same physical-pixel space (Windows PMv2, Linux X11/Wayland). If a
-        // capture ever diverges from screen geometry, our screenshot->native
-        // scaling would mis-target input, so refuse rather than click blind.
-        if (
-          geometry.screenWidth !== geometry.screenshotWidth ||
-          geometry.screenHeight !== geometry.screenshotHeight
-        ) {
-          throw new Error(
-            "COMPUTER_UNSUPPORTED_DISPLAY: cua-driver reported capture and screen geometry in different pixel spaces",
-          );
-        }
-        const nativePng = desktopPng(desktop);
-        let encoded = nativePng;
-        let width = geometry.screenshotWidth;
-        let height = geometry.screenshotHeight;
-        if (format === "jpeg" || width > maxWidth) {
-          const result = await imageProcessor.encode(nativePng, {
-            format,
-            ...(format === "jpeg" ? { quality: Math.round(quality * 100) } : {}),
-            ...(width > maxWidth ? { resize: { width: maxWidth, enlarge: false } } : {}),
-          });
-          encoded = result.data;
-          width = result.width;
-          height = result.height;
-        }
-        frameState.generation = driver().generation;
-        const displayFrameId = issueFrame(frameState, geometry, { width, height });
-        return JSON.stringify({
-          format,
-          base64: encoded.toString("base64"),
-          displayFrameId,
-          screenIndex: 0,
-          width,
-          height,
-        });
-      }),
+    openExecution: async () => {
+      const queue = new PromiseQueue();
+      const frameState: CuaFrameState = { generation: driver().generation };
+      return {
+        snapshot: async (paramsJSON, signal) =>
+          await queue.run(async () => {
+            if (!isSupportedPlatform) {
+              throw new Error(
+                "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux",
+              );
+            }
+            const params = parseScreenSnapshotParamsJSON(paramsJSON);
+            assertPrimaryDisplay(params.screenIndex);
+            const format = params.format ?? "jpeg";
+            const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
+            const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
+            const desktop = await driver().getDesktopState(signal);
+            const geometry = desktopGeometry(desktop);
+            // cua-driver desktop input consumes native get_desktop_state PNG pixels,
+            // and on every supported backend the driver reports screen geometry in
+            // that same physical-pixel space (Windows PMv2, Linux X11/Wayland). If a
+            // capture ever diverges from screen geometry, our screenshot->native
+            // scaling would mis-target input, so refuse rather than click blind.
+            if (
+              geometry.screenWidth !== geometry.screenshotWidth ||
+              geometry.screenHeight !== geometry.screenshotHeight
+            ) {
+              throw new Error(
+                "COMPUTER_UNSUPPORTED_DISPLAY: cua-driver reported capture and screen geometry in different pixel spaces",
+              );
+            }
+            const nativePng = desktopPng(desktop);
+            let encoded = nativePng;
+            let width = geometry.screenshotWidth;
+            let height = geometry.screenshotHeight;
+            if (format === "jpeg" || width > maxWidth) {
+              const result = await imageProcessor.encode(nativePng, {
+                format,
+                ...(format === "jpeg" ? { quality: Math.round(quality * 100) } : {}),
+                ...(width > maxWidth ? { resize: { width: maxWidth, enlarge: false } } : {}),
+              });
+              encoded = result.data;
+              width = result.width;
+              height = result.height;
+            }
+            adoptGeneration(frameState, driver().generation);
+            const displayFrameId = issueFrame(frameState, geometry, { width, height });
+            return JSON.stringify({
+              format,
+              base64: encoded.toString("base64"),
+              displayFrameId,
+              screenIndex: 0,
+              width,
+              height,
+            });
+          }),
+        act: async (paramsJSON, signal) =>
+          await queue.run(async () => {
+            if (!isSupportedPlatform) {
+              throw new Error(
+                "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux",
+              );
+            }
+            return await handleV2Act(
+              platform,
+              driver(),
+              frameState,
+              parseComputerActParamsJSON(paramsJSON),
+              handleDesktopAct,
+              signal,
+            );
+          }),
+        close: async () => await disposeOwnedDriver(),
+      };
+    },
   };
-
-  const act: OpenClawPluginNodeHostCommand = {
-    command: "computer.act",
-    cap: "computer",
-    dangerous: true,
-    isAvailable,
-    handle: async (paramsJSON, _io, context) =>
-      await queue.run(async () => {
-        if (!isSupportedPlatform) {
-          throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux");
-        }
-        return await handleAct(
-          driver(),
-          frameState,
-          parseParams(ComputerActParamsSchema, paramsJSON),
-          context?.signal,
-        );
-      }),
-  };
-
-  return [snapshot, act];
 }

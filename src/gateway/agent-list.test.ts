@@ -5,10 +5,41 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 
 describe("listGatewayAgentsBasic", () => {
+  it("projects sole, retained-legacy, and explicit fleet ownership honestly", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async () => {
+      expect(listGatewayAgentsBasic({ agents: { entries: { ops: {} } } })).toMatchObject({
+        defaultId: "ops",
+        ownership: "sole",
+        selectionRequired: false,
+      });
+
+      const legacy = retainLegacyDefaultAgentId(
+        { agents: { entries: { first: {}, retired: {}, research: {} } } },
+        "retired",
+      );
+      expect(listGatewayAgentsBasic(legacy)).toMatchObject({
+        defaultId: "retired",
+        ownership: "legacy",
+        selectionRequired: false,
+      });
+
+      expect(
+        listGatewayAgentsBasic({
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        }),
+      ).toMatchObject({
+        defaultId: "ops",
+        ownership: "explicit",
+        selectionRequired: true,
+      });
+    });
+  });
+
   it("retains disk system agents without treating regular disk dirs as roster members", async () => {
     await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
       await Promise.all(

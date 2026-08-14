@@ -380,7 +380,6 @@ function resolveModelAsyncForTest(
   options?: {
     allowBundledStaticCatalogFallback?: boolean;
     preferBundledStaticCatalogTransport?: boolean;
-    retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ReturnType<typeof createRuntimeHooks>;
     skipAgentDiscovery?: boolean;
   },

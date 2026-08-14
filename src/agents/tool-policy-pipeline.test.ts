@@ -1,6 +1,7 @@
 // Tool policy pipeline tests cover profile/allowlist filtering, diagnostics,
 // warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -79,6 +80,33 @@ describe("tool-policy-pipeline", () => {
     });
     const names = filtered.map((t) => (t as unknown as DummyTool).name).toSorted();
     expect(names).toEqual(["plugin_tool"]);
+  });
+
+  test("can freeze an allowlist entry against a later plugin-id collision", () => {
+    const tools = [{ name: "read" }, { name: "future_tool" }];
+    const toolMeta = (tool: DummyTool) =>
+      tool.name === "future_tool" ? { pluginId: "read" } : undefined;
+    const apply = (frozen: boolean) => {
+      const policy = { allow: ["read"] };
+      if (frozen) {
+        markFrozenClawToolAllowPolicy(policy);
+      }
+      return applyToolPolicyPipeline({
+        tools: asPolicyTools(tools),
+        toolMeta,
+        warn: () => {},
+        steps: [
+          {
+            policy,
+            label: "agent tools.allow",
+            stripPluginOnlyAllowlist: true,
+          },
+        ],
+      }).map((tool) => tool.name);
+    };
+
+    expect(apply(false)).toEqual(["future_tool"]);
+    expect(apply(true)).toEqual(["read"]);
   });
 
   test.each([

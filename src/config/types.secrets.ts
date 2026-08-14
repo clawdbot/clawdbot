@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Defines secret reference and resolution configuration types.
 
 /** Supported secret reference backends in config. */
@@ -204,11 +205,7 @@ export function hasConfiguredSecretInput(value: unknown, defaults?: SecretDefaul
 
 /** Trim a literal secret input string while leaving non-string inputs unresolved. */
 export function normalizeSecretInputString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function formatSecretRefLabel(ref: SecretRef): string {
@@ -384,6 +381,10 @@ export type SecretProviderConfig =
   | StoreSecretProviderConfig;
 
 export type SecretsConfig = {
+  egressProxy?: {
+    enabled?: boolean;
+    bypassHosts?: string[];
+  };
   providers?: Record<string, SecretProviderConfig>;
   defaults?: {
     env?: string;

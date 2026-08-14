@@ -19,7 +19,7 @@ import {
   enqueueSessionDeliveryWithStatus,
   loadPendingSessionDeliveries,
 } from "../../infra/session-delivery-queue-storage.js";
-import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue.js";
+import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue-recovery.js";
 import {
   drainSystemEventEntries,
   enqueueSystemEvent,

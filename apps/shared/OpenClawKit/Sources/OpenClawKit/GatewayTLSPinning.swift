@@ -683,25 +683,49 @@ public protocol GatewayTLSRouteMetadataProviding: AnyObject {
     var effectiveTLSFingerprintSHA256: String? { get }
 }
 
-struct GatewayTLSAuthority: Equatable, Sendable {
-    let host: String
-    let port: Int
+public struct GatewayTLSAuthority: Equatable, Sendable {
+    public let scheme: String
+    public let host: String
+    public let port: Int
+    private let defaultPort: Int
 
-    init?(url: URL) {
-        guard let host = Self.normalizedHost(url.host) else { return nil }
+    public init?(url: URL) {
+        guard let scheme = url.scheme?.lowercased(),
+              let defaultPort = Self.defaultPort(for: scheme),
+              let host = Self.normalizedHost(url.host)
+        else { return nil }
+        self.scheme = scheme
         self.host = host
-        self.port = url.port ?? (url.scheme?.lowercased() == "wss" ? 443 : 80)
+        self.port = url.port ?? defaultPort
+        self.defaultPort = defaultPort
     }
 
-    init?(host: String, port: Int) {
-        guard let host = Self.normalizedHost(host) else { return nil }
-        self.host = host
-        self.port = port
+    public func matches(host: String, port: Int) -> Bool {
+        // URLProtectionSpace uses 0 for the protocol's default port. Normalize it here so
+        // every pinned Apple transport reaches the same authority decision.
+        let challengePort = port == 0 ? self.defaultPort : port
+        return Self.normalizedHost(host) == self.host && challengePort == self.port
+    }
+
+    public var serialized: String {
+        let hostPart = self.host.contains(":") ? "[\(self.host)]" : self.host
+        return "\(self.scheme)://\(hostPart)" + (self.port == self.defaultPort ? "" : ":\(self.port)")
+    }
+
+    private static func defaultPort(for scheme: String) -> Int? {
+        switch scheme {
+        case "http", "ws": 80
+        case "https", "wss": 443
+        default: nil
+        }
     }
 
     private static func normalizedHost(_ host: String?) -> String? {
         let value = host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return value.isEmpty ? nil : value
+        guard !value.isEmpty else { return nil }
+        return value.hasPrefix("[") && value.hasSuffix("]")
+            ? String(value.dropFirst().dropLast())
+            : value
     }
 }
 
@@ -871,9 +895,8 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let host = challenge.protectionSpace.host
         let port = challenge.protectionSpace.port
         let expected = self.currentEnforcedFingerprint()
-        let challengedAuthority = GatewayTLSAuthority(host: host, port: port)
         guard let expectedAuthority = self.currentExpectedAuthority(),
-              challengedAuthority == expectedAuthority
+              expectedAuthority.matches(host: host, port: port)
         else {
             self.recordTLSFailure(GatewayTLSValidationFailure(
                 kind: .authorityMismatch,

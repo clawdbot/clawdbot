@@ -481,12 +481,24 @@ Gateway and restore the verified pre-update filesystem, volume, or VM snapshot.
 Preserve the current state separately before restoring because this removes
 changes made after the snapshot.
 
-Broad `openclaw backup create` archives support creation and verification, but
-not in-place whole-archive activation. Extract a broad archive into a staging
-directory and use its `manifest.json` source-to-archive mapping for an offline
-restore. `openclaw backup sqlite restore` likewise writes a verified database
-to a fresh target; activating that target remains an explicit offline operator
-step.
+Restore a broad archive to a fresh staging directory with the current CLI:
+
+```bash
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
+```
+
+The command verifies the archive and its SQLite databases before extraction.
+Activation remains an explicit offline step: stop the Gateway, move the
+restored asset tree into place or point `OPENCLAW_STATE_DIR` at the restored
+state asset, run `openclaw doctor`, then restart.
+
+Treat a state restore as time travel. Ratcheting channel credentials, especially
+WhatsApp, can desynchronize and require relinking. Approvals and
+delivery/dedupe state roll back too, and plugin `node_modules` trees are not
+archived. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the complete activation and recovery sequence. `openclaw backup sqlite
+restore` likewise writes a verified database to a fresh target; activating that
+target remains an explicit offline operator step.
 
 ### Verify the rollback
 

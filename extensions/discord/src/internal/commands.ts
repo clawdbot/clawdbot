@@ -7,6 +7,7 @@ import {
 } from "discord-api-types/v10";
 import type { BaseMessageInteractiveComponent } from "./components.js";
 import type { AutocompleteInteraction, CommandInteraction } from "./interactions.js";
+import { stripUndefinedFields as clean } from "./undefined-fields.js";
 
 type ConditionalCommandOption = (interaction: unknown) => boolean;
 type CommandOption = Record<string, unknown> & {
@@ -24,10 +25,6 @@ type RawSubcommandOption = {
   type?: unknown;
   options?: RawSubcommandOption[];
 };
-
-function clean<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
 
 function resolveConditionalCommandOption(
   value: boolean | ConditionalCommandOption,

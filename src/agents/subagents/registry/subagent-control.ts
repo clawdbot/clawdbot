@@ -21,7 +21,11 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../../routing/session-key.js";
 import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -33,11 +37,13 @@ import {
   type DetachedTaskTerminalState,
 } from "../../../tasks/detached-task-runtime-contract.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import { resolveSessionAgentId } from "../../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../../run-wait.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -154,6 +160,7 @@ async function resolveSubagentControlRuntime(): Promise<{
 /** Controller identity and capability scope resolved from the caller session. */
 export type ResolvedSubagentController = {
   controllerSessionKey: string;
+  controllerAgentId?: string;
   callerSessionKey: string;
   callerIsSubagent: boolean;
   controlScope: "children" | "none";
@@ -162,6 +169,7 @@ export type ResolvedSubagentController = {
 export function resolveSubagentController(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
+  agentId?: string;
 }): ResolvedSubagentController {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   const callerRaw = params.agentSessionKey?.trim() || alias;
@@ -170,9 +178,15 @@ export function resolveSubagentController(params: {
     alias,
     mainKey,
   });
+  const controllerAgentId = resolveSessionAgentId({
+    config: params.cfg,
+    sessionKey: callerSessionKey,
+    agentId: params.agentId,
+  });
   if (!isSubagentSessionKey(callerSessionKey)) {
     return {
       controllerSessionKey: callerSessionKey,
+      controllerAgentId,
       callerSessionKey,
       callerIsSubagent: false,
       controlScope: "children",
@@ -180,30 +194,63 @@ export function resolveSubagentController(params: {
   }
   const capabilities = resolveStoredSubagentCapabilities(callerSessionKey, {
     cfg: params.cfg,
+    agentId: controllerAgentId,
   });
   return {
     controllerSessionKey: callerSessionKey,
+    controllerAgentId,
     callerSessionKey,
     callerIsSubagent: true,
     controlScope: capabilities.controlScope,
   };
 }
 
-function isSubagentRunVisibleToSession(entry: SubagentRunRecord, sessionKey: string): boolean {
+function resolveRunRequesterAgentId(
+  entry: SubagentRunRecord,
+  cfg?: OpenClawConfig,
+): string | undefined {
+  if (entry.requesterAgentId) {
+    return entry.requesterAgentId;
+  }
+  const parsed = parseAgentSessionKey(entry.requesterSessionKey)?.agentId;
+  if (parsed || !cfg) {
+    return parsed;
+  }
+  return resolveSubagentRequesterAgentId(cfg, entry);
+}
+
+function isSubagentRunVisibleToSession(
+  entry: SubagentRunRecord,
+  sessionKey: string,
+  agentId: string,
+  cfg?: OpenClawConfig,
+): boolean {
   const controllerKey = entry.controllerSessionKey?.trim();
   const requesterKey = entry.requesterSessionKey.trim();
   // Completion routing can target a different session than control ownership.
   // Both owners may read the run, while ensureControllerOwnsRun still gates mutations.
-  return controllerKey === sessionKey || requesterKey === sessionKey;
+  const requesterAgentId = resolveRunRequesterAgentId(entry, cfg);
+  const controllerAgentId =
+    (controllerKey ? parseAgentSessionKey(controllerKey)?.agentId : undefined) ?? requesterAgentId;
+  const normalizedAgentId = normalizeAgentId(agentId);
+  return (
+    (controllerKey === sessionKey && controllerAgentId === normalizedAgentId) ||
+    (requesterKey === sessionKey && requesterAgentId === normalizedAgentId)
+  );
 }
 
 /** Builds one stable snapshot for controlled-run listing and descendant status reads. */
-export function buildControlledSubagentRunsReadContext(controllerSessionKey: string): {
+export function buildControlledSubagentRunsReadContext(
+  controllerSessionKey: string,
+  controllerAgentId?: string,
+  cfg?: OpenClawConfig,
+): {
   runs: SubagentRunRecord[];
   countPendingDescendantRuns(rootSessionKey: string): number;
 } {
   const key = controllerSessionKey.trim();
-  if (!key) {
+  const agentId = controllerAgentId ?? parseAgentSessionKey(key)?.agentId;
+  if (!key || !agentId) {
     return {
       runs: [],
       countPendingDescendantRuns: () => 0,
@@ -213,7 +260,7 @@ export function buildControlledSubagentRunsReadContext(controllerSessionKey: str
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
   const readIndex = buildSubagentRunReadIndexFromRuns({ runs: snapshot });
   const filtered = Array.from(readIndex.latestRunsByChildSessionKey.values()).filter((entry) =>
-    isSubagentRunVisibleToSession(entry, key),
+    isSubagentRunVisibleToSession(entry, key, agentId, cfg),
   );
   return {
     runs: sortSubagentRuns(filtered),
@@ -223,16 +270,26 @@ export function buildControlledSubagentRunsReadContext(controllerSessionKey: str
 }
 
 /** Lists latest child runs controlled by a session key. */
-export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
-  return buildControlledSubagentRunsReadContext(controllerSessionKey).runs;
+export function listControlledSubagentRuns(
+  controllerSessionKey: string,
+  controllerAgentId?: string,
+  cfg?: OpenClawConfig,
+): SubagentRunRecord[] {
+  return buildControlledSubagentRunsReadContext(controllerSessionKey, controllerAgentId, cfg).runs;
 }
 
 function ensureControllerOwnsRun(params: {
+  cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
   entry: SubagentRunRecord;
 }) {
   const owner = params.entry.controllerSessionKey?.trim() || params.entry.requesterSessionKey;
-  if (owner === params.controller.controllerSessionKey) {
+  const ownerAgentId =
+    parseAgentSessionKey(owner)?.agentId ?? resolveRunRequesterAgentId(params.entry, params.cfg);
+  const controllerAgentId =
+    params.controller.controllerAgentId ??
+    parseAgentSessionKey(params.controller.controllerSessionKey)?.agentId;
+  if (owner === params.controller.controllerSessionKey && ownerAgentId === controllerAgentId) {
     return undefined;
   }
   return "Subagents can only control runs spawned from their own session.";
@@ -246,8 +303,35 @@ function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendan
   );
 }
 
-function isCurrentSubagentRun(entry: SubagentRunRecord): boolean {
-  return getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry;
+function getLatestOwnedSubagentRun(
+  childSessionKey: string,
+  agentId: string | undefined,
+  cfg: OpenClawConfig,
+): SubagentRunRecord | undefined {
+  // Agent-scoped child keys already carry their sole owner; bare per-agent
+  // keys need an explicit owner to avoid cross-agent shadowing.
+  const ownerFilter = parseAgentSessionKey(childSessionKey) ? undefined : agentId;
+  return (
+    getLatestLiveSubagentRunByChildSessionKey(
+      childSessionKey,
+      ownerFilter
+        ? (candidate) => resolveRunRequesterAgentId(candidate, cfg) === ownerFilter
+        : undefined,
+    ) ?? undefined
+  );
+}
+
+function isCurrentSubagentRun(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
+  if (!cfg) {
+    return getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry;
+  }
+  return (
+    getLatestOwnedSubagentRun(
+      entry.childSessionKey,
+      resolveRunRequesterAgentId(entry, cfg),
+      cfg,
+    ) === entry
+  );
 }
 
 function isSameSubagentRunGeneration(
@@ -404,7 +488,7 @@ async function killSubagentRun(params: {
     scope: resolved.storePath,
     identities: [childSessionKey, sessionId],
     prepare: async () => {
-      if (!isCurrentSubagentRun(params.entry)) {
+      if (!isCurrentSubagentRun(params.entry, params.cfg)) {
         return;
       }
       admittedWorkReleased = await interruptSessionWorkAdmissions({
@@ -423,7 +507,7 @@ async function killSubagentRun(params: {
       }
       // Runtime loading and admission draining yield. Fence the exact row before
       // touching session-owned queues so a successor cannot inherit an older kill.
-      if (!isCurrentSubagentRun(params.entry)) {
+      if (!isCurrentSubagentRun(params.entry, params.cfg)) {
         return { killed: false, sessionId, superseded: true };
       }
       const targetStateAfterRuntimeLoad = resolveSubagentKillTargetState(params.entry);
@@ -438,7 +522,7 @@ async function killSubagentRun(params: {
       }
       let killClaim: ReturnType<typeof claimSubagentRunKill>;
       const killOwnerCurrent = () =>
-        isCurrentSubagentRun(params.entry) &&
+        isCurrentSubagentRun(params.entry, params.cfg) &&
         (!killClaim ||
           ((params.entry.killIntent === killClaim ||
             (params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
@@ -680,7 +764,7 @@ async function killSubagentRunTree(params: {
       if (stopResult.error) {
         errors.push(`${resolveSubagentLabel(stopped.entry)}: ${stopResult.error}`);
       }
-      const stoppedEntryIsCurrent = isCurrentSubagentRun(stopped.entry);
+      const stoppedEntryIsCurrent = isCurrentSubagentRun(stopped.entry, params.cfg);
       if (stopResult.superseded || (!stopResult.killed && !stoppedEntryIsCurrent)) {
         continue;
       }
@@ -733,6 +817,7 @@ export async function killAllControlledSubagentRuns(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
   runs: SubagentRunRecord[];
+  suppressTaskDelivery?: boolean;
 }) {
   if (params.controller.controlScope !== "children") {
     return {
@@ -748,6 +833,7 @@ export async function killAllControlledSubagentRuns(params: {
     cache: new Map<string, Record<string, SessionEntry>>(),
     seenChildSessionKeys: new Set<string>(),
     controllerSessionKey: params.controller.controllerSessionKey,
+    suppressTaskDelivery: params.suppressTaskDelivery,
   });
   if (result.errors.length > 0) {
     return {
@@ -786,6 +872,7 @@ export async function killControlledSubagentRun(params: {
     };
   }
   const ownershipError = ensureControllerOwnsRun({
+    cfg: params.cfg,
     controller: params.controller,
     entry: currentEntry,
   });
@@ -813,7 +900,7 @@ export async function killControlledSubagentRun(params: {
       error: stopResult.error,
     };
   }
-  const stoppedEntryIsCurrent = isCurrentSubagentRun(stopped.entry);
+  const stoppedEntryIsCurrent = isCurrentSubagentRun(stopped.entry, params.cfg);
   if (stopResult.superseded || (!stopResult.killed && !stoppedEntryIsCurrent)) {
     return {
       status: "done" as const,
@@ -884,12 +971,16 @@ export async function killControlledSubagentRun(params: {
 }
 
 /** Admin kill path for a subagent session key, bypassing caller ownership checks. */
-export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessionKey: string }) {
+export async function killSubagentRunAdmin(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+}) {
   const targetSessionKey = params.sessionKey.trim();
   if (!targetSessionKey) {
     return { found: false as const, killed: false };
   }
-  const entry = getLatestLiveSubagentRunByChildSessionKey(targetSessionKey);
+  const entry = getLatestOwnedSubagentRun(targetSessionKey, params.agentId, params.cfg);
   if (!entry) {
     return { found: false as const, killed: false };
   }
@@ -911,7 +1002,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
       error: stopResult.error,
     };
   }
-  const stoppedEntryIsCurrent = isCurrentSubagentRun(stopped.entry);
+  const stoppedEntryIsCurrent = isCurrentSubagentRun(stopped.entry, params.cfg);
   if (stopResult.superseded || (!stopResult.killed && !stoppedEntryIsCurrent)) {
     return {
       found: true as const,
@@ -965,7 +1056,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
       expectedSessionId: resolved.entry?.sessionId,
       expectedLifecycleRevision: resolved.entry?.lifecycleRevision,
       abortedLastRun: false,
-      isCurrent: () => isCurrentSubagentRun(stopped.entry),
+      isCurrent: () => isCurrentSubagentRun(stopped.entry, params.cfg),
     });
   }
 
@@ -1038,6 +1129,7 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const ownershipError = ensureControllerOwnsRun({
+    cfg: params.cfg,
     controller: params.controller,
     entry: currentEntry,
   });
@@ -1361,6 +1453,7 @@ export async function sendControlledSubagentMessage(params: {
   message: string;
 }) {
   const ownershipError = ensureControllerOwnsRun({
+    cfg: params.cfg,
     controller: params.controller,
     entry: params.entry,
   });

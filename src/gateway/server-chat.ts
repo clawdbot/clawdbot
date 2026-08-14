@@ -10,7 +10,6 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
@@ -56,16 +55,15 @@ import type {
 import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
+import { buildGatewaySessionEventRow } from "./session-event-payload.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
-import {
-  resolveSessionSubscriptionKey,
-  resolveSessionSubscriptionKeys,
-} from "./session-subscription-keys.js";
-import { loadSessionEntryReadOnly } from "./session-utils.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
@@ -529,7 +527,7 @@ export function createAgentEventHandler({
     event: AgentEventPayload,
   ): { suppress: boolean } => {
     try {
-      const { entry } = loadSessionEntryReadOnly(sessionKey, {
+      const { entry } = loadGatewaySessionEntryReadOnly(sessionKey, {
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
@@ -571,6 +569,7 @@ export function createAgentEventHandler({
     evt?: AgentEventPayload,
     agentId?: string,
     includeActiveRunState = false,
+    lifecycleProjection = false,
   ) => {
     const snapshotOptions = agentId ? { agentId } : undefined;
     const lifecycleSnapshot = loadGatewaySessionLifecycleSnapshotForEvent(
@@ -619,9 +618,14 @@ export function createAgentEventHandler({
       : {};
     const clearsLastRunError =
       Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
-    const session = row
+    const projectedRow = row
+      ? lifecycleProjection
+        ? buildGatewaySessionEventRow(row, { lifecycle: true })
+        : row
+      : undefined;
+    const session = projectedRow
       ? {
-          ...row,
+          ...projectedRow,
           ...lifecyclePatch,
           ...activeRunFields,
           // JSON drops undefined values, so a start/success must send null to
@@ -671,17 +675,17 @@ export function createAgentEventHandler({
       lastTo: row?.lastTo,
       lastAccountId: row?.lastAccountId,
       lastThreadId: row?.lastThreadId,
-      totalTokens: row?.totalTokens,
-      totalTokensFresh: row?.totalTokensFresh,
+      totalTokens: projectedRow?.totalTokens,
+      totalTokensFresh: projectedRow?.totalTokensFresh,
       ...(omitUnscopedGlobalGoal ? {} : { goal: row?.goal ?? null }),
-      contextTokens: row?.contextTokens,
-      estimatedCostUsd: row?.estimatedCostUsd,
+      contextTokens: projectedRow?.contextTokens,
+      estimatedCostUsd: projectedRow?.estimatedCostUsd,
       responseUsage: row?.responseUsage,
       // Carry the row-built channel-aware effective mode so the chat snapshot
       // matches the session-event/list projections.
       effectiveResponseUsage: row?.effectiveResponseUsage,
-      modelProvider: row?.modelProvider,
-      model: row?.model,
+      modelProvider: projectedRow?.modelProvider,
+      model: projectedRow?.model,
       ...activeRunFields,
       status: snapshotSource.status,
       lastRunError: snapshotSource.lastRunError ?? null,
@@ -693,12 +697,17 @@ export function createAgentEventHandler({
   };
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
-    const canonicalKey = resolveSessionSubscriptionKey(sessionKey, agentId ?? "");
-    if (canonicalKey === sessionKey) {
-      return [canonicalKey];
+    if (sessionKey.trim().toLowerCase() !== "global") {
+      return [sessionKey];
     }
-    const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-    return resolveSessionSubscriptionKeys(sessionKey, agentId ?? defaultAgentId, defaultAgentId);
+    const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+      getRuntimeConfig(),
+      sessionKey,
+    );
+    const deliveryAgentId = agentId ?? compatibilityOwnerAgentId;
+    return deliveryAgentId
+      ? resolveSessionSubscriptionKeys(sessionKey, deliveryAgentId, compatibilityOwnerAgentId)
+      : [];
   };
   const sendNodeSessionPayloadForAgent = (
     sessionKey: string,
@@ -818,8 +827,9 @@ export function createAgentEventHandler({
     const validationAbortErrorMessage =
       opts?.validationAbortErrorMessage ??
       readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+    const terminalClassification = classifyAgentRunTerminalOutcome(terminalOutcome);
     const classifiedTerminalState =
-      CHAT_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminalOutcome)];
+      CHAT_STATE_BY_TERMINAL_CLASSIFICATION[terminalClassification];
     const terminalState = validationAbortErrorMessage ? "aborted" : classifiedTerminalState;
     const yieldedWaiting = isAgentLifecycleYieldedWaiting({
       phase: lifecyclePhase,
@@ -866,8 +876,13 @@ export function createAgentEventHandler({
             terminalState,
             terminalOutcome.error ?? evt.data?.error,
             terminalOutcome.stopReason,
-            readChatErrorKind(evt.data?.errorKind) ??
-              resolveChatErrorKindFromError(evt.data?.error),
+            // Timeout is a recorded classification, not event metadata: the
+            // lifecycle producer emits no errorKind, so without this the UI
+            // shows a generic "failed" while sessions.list says "timeout".
+            terminalClassification === "timeout"
+              ? "timeout"
+              : (readChatErrorKind(evt.data?.errorKind) ??
+                  resolveChatErrorKindFromError(evt.data?.error)),
             {
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,
@@ -943,7 +958,7 @@ export function createAgentEventHandler({
               runId: evt.runId,
               ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
               ts: evt.ts,
-              ...buildSessionEventSnapshot(sessionKey, snapshotEvent, sessionAgentId, true),
+              ...buildSessionEventSnapshot(sessionKey, snapshotEvent, sessionAgentId, true, true),
             },
             sessionEventConnIds,
             { dropIfSlow: true },
@@ -1383,7 +1398,7 @@ export function createAgentEventHandler({
       return runVerbose ?? "off";
     }
     try {
-      const { cfg, entry } = loadSessionEntryReadOnly(sessionKey);
+      const { cfg, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
       const sessionChangedAfterRunStarted =
@@ -1830,7 +1845,7 @@ export function createAgentEventHandler({
             runId: evt.runId,
             ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
             ts: evt.ts,
-            ...buildSessionEventSnapshot(sessionKey, evt, sessionAgentId, true),
+            ...buildSessionEventSnapshot(sessionKey, evt, sessionAgentId, true, true),
           },
           sessionEventConnIds,
           { dropIfSlow: true },

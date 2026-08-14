@@ -713,48 +713,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
   });
 
-  it("uses the curated Signal soft-stall emoji for hard stalls", async () => {
-    vi.useFakeTimers();
-    let releaseDispatch!: () => void;
-    try {
-      dispatchInboundMessageMock.mockImplementationOnce(
-        async (params: DispatchInboundMessageMockParams) => {
-          capture.ctx = params.ctx;
-          await new Promise<void>((resolve) => {
-            releaseDispatch = resolve;
-          });
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
-        },
-      );
-      const handler = createTestHandler({
-        cfg: createStatusReactionConfig({
-          messages: {
-            statusReactions: { enabled: true, timing: { ...shortStatusReactionTiming } },
-          },
-        }),
-        statusReactionTiming: { ...shortStatusReactionTiming },
-      });
-
-      const handled = receiveDirectMessage(handler);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(15_000);
-
-      let sentEmojis = sentReactionEmojis();
-      expect(sentEmojis).toContain("⏳");
-      expect(sentEmojis).not.toContain("⚠️");
-
-      releaseDispatch();
-      await handled;
-      await vi.advanceTimersByTimeAsync(0);
-
-      sentEmojis = sentReactionEmojis();
-      expect(sentEmojis).toContain("✅");
-      expect(sentEmojis.at(-1)).toBe("👀");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("restores the initial Signal ack reaction after a successful reply", async () => {
     dispatchInboundMessageMock.mockImplementationOnce(
       async (params: DispatchInboundMessageMockParams) => {

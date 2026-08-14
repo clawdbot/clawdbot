@@ -251,6 +251,7 @@ export function resolveFollowupDeliveryDecision(params: {
   }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,
+    agentDir: turn.queued.run.agentDir,
     sessionRaw: turn.session.current()?.responseUsage,
     channel: resolveOriginMessageProvider({
       originatingChannel: turn.queued.originatingChannel,

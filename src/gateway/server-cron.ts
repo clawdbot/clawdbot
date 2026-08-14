@@ -2,15 +2,21 @@
 // plugin hooks, notifications, and cron lifecycle cleanup.
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, listAgentIds } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryGetLegacyDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
+import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
+  resolveSystemMainSessionTarget,
 } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -19,6 +25,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import {
   buildCronCommandSummary,
   redactCronCommandSummaryForExternalDelivery,
@@ -55,6 +62,7 @@ import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -372,7 +380,7 @@ export function buildGatewayCronService(params: {
     const runtimeConfig = getRuntimeConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const defaultAgentId = resolveDefaultAgentId(runtimeConfig);
+    const defaultAgentId = tryResolveLegacyCompatibilityAgentId(runtimeConfig);
     if (
       normalized !== undefined &&
       normalized !== defaultAgentId &&
@@ -380,7 +388,10 @@ export function buildGatewayCronService(params: {
     ) {
       throw new Error(`cron job agent is unavailable: ${normalized}`);
     }
-    const agentId = normalized ?? defaultAgentId;
+    const agentId = resolveCronJobEffectiveAgentId(
+      normalized ? { agentId: normalized } : {},
+      defaultAgentId,
+    );
     if (isAgentDeletionBlocked(agentId)) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
     }
@@ -441,6 +452,10 @@ export function buildGatewayCronService(params: {
     if (opts?.preserveUntargeted && !requestedAgentId && !requestedSessionKey) {
       return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
     }
+    if (!requestedAgentId && !requestedSessionKey) {
+      const runtimeConfig = getRuntimeConfig();
+      return { runtimeConfig, ...resolveSystemMainSessionTarget(runtimeConfig) };
+    }
 
     // Derive from canonical agent-prefixed keys only. Relative keys intentionally
     // fall through to the configured default instead of hardcoding "main".
@@ -492,10 +507,11 @@ export function buildGatewayCronService(params: {
     return sanitizeCronHeartbeatOverride(heartbeatOverride);
   };
 
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveSessionStorePathCore(params.cfg.session?.store, {
-      agentId: agentId ?? defaultAgentId,
+      agentId: agentId ?? resolveSessionStoreCompatibilityAgentId(getRuntimeConfig()),
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
   const scriptRuntime =
@@ -710,8 +726,9 @@ export function buildGatewayCronService(params: {
             }),
         }
       : {}),
-    defaultAgentId,
-    resolveDefaultAgentId: () => resolveDefaultAgentId(getRuntimeConfig()),
+    ...(defaultAgentId ? { defaultAgentId } : {}),
+    ...(legacyDefaultAgentId ? { legacyDefaultAgentId } : {}),
+    resolveDefaultAgentId: () => tryResolveLegacyCompatibilityAgentId(getRuntimeConfig()),
     resolveSessionStoreAgentIds: () => {
       const cfg = getRuntimeConfig();
       try {
@@ -730,15 +747,21 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      const { sessionKey } = resolveCronTarget(opts);
-      if (!sessionKey) {
-        throw new Error("Cron system event target did not resolve a session key.");
+      const { agentId, sessionKey } = resolveCronTarget(opts);
+      if (!agentId || !sessionKey) {
+        throw new Error("Cron system event target did not resolve an owner and session key.");
       }
-      const remove = enqueueSystemEventWithReceipt(text, {
-        sessionKey,
-        contextKey: opts?.contextKey,
-        deliveryContext: opts?.deliveryContext,
-      });
+      const remove = enqueueSystemEventWithReceipt(
+        text,
+        withSystemEventOwner(
+          {
+            sessionKey,
+            contextKey: opts?.contextKey,
+            deliveryContext: opts?.deliveryContext,
+          },
+          agentId,
+        ),
+      );
       return remove ? { accepted: true, remove } : { accepted: false };
     },
     resolveOriginDeliveryContext: (opts) => {
@@ -755,7 +778,10 @@ export function buildGatewayCronService(params: {
       return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, sessionKey });
     },
     requestHeartbeat: (opts) => {
-      const { agentId, sessionKey } = resolveCronTarget({ ...opts, preserveUntargeted: true });
+      const { agentId, sessionKey } = resolveCronTarget({
+        ...opts,
+        preserveUntargeted: opts?.source !== "manual",
+      });
       requestHeartbeat({
         source: opts?.source ?? "cron",
         intent: opts?.intent ?? "event",

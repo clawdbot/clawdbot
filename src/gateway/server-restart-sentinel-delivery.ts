@@ -23,7 +23,7 @@ import {
   SessionDeliveryDeferredError,
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
-} from "../infra/session-delivery-queue.js";
+} from "../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";

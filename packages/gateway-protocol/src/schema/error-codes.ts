@@ -18,6 +18,8 @@ export {
   type McpAppViewExpiredErrorDetails,
   type MissingScopeErrorDetails,
   type UserPrefsLimitExceededErrorDetails,
+  type ProjectCloneErrorDetails,
+  type ProjectCloneFailureCause,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
   isMcpAppViewExpiredError,
@@ -51,11 +53,19 @@ export const WizardNotFoundErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.WIZARD_NOT_FOUND),
 });
 
+export const ProjectCloneErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.PROJECT_CLONE_FAILED),
+  cause: Type.String({
+    enum: ["invalid_url", "auth_required", "not_found", "network", "target_exists", "clone_failed"],
+  }),
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
+  ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
 ]);

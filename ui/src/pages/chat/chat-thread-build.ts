@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -8,6 +9,7 @@ import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
+  advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
@@ -20,7 +22,6 @@ import {
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import {
   buildCompactionDividerItem,
   buildResetDividerItem,
@@ -29,7 +30,6 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import {
-  annotateToolTurnOutcome,
   coalesceToolActivityMessages,
   groupMessages,
   isKeyedAssistantStreamFallbackMessage,
@@ -479,8 +479,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       const visibleText = usesAccumulatedText
         ? trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText)
         : text;
-      if (usesAccumulatedText && text.length > 0) {
-        previousAccumulatedStreamText = text;
+      if (usesAccumulatedText) {
+        previousAccumulatedStreamText = advanceAccumulatedStreamText(
+          previousAccumulatedStreamText,
+          text,
+        );
       }
       if (visibleText.length > 0) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
@@ -615,7 +618,5 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
 
-  return annotateToolTurnOutcome(
-    groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items))),
-  );
+  return groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items)));
 }

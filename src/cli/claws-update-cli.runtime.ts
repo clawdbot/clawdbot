@@ -136,7 +136,9 @@ export async function runClawsUpdateCommand(
     source = recorded.kind === "package" ? recorded.packageRoot : recorded.manifestPath;
   }
 
-  const loaded = await readClawManifestFile(source);
+  const loaded = await readClawManifestFile(source, {
+    allowLegacyDynamicToolProfile: !opts.from,
+  });
   if (!loaded.ok) {
     const diagnostics = opts.from
       ? loaded.diagnostics

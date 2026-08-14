@@ -1,4 +1,5 @@
 /** Prepares exec workdir and environment facts before policy and host dispatch. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
@@ -96,7 +97,7 @@ function buildChannelContextEnv(
 }
 
 function isExecToolArgsObject(value: unknown): value is ExecToolArgs {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, string> | undefined {
@@ -355,9 +356,14 @@ export function resolvePreparedExecEnvironment(params: {
   defaultPathPrepend: string[];
   pluginEnv?: Record<string, string>;
   storeEnv?: Record<string, string>;
+  storeSecretEnv?: Record<string, string>;
+  secretEgressEnv?: Record<string, string>;
   warnings: string[];
 }): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
   const inheritedBaseEnv = coerceEnv(process.env);
+  if (params.secretEgressEnv) {
+    Object.assign(inheritedBaseEnv, params.secretEgressEnv);
+  }
   const channelContextEnv = buildChannelContextEnv(params.channelContext);
   const explicitEnv: Record<string, string> | undefined =
     params.execParams.env !== undefined ||
@@ -399,20 +405,23 @@ export function resolvePreparedExecEnvironment(params: {
     );
   }
   const hasStoreEnv = storeEnv && Object.keys(storeEnv).length > 0;
-  const requestedEnv: Record<string, string> | undefined = hasStoreEnv
+  const untrustedRequestedEnv: Record<string, string> | undefined = hasStoreEnv
     ? { ...storeEnv, ...explicitEnv }
     : explicitEnv;
+  const requestedEnv: Record<string, string> | undefined = params.storeSecretEnv
+    ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
+    : untrustedRequestedEnv;
   const hostEnvResult =
     params.host === "sandbox"
       ? null
       : sanitizeHostExecEnvWithDiagnostics({
           baseEnv: inheritedBaseEnv,
-          overrides: requestedEnv,
+          overrides: untrustedRequestedEnv,
           blockPathOverrides: true,
         });
   if (
     hostEnvResult &&
-    requestedEnv &&
+    untrustedRequestedEnv &&
     (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
       hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
   ) {
@@ -449,7 +458,7 @@ export function resolvePreparedExecEnvironment(params: {
     params.sandbox && params.host === "sandbox"
       ? buildSandboxEnv({
           defaultPath: DEFAULT_PATH,
-          paramsEnv: requestedEnv,
+          paramsEnv: untrustedRequestedEnv,
           sandboxEnv: params.sandbox.env,
           containerWorkdir: params.containerWorkdir ?? params.sandbox.containerWorkdir,
         })
@@ -471,6 +480,19 @@ export function resolvePreparedExecEnvironment(params: {
     );
   } else {
     applyPathPrepend(env, params.defaultPathPrepend);
+  }
+
+  if (params.storeSecretEnv) {
+    // Secret-kind entries are authenticated ciphertext, not active credentials.
+    // Inject them after ordinary env filtering so names such as GH_TOKEN remain usable.
+    for (const [key, value] of Object.entries(params.storeSecretEnv)) {
+      if (!explicitEnv || !Object.hasOwn(explicitEnv, key)) {
+        env[key] = value;
+      }
+    }
+  }
+  if (params.secretEgressEnv) {
+    Object.assign(env, params.secretEgressEnv);
   }
 
   return { env, requestedEnv };

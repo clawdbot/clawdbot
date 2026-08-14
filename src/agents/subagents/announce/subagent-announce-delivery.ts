@@ -10,17 +10,24 @@ import type { ContinuationTrigger } from "../../../auto-reply/get-reply-options.
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery.js";
 import { isContinuationHeartbeatEquivalent } from "../../../auto-reply/reply/run-provenance.js";
+import { getRuntimeConfig } from "../../../config/config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { callGateway } from "../../../gateway/call.js";
+import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import { normalizeDiagnosticTraceparent } from "../../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { isOutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
+import { sendMessage } from "../../../infra/outbound/message.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
-} from "../../../infra/session-delivery-queue.js";
+} from "../../../infra/session-delivery-queue-storage.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import { normalizeMainKey, parseAgentSessionKey } from "../../../routing/session-key.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   isAgentMediatedCompletionSourceTool,
@@ -36,7 +43,6 @@ import {
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
-import { resolveDefaultAgentId } from "../../agent-scope-config.js";
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
@@ -52,7 +58,13 @@ import {
   hasVisibleAgentPayload,
 } from "../../embedded-agent-runner/message-visibility.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
+import {
+  isEmbeddedAgentRunActive,
+  isEmbeddedRunAbandoned,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+  resolveActiveEmbeddedRunSessionId,
+  type EmbeddedAgentQueueMessageOutcome,
+} from "../../embedded-agent-runner/runs.js";
 import { isFailoverError } from "../../failover-error.js";
 import { mediaUrlsFromGeneratedAttachments } from "../../generated-attachments.js";
 import {
@@ -66,20 +78,10 @@ import {
 import { admitCorrelatedSubagentSessionDelivery } from "../completion/subagent-completion-delivery.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
-  callGateway,
-  dispatchGatewayMethodInProcess,
-  isEmbeddedAgentRunActive,
-  isEmbeddedRunAbandoned,
-  getRuntimeConfig,
   formatEmbeddedAgentQueueFailureSummary,
-  loadSessionEntry,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
-  resolveAgentIdFromSessionKey,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
-  resolveSessionStorePathCore,
-  sendMessage,
+  tryResolveSubagentRequesterAgentId,
 } from "./subagent-announce-delivery.runtime.js";
 import {
   runSubagentAnnounceDispatch,
@@ -95,10 +97,14 @@ import {
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+
 type SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
-  getRequesterSessionActivity: (requesterSessionKey: string) => {
+  getRequesterSessionActivity: (
+    requesterSessionKey: string,
+    requesterAgentId?: string,
+  ) => {
     sessionId?: string;
     isActive: boolean;
   };
@@ -116,10 +122,24 @@ type SubagentAnnounceDeliveryDeps = {
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
-  getRequesterSessionActivity: (requesterSessionKey: string) => {
-    const sessionId =
-      resolveActiveEmbeddedRunSessionId(requesterSessionKey) ??
-      loadRequesterSessionEntry(requesterSessionKey).entry?.sessionId;
+  getRequesterSessionActivity: (requesterSessionKey: string, requesterAgentId?: string) => {
+    const cfg = getRuntimeConfig();
+    const resolvedAgentId = tryResolveSubagentRequesterAgentId(
+      cfg,
+      requesterSessionKey,
+      requesterAgentId,
+    );
+    if (!resolvedAgentId) {
+      return { isActive: false };
+    }
+    const storedSessionId = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId).entry
+      ?.sessionId;
+    // Unscoped active-run keys are ambiguous across agents. An explicit owner
+    // must use its logical store entry instead of another agent's run.
+    const activeSessionId = parseAgentSessionKey(requesterSessionKey)
+      ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
+      : undefined;
+    const sessionId = activeSessionId ?? storedSessionId;
     return {
       sessionId,
       isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
@@ -176,12 +196,27 @@ function formatQueueWakeFailureError(
   return summary ? `${fallback}: ${summary}` : fallback;
 }
 
-function resolveRequesterSessionActivity(requesterSessionKey: string) {
-  const activity = subagentAnnounceDeliveryDeps.getRequesterSessionActivity(requesterSessionKey);
+function resolveRequesterSessionActivity(requesterSessionKey: string, requesterAgentId?: string) {
+  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
+  const resolvedAgentId = tryResolveSubagentRequesterAgentId(
+    cfg,
+    requesterSessionKey,
+    requesterAgentId,
+  );
+  if (!resolvedAgentId) {
+    return { isActive: false };
+  }
+  const activity = subagentAnnounceDeliveryDeps.getRequesterSessionActivity(
+    requesterSessionKey,
+    resolvedAgentId,
+  );
   if (activity.sessionId || activity.isActive) {
     return activity;
   }
-  const { entry } = loadRequesterSessionEntry(requesterSessionKey);
+  const { entry } = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
+    requesterSessionKey,
+    resolvedAgentId,
+  );
   const sessionId = entry?.sessionId;
   return {
     sessionId,
@@ -574,26 +609,38 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   return await params.run();
 }
 
-export function loadRequesterSessionEntry(requesterSessionKey: string) {
+export function loadRequesterSessionEntry(requesterSessionKey: string, explicitAgentId?: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-  const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
-  const agentId = resolveAgentIdFromSessionKey(canonicalKey, resolveDefaultAgentId(cfg));
+  const rawStorageKey = requesterSessionKey.trim();
+  const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey, explicitAgentId);
+  const configuredMainKey = normalizeMainKey(cfg.session?.mainKey);
+  const storageKey =
+    rawStorageKey === "main" || rawStorageKey === configuredMainKey ? canonicalKey : rawStorageKey;
+  const agentId = tryResolveSubagentRequesterAgentId(cfg, rawStorageKey, explicitAgentId);
+  if (!agentId) {
+    return { cfg, entry: undefined, canonicalKey };
+  }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const entry = subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
-    sessionKey: canonicalKey,
+    sessionKey: storageKey,
+    agentId,
     clone: false,
   });
   return { cfg, entry, canonicalKey };
 }
 
-export function loadSessionEntryByKey(sessionKey: string) {
+export function loadSessionEntryByKey(sessionKey: string, explicitAgentId?: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
+  const agentId = tryResolveSubagentRequesterAgentId(cfg, sessionKey, explicitAgentId);
+  if (!agentId) {
+    return undefined;
+  }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   return subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
     sessionKey,
+    agentId,
     clone: false,
   });
 }
@@ -601,6 +648,7 @@ export function loadSessionEntryByKey(sessionKey: string) {
 async function maybeSteerSubagentAnnounce(params: {
   deliveryTimeoutMs?: number;
   requesterSessionKey: string;
+  requesterAgentId?: string;
   steerMessage: string;
   signal?: AbortSignal;
   isSourceSessionEffectsAllowed?: () => boolean;
@@ -611,9 +659,24 @@ async function maybeSteerSubagentAnnounce(params: {
   if (params.signal?.aborted) {
     return { status: "none" };
   }
-  const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
+  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
+  const requesterAgentId = tryResolveSubagentRequesterAgentId(
+    cfg,
+    params.requesterSessionKey,
+    params.requesterAgentId,
+  );
+  if (!requesterAgentId) {
+    return { status: "none" };
+  }
+  const { entry } = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
+    params.requesterSessionKey,
+    requesterAgentId,
+  );
+  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey, requesterAgentId);
+  const { sessionId, isActive } = resolveRequesterSessionActivity(
+    params.requesterSessionKey,
+    requesterAgentId,
+  );
   if (subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(canonicalKey, sessionId)) {
     return { status: "none" };
   }
@@ -659,7 +722,10 @@ async function maybeSteerSubagentAnnounce(params: {
   if (queueOutcome.reason === "stale_run") {
     return { status: "none" };
   }
-  const currentActivity = resolveRequesterSessionActivity(canonicalKey);
+  const currentActivity = resolveRequesterSessionActivity(
+    params.requesterSessionKey,
+    requesterAgentId,
+  );
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }
 
@@ -731,6 +797,7 @@ function hasFailedSubagentNoOutputCompletion(events: readonly AgentInternalEvent
 async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
+  requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {
     deliver: boolean;
@@ -753,17 +820,21 @@ async function deliverCompletionDirect(params: {
   ) {
     return undefined;
   }
-  const agentId = resolveAgentIdFromSessionKey(
+  const agentId = tryResolveSubagentRequesterAgentId(
+    params.cfg,
     params.requesterSessionKey,
-    resolveDefaultAgentId(params.cfg),
+    params.requesterAgentId,
   );
+  if (!agentId) {
+    return undefined;
+  }
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
   try {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
       return sourceOwnerChangedResult();
     }
-    await subagentAnnounceDeliveryDeps.sendMessage({
+    const sendResult = await subagentAnnounceDeliveryDeps.sendMessage({
       cfg: params.cfg,
       channel: params.deliveryTarget.channel,
       to: params.deliveryTarget.to,
@@ -789,7 +860,23 @@ async function deliverCompletionDirect(params: {
         idempotencyKey,
       },
     });
-    return committedDelivery ?? { delivered: true, path: "direct" };
+    if (committedDelivery) {
+      return committedDelivery;
+    }
+    if (sendResult.deliveryStatus === "suppressed") {
+      const ambiguous = sendResult.suppressionReason === "adapter_returned_no_identity";
+      return {
+        delivered: false,
+        path: "direct",
+        error: ambiguous
+          ? "text completion direct delivery could not be confirmed: adapter returned no identity"
+          : `text completion direct delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+        ...(ambiguous
+          ? { disposition: "ambiguous" as const }
+          : { disposition: "intentional_non_delivery" as const, terminal: true }),
+      };
+    }
+    return { delivered: true, path: "direct" };
   } catch (err) {
     if (committedDelivery) {
       // Post-send bookkeeping must never turn an identified delivery into a
@@ -863,6 +950,7 @@ function hasMessagingToolDeliveryToSource(
 
 async function sendSubagentAnnounceDirectly(params: {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   targetRequesterSessionKey: string;
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
@@ -895,6 +983,7 @@ async function sendSubagentAnnounceDirectly(params: {
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
+    params.requesterAgentId,
   );
   try {
     // Merge completionDirectOrigin with directOrigin so that missing fields
@@ -908,6 +997,7 @@ async function sendSubagentAnnounceDirectly(params: {
       : requesterSessionOrigin;
     const requesterEntry = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
       params.targetRequesterSessionKey,
+      params.requesterAgentId,
     ).entry;
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
@@ -963,7 +1053,10 @@ async function sendSubagentAnnounceDirectly(params: {
     const requiresMessageToolDelivery =
       completionRouteRequiresMessageToolDelivery ||
       subagentDirectMessageCompletionRequiresMessageTool;
-    const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    const requesterActivity = resolveRequesterSessionActivity(
+      params.targetRequesterSessionKey,
+      params.requesterAgentId,
+    );
     if (
       params.expectsCompletionMessage &&
       subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(
@@ -996,6 +1089,7 @@ async function sendSubagentAnnounceDirectly(params: {
       deliverCompletionDirect({
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
+        requesterAgentId: params.requesterAgentId,
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,
         internalEvents: params.internalEvents,
@@ -1060,7 +1154,8 @@ async function sendSubagentAnnounceDirectly(params: {
     if (
       params.expectsCompletionMessage &&
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
-      !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive &&
+      !resolveRequesterSessionActivity(params.targetRequesterSessionKey, params.requesterAgentId)
+        .isActive &&
       !agentMediatedCompletion
     ) {
       return {
@@ -1372,6 +1467,7 @@ async function sendSubagentAnnounceDirectly(params: {
 
 export async function deliverSubagentAnnouncement(params: {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   announceId?: string;
   triggerMessage: string;
   steerMessage: string;
@@ -1418,7 +1514,11 @@ export async function deliverSubagentAnnouncement(params: {
         : undefined;
       const traceparent = normalizeDiagnosticTraceparent(params.traceparent);
       const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-      const canonicalSessionKey = resolveRequesterStoreKey(cfg, params.targetRequesterSessionKey);
+      const canonicalSessionKey = resolveRequesterStoreKey(
+        cfg,
+        params.targetRequesterSessionKey,
+        params.requesterAgentId,
+      );
       const queuedRoute = resolveGeneratedMediaSessionDeliveryRoute({
         sessionKey: canonicalSessionKey,
         completionDirectOrigin: params.completionDirectOrigin,
@@ -1433,6 +1533,7 @@ export async function deliverSubagentAnnouncement(params: {
       });
       const requesterEntry = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
         params.targetRequesterSessionKey,
+        params.requesterAgentId,
       ).entry;
       // No external route exists for an internal-only handoff. Let the normal
       // agent final enter the owning transcript instead of requiring a message tool target.
@@ -1531,6 +1632,7 @@ export async function deliverSubagentAnnouncement(params: {
           subagentAnnounceDeliveryDeps.getRuntimeConfig(),
         ),
         requesterSessionKey: params.requesterSessionKey,
+        requesterAgentId: params.requesterAgentId,
         steerMessage: params.steerMessage,
         signal: params.signal,
         isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
@@ -1542,6 +1644,7 @@ export async function deliverSubagentAnnouncement(params: {
       }
       return await sendSubagentAnnounceDirectly({
         requesterSessionKey: params.requesterSessionKey,
+        requesterAgentId: params.requesterAgentId,
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
         internalEvents: params.internalEvents,

@@ -171,6 +171,7 @@ describe("embedded run retry dispatch", () => {
       await expect(dispatchEmbeddedRunAttempt(input)).rejects.toBe(postCompactionAbortError);
 
       expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
+        requesterAgentId: "main",
         requesterSessionKey: "agent:main:session-1",
         requesterTurnRunId: "run-1",
         requesterYielded: yieldDetected,

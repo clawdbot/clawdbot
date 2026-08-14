@@ -2,18 +2,18 @@
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentEntries } from "../../agents/agent-scope.js";
 import {
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
 import {
   isIncognitoSessionKey,
-  LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
@@ -160,11 +160,11 @@ function resolveGatewaySessionStoreTargets(
 ): ResolvedGatewaySessionStoreTargets {
   const storeConfig = cfg.session?.store;
   const diagnostics: string[] = [];
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const requestedAgentId =
     typeof opts.agentId === "string" && opts.agentId.trim()
       ? normalizeAgentId(opts.agentId)
       : undefined;
+  const defaultAgentId = normalizeAgentId(resolveSessionStoreCompatibilityAgentId(cfg));
   const configuredAgentIds =
     opts.configuredAgentsOnly === true && !requestedAgentId
       ? new Set(listConfiguredSessionStoreAgentIds(cfg))
@@ -185,7 +185,6 @@ function resolveGatewaySessionStoreTargets(
         ...listAgentEntries(cfg).map((entry) => normalizeAgentId(entry.id)),
         ...listKnownSessionStoreAgentIds(cfg),
         defaultAgentId,
-        LEGACY_IMPLICIT_AGENT_ID,
         ...(requestedAgentId ? [requestedAgentId] : []),
       ]),
     ];
@@ -231,13 +230,12 @@ export function canPrewarmCombinedSessionStoresForGateway(
   cfg: OpenClawConfig,
   params: { agentIds: readonly string[]; maxRows: number },
 ): boolean {
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   let totalRows = 0;
   for (const agentId of params.agentIds) {
     const resolved = resolveGatewaySessionStoreTargets(cfg, { agentId });
     const projectionTargets = dedupeSessionStoreTargetsBySqliteTarget(
       [...resolved.durableTargets, ...resolved.incognitoTargets],
-      { defaultAgentId },
+      { defaultAgentId: resolved.defaultAgentId },
     );
     for (const target of projectionTargets) {
       totalRows += countSessionEntryRowsReadOnly(target);

@@ -262,6 +262,21 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes node-host executable resolution and native coverage to Windows", () => {
+    for (const executablePath of [
+      "src/plugin-sdk/node-host.ts",
+      "src/plugin-sdk/node-host.test.ts",
+      "src/process/terminal-pty.test.ts",
+      "src/tui/tui.ts",
+      "src/tui/tui.resolve-codex-bin.test.ts",
+    ]) {
+      expect(detectChangedScope([executablePath]), executablePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes explicit memory extra-file owners and native coverage to Windows", () => {
     for (const memoryPath of [
       "packages/memory-host-sdk/src/host/explicit-extra-markdown.ts",

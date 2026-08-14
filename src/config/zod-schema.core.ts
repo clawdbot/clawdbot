@@ -204,6 +204,13 @@ export const SecretProviderSchema = z.union([
 /** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
+    egressProxy: z
+      .object({
+        enabled: z.boolean().optional(),
+        bypassHosts: z.array(z.string().trim().min(1)).max(256).optional(),
+      })
+      .strict()
+      .optional(),
     providers: z
       .object({
         // Keep this as a record so users can define multiple named providers per source.

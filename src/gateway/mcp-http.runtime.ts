@@ -198,6 +198,7 @@ export class McpLoopbackToolCache {
       params.grantToken ?? "",
       params.sessionKey,
       params.runtimePolicySessionKey ?? "",
+      params.runtimePolicyAgentId ?? "",
       params.agentId ?? "",
       params.sessionId ?? "",
       params.runId ?? "",

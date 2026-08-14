@@ -57,6 +57,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "subagents", family: "openclaw" },
   { name: "request_compaction", family: "openclaw" },
   { name: "terminal", family: "openclaw" },
+  { name: "portal", family: "openclaw" },
   { name: "transcripts", family: "openclaw" },
   { name: "tts", family: "openclaw" },
   { name: "update_goal", family: "openclaw" },

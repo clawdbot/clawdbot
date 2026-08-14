@@ -5,7 +5,10 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
-import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import type {
+  BaseOpenAIStreamOptions,
+  OpenAIResponsesCompactionRejection,
+} from "../provider-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
@@ -19,7 +22,9 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   buildOpenAIResponsesReplayContext,
   buildOpenAIResponsesCompactionReplayPlan,
+  isOpenAIResponsesReplayContext,
   isSafeResponsesReplayItemId,
+  openAIResponsesReplayContextMatches,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
 import {
@@ -59,6 +64,18 @@ export function isInvalidEncryptedContentError(error: unknown): boolean {
     (record.status === 400 &&
       message.toLowerCase().includes("could not decrypt the provided encrypted_content"))
   );
+}
+
+function isOrphanedFunctionCallOutputError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as Record<string, unknown>;
+  const message = typeof record.message === "string" ? record.message : "";
+  // Server rejects a function_call_output whose function_call lives inside the
+  // encrypted compaction blob. Match by substring like the sibling classifiers:
+  // wrapped transport errors prefix the raw body ("400 ...", "HTTP 400: {json}").
+  return /No tool call found for function call output with call_id [A-Za-z0-9_-]+/.test(message);
 }
 
 function stripEncryptedReasoningContentFields(value: unknown): {
@@ -101,11 +118,13 @@ type ResponsesEncryptedContentRequest = { input?: ResponseInput };
 type ResponsesEncryptedContentAttemptKind =
   | "initial"
   | "reasoning-stripped"
-  | "compaction-stripped";
+  | "compaction-stripped"
+  | "continuation-rejected";
 
 export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
   kind: ResponsesEncryptedContentAttemptKind;
   request: TRequest;
+  rejectedCompaction?: OpenAIResponsesCompactionRejection;
 };
 
 function stripResponsesRequestEncryptedReasoning<TRequest extends ResponsesEncryptedContentRequest>(
@@ -138,6 +157,24 @@ function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedCont
   return input.length === request.input.length ? request : { ...request, input };
 }
 
+function readOpenAIResponsesCompactionRejection(
+  request: ResponsesEncryptedContentRequest,
+): OpenAIResponsesCompactionRejection | undefined {
+  if (!Array.isArray(request.input)) {
+    return undefined;
+  }
+  const item = request.input.find(
+    (candidate) =>
+      candidate !== null &&
+      typeof candidate === "object" &&
+      (candidate as { type?: unknown }).type === "compaction" &&
+      typeof (candidate as { encrypted_content?: unknown }).encrypted_content === "string",
+  ) as { encrypted_content: string; id?: unknown } | undefined;
+  return item
+    ? { data: item.encrypted_content, ...(typeof item.id === "string" ? { id: item.id } : {}) }
+    : undefined;
+}
+
 export async function resolveNextResponsesEncryptedContentAttempt<
   TRequest extends ResponsesEncryptedContentRequest,
 >(
@@ -145,10 +182,17 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   error: unknown,
   options?: { buildFullHistoryRequest?: () => TRequest | Promise<TRequest> },
 ): Promise<ResponsesEncryptedContentAttempt<TRequest> | undefined> {
-  if (!isInvalidEncryptedContentError(error) || attempt.kind === "compaction-stripped") {
+  const orphanedFunctionOutput = isOrphanedFunctionCallOutputError(error);
+  if (
+    (!isInvalidEncryptedContentError(error) && !orphanedFunctionOutput) ||
+    attempt.kind === "compaction-stripped"
+  ) {
     return undefined;
   }
-  if (attempt.kind === "initial") {
+  if (
+    !orphanedFunctionOutput &&
+    (attempt.kind === "initial" || attempt.kind === "continuation-rejected")
+  ) {
     const reasoningStripped = stripResponsesRequestEncryptedReasoning(attempt.request);
     if (reasoningStripped !== attempt.request) {
       return { kind: "reasoning-stripped", request: reasoningStripped };
@@ -167,7 +211,11 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   if (attempt.kind === "reasoning-stripped") {
     compactionStripped = stripResponsesRequestEncryptedReasoning(compactionStripped);
   }
-  return { kind: "compaction-stripped", request: compactionStripped };
+  return {
+    kind: "compaction-stripped",
+    request: compactionStripped,
+    rejectedCompaction: readOpenAIResponsesCompactionRejection(attempt.request),
+  };
 }
 
 export function tagOpenAIResponsesReasoningReplayItem(
@@ -190,37 +238,11 @@ export function tagOpenAIResponsesReasoningReplayItem(
 function isOpenAIResponsesReasoningReplayMetadata(
   value: unknown,
 ): value is OpenAIResponsesReasoningReplayMetadata {
-  if (!value || typeof value !== "object") {
+  if (!isOpenAIResponsesReplayContext(value)) {
     return false;
   }
   const record = value as Record<string, unknown>;
-  return (
-    record.v === 1 &&
-    record.source === "openai-responses" &&
-    typeof record.provider === "string" &&
-    typeof record.api === "string" &&
-    typeof record.model === "string" &&
-    (record.baseUrlHash === undefined || typeof record.baseUrlHash === "string") &&
-    (record.sessionHash === undefined || typeof record.sessionHash === "string") &&
-    (record.authProfileHash === undefined || typeof record.authProfileHash === "string")
-  );
-}
-
-function encryptedReasoningReplayMetadataMatches(
-  metadata: OpenAIResponsesReasoningReplayMetadata | undefined,
-  context: OpenAIResponsesReplayContext,
-): boolean {
-  if (!metadata) {
-    return false;
-  }
-  return (
-    metadata.provider === context.provider &&
-    metadata.api === context.api &&
-    metadata.model === context.model &&
-    metadata.baseUrlHash === context.baseUrlHash &&
-    metadata.sessionHash === context.sessionHash &&
-    metadata.authProfileHash === context.authProfileHash
-  );
+  return record.v === 1 && record.source === "openai-responses";
 }
 
 export function readOpenAIResponsesReasoningReplayBlockMetadata(
@@ -265,7 +287,10 @@ export function prepareOpenAIResponsesReasoningItemForReplay(
     blockMetadata === undefined &&
     !hasRawMetadata &&
     options?.preserveUnattributedEncryptedContent === true;
-  if (preserveUnattributed || encryptedReasoningReplayMetadataMatches(metadata, context)) {
+  if (
+    preserveUnattributed ||
+    (metadata && openAIResponsesReplayContextMatches(metadata, context))
+  ) {
     return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const stripped = stripEncryptedReasoningContentFields(rest);
@@ -280,11 +305,17 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   requestOptions: unknown;
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
-  onCompactionRejected?: () => void;
+  initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
+  initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
+  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
   buildFullHistoryRequest?: () =>
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
-}): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
+}): Promise<{
+  stream: AsyncIterable<unknown>;
+  response: Response;
+  attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
+}> {
   const sendAttempt = async (
     attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
   ) => {
@@ -292,14 +323,19 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       .create(attempt.request as never, params.requestOptions as never)
       .withResponse();
     if (attempt.kind === "compaction-stripped") {
-      params.onCompactionRejected?.();
+      if (attempt.rejectedCompaction) {
+        params.onCompactionRejected?.(attempt.rejectedCompaction);
+      }
     }
-    return { stream: data as unknown as AsyncIterable<unknown>, response };
+    return { stream: data as unknown as AsyncIterable<unknown>, response, attempt };
   };
 
   let attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams> = {
-    kind: "initial",
+    kind: params.initialAttemptKind ?? "initial",
     request: params.request,
+    ...(params.initialRejectedCompaction
+      ? { rejectedCompaction: params.initialRejectedCompaction }
+      : {}),
   };
   while (true) {
     params.observePrompt?.(attempt.request, {
@@ -309,23 +345,38 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     try {
       return await sendAttempt(attempt);
     } catch (error) {
-      const nextAttempt = await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
+      let nextAttempt = await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
         buildFullHistoryRequest: params.buildFullHistoryRequest,
       });
+      if (
+        !nextAttempt &&
+        attempt.request.previous_response_id &&
+        error &&
+        typeof error === "object" &&
+        typeof (error as { status?: unknown }).status === "number" &&
+        (error as { code?: unknown }).code === "previous_response_not_found"
+      ) {
+        const request = {
+          ...(params.buildFullHistoryRequest
+            ? await params.buildFullHistoryRequest()
+            : attempt.request),
+        };
+        delete request.previous_response_id;
+        nextAttempt = { kind: "continuation-rejected", request };
+      }
       if (!nextAttempt) {
         throw error;
       }
-      if (nextAttempt.kind === "reasoning-stripped") {
-        log.warn(
-          `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
-            `api=${params.model.api} model=${params.model.id}`,
-        );
-      } else {
-        log.warn(
-          `[responses] retrying without encrypted compaction content provider=${params.model.provider} ` +
-            `api=${params.model.api} model=${params.model.id}`,
-        );
-      }
+      const retryDescription =
+        nextAttempt.kind === "reasoning-stripped"
+          ? "without encrypted reasoning content"
+          : nextAttempt.kind === "compaction-stripped"
+            ? "without encrypted compaction content"
+            : "full history after rejected previous_response_id";
+      log.warn(
+        `[responses] retrying ${retryDescription} provider=${params.model.provider} ` +
+          `api=${params.model.api} model=${params.model.id}`,
+      );
       attempt = nextAttempt;
     }
   }

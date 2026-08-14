@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { DEVICE_WORKER_PROVIDER_ID, isDeviceWorkerAvailable } from "./device-provider.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -17,6 +18,7 @@ import type {
 } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import {
@@ -43,6 +45,7 @@ type WorkerLocalDispatchBarrier = (params: {
 }) => Promise<WorkerDispatchPlacement>;
 
 type WorkerReclaimedPlacement = Extract<WorkerDispatchPlacement, { state: "reclaimed" }>;
+type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
 type WorkerPlacementReclaimBarrier = (
   params: WorkerPlacementReclaimRequest & {
     reclaim: (localPath: string) => Promise<WorkerReclaimedPlacement>;
@@ -77,11 +80,32 @@ type WorkerPlacementDispatchOptions = {
 function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
   expectedEnvironmentId: string,
-): { environmentId: string; ownerEpoch: number; bundleHash: string } {
+):
+  | { transport: "node"; environmentId: string; ownerEpoch: number; bundleHash: string }
+  | { transport: "ssh"; environmentId: string; ownerEpoch: number; bundleHash: string } {
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
+    environment.environmentId !== expectedEnvironmentId
+  ) {
+    throw new Error(
+      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+    );
+  }
+  if (
+    environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+    !environment.sshEndpoint &&
+    environment.bootstrapReceipt?.installKind === "local" &&
+    supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
+  ) {
+    return {
+      transport: "node",
+      environmentId: environment.environmentId,
+      ownerEpoch: environment.ownerEpoch,
+      bundleHash: environment.bootstrapReceipt.bundleHash,
+    };
+  }
+  if (
     !environment.bootstrapReceipt ||
-    environment.environmentId !== expectedEnvironmentId ||
     !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
     throw new Error(
@@ -89,6 +113,7 @@ function requireProvisionedEnvironment(
     );
   }
   return {
+    transport: "ssh",
     environmentId: environment.environmentId,
     ownerEpoch: environment.ownerEpoch,
     bundleHash: environment.bootstrapReceipt.bundleHash,
@@ -155,6 +180,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
+      if (request.deviceId && !(await isDeviceWorkerAvailable(environments, request.deviceId))) {
+        throw new Error(
+          `device worker requires a connected current node host; reconnect or reprovision: ${request.deviceId}`,
+        );
+      }
       const localPath = await options.resolveWorkspacePath(request);
       const idempotencyKey = `session-dispatch:${request.sessionId}:${placement.generation}`;
       const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
@@ -482,10 +512,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       },
     });
 
-  const reclaimInFlight = new Map<string, Promise<WorkerReclaimedPlacement>>();
+  const reclaimInFlight = new Map<string, Promise<WorkerReclaimPlacement>>();
   const reclaim = async (
     request: WorkerPlacementReclaimRequest,
-  ): Promise<WorkerReclaimedPlacement> => {
+  ): Promise<WorkerReclaimPlacement> => {
     const current = placements.get(request.sessionId);
     if (current?.state === "reclaimed") {
       return current;
@@ -494,7 +524,30 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (inFlight) {
       return await inFlight;
     }
-    const operation = reclaimOnce(request).catch((error: unknown) => {
+    const operation = (async () => {
+      const owned = placements.get(request.sessionId);
+      if (owned?.state === "failed") {
+        if (
+          !isFailedWorkerPlacementEnvironmentGone({
+            environmentService: environments,
+            placement: owned,
+          })
+        ) {
+          throw new Error("Failed cloud worker environment must be stopped before reclaim");
+        }
+        const local = placements.transition({
+          sessionId: request.sessionId,
+          from: "failed",
+          to: "local",
+          expectedGeneration: owned.generation,
+        });
+        if (local.state !== "local") {
+          throw new Error("Failed cloud worker reclaim did not produce a local placement");
+        }
+        return local;
+      }
+      return await reclaimOnce(request);
+    })().catch((error: unknown) => {
       // Another teardown path can win after this call has crossed its durable completion fence.
       // Report the committed terminal state instead of leaking a stale tunnel error to callers.
       const completed = placements.get(request.sessionId);

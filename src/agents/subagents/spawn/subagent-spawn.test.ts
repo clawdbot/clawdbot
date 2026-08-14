@@ -21,6 +21,9 @@ import {
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
+  loadFullModelCatalogMock: vi.fn(async () => {
+    throw new Error("full model catalog should not materialize");
+  }),
   loadPreparedModelCatalogMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
@@ -195,6 +198,7 @@ describe("spawnSubagentDirect seam flow", () => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.loadSessionStoreMock.mockReset();
+    hoisted.loadFullModelCatalogMock.mockClear();
     hoisted.loadPreparedModelCatalogMock.mockReset().mockResolvedValue([]);
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
@@ -880,7 +884,11 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     expect(liveRejected.status).toBe("forbidden");
     expect(liveRejected.error).toContain("tools.swarm.maxChildrenPerGroup");
-    expect(hoisted.listSwarmRunsForGroupMock).toHaveBeenLastCalledWith("group", "agent:main:main");
+    expect(hoisted.listSwarmRunsForGroupMock).toHaveBeenLastCalledWith(
+      "group",
+      "agent:main:main",
+      "main",
+    );
 
     hoisted.listSwarmRunsForGroupMock.mockReturnValueOnce([
       { runId: "done", collect: true, collectorCompletion: { status: "done" } },
@@ -904,7 +912,11 @@ describe("spawnSubagentDirect seam flow", () => {
     );
 
     expect(accepted.status).toBe("accepted");
-    expect(hoisted.listSwarmRunsForGroupMock).toHaveBeenCalledWith("fresh", "agent:main:main");
+    expect(hoisted.listSwarmRunsForGroupMock).toHaveBeenCalledWith(
+      "fresh",
+      "agent:main:main",
+      "main",
+    );
   });
 
   it("enforces group caps atomically across concurrent collector registration", async () => {
@@ -983,6 +995,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
     expect(hoisted.countActiveRunsForSessionMock).toHaveBeenCalledWith(controllerSessionKey, {
       collect: false,
+      requesterAgentId: "main",
     });
   });
 
@@ -1128,6 +1141,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(accepted.status).toBe("accepted");
     expect(hoisted.countActiveRunsForSessionMock).toHaveBeenCalledWith("agent:main:main", {
       collect: false,
+      requesterAgentId: "main",
     });
   });
 
@@ -1150,14 +1164,29 @@ describe("spawnSubagentDirect seam flow", () => {
 
   it("rejects schema collection for a model that cannot call tools", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
-    hoisted.loadPreparedModelCatalogMock.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "no-tools",
-        name: "No tools",
-        compat: { supportsTools: false },
-      },
-    ]);
+    hoisted.loadPreparedModelCatalogMock.mockImplementation(async (options: unknown) => {
+      const scoped = options as {
+        readOnly?: boolean;
+        providerDiscoveryProviderIds?: string[];
+        scopedLiveProviderDiscovery?: boolean;
+      };
+      if (
+        scoped.readOnly !== true ||
+        scoped.scopedLiveProviderDiscovery !== true ||
+        scoped.providerDiscoveryProviderIds?.[0] !== "openai" ||
+        scoped.providerDiscoveryProviderIds.length !== 1
+      ) {
+        return await hoisted.loadFullModelCatalogMock();
+      }
+      return [
+        {
+          provider: "openai",
+          id: "no-tools",
+          name: "No tools",
+          compat: { supportsTools: false },
+        },
+      ];
+    });
 
     const rejected = await spawnSubagentDirect(
       {
@@ -1171,10 +1200,14 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(rejected.status).toBe("error");
     expect(rejected.error).toContain("requires a tool-capable target model");
+    expect(hoisted.loadFullModelCatalogMock).not.toHaveBeenCalled();
     expect(hoisted.loadPreparedModelCatalogMock).toHaveBeenCalledWith({
       config: hoisted.configOverride,
       agentDir: expect.any(String),
       workspaceDir: "/tmp/workspace-main",
+      readOnly: true,
+      providerDiscoveryProviderIds: ["openai"],
+      scopedLiveProviderDiscovery: true,
     });
     expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
@@ -1820,7 +1853,11 @@ describe("spawnSubagentDirect seam flow", () => {
       requesterSessionKey: "agent:main:main",
       swarmRequesterSessionKey: spawningSessionKey,
     });
-    expect(hoisted.listSwarmRunsForGroupMock).toHaveBeenCalledWith("routed", spawningSessionKey);
+    expect(hoisted.listSwarmRunsForGroupMock).toHaveBeenCalledWith(
+      "routed",
+      spawningSessionKey,
+      "main",
+    );
   });
 
   it("keeps spawn cwd separate from inherited agent workspace", async () => {

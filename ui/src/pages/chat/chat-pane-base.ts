@@ -23,6 +23,8 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
+import { DockLayoutController } from "../../components/dock-layout-controller.ts";
+import { t } from "../../i18n/index.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
@@ -42,8 +44,13 @@ import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
+  type ChatPaneConnectionScope,
+  chatCompanionRailLayout,
+  chatTasksRailLayout,
+  chatWorkspaceRailLayout,
   type ChatPageContext,
   type PaneSessionChangeOptions,
+  sidebarChatLayoutWidth,
 } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import {
@@ -54,12 +61,21 @@ import {
 } from "./chat-session-companion.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
+import {
+  isSidebarRegionCollapsed,
+  sidebarPrimaryWidth,
+  type SidebarLayout,
+} from "./sidebar-layout.ts";
+
+const CHAT_RAIL_MAIN_MIN_WIDTH_PX = 312;
+const CHAT_RAIL_DIVIDERS_MAX_WIDTH_PX = 8;
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // Relative labels still need a minute tick; external PR state is server-pushed.
@@ -141,7 +157,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.requestUpdate(),
   );
   protected readonly transcript = new ChatTranscriptController(this);
-  protected readonly backgroundTaskTranscript = new ChatTranscriptController(this);
+  protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();
@@ -160,6 +176,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
+  protected continueInTerminalDialog: {
+    qualifiedSessionKey: string;
+    selectedGatewayUrl: string;
+    clientGatewayUrl: string;
+    scope: ChatPaneConnectionScope;
+  } | null = null;
+  @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
@@ -172,6 +195,103 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected resetConfirmationOpen = false;
   @litState() protected sessionRailReady = customElements.get("openclaw-chat-session-rail") != null;
   @litState() protected sessionRailMode: SessionRailMode = "hidden";
+  protected readonly companionRailLayout = new DockLayoutController(this, {
+    layout: chatCompanionRailLayout,
+    reservationPrefix: "chat-companion-rail",
+    isAvailable: () => true,
+    maxWidth: () => this.chatRailMaxWidth(".chat-main"),
+    reserveViewport: false,
+  });
+  protected readonly tasksRailLayout = new DockLayoutController(this, {
+    layout: chatTasksRailLayout,
+    reservationPrefix: "chat-tasks-rail",
+    isAvailable: () => true,
+    maxWidth: () =>
+      this.chatRailMaxWidth(
+        ".chat-workbench",
+        ".chat-workspace-rail",
+        "chat-workbench--workspace-open",
+        "chat-workbench--tasks-open",
+      ),
+    reserveViewport: false,
+  });
+  protected readonly workspaceRailLayout = new DockLayoutController(this, {
+    layout: chatWorkspaceRailLayout,
+    reservationPrefix: "chat-workspace-rail",
+    isAvailable: () => true,
+    maxWidth: () =>
+      this.chatRailMaxWidth(
+        ".chat-workbench",
+        ".chat-tasks-rail",
+        "chat-workbench--tasks-open",
+        "chat-workbench--workspace-open",
+      ),
+    reserveViewport: false,
+  });
+
+  protected companionRailColumn() {
+    return [
+      this.companionRailLayout.width,
+      this.companionRailLayout.renderResizer(
+        "chat-companion-rail",
+        t("chat.sidebarColumns.resize", { panel: t("chat.rail.title") }),
+      ),
+    ] as const;
+  }
+
+  protected tasksRailColumn() {
+    return [
+      this.tasksRailLayout.width,
+      this.tasksRailLayout.renderResizer(
+        "chat-tasks-rail",
+        t("chat.sidebarColumns.resize", { panel: t("chat.backgroundTasks.title") }),
+      ),
+    ] as const;
+  }
+
+  protected workspaceRailColumn() {
+    return [
+      this.workspaceRailLayout.width,
+      this.workspaceRailLayout.renderResizer(
+        "chat-workspace-rail",
+        t("chat.sidebarColumns.resize", { panel: t("chat.workspaceFiles.files") }),
+      ),
+    ] as const;
+  }
+
+  protected chatLayoutWidth(sidebarLayout: SidebarLayout): number {
+    const chatColumn = sidebarLayout.columns.find((column) =>
+      column.panels.some((panel) => panel.slot === "chat"),
+    );
+    return sidebarChatLayoutWidth(
+      this.paneWidth,
+      chatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth),
+      isSidebarRegionCollapsed(sidebarLayout, this.paneWidth),
+    );
+  }
+
+  private chatRailMaxWidth(
+    containerSelector: string,
+    siblingSelector?: string,
+    siblingOpenClass?: string,
+    ownSideOpenClass?: string,
+  ): number {
+    const container = this.querySelector<HTMLElement>(containerSelector);
+    const ownRailIsSideDocked =
+      !ownSideOpenClass || container?.classList.contains(ownSideOpenClass) === true;
+    const sideSibling =
+      ownRailIsSideDocked &&
+      siblingSelector &&
+      siblingOpenClass &&
+      container?.classList.contains(siblingOpenClass)
+        ? this.querySelector<HTMLElement>(siblingSelector)
+        : null;
+    const containerWidth = container?.getBoundingClientRect().width ?? this.paneWidth;
+    const siblingWidth = sideSibling?.getBoundingClientRect().width ?? 0;
+    return (
+      containerWidth - siblingWidth - CHAT_RAIL_MAIN_MIN_WIDTH_PX - CHAT_RAIL_DIVIDERS_MAX_WIDTH_PX
+    );
+  }
   protected sessionRailModeSessionKey = "";
   protected sessionRailLoad: Promise<void> | null = null;
   protected sessionRailCommand: (SessionRailCommand & { sessionKey: string }) | null = null;
@@ -245,39 +365,28 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     const sessionKey = state.sessionKey;
+    const agentId = resolveChatAgentId(state);
     this.requestSessionRail("open");
     if (!state.connected || !state.client) {
-      this.sessionCompanionThreads.setDraft(sessionKey, question);
+      this.sessionCompanionThreads.setDraft(sessionKey, question, agentId);
       return;
     }
     const client = state.client;
-    const connectionGeneration = this.connectionGeneration;
     await this.sessionCompanionThreads.submit(
       sessionKey,
       question,
-      (key, value, onPrepared) => requestSessionCompanionAnswer(client, key, value, onPrepared),
-      () =>
-        this.state === state &&
-        state.connected &&
-        state.client === client &&
-        state.sessionKey === sessionKey &&
-        this.connectionGeneration === connectionGeneration,
-      async (key) => {
-        const current = this.state;
-        if (!current?.connected || !current.client) {
-          throw new Error("Session companion connection is unavailable.");
-        }
-        return await requestSessionCompanionState(current.client, key);
-      },
+      (key, value) => requestSessionCompanionAnswer(client, key, value, agentId),
+      agentId,
     );
   };
 
   protected readonly prefillSessionCompanionQuestion = (question: string) => {
-    const sessionKey = this.state?.sessionKey;
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
     if (!sessionKey) {
       return;
     }
-    this.sessionCompanionThreads.setDraft(sessionKey, question);
+    this.sessionCompanionThreads.setDraft(sessionKey, question, resolveChatAgentId(state));
     this.requestSessionRail("open");
   };
 
@@ -286,14 +395,17 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!state?.connected || !state.client || !sessionKey || parseCatalogSessionKey(sessionKey)) {
       return;
     }
-    const hydrationKey = `${this.connectionGeneration}\0${sessionKey}`;
+    const agentId = resolveChatAgentId(state);
+    const hydrationKey = `${this.connectionGeneration}\0${agentId}\0${sessionKey}`;
     if (this.sessionCompanionHydrationKey === hydrationKey) {
       return;
     }
     this.sessionCompanionHydrationKey = hydrationKey;
     this.ensureSessionRail();
-    void this.sessionCompanionThreads.hydrate(sessionKey, (key) =>
-      requestSessionCompanionState(state.client!, key),
+    void this.sessionCompanionThreads.hydrate(
+      sessionKey,
+      (key) => requestSessionCompanionState(state.client!, key, agentId),
+      agentId,
     );
   }
 
@@ -302,8 +414,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!state?.connected || !state.client || !state.sessionKey) {
       return;
     }
+    const agentId = resolveChatAgentId(state);
     await this.sessionCompanionThreads
-      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key))
+      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key, agentId), agentId)
       .catch(() => undefined);
   };
   protected resetConfirmation:

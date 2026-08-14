@@ -571,8 +571,8 @@ export function createMarkdownParser(): MarkdownIt {
     return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
   };
 
-  // Message rendering allows only inline data images (#15437). Document
-  // previews preserve authored image URLs and rely on DOMPurify's URI policy.
+  // Message rendering allows inline data images and explicit open-only placeholders
+  // for remote URLs. Document previews preserve authored URLs for direct rendering.
   installAssistantTranscriptRoleImageRenderer(markdownParser, {
     escapeHtml: escapeMarkdownHtml,
     isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
@@ -582,6 +582,16 @@ export function createMarkdownParser(): MarkdownIt {
       t("chat.imageLightbox.open", {
         title: hasAlt ? alt : t("chat.imageLightbox.untitled"),
       }),
+    renderExternalImageFallback: (src, renderedLabel, linkedImage) => {
+      if (!parseWebLinkHref(src)) {
+        return renderedLabel;
+      }
+      const label = `<span>${escapeMarkdownHtml(t("chat.externalImage.notLoaded"))}: ${renderedLabel}</span>`;
+      const action = linkedImage
+        ? ""
+        : ` <a href="${escapeMarkdownHtml(src)}">${escapeMarkdownHtml(t("chat.externalImage.open"))}</a>`;
+      return `<span class="markdown-external-image">${label}${action}</span>`;
+    },
     interactiveImages: (env) =>
       (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
     allowRemoteImages: (env) =>

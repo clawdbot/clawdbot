@@ -21,6 +21,7 @@ export const TransportProtocolSchemas = {
   UnknownAgentIdErrorDetails: errorCodes.UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetails: errorCodes.WizardNotFoundErrorDetailsSchema,
   GatewayErrorDetails: errorCodes.GatewayErrorDetailsSchema,
+  ProjectCloneErrorDetails: errorCodes.ProjectCloneErrorDetailsSchema,
   GatewaySuspendTaskBlocker: gatewaySuspend.GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: gatewaySuspend.GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareParams: gatewaySuspend.GatewaySuspendPrepareParamsSchema,

@@ -30,6 +30,7 @@ import {
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
+import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -86,7 +87,9 @@ type WorkerEnvironmentServiceOptions = {
     profile: WorkerProfile;
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
+  resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
   tunnelManager?: WorkerTunnelManager;
+  nodeTunnelManager?: NodeWorkerTunnelManager;
   reconcileIntervalMs?: number;
   providerCallTimeoutMs?: number;
   bootstrapCallTimeoutMs?: number;
@@ -133,6 +136,17 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const providerOperations = new KeyedAsyncQueue();
   const activeOperations = new Set<Promise<unknown>>();
   const now = options.now ?? Date.now;
+  const tunnelLifecycle =
+    options.tunnelManager || options.nodeTunnelManager
+      ? {
+          stop: async (environmentId: string, ownerEpoch?: number) => {
+            await Promise.all([
+              options.tunnelManager?.stop(environmentId, ownerEpoch),
+              options.nodeTunnelManager?.stop(environmentId, ownerEpoch),
+            ]);
+          },
+        }
+      : undefined;
   const inference = createWorkerInferenceManager({
     execute: options.executeInference,
     getConfig: options.getConfig,
@@ -239,7 +253,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const credentialBroker = createWorkerCredentialBroker({
     store,
     prepareInstallation: options.prepareInstallation,
-    tunnelManager: options.tunnelManager,
+    tunnelManager: tunnelLifecycle,
     workerCredentialTtlMs: options.workerCredentialTtlMs,
     generateWorkerCredential: options.generateWorkerCredential,
     liveEvents: options.liveEvents,
@@ -260,8 +274,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareInstallation: options.prepareInstallation,
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
+    resolveNodeWorkerBuild: options.resolveNodeWorkerBuild,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
-    tunnelManager: options.tunnelManager,
+    tunnelManager: tunnelLifecycle,
     credentialBroker,
     callBootstrap,
     callProvider,
@@ -279,6 +294,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     store,
     getConfig: options.getConfig,
     tunnelManager: options.tunnelManager,
+    nodeTunnelManager: options.nodeTunnelManager,
     resolveWorkerGateway: options.resolveWorkerGateway,
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
@@ -320,6 +336,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         }),
     );
     await runTasksWithConcurrency({ tasks, limit: 8 });
+    store.pruneTerminalEnvironments();
   };
 
   const reconcileOnce = () => {

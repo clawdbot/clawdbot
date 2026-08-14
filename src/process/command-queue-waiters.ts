@@ -1,5 +1,5 @@
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 type ActiveTaskWaiter = {
   activeTaskIds: Set<number>;

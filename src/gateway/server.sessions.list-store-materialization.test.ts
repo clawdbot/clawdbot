@@ -10,6 +10,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -157,12 +158,15 @@ test("startup prewarm fills session snapshot and title caches before the first l
       storePath,
     });
 
-    const result = await directSessionReq("sessions.list", {
+    const result = await directSessionReq<SessionsListResult>("sessions.list", {
       ...LIST_PARAMS,
       includeDerivedTitles: true,
     });
 
     expect(result.ok).toBe(true);
+    expect(result.payload?.sessions).toContainEqual(
+      expect.objectContaining({ key: sessionKey, derivedTitle: "Warm title" }),
+    );
     expect(titleBatchSpy).not.toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
     const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({

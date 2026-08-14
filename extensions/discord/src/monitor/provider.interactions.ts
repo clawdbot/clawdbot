@@ -30,7 +30,7 @@ import type { DiscordProviderCommandSpec } from "./provider.commands.js";
 import { createDiscordQuestionButton } from "./questions.js";
 import type { ThreadBindingManager } from "./thread-bindings.types.js";
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 export function createDiscordProviderInteractionSurface(params: {
   cfg: OpenClawConfig;

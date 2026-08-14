@@ -98,7 +98,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
         opts: {
           agentId: "main",
           configuredAgentsOnly: true,
-          includeDerivedTitles: false,
+          includeDerivedTitles: true,
           includeGlobal: true,
           includeUnknown: true,
           limit: 60,

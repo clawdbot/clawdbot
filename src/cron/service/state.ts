@@ -13,6 +13,7 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
@@ -97,7 +98,8 @@ export type CronServiceDeps = {
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
   /** Resolve the current default when runtime config can change after startup. */
-  resolveDefaultAgentId?: () => string;
+  resolveDefaultAgentId?: () => string | undefined;
+  legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate agent ownership inside the cron mutation lock. */
@@ -264,6 +266,7 @@ type CronRunAdmission = {
 type QueuedCronRunReservation = {
   identity: object;
   markerAtMs: number;
+  runReceipt: CronRunReceiptHandle;
   preserveWhenDisabled: boolean;
   activationPreviousLastError?: { value: string | undefined };
 };

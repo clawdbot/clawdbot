@@ -56,6 +56,7 @@ struct SettingsProTab: View {
     @State var gatewayPassword = ""
     @State var gatewayCredentialFieldStableID: String?
     @State var manualGatewayPortText = ""
+    @State var manualGatewayContextPath: String?
     @State var setupStatusText: String?
     @State var setupAttemptID: UUID?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?

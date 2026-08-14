@@ -5,6 +5,8 @@
 import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
@@ -225,12 +227,8 @@ export class CodexAppServerClient {
     this.child = child;
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
-    this.lines.on("error", (error) =>
-      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
-    );
-    child.stdout.on("error", (error) =>
-      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
-    );
+    this.lines.on("error", (error) => this.closeWithError(toStringifiedError(error)));
+    child.stdout.on("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (text: string) => {
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
@@ -244,9 +242,7 @@ export class CodexAppServerClient {
     child.stderr.on("error", (error) => {
       embeddedAgentLog.warn("codex app-server stderr stream failed", { error });
     });
-    child.once("error", (error) =>
-      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
-    );
+    child.once("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.once("exit", (code, signal) => {
       this.transportExited = true;
       this.closeWithError(buildCodexAppServerExitError(code, signal, this.stderrTail));
@@ -255,9 +251,7 @@ export class CodexAppServerClient {
     // stream. When the child process terminates abruptly the pipe can break
     // before the "exit" event fires, so a pending writeMessage() produces an
     // asynchronous error on stdin that would otherwise crash the gateway.
-    child.stdin.on?.("error", (error) =>
-      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
-    );
+    child.stdin.on?.("error", (error) => this.closeWithError(toStringifiedError(error)));
   }
 
   /** Starts a new app-server client using resolved runtime start options. */
@@ -638,7 +632,7 @@ export class CodexAppServerClient {
         onWriteAttempt?.();
         this.writeMessage(message, (error) => rejectPending(error));
       } catch (error) {
-        rejectPending(error instanceof Error ? error : new Error(String(error)));
+        rejectPending(toStringifiedError(error));
       }
     });
   }
@@ -829,7 +823,7 @@ export class CodexAppServerClient {
       }
       this.writeMessage({ id: request.id, result: defaultServerRequestResponse(request) });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       embeddedAgentLog.warn("codex app-server server request handler failed", {
         id: request.id,
         method: request.method,
@@ -1028,10 +1022,10 @@ function buildCodexAppServerRuntimeIdentity(
   response: CodexInitializeResponse,
   serverVersion: string,
 ): CodexAppServerRuntimeIdentity {
-  const userAgent = readNonEmptyInitializeString(response.userAgent);
-  const codexHome = readNonEmptyInitializeString(response.codexHome);
-  const platformFamily = readNonEmptyInitializeString(response.platformFamily);
-  const platformOs = readNonEmptyInitializeString(response.platformOs);
+  const userAgent = normalizeOptionalString(response.userAgent);
+  const codexHome = normalizeOptionalString(response.codexHome);
+  const platformFamily = normalizeOptionalString(response.platformFamily);
+  const platformOs = normalizeOptionalString(response.platformOs);
   return {
     serverVersion,
     ...(userAgent ? { userAgent } : {}),
@@ -1039,11 +1033,6 @@ function buildCodexAppServerRuntimeIdentity(
     ...(platformFamily ? { platformFamily } : {}),
     ...(platformOs ? { platformOs } : {}),
   };
-}
-
-function readNonEmptyInitializeString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 /** Extracts the Codex version from the app-server initialize user-agent field. */
@@ -1096,7 +1085,7 @@ function shouldBufferCodexAppServerParseFailure(value: string, error: unknown): 
   if (!value.startsWith("{") && !value.startsWith("[")) {
     return false;
   }
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   return (
     message.includes("Unterminated string") || message.includes("Unexpected end of JSON input")
   );
@@ -1107,7 +1096,7 @@ function logCodexAppServerParseFailure(value: string, error: unknown, fragmentCo
   const suffix = fragmentCount > 1 ? ` fragments=${fragmentCount}` : "";
   embeddedAgentLog.warn("failed to parse codex app-server message", {
     error,
-    errorMessage: error instanceof Error ? error.message : String(error),
+    errorMessage: coerceErrorMessage(error),
     fragmentCount,
     linePreview,
     consoleMessage: `failed to parse codex app-server message${suffix}: preview=${JSON.stringify(

@@ -52,6 +52,7 @@ export type MediaGenerationTaskHandle = {
   taskId: string;
   runId: string;
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   taskLabel: string;
   traceparent?: string;
@@ -64,7 +65,10 @@ export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => vo
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
 /** Returns whether a media generation request should detach for a session. */
-export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
+export function shouldDetachMediaGenerationTask(
+  sessionKey: string | undefined,
+  requesterAgentId?: string,
+): boolean {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
     return false;
@@ -75,6 +79,7 @@ export function shouldDetachMediaGenerationTask(sessionKey: string | undefined):
   try {
     const entry = loadSessionEntryReadOnly({
       sessionKey: normalizedSessionKey,
+      agentId: requesterAgentId,
       clone: false,
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
@@ -107,6 +112,7 @@ type MediaGenerationExecutionResult = {
 
 type CreateMediaGenerationTaskRunParams = {
   sessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
   providerId?: string;
@@ -195,12 +201,14 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   registerGeneratedMediaTaskActivity(handle.runId, handle.requesterSessionKey);
   registerAgentRunContext(handle.runId, {
     sessionKey: handle.requesterSessionKey,
+    agentId: handle.requesterAgentId,
     lastActiveAt: Date.now(),
   });
 }
 
 function createMediaGenerationTaskRun(params: {
   sessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
   providerId?: string;
@@ -218,7 +226,7 @@ function createMediaGenerationTaskRun(params: {
     // Pin the complete requester route when detached work starts. Completion-time
     // session state can move to another peer while generation is still running.
     const requesterOrigin = resolveAnnounceOrigin(
-      loadRequesterSessionEntry(sessionKey).entry,
+      loadRequesterSessionEntry(sessionKey, params.requesterAgentId).entry,
       params.requesterOrigin,
     );
     const task = createRunningTaskRun({
@@ -226,6 +234,7 @@ function createMediaGenerationTaskRun(params: {
       taskKind: params.taskKind,
       sourceId: params.providerId ? `${params.toolName}:${params.providerId}` : params.toolName,
       requesterSessionKey: sessionKey,
+      requesterAgentId: params.requesterAgentId,
       ownerKey: sessionKey,
       scopeKind: "session",
       requesterOrigin,
@@ -246,6 +255,7 @@ function createMediaGenerationTaskRun(params: {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
+      requesterAgentId: params.requesterAgentId,
       requesterOrigin,
       taskLabel: params.prompt,
       traceparent: formatActiveContinuationTraceparent(),
@@ -652,6 +662,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     `A ${params.completionLabel} generation task finished. Process the completion update now.`;
   const delivery = await deliverSubagentAnnouncement({
     requesterSessionKey: params.handle.requesterSessionKey,
+    requesterAgentId: params.handle.requesterAgentId,
     targetRequesterSessionKey: params.handle.requesterSessionKey,
     announceId,
     triggerMessage,

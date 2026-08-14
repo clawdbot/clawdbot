@@ -193,11 +193,29 @@ describe("Pi session catalog", () => {
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
     await expect(
-      provider!.read({ hostId: "gateway", threadId: "pi-session", limit: 2 }),
+      provider!.read({
+        allowProcessHomeFallback: false,
+        hostId: "gateway",
+        threadId: "pi-session",
+        limit: 2,
+      }),
     ).resolves.toMatchObject({ threadId: "pi-session", items: expect.any(Array) });
-    await expect(provider!.list({})).resolves.toEqual([
+    await expect(provider!.list({ allowProcessHomeFallback: false })).resolves.toEqual([
       expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
     ]);
+
+    for (const key of ["PI_CODING_AGENT_SESSION_DIR", "PI_CODING_AGENT_DIR"] as const) {
+      delete process.env[key];
+    }
+    process.env.HOME = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-isolated-home-"));
+    temporaryDirectories.push(process.env.HOME);
+    const request = { hostId: "gateway", threadId: "pi-session" };
+    const isolatedRequest = { ...request, allowProcessHomeFallback: false };
+    for (const operation of [provider!.continueSession, provider!.openTerminal]) {
+      await expect(operation?.(isolatedRequest)).rejects.toThrow(
+        "local Pi sessions are unavailable in isolated state",
+      );
+    }
   });
 
   it("recognizes Pi sessions when the agent directory uses a symlinked path", async () => {

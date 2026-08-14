@@ -6,19 +6,17 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
   completeDeliveryQueueEntry,
-  failPendingDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntryResult,
   loadDeliveryQueueEntryResults,
-  moveDeliveryQueueEntryToFailed,
+  pruneExpiredDeliveryQueueTombstones,
+  terminalizePendingDeliveryQueueEntry,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
+  type DeliveryQueueEntryLoadResult,
+  type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { generateSecureUuid } from "./secure-random.js";
 import {
   hasOnlyGenericAttachmentRefs,
@@ -28,21 +26,32 @@ import {
   decodeSessionDeliveryResult,
   normalizeQueuedSessionDeliveryTraceparent,
   normalizeSessionDeliveryForPersistence,
-  queuedSessionDeliveryMetadata,
-  type QueuedSessionDelivery,
-  type QueuedSessionDeliveryPayload,
+  type QueuedSessionDelivery as CoreQueuedSessionDelivery,
+  type QueuedSessionDeliveryPayload as CoreQueuedSessionDeliveryPayload,
   type SessionDeliveryContext,
   type SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-codec.js";
 
 export type {
   DelegateArtifactDeliveryReceipt,
-  QueuedSessionDelivery,
-  QueuedSessionDeliveryPayload,
   SessionDeliveryContext,
   SessionDeliveryRoute,
   SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-codec.js";
+
+export type QueuedSessionDeliveryPayload =
+  | (Extract<CoreQueuedSessionDeliveryPayload, { kind: "systemEvent" }> & {
+      /** Preserves ownership when a durable event targets the literal global session. */
+      agentId?: string;
+    })
+  | Exclude<CoreQueuedSessionDeliveryPayload, { kind: "systemEvent" }>;
+
+type SessionDeliveryStorageFields = { retainOnFailure?: true };
+
+export type QueuedSessionDelivery =
+  | (Extract<CoreQueuedSessionDelivery, { kind: "systemEvent" }> &
+      SessionDeliveryStorageFields & { agentId?: string })
+  | (Exclude<CoreQueuedSessionDelivery, { kind: "systemEvent" }> & SessionDeliveryStorageFields);
 
 // Session delivery queue persists session-scoped messages until channel
 // delivery acknowledges them or recovery exhausts retry policy.
@@ -56,36 +65,28 @@ function openStateDatabaseForSession(stateDir?: string) {
   });
 }
 
-/**
- * Prune failed session-delivery entries older than maxAgeMs.
- * Returns scanned + removed counts for caller logging.
- */
+/** Run shared delivery-row retention maintenance and report session failures removed. */
 export async function pruneFailedOlderThan(
-  maxAgeMs: number,
+  _maxAgeMs: number,
   now: number = Date.now(),
   stateDir?: string,
 ): Promise<{ scanned: number; removed: number }> {
-  const cutoff = now - maxAgeMs;
   const database = openStateDatabaseForSession(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const scannedRow = executeSqliteQueryTakeFirstSync(
-    database.db,
-    queueDb
-      .selectFrom("delivery_queue_entries")
-      .select((eb) => eb.fn.countAll<number>().as("count"))
-      .where("queue_name", "=", SESSION_DELIVERY_QUEUE_NAME)
-      .where("status", "=", "failed"),
-  ) as { count: number | bigint } | undefined;
-  const scanned = scannedRow ? Number(scannedRow.count) : 0;
-  const deleteResult = executeSqliteQuerySync(
-    database.db,
-    queueDb
-      .deleteFrom("delivery_queue_entries")
-      .where("queue_name", "=", SESSION_DELIVERY_QUEUE_NAME)
-      .where("status", "=", "failed")
-      .where("failed_at", "<", cutoff),
-  );
-  const removed = Number(deleteResult.numAffectedRows ?? 0n);
+  const countFailed = () => {
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      queueDb
+        .selectFrom("delivery_queue_entries")
+        .select((eb) => eb.fn.countAll<number>().as("count"))
+        .where("queue_name", "=", SESSION_DELIVERY_QUEUE_NAME)
+        .where("status", "=", "failed"),
+    ) as { count: number | bigint } | undefined;
+    return row ? Number(row.count) : 0;
+  };
+  const scanned = countFailed();
+  pruneExpiredDeliveryQueueTombstones(stateDir, now);
+  const removed = Math.max(0, scanned - countFailed());
   return { scanned, removed };
 }
 
@@ -95,22 +96,75 @@ function failInvalidSessionDelivery(params: {
   entryJson: string;
   stateDir?: string;
 }): void {
-  failPendingDeliveryQueueEntry({
+  terminalizePendingDeliveryQueueEntry({
     queueName: SESSION_DELIVERY_QUEUE_NAME,
     id: params.entry.id,
-    expectedStatus: "pending",
     lastError: params.error,
     entry: {
       id: params.entry.id,
       enqueuedAt: params.entry.enqueuedAt,
       retryCount: params.entry.retryCount,
+      retainOnFailure: true,
     },
-    // The rejected row is never re-serialized, so guard the transition on the
-    // persisted text itself and keep the terminal payload identity-only.
+    // The rejected row has no decoded value to re-serialize. Guard on the
+    // persisted text while the shared terminalizer writes one payload-free receipt.
     expectedEntryJson: params.entryJson,
-    clearIndexedMetadata: true,
     stateDir: params.stateDir,
   });
+}
+
+type SessionDeliveryStorageEnvelope = SessionDeliveryStorageFields & { agentId?: string };
+
+function splitSessionDeliveryStorageEnvelope(entry: DeliveryQueueEntryState): {
+  coreEntry: DeliveryQueueEntryState;
+  envelope: SessionDeliveryStorageEnvelope;
+} {
+  const raw = entry as DeliveryQueueEntryState & {
+    kind?: unknown;
+    agentId?: unknown;
+    retainOnFailure?: unknown;
+  };
+  const coreEntry = { ...entry } as Record<string, unknown>;
+  const envelope: SessionDeliveryStorageEnvelope = {};
+  if (
+    raw.kind === "systemEvent" &&
+    typeof raw.agentId === "string" &&
+    raw.agentId.trim().length > 0
+  ) {
+    envelope.agentId = raw.agentId;
+    delete coreEntry.agentId;
+  } else if (raw.kind === "systemEvent" && raw.agentId === undefined) {
+    delete coreEntry.agentId;
+  }
+  if (raw.retainOnFailure === true) {
+    envelope.retainOnFailure = true;
+    delete coreEntry.retainOnFailure;
+  } else if (raw.retainOnFailure === undefined) {
+    delete coreEntry.retainOnFailure;
+  }
+  return { coreEntry: coreEntry as DeliveryQueueEntryState, envelope };
+}
+
+function normalizeSessionDeliveryForStorage(entry: QueuedSessionDelivery): QueuedSessionDelivery {
+  const { coreEntry, envelope } = splitSessionDeliveryStorageEnvelope(entry);
+  const normalized = normalizeSessionDeliveryForPersistence(
+    coreEntry as CoreQueuedSessionDelivery,
+  );
+  return { ...normalized, ...envelope } as QueuedSessionDelivery;
+}
+
+function decodeStoredSessionDeliveryResult(result: DeliveryQueueEntryLoadResult) {
+  if (result.status !== "loaded") {
+    return decodeSessionDeliveryResult(result);
+  }
+  const { coreEntry, envelope } = splitSessionDeliveryStorageEnvelope(result.entry);
+  const decoded = decodeSessionDeliveryResult({ ...result, entry: coreEntry });
+  return decoded.status === "loaded"
+    ? {
+        status: "loaded" as const,
+        entry: { ...decoded.entry, ...envelope } as QueuedSessionDelivery,
+      }
+    : decoded;
 }
 
 // Strip trailing whitespace per line and at end-of-string before hashing the
@@ -125,9 +179,12 @@ export function prepareClaimedSessionDelivery(
   initialAttemptLeaseMs: number,
   now = Date.now(),
 ): QueuedSessionDelivery {
-  const payload = normalizeQueuedSessionDeliveryTraceparent(params);
-  return normalizeSessionDeliveryForPersistence({
+  const payload = normalizeQueuedSessionDeliveryTraceparent(
+    params as CoreQueuedSessionDeliveryPayload,
+  ) as QueuedSessionDeliveryPayload;
+  return normalizeSessionDeliveryForStorage({
     ...payload,
+    retainOnFailure: true,
     id: buildEntryId(params.idempotencyKey),
     enqueuedAt: now,
     retryCount: 0,
@@ -264,11 +321,14 @@ export async function enqueueSessionDeliveryWithStatus(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<SessionDeliveryEnqueueResult> {
-  const payload = normalizeQueuedSessionDeliveryTraceparent(params);
+  const payload = normalizeQueuedSessionDeliveryTraceparent(
+    params as CoreQueuedSessionDeliveryPayload,
+  ) as QueuedSessionDeliveryPayload;
   const id = buildEntryId(payload.idempotencyKey);
 
-  const entry = normalizeSessionDeliveryForPersistence({
+  const entry = normalizeSessionDeliveryForStorage({
     ...payload,
+    ...(payload.completionRetention === "permanent" ? { retainOnFailure: true as const } : {}),
     id,
     enqueuedAt: Date.now(),
     retryCount: 0,
@@ -277,9 +337,7 @@ export async function enqueueSessionDeliveryWithStatus(
     queueName: SESSION_DELIVERY_QUEUE_NAME,
     entry,
     stateDir,
-    ...(params.completionRetention === "permanent"
-      ? { insertOnly: true }
-      : { reviveFailedOrCorruptPending: Boolean(params.idempotencyKey) }),
+    insertOnly: true,
   });
   // The upsert deliberately never replaces valid pending/completed ownership,
   // so read back the authoritative row state rather than assuming insertion.
@@ -534,7 +592,7 @@ export async function loadPendingSessionDelivery(
   if (!result) {
     return null;
   }
-  const decoded = decodeSessionDeliveryResult(result);
+  const decoded = decodeStoredSessionDeliveryResult(result);
   if (decoded.status === "loaded") {
     return decoded.entry;
   }
@@ -547,7 +605,7 @@ export async function loadPendingSessionDeliveries(
   stateDir?: string,
 ): Promise<QueuedSessionDelivery[]> {
   return loadDeliveryQueueEntryResults(SESSION_DELIVERY_QUEUE_NAME, stateDir).flatMap((result) => {
-    const decoded = decodeSessionDeliveryResult(result);
+    const decoded = decodeStoredSessionDeliveryResult(result);
     if (decoded.status === "loaded") {
       return [decoded.entry];
     }
@@ -561,23 +619,20 @@ export async function moveSessionDeliveryToFailed(id: string, stateDir?: string)
   try {
     const entry = await loadPendingSessionDelivery(id, stateDir);
     if (entry) {
-      const failedEntry = scrubTerminalQueuedAttachments(entry);
-      const moved = upsertDeliveryQueueEntry({
+      const terminalized = terminalizePendingDeliveryQueueEntry({
         queueName: SESSION_DELIVERY_QUEUE_NAME,
-        entry: failedEntry,
-        metadata: queuedSessionDeliveryMetadata(failedEntry),
-        status: "failed",
+        id,
+        entry,
         stateDir,
-        updatePendingOnly: true,
       });
-      if (moved) {
+      if (terminalized.status === "terminalized") {
         return;
       }
     }
     if (getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id, stateDir) === "failed") {
       return;
     }
-    moveDeliveryQueueEntryToFailed(SESSION_DELIVERY_QUEUE_NAME, id, stateDir);
+    throw new Error(`No pending session delivery queue entry ${id}`);
   } catch (error) {
     try {
       if (getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id, stateDir) === "failed") {

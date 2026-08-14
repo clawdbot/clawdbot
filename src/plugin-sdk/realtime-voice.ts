@@ -108,6 +108,7 @@ export {
   buildRealtimeVoiceAgentConsultPolicyInstructions,
   buildRealtimeVoiceAgentConsultPrompt,
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  buildRealtimeVoiceSessionInstructions,
   collectRealtimeVoiceAgentConsultVisibleText,
   isRealtimeVoiceAgentConsultToolPolicy,
   parseRealtimeVoiceAgentConsultArgs,
@@ -121,6 +122,20 @@ export {
   type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "../talk/agent-consult-tool.js";
+export {
+  buildRealtimeVoiceSpeakExactMessage,
+  classifyRealtimeVoiceConsultToolCall,
+  type RealtimeVoiceConsultToolCallOutcome,
+} from "../talk/exact-speech-protocol.js";
+export {
+  isRealtimeVoiceWakeNameRequired,
+  resolveRealtimeVoiceBargeIn,
+  resolveRealtimeVoiceInterruptResponseOnInputAudio,
+  resolveRealtimeVoiceMinBargeInAudioEndMs,
+  resolveRealtimeVoiceSessionPolicy,
+  type RealtimeVoiceSessionPolicy,
+  type RealtimeVoiceWakeNamePolicy,
+} from "../talk/realtime-session-policy.js";
 export {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,

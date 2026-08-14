@@ -83,12 +83,6 @@ vi.mock("../wizard/setup.memory-import.js", () => ({
   runSetupMemoryImportStep: mocks.runSetupMemoryImportStep,
 }));
 
-vi.mock("../plugins/providers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
-  resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
-  resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
-}));
-
 vi.mock("./verified-inference.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./verified-inference.js")>();
   return {

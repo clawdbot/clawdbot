@@ -8,7 +8,7 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -62,13 +62,14 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -135,12 +136,13 @@ function resolveSessionUsageTarget(
   config: OpenClawConfig,
   agentIdHint?: string,
 ): ResolvedSessionUsageTarget | undefined {
-  const { canonicalKey, entry, storePath } = loadSessionEntryReadOnly(
+  const { canonicalKey, entry, storePath } = loadGatewaySessionEntryReadOnly(
     key,
     agentIdHint ? { agentId: agentIdHint } : undefined,
   );
   const parsed = parseAgentSessionKey(key);
-  const agentId = parsed?.agentId ?? agentIdHint ?? resolveDefaultAgentId(config);
+  const agentId =
+    parsed?.agentId ?? agentIdHint ?? resolveSessionAgentId({ config, sessionKey: key });
   const sessionId = entry?.sessionId ?? parsed?.rest ?? key;
   const sessionFile = entry
     ? resolveExistingUsageSessionFile({
@@ -297,9 +299,14 @@ function resolveSessionUsageFileOrRespond(
   respond: RespondFn,
   config: OpenClawConfig,
 ): (ResolvedSessionUsageTarget & { config: OpenClawConfig }) | null {
+  const sessionOwner = resolveRequestedSessionAgentId(config, key);
+  if (!sessionOwner.ok) {
+    respond(false, undefined, sessionOwner.error);
+    return null;
+  }
   let resolved: ResolvedSessionUsageTarget | undefined;
   try {
-    resolved = resolveSessionUsageTarget(key, config);
+    resolved = resolveSessionUsageTarget(key, config, sessionOwner.agentId);
   } catch {
     resolved = undefined;
   }
@@ -1029,7 +1036,7 @@ async function loadCostUsageSummaryCached(params: {
   const allAgents = params.agentScope === "all";
   const agentId = allAgents
     ? undefined
-    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
+    : normalizeAgentId(params.agentId ?? resolveSessionAgentId({ config: params.config }));
   const dayBucketKey = usageDayBucketCacheKey(params.dayBucket);
   const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   return await loadUsageResultCached({
@@ -1061,7 +1068,11 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listAgentIds(params.config).map((agentId) => normalizeAgentId(agentId));
+  // Same agent universe as discoverAllSessionsForUsage: enumerating configured
+  // ids only would list system-agent sessions whose cost never reaches totals.
+  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+    normalizeAgentId(agent.id),
+  );
   const summaries = await runUsageAgentTasks(
     agentIds.map(
       (agentId) => () =>
@@ -1130,18 +1141,13 @@ function mergeUsageCacheStatus(
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
-  parseDateParts,
   parseUtcOffsetToMinutes,
-  resolveDateInterpretation,
   parseDateToMs,
   parseDays,
   resolveDateRange,
-  discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
-  loadSessionsUsageResultCached,
   sessionsUsageCache,
-  sessionsUsageCacheKey,
 };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
@@ -1163,12 +1169,21 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
+    let effectiveAgentId = agentId;
+    if (!agentScope && !effectiveAgentId) {
+      const requestedAgent = resolveRequestedSessionAgentId(config, "main");
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      effectiveAgentId = requestedAgent.agentId;
+    }
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
       dayBucket: resolveDayBucket(dateInterpretation),
       config,
-      agentId,
+      agentId: effectiveAgentId,
       agentScope,
     });
     respond(true, summary, undefined);
@@ -1203,22 +1218,26 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const specificKeyAgentId = specificKey ? parseAgentSessionKey(specificKey)?.agentId : undefined;
-    if (
-      requestedAgentId &&
-      specificKeyAgentId &&
-      normalizeAgentId(requestedAgentId) !== specificKeyAgentId
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      );
+    const specificSessionOwner = specificKey
+      ? resolveRequestedSessionAgentId(config, specificKey, requestedAgentId)
+      : undefined;
+    if (specificSessionOwner && !specificSessionOwner.ok) {
+      respond(false, undefined, specificSessionOwner.error);
+      return;
+    }
+    const implicitAgent =
+      !requestedAllAgents && !specificSessionOwner?.agentId && !requestedAgentId
+        ? resolveRequestedSessionAgentId(config, "main")
+        : undefined;
+    if (implicitAgent && !implicitAgent.ok) {
+      respond(false, undefined, implicitAgent.error);
       return;
     }
     const effectiveAgentId = requestedAllAgents
       ? undefined
-      : normalizeAgentId(requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config));
+      : normalizeAgentId(
+          specificSessionOwner?.agentId ?? requestedAgentId ?? implicitAgent?.agentId,
+        );
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
@@ -1254,12 +1273,16 @@ export const usageHandlers: GatewayRequestHandlers = {
           if (specificKey) {
             const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
               cfg: config,
-              agentId: effectiveAgentId ?? resolveDefaultAgentId(config),
+              agentId:
+                effectiveAgentId ??
+                expectDefined(specificSessionOwner?.agentId, "specific session owner"),
               sessionKey: specificKey,
             });
             const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
             const agentIdFromKey =
-              scopedParsed?.agentId ?? effectiveAgentId ?? resolveDefaultAgentId(config);
+              scopedParsed?.agentId ??
+              effectiveAgentId ??
+              expectDefined(specificSessionOwner?.agentId, "specific session owner");
             const keyRest = scopedParsed?.rest ?? specificKey;
 
             // Prefer the store entry when available, even if the caller provides a discovered key

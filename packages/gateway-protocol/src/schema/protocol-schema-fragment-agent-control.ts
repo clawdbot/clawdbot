@@ -1,4 +1,5 @@
 import * as agent from "./agent.js";
+import * as desktop from "./desktop.js";
 import * as environments from "./environments.js";
 import * as fsSchemas from "./fs.js";
 import * as projects from "./projects.js";
@@ -24,6 +25,12 @@ export const AgentControlProtocolSchemas = {
   WorkerDesktopObserveResult: environments.WorkerDesktopObserveResultSchema,
   WorkerDesktopLaunchParams: environments.WorkerDesktopLaunchParamsSchema,
   WorkerDesktopLaunchResult: environments.WorkerDesktopLaunchResultSchema,
+  ProjectCheckout: projects.ProjectCheckoutSchema,
+  ProjectSummary: projects.ProjectSummarySchema,
+  DesktopSource: desktop.DesktopSourceSchema,
+  DesktopObserveParams: desktop.DesktopObserveParamsSchema,
+  DesktopObserveResult: desktop.DesktopObserveResultSchema,
+  DesktopLaunchParams: desktop.DesktopLaunchParamsSchema,
   SystemInfoParams: systemInfo.SystemInfoParamsSchema,
   SystemInfoResult: systemInfo.SystemInfoResultSchema,
   AgentEvent: agent.AgentEventSchema,
@@ -53,6 +60,11 @@ export const AgentControlProtocolSchemas = {
   ProjectsListResult: projects.ProjectsListResultSchema,
   ProjectsRegisterParams: projects.ProjectsRegisterParamsSchema,
   ProjectsRegisterResult: projects.ProjectsRegisterResultSchema,
+  ProjectsAddParams: projects.ProjectsAddParamsSchema,
+  ProjectsAddResult: projects.ProjectsAddResultSchema,
+  RemoteProject: projects.RemoteProjectSchema,
+  ProjectsSearchRemoteParams: projects.ProjectsSearchRemoteParamsSchema,
+  ProjectsSearchRemoteResult: projects.ProjectsSearchRemoteResultSchema,
   ProjectsRemoveParams: projects.ProjectsRemoveParamsSchema,
   ProjectsRemoveResult: projects.ProjectsRemoveResultSchema,
   WorktreeRecord: worktrees.WorktreeRecordSchema,

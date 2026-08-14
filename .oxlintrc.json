@@ -262,8 +262,8 @@
     },
     {
       "files": [
-        "**/*.test.ts",
-        "**/*.test.tsx",
+        "**/*.{test,suite}.ts",
+        "**/*.{test,suite}.tsx",
         "**/*.e2e.test.ts",
         "**/*.live.test.ts",
         "**/*test-harness.ts",
@@ -282,8 +282,7 @@
         "extensions/**/*.{js,ts,mts,cts}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
         "**/protocol-gen/**",
@@ -304,8 +303,7 @@
         "extensions/**/*.{jsx,tsx}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
         "**/protocol-gen/**",
@@ -326,8 +324,7 @@
         "extensions/**/*.{mjs,cjs}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
         "**/protocol-gen/**",
@@ -342,14 +339,10 @@
     },
     {
       "files": [
-        "src/**/*.test.*",
-        "src/**/*.spec.*",
-        "ui/src/**/*.test.*",
-        "ui/src/**/*.spec.*",
-        "packages/**/*.test.*",
-        "packages/**/*.spec.*",
-        "extensions/**/*.test.*",
-        "extensions/**/*.spec.*"
+        "src/**/*.{test,spec,suite}.*",
+        "ui/src/**/*.{test,spec,suite}.*",
+        "packages/**/*.{test,spec,suite}.*",
+        "extensions/**/*.{test,spec,suite}.*"
       ],
       "excludeFiles": [
         "**/__generated__/**",

@@ -1,14 +1,8 @@
 // Telegram helper module supports agent config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 
 type ReasoningDefault = "on" | "stream" | "off";
-
-const DEFAULT_AGENT_ID = "main";
-
-function normalizeAgentId(value: string | undefined | null): string {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return normalized || DEFAULT_AGENT_ID;
-}
 
 export function resolveTelegramConfigReasoningDefault(
   cfg: OpenClawConfig,

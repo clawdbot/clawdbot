@@ -1,19 +1,13 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import { html, nothing, svg } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { icons } from "../icons.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   encodeTerminalUpload,
   quoteTerminalUploadPath,
   uploadTerminalFile,
 } from "./terminal-file-upload.ts";
-
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
-const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
-const DOCK_MAIN_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" /></svg>`;
-const OPEN_FULLSCREEN_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2.5h4.5V7M13.5 2.5 8 8" /><path d="M7 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5V9" /></svg>`;
-const UPLOAD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 8.1 9.8 3.5a2.5 2.5 0 0 1 3.5 3.5l-6 6a3.5 3.5 0 0 1-5-5l5.8-5.8" /><path d="m4.4 9 5.2-5.2a1.4 1.4 0 0 1 2 2l-5.3 5.3a2.3 2.3 0 0 1-3.2-3.2l4.6-4.6" /></svg>`;
 
 type TerminalUploadTab = {
   gatewaySessionId: string;
@@ -324,7 +318,7 @@ export function renderTerminalPanelActions(params: {
   onOpenFullscreen: () => void;
   onHide: () => void;
 }) {
-  return html`<div class="tp-actions">
+  return html`<div class="rail-header__actions tp-actions">
     <input
       class="tp-file-input"
       type="file"
@@ -334,14 +328,14 @@ export function renderTerminalPanelActions(params: {
       @change=${params.upload.handleFileSelection}
     />
     <button
-      class="tp-icon tp-upload"
+      class="rail-header__action tp-icon tp-upload"
       type="button"
       title=${t("terminal.addFiles")}
       aria-label=${t("terminal.addFiles")}
       ?disabled=${params.upload.hasPendingBatch() || !params.upload.hasActiveTab()}
       @click=${params.upload.chooseFiles}
     >
-      ${UPLOAD_GLYPH}
+      ${icons.paperclip}
     </button>
     ${params.fullscreen
       ? nothing
@@ -350,49 +344,49 @@ export function renderTerminalPanelActions(params: {
             role="group"
             aria-label=${t("terminal.dockMode")}
             ><button
-              class="tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
+              class="rail-header__action tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
               type="button"
               title=${t("terminal.dockBottom")}
               aria-label=${t("terminal.dockBottom")}
               @click=${() => params.onDock("bottom")}
             >
-              ${DOCK_BOTTOM_GLYPH}
+              ${icons.panelBottomOpen}
             </button>
             <button
-              class="tp-icon ${params.dock === "right" ? "is-active" : ""}"
+              class="rail-header__action tp-icon ${params.dock === "right" ? "is-active" : ""}"
               type="button"
               title=${t("terminal.dockRight")}
               aria-label=${t("terminal.dockRight")}
               @click=${() => params.onDock("right")}
             >
-              ${DOCK_RIGHT_GLYPH}</button
+              ${icons.panelRightOpen}</button
             ><button
-              class="tp-icon ${params.dock === "main" ? "is-active" : ""}"
+              class="rail-header__action tp-icon ${params.dock === "main" ? "is-active" : ""}"
               type="button"
               title=${t("terminal.dockMain")}
               aria-label=${t("terminal.dockMain")}
               @click=${() => params.onDock("main")}
             >
-              ${DOCK_MAIN_GLYPH}
+              ${icons.columns2}
             </button>
           </span>
           <button
-            class="tp-icon tp-open-fullscreen"
+            class="rail-header__action tp-icon tp-open-fullscreen"
             type="button"
             title=${t("terminal.openFullscreen")}
             aria-label=${t("terminal.openFullscreen")}
             @click=${params.onOpenFullscreen}
           >
-            ${OPEN_FULLSCREEN_GLYPH}
+            ${icons.maximize}
           </button>
           <button
-            class="tp-icon"
+            class="rail-header__action tp-icon"
             type="button"
             title=${t("terminal.hide")}
             aria-label=${t("terminal.hide")}
             @click=${params.onHide}
           >
-            ${CLOSE_GLYPH}
+            ${icons.x}
           </button>`}
   </div>`;
 }

@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeModelRef } from "./agents/model-ref-shared.js";
 import { isStaticallyChannelConfigured } from "./config/channel-configured-shared.js";
-import { parseBrowserMajorVersion } from "./plugin-sdk/browser-host-inspection.js";
 
 const testModelIdNormalization = {
   providers: {
@@ -20,21 +19,7 @@ const testModelIdNormalization = {
   },
 };
 
-const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() =>
-  vi.fn((params: { artifactBasename: string }) => {
-    if (params.artifactBasename === "browser-host-inspection.js") {
-      return {
-        parseBrowserMajorVersion: (raw: string | null | undefined) => {
-          const match = raw?.match(/\b(\d+)\./u);
-          return match?.[1] ? Number(match[1]) : null;
-        },
-        readBrowserVersion: () => null,
-        resolveGoogleChromeExecutableForPlatform: () => null,
-      };
-    }
-    throw new Error(`unexpected public surface load: ${params.artifactBasename}`);
-  }),
-);
+const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
   vi.fn(() => ({
@@ -122,7 +107,7 @@ vi.mock("./plugin-sdk/facade-runtime.js", () => ({
 }));
 
 describe("plugin activation boundary", () => {
-  it("keeps generic boundaries cold and loads only narrow browser helper surfaces on use", () => {
+  it("keeps generic channel and model-normalization boundaries cold", () => {
     loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
 
     expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
@@ -154,12 +139,5 @@ describe("plugin activation boundary", () => {
       model: "grok-4-fast",
     });
     expect(loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
-
-    expect(parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
-    expect(
-      loadBundledPluginPublicSurfaceModuleSyncCore.mock.calls.map(
-        ([params]) => params.artifactBasename,
-      ),
-    ).toEqual(["browser-host-inspection.js"]);
   });
 });

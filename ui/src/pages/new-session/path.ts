@@ -3,6 +3,16 @@ export function folderDisplayName(path: string): string {
   return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
 }
 
+export function parentFolderDisplayName(path: string): string | undefined {
+  const trimmed = path.replace(/[\\/]+$/u, "");
+  const separator = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (separator < 0) {
+    return undefined;
+  }
+  const parent = separator === 0 ? trimmed.slice(0, 1) : trimmed.slice(0, separator);
+  return folderDisplayName(parent) || undefined;
+}
+
 export function isAbsolutePath(path: string): boolean {
   return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
 }

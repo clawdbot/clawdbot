@@ -165,6 +165,13 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
       expect(shimCalls).toContain(
         `"repos/openclaw/openclaw/compare/${workflowSha}...${verifierSha}?per_page=1&page=2"`,
       );
+      expect(shimCalls).toContain(
+        JSON.stringify([
+          "api",
+          `repos/openclaw/openclaw/actions/jobs/${fixture.parentJob.id}/logs`,
+          "--allow-escape-sequences",
+        ]),
+      );
       expect(shimCalls).not.toContain(`/actions/artifacts/${artifactId}/zip`);
       expect(plainCalls.trim()).toBe(
         JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`]),
@@ -172,6 +179,109 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+});
+
+function runParentJobLogProbe(shimBody: string) {
+  const root = mkdtempSync(join(tmpdir(), "release-ci-job-log-"));
+  const shimLog = join(root, "shim.log");
+  const shimGh = join(root, "gh");
+  writeFileSync(
+    shimGh,
+    `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.SHIM_LOG, JSON.stringify(args) + "\\n");
+${shimBody}
+`,
+  );
+  chmodSync(shimGh, 0o755);
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createReleaseEvidenceClient } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
+         try {
+           process.stdout.write(createReleaseEvidenceClient("owner/repo").getJobLog("123"));
+         } catch (error) {
+           process.stdout.write(JSON.stringify({
+             message: error instanceof Error ? error.message : String(error),
+             stderr: typeof error === "object" && error !== null && "stderr" in error
+               ? String(error.stderr)
+               : "",
+           }));
+           process.exitCode = 17;
+         }`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${root}:${process.env.PATH ?? ""}`,
+          SHIM_LOG: shimLog,
+        },
+      },
+    );
+    return {
+      calls: readFileSync(shimLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+      result,
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+describe("parent job log compatibility", () => {
+  const flaggedArgs = ["api", "repos/owner/repo/actions/jobs/123/logs", "--allow-escape-sequences"];
+  const legacyArgs = ["api", "repos/owner/repo/actions/jobs/123/logs"];
+
+  it("uses one flagged call when gh supports raw escape-sequence output", () => {
+    const { calls, result } = runParentJobLogProbe(
+      'process.stdout.write("\\u001b[31mlog\\u001b[0m");',
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("\u001b[31mlog\u001b[0m");
+    expect(calls).toEqual([flaggedArgs]);
+  });
+
+  it("retries once without the flag for the exact legacy gh error", () => {
+    const { calls, result } = runParentJobLogProbe(`
+if (args.includes("--allow-escape-sequences")) {
+  process.stderr.write("unknown flag: --allow-escape-sequences\\n\\nUsage: gh api <endpoint> [flags]\\n");
+  process.exit(1);
+}
+process.stdout.write("\\u001b[31mlegacy log\\u001b[0m");
+`);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("\u001b[31mlegacy log\u001b[0m");
+    expect(calls).toEqual([flaggedArgs, legacyArgs]);
+  });
+
+  it("propagates unrelated errors without retrying", () => {
+    const { calls, result } = runParentJobLogProbe(`
+process.stderr.write("error: unknown flag: --allow-escape-sequences\\n");
+process.exit(1);
+`);
+
+    expect(result.status).toBe(17);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("Command failed: gh"),
+        stderr: "error: unknown flag: --allow-escape-sequences\n",
+      }),
+    );
+    expect(calls).toEqual([flaggedArgs]);
   });
 });
 

@@ -288,8 +288,34 @@ function findParentJobsAll(parentRunId, repository = DEFAULT_REPO) {
   return jobs;
 }
 
+function parentJobLogArgs(jobId, repository = DEFAULT_REPO, allowEscapeSequences = true) {
+  const args = ["api", `repos/${repository}/actions/jobs/${jobId}/logs`];
+  if (allowEscapeSequences) {
+    args.push("--allow-escape-sequences");
+  }
+  return args;
+}
+
+function isUnknownAllowEscapeSequencesFlag(error) {
+  if (typeof error !== "object" || error === null || !("stderr" in error)) {
+    return false;
+  }
+  const stderr = error.stderr;
+  return (
+    typeof stderr === "string" &&
+    stderr.replace(/\r\n?/gu, "\n").split("\n").includes("unknown flag: --allow-escape-sequences")
+  );
+}
+
 function parentJobLog(jobId, repository = DEFAULT_REPO) {
-  return gh(["api", `repos/${repository}/actions/jobs/${jobId}/logs`]);
+  try {
+    return gh(parentJobLogArgs(jobId, repository));
+  } catch (error) {
+    if (!isUnknownAllowEscapeSequencesFlag(error)) {
+      throw error;
+    }
+    return gh(parentJobLogArgs(jobId, repository, false));
+  }
 }
 
 function normalizeOptionalRunId(value, label) {

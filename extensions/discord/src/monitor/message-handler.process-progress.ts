@@ -125,6 +125,10 @@ export function createDiscordMessageProgressRuntime(params: {
     commentaryPayloadsEnabled: draftPreview.isProgressMode
       ? draftPreview.commentaryProgressEnabled
       : undefined,
+    shouldDeliverCommentaryPayloads:
+      draftPreview.isProgressMode && draftPreview.commentaryProgressEnabled
+        ? () => shouldYieldDraftCommentary()
+        : undefined,
     reasoningPayloadsEnabled: reasoningDurableEnabled,
     onVerboseProgressVisibility: (isActive) => {
       shouldYieldDraftCommentary = isActive;

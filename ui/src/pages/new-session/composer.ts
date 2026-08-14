@@ -22,6 +22,7 @@ import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 type NewSessionComposerOptions = {
+  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments: ChatAttachment[];
   canSubmit: boolean;
   getAttachments: () => ChatAttachment[];
@@ -56,8 +57,9 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn"
+          class="chat-send-btn new-session-page__start-submit"
           ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${options.onSubmit}
         >
@@ -72,8 +74,9 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn new-session-page__start-primary"
+          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary"
           ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${options.onSubmit}
         >
@@ -195,6 +198,7 @@ function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposer
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
+    attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
     disabled: options.submitting || options.messageLocked,
     getAttachments: options.getAttachments,
@@ -305,6 +309,7 @@ export function renderNewSessionDraftComposer(options: {
 }) {
   const readSignal = options.attachmentDraft.readSignal;
   return renderNewSessionComposer({
+    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,

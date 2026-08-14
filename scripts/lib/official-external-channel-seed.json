@@ -123,15 +123,15 @@
           "docsSource": "official",
           "docsInventory": {
             "package": {
-              "name": "@openclaw/qqbot",
-              "description": "OpenClaw QQ Bot channel plugin for group and direct-message workflows.",
+              "name": "@tencent-connect/openclaw-qqbot",
+              "description": "OpenClaw QQ Bot channel plugin by the Tencent Connect team.",
               "openclaw": {
                 "install": {
-                  "npmSpec": "@openclaw/qqbot",
+                  "npmSpec": "@tencent-connect/openclaw-qqbot",
                   "defaultChoice": "npm"
                 },
                 "release": {
-                  "publishToClawHub": true,
+                  "publishToClawHub": false,
                   "publishToNpm": true
                 }
               }

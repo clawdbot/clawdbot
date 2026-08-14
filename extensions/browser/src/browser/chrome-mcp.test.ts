@@ -6,6 +6,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildChromeMcpArgsFromOptions, normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   ChromeMcpDocumentUnavailableError,
   clickChromeMcpCoords,
@@ -241,6 +242,26 @@ describe("chrome MCP page parsing", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  it("passes HTTP CDP endpoints to Chrome MCP as browserUrl discovery endpoints", () => {
+    const args = buildChromeMcpArgsFromOptions(
+      normalizeChromeMcpOptions({ cdpUrl: "http://127.0.0.1:9222" }),
+    );
+
+    expect(args).toContain("--browserUrl");
+    expect(args).toContain("http://127.0.0.1:9222");
+    expect(args).not.toContain("--wsEndpoint");
+  });
+
+  it("passes direct WebSocket CDP endpoints to Chrome MCP as wsEndpoint attachments", () => {
+    const args = buildChromeMcpArgsFromOptions(
+      normalizeChromeMcpOptions({ cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc" }),
+    );
+
+    expect(args).toContain("--wsEndpoint");
+    expect(args).toContain("ws://127.0.0.1:9222/devtools/browser/abc");
+    expect(args).not.toContain("--browserUrl");
   });
 
   it("keeps document-bound evaluations on one pinned target and raw snapshot uid", async () => {

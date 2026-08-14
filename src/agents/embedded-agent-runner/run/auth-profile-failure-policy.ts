@@ -29,9 +29,12 @@ export function resolveAuthProfileFailureReason(params: {
   if (
     params.policy === "local" ||
     !params.failoverReason ||
+    // Provider-scoped overload must not cool one credential (#121341 classification).
+    // Preserve #121278 credential scoping by rotating without a profile-health write.
+    params.failoverReason === "overloaded" ||
     (params.policy === "local_transient" &&
-      (params.failoverReason === "overloaded" ||
-        (params.failoverReason === "rate_limit" && params.transientRateLimit === true))) ||
+      params.failoverReason === "rate_limit" &&
+      params.transientRateLimit === true) ||
     params.failoverReason === "server_error" ||
     params.failoverReason === "tls_certificate" ||
     params.failoverReason === "empty_response" ||

@@ -4,7 +4,13 @@
 }
 
 .wizard-step__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.wizard-step__external-link {
+  justify-self: start;
 }
 
 .wizard-step__device-code {
@@ -70,6 +76,7 @@
 
 .wizard-step__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

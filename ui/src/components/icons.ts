@@ -53,6 +53,9 @@ export const icons = {
     <path d="M9 10h6" />
     <path d="M12 13V7" />
     <path d="M9 17h6" />`),
+  diff: strokeIcon(svg` <path d="M12 3v14" />
+    <path d="M5 10h14" />
+    <path d="M5 21h14" />`),
   braces: strokeIcon(svg` <path
       d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"
     />

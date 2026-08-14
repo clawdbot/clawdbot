@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { enqueueSessionDelivery } from "./session-delivery-queue.js";
+import { enqueueSessionDelivery } from "./session-delivery-queue-storage.js";
 
 function managedArtifactDelivery() {
   return {
