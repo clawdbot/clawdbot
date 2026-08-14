@@ -52,7 +52,7 @@ jobs:
             base_dir="${RUNNER_TEMP}/fallback-android-release"
             mkdir -p "${base_dir}"
 
-            bun apps/android/scripts/build-release-artifacts.ts --artifact third-party
+            bun apps/android/scripts/build-release-artifacts.ts --artifact third-party --debug
 
             version="$(node -p 'require("./apps/android/version.json").version')"
             source_apk="apps/android/build/release-artifacts/openclaw-${version}-third-party-release.apk"
