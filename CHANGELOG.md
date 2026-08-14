@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Chrome Web Store:** promote the live extension listing in Control UI and automatically package, upload, and submit newer extension versions through approval-gated keyless Google authentication.
+- **Chrome Web Store:** promote the live extension listing in Control UI now that the store version is publicly available.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **macOS app profiles:** isolate named app instances across state, preferences, Keychain, Gateway services, and duplicate-instance ownership while keeping host-global login and node services untouched.
 - **Developer workflow:** remove the obsolete scoped-commit helper and use standard Git commands in isolated worktrees.
