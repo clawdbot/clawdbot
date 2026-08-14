@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Version tag (e.g., v2026.1.15) - 留空则构建当前分支'
-        required: false
+        description: 'Version tag (e.g., v2026.1.15) '
+        required: true
         type: string
         default: 'v20260815'
 
@@ -51,37 +51,8 @@ jobs:
           mkdir -p dist
             base_dir="${RUNNER_TEMP}/fallback-android-release"
             mkdir -p "${base_dir}"
-            node --input-type=module <<'NODE'
-          import { readFileSync } from "node:fs";
-          import { spawnSync } from "node:child_process";
 
-          const path = "apps/android/build/release-signing/gradle.properties";
-          const expected = new Set([
-            "OPENCLAW_ANDROID_STORE_FILE",
-            "OPENCLAW_ANDROID_STORE_PASSWORD",
-            "OPENCLAW_ANDROID_KEY_ALIAS",
-            "OPENCLAW_ANDROID_KEY_PASSWORD",
-          ]);
-          const properties = new Map();
-          for (const rawLine of readFileSync(path, "utf8").split(/\r?\n/u)) {
-            const line = rawLine.trim();
-            if (!line || line.startsWith("#")) continue;
-            const separator = line.indexOf("=");
-            if (separator <= 0) throw new Error("Malformed Android signing property.");
-            properties.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
-          }
-          for (const name of expected) {
-            const value = properties.get(name);
-            if (!value) throw new Error(`Missing Android signing property: ${name}`);
-            process.env[`ORG_GRADLE_PROJECT_${name}`] = value;
-          }
-          const result = spawnSync(
-            "bun",
-            ["apps/android/scripts/build-release-artifacts.ts", "--artifact", "third-party"],
-            { env: process.env, stdio: "inherit" },
-          );
-          process.exit(result.status ?? 1);
-          NODE
+            bun apps/android/scripts/build-release-artifacts.ts --artifact third-party
 
             version="$(node -p 'require("./apps/android/version.json").version')"
             source_apk="apps/android/build/release-artifacts/openclaw-${version}-third-party-release.apk"
@@ -94,7 +65,6 @@ jobs:
               sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
             )
           
-
           expected_version_name="${RELEASE_TAG#v}"
           expected_version_name="${expected_version_name%%-*}"
           expected_version_code="$(node -p 'require("./apps/android/version.json").versionCode')"
@@ -109,8 +79,6 @@ jobs:
             echo "Standalone APK version metadata does not match apps/android/version.json." >&2
             exit 1
           fi
-
-
 
 
       - name: Remove materialized signing files
