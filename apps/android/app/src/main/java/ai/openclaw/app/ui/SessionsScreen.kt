@@ -376,13 +376,13 @@ internal fun SessionsScreen(
               onRename = { renameSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onFork = {
                 coroutineScope.launch {
-                  viewModel
-                    .forkChatSession(
+                  val newKey =
+                    viewModel.forkChatSession(
                       session.key,
                       session.ownerAgentId,
                       fromLastCompleted = session.hasActiveRun == true,
                     )
-                    ?.let { newKey ->
+                  if (newKey != null) {
                     viewModel.switchChatSession(newKey, session.ownerAgentId)
                     onOpenChat()
                   }
