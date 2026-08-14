@@ -54,12 +54,12 @@ import {
   reconcileChatRunFromSessionRow,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
+import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   preserveQueuedUserTurn,
   retirePersistedSteeredChips,
   retireSteeredChipsForTerminalRun,
 } from "./steer-lifecycle.ts";
-import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
