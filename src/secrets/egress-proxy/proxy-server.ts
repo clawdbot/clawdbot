@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer as createHttpServer,
@@ -120,8 +120,15 @@ function runKey(run: Readonly<{ instanceId: string; runId: string }>): string {
   return `${run.runId}\0${run.instanceId}`;
 }
 
+// Proxy tokens are 256-bit random bearer credentials, not user-chosen passwords, so a
+// slow KDF would add per-request latency on the proxy hot path without making brute force
+// any more infeasible. A process-keyed MAC is the right primitive: it normalizes attacker-
+// controlled input to a fixed length for constant-time compare, and a leaked digest cannot
+// be correlated back to a token without the in-memory key.
+const tokenMacKey = randomBytes(32);
+
 function tokenDigest(token: string): Buffer {
-  return createHash("sha256").update(token).digest();
+  return createHmac("sha256", tokenMacKey).update(token).digest();
 }
 
 function parseBasicProxyPassword(header: string | string[] | undefined): string | undefined {
