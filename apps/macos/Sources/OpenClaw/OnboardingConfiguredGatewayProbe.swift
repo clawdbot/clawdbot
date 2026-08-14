@@ -170,11 +170,25 @@ final class OnboardingConfiguredGatewayProbe {
             guard supportsVerification else {
                 return .configured(modelRef: model, verification: nil, route: boundRoute)
             }
-            let verificationData = try await gateway.request(
-                method: "openclaw.setup.verify",
-                params: [:],
-                timeoutMs: self.verificationTimeoutMs,
-                ifCurrentServerLease: lease)
+            let verificationData: Data
+            do {
+                verificationData = try await gateway.request(
+                    method: "openclaw.setup.verify",
+                    params: [:],
+                    timeoutMs: self.verificationTimeoutMs,
+                    ifCurrentServerLease: lease)
+            } catch {
+                guard let response = error as? GatewayResponseError,
+                      response.method == "openclaw.setup.verify",
+                      response.missingScope == "operator.admin"
+                else { throw error }
+                guard await self.gateway.isCurrentServerLease(lease),
+                      self.isCurrent(attempt)
+                else { return .superseded }
+                // Released Gateways advertised this method while requiring admin.
+                // Persisted macOS device grants can be write-only after an upgrade.
+                return .configured(modelRef: model, verification: nil, route: boundRoute)
+            }
             guard await self.gateway.isCurrentServerLease(lease),
                   self.isCurrent(attempt)
             else { return .superseded }

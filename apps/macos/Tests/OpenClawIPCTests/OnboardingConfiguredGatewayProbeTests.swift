@@ -246,9 +246,16 @@ private func onboardingVerifyResponse(
         .utf8)
 }
 
+private func onboardingLegacyVerifyScopeResponse(id: String) -> Data {
+    Data(
+        #"{"type":"res","id":"\#(id)","ok":false,"error":{"code":"INVALID_REQUEST","message":"missing scope: operator.admin"}}"#
+            .utf8)
+}
+
 private enum OnboardingVerifyReply: Sendable {
     case verified
     case rejected
+    case legacyAdminScopeRequired
     case transportFailure
 }
 
@@ -279,6 +286,8 @@ private func onboardingVerifyTaskFactory(
                         ok: false,
                         status: "auth",
                         error: "expired login")))
+                case .legacyAdminScopeRequired:
+                    task.emitReceiveSuccess(.data(onboardingLegacyVerifyScopeResponse(id: request.id)))
                 case .transportFailure:
                     task.emitReceiveFailure()
                 }
@@ -415,6 +424,30 @@ struct OnboardingConfiguredGatewayProbeTests {
 
         #expect(configuredModel(outcome) == "openai/gpt-5.5")
         #expect(await recorder.snapshot() == ["health", "agents.list"])
+    }
+
+    @Test func `legacy admin-scoped verifier keeps config-only handoff`() async throws {
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let recorder = OnboardingProbeMethodRecorder()
+        let fixture = onboardingProbeFixture(
+            url: url,
+            taskFactory: onboardingVerifyTaskFactory(
+                reply: .legacyAdminScopeRequired,
+                recorder: recorder))
+
+        let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
+
+        guard case let .configured(modelRef, verification, _) = outcome else {
+            Issue.record("expected legacy config-only handoff")
+            return
+        }
+        #expect(modelRef == "openai/gpt-5.5")
+        #expect(verification == nil)
+        #expect(await recorder.snapshot() == [
+            "health",
+            "agents.list",
+            "openclaw.setup.verify",
+        ])
     }
 
     @Test func `live verification transport failure is unavailable`() async throws {
