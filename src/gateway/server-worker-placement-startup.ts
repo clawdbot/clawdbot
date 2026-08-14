@@ -11,7 +11,9 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { resolveWorkerPlacementSessionEvidence } from "./server-worker-placement-session-evidence.js";
+import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
@@ -114,6 +116,7 @@ type WorkerPlacementSidecar = { stop: () => Promise<void> };
 export type GatewayWorkerPlacementRuntimeParams = {
   placements: WorkerSessionPlacementStore;
   environments: WorkerEnvironmentService;
+  gatewayNamespace: string;
   admitNewPlacements: boolean;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
   warn: (message: string) => void;
@@ -407,6 +410,12 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     resolveSessionEvidence: resolveWorkerPlacementSessionEvidence,
     warn: params.warn,
   });
+  const nodeWorkspaceRetention = createNodeWorkspaceRetainCoordinator({
+    gatewayNamespace: params.gatewayNamespace,
+    placements: params.placements,
+    environments: params.environments,
+    warn: params.warn,
+  });
   const admissionProvider = createWorkerSessionTurnPlacementProvider({
     environments: params.environments,
     placements: params.placements,
@@ -499,6 +508,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         (async () => {
           await sessionRetirement.reconcile();
           await dispatchService.reconcileActive();
+          void nodeWorkspaceRetention.schedule();
         })(),
         "Worker placement reconcile sweep failed",
       );
@@ -546,6 +556,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               (operation): operation is Promise<void> => operation !== undefined,
             ),
           );
+          await nodeWorkspaceRetention.stop();
           await params.environments.stop();
         })();
         return stopPromise;
@@ -585,6 +596,11 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         await sidecar.stop();
         return null;
       }
+      void nodeWorkspaceRetention.start();
+      if (hooks.isClosePreludeStarted()) {
+        await sidecar.stop();
+        return null;
+      }
       params.environments.start();
       if (hooks.isClosePreludeStarted()) {
         await sidecar.stop();
@@ -608,6 +624,9 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     diskSpace,
     placements: params.placements,
     resolveNodeWorkspaceBinding,
+    bindNodeWorkerSupervisorTransport: (transport: NodeWorkerSupervisorTransport) =>
+      nodeWorkspaceRetention.bindTransport(transport),
+    scheduleNodeWorkspaceRetention: (nodeId?: string) => nodeWorkspaceRetention.schedule(nodeId),
     startRuntime,
   };
 }

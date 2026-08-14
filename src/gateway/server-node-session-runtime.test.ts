@@ -44,6 +44,7 @@ function createRuntime(
     Parameters<typeof createGatewayNodeSessionRuntime>[0]["isPairingStateCurrent"]
   > = (_nodeId, expected) =>
     expected.identity === "identity-a" && expected.generation === "generation-a",
+  onRunnerInventoryChanged?: (nodeId: string) => void,
 ) {
   return createGatewayNodeSessionRuntime({
     broadcast,
@@ -52,6 +53,7 @@ function createRuntime(
       generation: await resolveCurrentPairingGeneration(),
     }),
     isPairingStateCurrent,
+    onRunnerInventoryChanged,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
   });
@@ -95,9 +97,15 @@ describe("gateway node session runtime", () => {
     });
   });
 
-  test("broadcasts runner topology changes from publication and connection replacement", () => {
+  test("broadcasts and routes runner inventory changes from publication and replacement", () => {
     const broadcast = vi.fn();
-    const runtime = createRuntime(async () => "generation-a", broadcast);
+    const onRunnerInventoryChanged = vi.fn();
+    const runtime = createRuntime(
+      async () => "generation-a",
+      broadcast,
+      undefined,
+      onRunnerInventoryChanged,
+    );
     registerNode(runtime, "conn-original", "generation-a", []);
 
     expect(
@@ -115,10 +123,12 @@ describe("gateway node session runtime", () => {
       { nodeId: "node-a" },
       { dropIfSlow: true },
     );
+    expect(onRunnerInventoryChanged).toHaveBeenLastCalledWith("node-a");
 
     registerNode(runtime, "conn-replacement", "generation-a", []);
 
     expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(onRunnerInventoryChanged).toHaveBeenCalledTimes(2);
     expect(broadcast).toHaveBeenLastCalledWith(
       GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
       { nodeId: "node-a" },

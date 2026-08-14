@@ -19,6 +19,7 @@ import {
   DEVICE_WORKER_PROVIDER_ID,
 } from "./worker-environments/device-provider.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
+import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from "./worker-environments/node-worker-gateway-namespace.js";
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -48,6 +49,7 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerEnvironmentService?: WorkerEnvironmentService;
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
+  nodeWorkerGatewayNamespace?: string;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
@@ -182,8 +184,10 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getOwner: (environmentId) => params.startup.store.getTransferOwner(environmentId),
   });
   await nodeWorkspaceTransfer.initialize();
+  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
+  const nodeWorkerGatewayNamespace = resolveNodeWorkerGatewayNamespace(gatewayDeviceId);
   const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
-    gatewayDeviceId: loadOrCreateProcessDeviceIdentity().deviceId,
+    gatewayDeviceId,
     getEnvironment: (environmentId) => params.startup.store.get(environmentId),
     getTransport: () => deviceRuntime.getNodeTransport(),
     launchNodeWorker: async (request) => await deviceRuntime.launchNodeWorker(request),
@@ -297,6 +301,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     workerEnvironmentService,
     workerLiveEvents,
     workerTunnelManager,
+    nodeWorkerGatewayNamespace,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },

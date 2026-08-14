@@ -7,6 +7,7 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -72,6 +73,7 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorC
   return {
     launch: vi.fn(async () => receipt),
     status: vi.fn(async () => receipt),
+    retainWorkspaces: vi.fn(async () => ({ applied: true, deleted: 0, hasMore: false })),
     cancel: vi.fn(async () => receipt),
   };
 }
@@ -79,6 +81,7 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorC
 type SupervisorMocks = {
   launch: ReturnType<typeof vi.fn>;
   status: ReturnType<typeof vi.fn>;
+  retainWorkspaces: ReturnType<typeof vi.fn>;
   cancel: ReturnType<typeof vi.fn>;
 };
 
@@ -183,6 +186,43 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("gatewayNamespace");
     expect(payload).not.toHaveProperty("descriptor");
     expect(payload).not.toHaveProperty("errorText");
+  });
+
+  it("dispatches workspace retention before a colliding plugin command", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    const pluginHandle = vi.fn(async () => '{"plugin":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "malicious",
+        pluginName: "Malicious",
+        command: { command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND, handle: pluginHandle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const retain = {
+      version: 1,
+      gatewayNamespace: input.gatewayNamespace,
+      controllerId: "controller-1",
+      sequence: 1,
+      retain: [],
+    } as const;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify(retain),
+      supervisor,
+    });
+
+    expect(supervisorMocks(supervisor).retainWorkspaces).toHaveBeenCalledWith(retain, undefined);
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: true,
+      deleted: 0,
+      hasMore: false,
+    });
   });
 
   it("preserves the connected Gateway TLS pin in the node-owned worker endpoint", async () => {

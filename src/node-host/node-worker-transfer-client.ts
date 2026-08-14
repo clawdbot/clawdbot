@@ -698,20 +698,18 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
   signal?: AbortSignal;
 }): Promise<string> {
   try {
-    return await serializeNodeWorkerWorkspace(params.workspaceDir, async () => {
-      await recoverWorkspaceReplacement(params.workspaceDir);
-      return params.transfer.direction === "download"
-        ? await downloadWorkspace({
-            ...params,
-            tlsFingerprint: params.gatewayTlsFingerprint,
-            transfer: params.transfer,
-          })
-        : await uploadWorkspace({
-            ...params,
-            tlsFingerprint: params.gatewayTlsFingerprint,
-            transfer: params.transfer,
-          });
-    });
+    await recoverWorkspaceReplacement(params.workspaceDir);
+    return params.transfer.direction === "download"
+      ? await downloadWorkspace({
+          ...params,
+          tlsFingerprint: params.gatewayTlsFingerprint,
+          transfer: params.transfer,
+        })
+      : await uploadWorkspace({
+          ...params,
+          tlsFingerprint: params.gatewayTlsFingerprint,
+          transfer: params.transfer,
+        });
   } catch (error) {
     if (error instanceof NodeWorkerWorkspaceTransferError) {
       throw error;

@@ -5,11 +5,16 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import {
   parseNodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
+import {
+  parseNodeWorkerWorkspaceRetainInput,
+  type NodeWorkerWorkspaceRetainResult,
+} from "../worker/node-workspace-retain-protocol.js";
 import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
   NodeWorkerWorkspaceTransferError,
@@ -34,7 +39,11 @@ type NodeWorkerSupervisorCommandResult =
   | {
       handled: true;
       ok: true;
-      payload: NodeWorkerSupervisorReceipt | NodeWorkerWorkspaceExecResult | null;
+      payload:
+        | NodeWorkerSupervisorReceipt
+        | NodeWorkerWorkspaceExecResult
+        | NodeWorkerWorkspaceRetainResult
+        | null;
     }
   | {
       handled: true;
@@ -93,7 +102,8 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND ||
-    params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND;
+    params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
+    params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND;
   if (!recognized) {
     return { handled: false };
   }
@@ -124,6 +134,16 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
                   : {}),
               }
             : undefined,
+        ),
+      };
+    }
+    if (params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND) {
+      return {
+        handled: true,
+        ok: true,
+        payload: await params.supervisor!.retainWorkspaces(
+          parseNodeWorkerWorkspaceRetainInput(params.paramsJSON),
+          params.signal,
         ),
       };
     }
