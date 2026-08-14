@@ -9,7 +9,6 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { resolveDesktopDocumentTarget } from "../../app/desktop-document-mode.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -41,7 +40,7 @@ import {
   renderDesktopPanelHeader,
   renderDesktopPicker,
 } from "./desktop-panel-view.ts";
-import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import { desktopSourceForEnvironment, resolveDesktopDocumentTarget } from "./desktop-source.ts";
 
 const panelLayout = createDockPanelLayout({
   storageKey: "openclaw.desktopPanel",

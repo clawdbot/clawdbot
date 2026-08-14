@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { desktopDocumentOptions, resolveDesktopDocumentTarget } from "./desktop-document-mode.ts";
+import { resolveDesktopDocumentTarget } from "../components/desktop/desktop-source.ts";
+import { desktopDocumentOptions } from "./desktop-document-mode.ts";
 
 describe("desktop document mode", () => {
   it("parses desktop source, session, and control options", () => {
