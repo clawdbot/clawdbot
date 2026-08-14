@@ -36,6 +36,9 @@ const cronContinuationCleanupMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
+const agentRunRegistryMocks = vi.hoisted(() => ({
+  getAgentRunTaskRunId: vi.fn<(runId: string) => string | undefined>(() => undefined),
+}));
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
 vi.mock("../../config/sessions/session-accessor.js", async () => ({
@@ -48,6 +51,12 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
+vi.mock("../../infra/agent-run-registry.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+    "../../infra/agent-run-registry.js",
+  )),
+  getAgentRunTaskRunId: agentRunRegistryMocks.getAgentRunTaskRunId,
+}));
 
 import {
   createMediaGenerationTaskLifecycle,
@@ -67,6 +76,7 @@ beforeEach(() => {
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
   cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry.mockReset().mockReturnValue(undefined);
+  agentRunRegistryMocks.getAgentRunTaskRunId.mockReset().mockReturnValue(undefined);
 });
 
 function createImageMediaLifecycle() {
@@ -880,6 +890,22 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 });
 
 describe("createMediaGenerationTaskLifecycle", () => {
+  it("pins the owner-issued cron task run id when detached media starts", () => {
+    agentRunRegistryMocks.getAgentRunTaskRunId.mockReturnValue("cron-task-run-exact");
+    const lifecycle = createImageMediaLifecycle();
+
+    const handle = lifecycle.createTaskRun({
+      sessionKey: "agent:main:cron:daily-media:run:cron-session-123",
+      prompt: "proof image",
+    });
+
+    expect(agentRunRegistryMocks.getAgentRunTaskRunId).toHaveBeenCalledWith("cron-session-123");
+    expect(handle).toMatchObject({
+      requesterSessionKey: "agent:main:cron:daily-media:run:cron-session-123",
+      originatingCronTaskRunId: "cron-task-run-exact",
+    });
+  });
+
   it("tracks pending media when the detached runtime does not mirror core tasks", () => {
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
     const lifecycle = createImageMediaLifecycle();

@@ -8,7 +8,11 @@ import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  clearAgentRunContext,
+  getAgentRunTaskRunId,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
@@ -51,6 +55,7 @@ export type MediaGenerationTaskHandle = {
   taskId: string;
   runId: string;
   requesterSessionKey: string;
+  originatingCronTaskRunId?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   taskLabel: string;
@@ -219,6 +224,8 @@ function createMediaGenerationTaskRun(params: {
   if (!sessionKey) {
     return null;
   }
+  const cronRunId = parseCronRunScopeSuffix(sessionKey).runId;
+  const originatingCronTaskRunId = cronRunId ? getAgentRunTaskRunId(cronRunId) : undefined;
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
   try {
     // Pin the complete requester route when detached work starts. Completion-time
@@ -253,6 +260,7 @@ function createMediaGenerationTaskRun(params: {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
+      ...(originatingCronTaskRunId ? { originatingCronTaskRunId } : {}),
       requesterAgentId: params.requesterAgentId,
       requesterOrigin,
       taskLabel: params.prompt,
