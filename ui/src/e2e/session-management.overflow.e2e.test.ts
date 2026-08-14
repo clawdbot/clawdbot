@@ -188,6 +188,37 @@ suite.define(() => {
     }
   });
 
+  it("keeps a sibling's fade but holds its title still while a menu is open", async () => {
+    const { context, page } = await openSidebar("light");
+
+    try {
+      const owner = page.locator(`[data-session-key="${SHORT_KEY}"]`);
+      const sibling = page.locator(`[data-session-key="${LONG_KEY}"]`);
+      const label = sibling.locator(".sidebar-recent-session__name");
+
+      await owner.hover();
+      await owner.locator("[data-session-menu]").click();
+      await expect.poll(() => page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(1);
+
+      await sibling.hover();
+      await page.waitForTimeout(900);
+
+      // Hover reveals Pin and More from CSS alone, so the measured fade has to
+      // follow them onto this row even while another row's menu is open —
+      // otherwise those controls sit on unfaded title text.
+      expect(
+        Number.parseFloat(
+          await sibling.evaluate((el) => el.style.getPropertyValue("--session-row-action-cover")),
+        ),
+      ).toBeGreaterThan(0);
+      // The traversal is the part an open menu suppresses: nothing moves behind
+      // the surface the operator is reading.
+      expect(await label.evaluate((el) => el.className)).not.toContain("hover-marquee--scrolling");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("leaves clipped titles still under reduced motion", async () => {
     const { context, page } = await openSidebar("light", "reduce");
 

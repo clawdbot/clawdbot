@@ -80,21 +80,25 @@ function measureRowReveal(host: HTMLElement, label: HTMLElement | null): RowReve
  * its traversal.
  */
 export function revealSessionRow(host: HTMLElement): void {
-  // The menu owner keeps its own reveal; every sibling stays inert until the
-  // menu closes, so only one row is ever asking for the pointer's attention.
-  if (host.closest(HOVER_SUPPRESSED_SCOPE) && !host.classList.contains(MENU_OPEN_CLASS)) {
-    return;
-  }
   const label = findMarqueeLabel(host);
   // Measure at hover time: labels resize with the sidebar and with hover-only
   // row actions, so a cached width would drift.
   const { cover, hidden } = measureRowReveal(host, label);
+  // The fade is not part of the reveal: CSS shows the actions on :hover on its
+  // own, and the mask in layout.css ramps at this measurement. Skipping it while
+  // a menu is open would leave those actions sitting on unfaded title text, so
+  // the cover is published for every hovered row and only the traversal below
+  // is suppressed.
   host.style.setProperty(ACTION_COVER_PROPERTY, `${Math.round(cover)}px`);
   if (!label || label.classList.contains("hover-marquee--scrolling")) {
     return;
   }
   clearPendingMarquee(label);
-  if (hidden <= 1) {
+  // The menu owner keeps its own traversal; a sibling crossed on the way to the
+  // menu holds still, so only one row is ever moving under the pointer.
+  const suppressed =
+    host.closest(HOVER_SUPPRESSED_SCOPE) !== null && !host.classList.contains(MENU_OPEN_CLASS);
+  if (hidden <= 1 || suppressed) {
     return;
   }
   const distance = hidden + MARQUEE_FADE_PX;

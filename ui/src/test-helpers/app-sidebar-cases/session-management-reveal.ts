@@ -38,7 +38,7 @@ function rowFor(sidebar: Element, key: string): HTMLElement {
 }
 
 describe("AppSidebar session management reveal", () => {
-  it("keeps the endcap ahead of the child disclosure", async () => {
+  it("ends every row with the endcap so state keeps one trailing rail", async () => {
     const sidebar = await mountWithRows([
       {
         key: "agent:main:parent",
@@ -47,16 +47,22 @@ describe("AppSidebar session management reveal", () => {
         updatedAt: 2,
         childSessions: ["agent:main:child"],
       },
+      { key: "agent:main:solo", kind: "direct", label: "Ship release", updatedAt: 1 },
     ]);
-    const row = rowFor(sidebar, "agent:main:parent");
-    const order = [...row.children].map((child) => child.className.split(" ")[0]);
 
-    expect(order.indexOf("sidebar-recent-session__aside")).toBeGreaterThan(
-      order.indexOf("sidebar-recent-session__link"),
-    );
-    expect(order.indexOf("sidebar-child-session-toggle")).toBeGreaterThan(
-      order.indexOf("sidebar-recent-session__aside"),
-    );
+    // The endcap holds the trailing edge by being last, not by any rule that
+    // pins it, so the disclosure button has to precede it. Rendered after, it
+    // pushes a parent's state inboard while childless rows keep the real edge --
+    // the two rails an operator reads as a misaligned spinner.
+    for (const key of ["agent:main:parent", "agent:main:solo"]) {
+      const order = [...rowFor(sidebar, key).children].map(
+        (child) => child.className.split(" ")[0],
+      );
+      expect(order.indexOf("sidebar-recent-session__aside")).toBe(order.length - 1);
+      expect(order.indexOf("sidebar-recent-session__aside")).toBeGreaterThan(
+        order.indexOf("sidebar-recent-session__link"),
+      );
+    }
   });
 
   it("holds the management layer revealed while the row menu is open", async () => {
@@ -97,7 +103,7 @@ describe("AppSidebar session management reveal", () => {
     }
   });
 
-  it("holds every other row inert while one row's menu is open", async () => {
+  it("keeps every other row's fade while one row's menu is open", async () => {
     const sidebar = await mountWithRows([
       { key: "agent:main:one", kind: "direct", label: "One", updatedAt: 2 },
       { key: "agent:main:two", kind: "direct", label: "Two", updatedAt: 1 },
@@ -112,16 +118,10 @@ describe("AppSidebar session management reveal", () => {
       ?.click();
     await sidebar.updateComplete;
 
-    // An open menu owns the pointer: crossing a sibling on the way to it must
-    // not start that row revealing behind the surface being read.
-    sibling().dispatchEvent(new MouseEvent("mouseenter"));
-    expect(sibling().style.getPropertyValue(ACTION_COVER_PROPERTY)).toBe("");
-
-    rowFor(sidebar, "agent:main:one")
-      .querySelector<HTMLButtonElement>("[data-session-menu]")
-      ?.click();
-    await sidebar.updateComplete;
-
+    // An open menu suppresses the traversal on other rows, never their fade.
+    // CSS reveals Pin and More under the pointer whatever the menu is doing, so
+    // a row that stopped publishing this measurement would hand those controls
+    // unfaded title text to sit on.
     sibling().dispatchEvent(new MouseEvent("mouseenter"));
     expect(sibling().style.getPropertyValue(ACTION_COVER_PROPERTY)).not.toBe("");
   });

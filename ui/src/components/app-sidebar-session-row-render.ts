@@ -370,7 +370,6 @@ export function renderRecentSession(params: {
             sessionHasPendingApproval(host.sessionData.approvalBadgeSnapshot(), session.key),
         })}
       </a>
-      ${endcap}
       ${session.childSessionKeys.length > 0
         ? html`<button
             class="sidebar-child-session-toggle ${session.runningChildCount > 0
@@ -399,6 +398,10 @@ export function renderRecentSession(params: {
                 >`}
           </button>`
         : nothing}
+      <!-- The endcap is the row's trailing rail, so it stays last: nothing pins
+      it, and a sibling rendered after it pushes that row's state inboard while
+      childless rows keep the true edge. -->
+      ${endcap}
     </div>
   `;
   // Marquee state mutates the row DOM; keying prevents cross-session reuse.
