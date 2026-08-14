@@ -2973,6 +2973,50 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(compactionLogger.warn).not.toHaveBeenCalled();
   });
 
+  it("emits one redacted provider warning when the preserved-turn producer truncates", async () => {
+    const sensitiveSentinel = "preserved-secret-never-log";
+    const providerSummarize = vi.fn().mockResolvedValue("provider summary body");
+    registerCompactionProvider({
+      id: "preserved-overflow-provider",
+      label: "Preserved Overflow Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "preserved-overflow-provider",
+      recentTurnsPreserve: 12,
+    });
+    const messagesToSummarize = Array.from({ length: 24 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `preserved-${index}-${sensitiveSentinel}-${"p".repeat(700)}`,
+      timestamp: index + 1,
+    })) as AgentMessage[];
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 20_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary).toContain("[Earlier preserved messages truncated]");
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(compactionLogger.warn).toHaveBeenCalledOnce();
+    const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
+    expect(warning).toBe(
+      "Compaction safeguard: finalized artifact truncated; loss=preserved-turn-head",
+    );
+    expect(warning).not.toContain(sensitiveSentinel);
+  });
+
   it("retains provider body sentinels and emits one redacted warning when suffixes overflow", async () => {
     const sensitiveSentinel = "credential-sentinel-never-log";
     const providerBody = `BODY-START${"b".repeat(3_400)}BODY-MIDDLE${"b".repeat(3_400)}BODY-END`;
@@ -3022,7 +3066,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(compactionLogger.warn).toHaveBeenCalledOnce();
     const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
     expect(warning).toBe(
-      "Compaction safeguard: finalized artifact truncated; loss=split-turn-head,suffix-head",
+      "Compaction safeguard: finalized artifact truncated; " +
+        "loss=split-turn-head,preserved-turn-head,suffix-head",
     );
     expect(warning).not.toContain(sensitiveSentinel);
   });

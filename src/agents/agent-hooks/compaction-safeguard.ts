@@ -88,7 +88,12 @@ const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
 const compactionSafeguardDeps = {
   summarizeInStages,
 };
-type CompactionLoss = "summary-tail" | "suffix-head" | "split-turn-head" | "split-turn-tail";
+type CompactionLoss =
+  | "summary-tail"
+  | "suffix-head"
+  | "split-turn-head"
+  | "split-turn-tail"
+  | "preserved-turn-head";
 
 function prependPreviousSummaryForRedistill(params: {
   messages: AgentMessage[];
@@ -314,6 +319,9 @@ async function summarizeViaLLM(params: Parameters<typeof summarizeInStages>[0]):
 type ContextSection = {
   text: string;
   messageStarts: number[];
+  // Keep producer loss attached to the bounded artifact so every finalizer path
+  // emits the same redacted diagnostic when the section already dropped context.
+  truncatedLoss?: CompactionLoss;
 };
 
 type CompactionSuffix = {
@@ -858,6 +866,7 @@ function formatBoundedContextSection(params: {
   heading: string;
   maxChars: number;
   truncatedMarker: string;
+  truncatedLoss: CompactionLoss;
   onTruncated?: () => void;
 }): ContextSection {
   const lines = formatContextMessages(params.messages);
@@ -899,6 +908,7 @@ function formatBoundedContextSection(params: {
       offset += line.length + 1;
       return start;
     }),
+    truncatedLoss: params.truncatedLoss,
   };
 }
 
@@ -908,6 +918,7 @@ function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
     heading: "\n\n## Recent turns preserved verbatim",
     maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
     truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
+    truncatedLoss: "preserved-turn-head",
   });
 }
 
@@ -924,6 +935,7 @@ function buildSplitTurnContextSection(
     heading: "**Turn Context (split turn):**\n",
     maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
+    truncatedLoss: "split-turn-head",
     onTruncated,
   });
 }
@@ -1124,6 +1136,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       const finalized = budgetCompactionSummary(body, suffix, MAX_COMPACTION_SUMMARY_CHARS);
       const losses = new Set(producerLosses);
+      for (const section of Object.values(sections)) {
+        if (section?.truncatedLoss) {
+          losses.add(section.truncatedLoss);
+        }
+      }
       if (finalized.bodyTrimmed) {
         losses.add("summary-tail");
       }
