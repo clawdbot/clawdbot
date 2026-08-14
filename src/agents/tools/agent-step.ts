@@ -7,6 +7,11 @@ import crypto from "node:crypto";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  escapeInternalRuntimeContextDelimiters,
+} from "../internal-runtime-context.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
 import {
@@ -62,6 +67,7 @@ export async function runAgentStep(params: {
   sessionKey: string;
   message: string;
   extraSystemPrompt: string;
+  runtimeContext?: string;
   timeoutMs: number;
   channel?: string;
   lane?: string;
@@ -79,7 +85,13 @@ export async function runAgentStep(params: {
     sourceTool: params.sourceTool ?? "sessions_send",
   };
   // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
-  const message = annotateInterSessionPromptText(params.message, inputProvenance);
+  const baseMessage = annotateInterSessionPromptText(params.message, inputProvenance);
+  const runtimeContext = params.runtimeContext
+    ? escapeInternalRuntimeContextDelimiters(params.runtimeContext)
+    : undefined;
+  const message = runtimeContext
+    ? `${baseMessage}\n\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${runtimeContext}\n${INTERNAL_RUNTIME_CONTEXT_END}`
+    : baseMessage;
   const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
   const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
