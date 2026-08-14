@@ -119,8 +119,9 @@ the resolved state or decision. See
 ownership boundary, and test expectations.
 
 Pass the exact resolver result to the host-injected registered context builder
-as `channelIngress`. This preserves the native plugin's record-, epoch-, and
-scope-bound participant evidence through one-shot queued run admission without
+as `channelIngress`. Results used for execution must include the final
+agent/session/message/event `contextBinding`; decision-only resolver calls may
+omit it. This preserves the native plugin's record-, epoch-, and scope-bound participant evidence through one-shot queued run admission without
 exposing it in message context fields. The standalone public builder is not an
 authoritative substitute. Never reconstruct evidence from sender, route, room,
 account, thread, message, transport, or session values. Legacy adapters can explicitly pass

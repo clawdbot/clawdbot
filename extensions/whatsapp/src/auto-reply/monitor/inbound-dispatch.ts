@@ -19,7 +19,10 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import {
+  requireWhatsAppInboundAdmission,
+  resolveWhatsAppAdmissionChannelIngress,
+} from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import {
   type DeliverableWhatsAppOutboundPayload,
@@ -411,6 +414,14 @@ export async function prepareWhatsAppInboundContext(params: {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
+  const eventId = params.msg.event.id ?? `${conversationId}:${newConnectionId()}`;
+  const channelIngress =
+    (await resolveWhatsAppAdmissionChannelIngress(admission, {
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      messageId: eventId,
+      inboundEventKind: "user_request",
+    })) ?? admission.channelIngress;
   const wasMentioned = params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned;
   const inboundHistory =
     conversationKind === "group"
@@ -443,7 +454,7 @@ export async function prepareWhatsAppInboundContext(params: {
     messageReceivedHooks: params.suppressMessageReceivedHooks ? "channel" : "core",
   } as const;
   const inbound: PreparedChannelInbound = {
-    channelIngress: admission.channelIngress,
+    channelIngress,
     channel: "whatsapp",
     supplemental: {
       quote: params.visibleReplyTo
@@ -458,7 +469,7 @@ export async function prepareWhatsAppInboundContext(params: {
     },
     media,
     event: {
-      id: params.msg.event.id ?? `${conversationId}:${newConnectionId()}`,
+      id: eventId,
       timestamp: params.msg.event.timestamp,
     },
     from: conversationId,

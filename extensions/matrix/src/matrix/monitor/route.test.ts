@@ -37,8 +37,6 @@ function matrixBinding(
   } as RouteBinding;
 }
 
-const threadCfg = { ...baseCfg, bindings: [matrixBinding("main")] } satisfies OpenClawConfig;
-
 function senderPeer(id = "@alice:example.org"): RoutePeer {
   return { kind: "direct", id };
 }

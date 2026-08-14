@@ -189,6 +189,11 @@ describe("googlechat inbound access policy", () => {
           senderName: "Alice",
           senderEmail: "alice@example.com",
           rawBody: "hello",
+          contextBinding: {
+            agentId: "main",
+            sessionKey: "agent:main:googlechat:direct:users/abc",
+            inboundEventKind: "user_request",
+          },
           statusSink,
           logVerbose,
         }),

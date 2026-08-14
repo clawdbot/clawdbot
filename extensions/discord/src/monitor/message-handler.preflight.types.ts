@@ -1,6 +1,9 @@
 // Discord type declarations define plugin contracts.
 import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
-import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -62,6 +65,10 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
 
   commandAuthorized: boolean;
   channelIngress: ResolvedChannelMessageIngress;
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+    conversation?: { parentId?: string; threadId?: string },
+  ) => Promise<ResolvedChannelMessageIngress>;
   baseText: string;
   messageText: string;
   preflightAudioTranscript?: string;

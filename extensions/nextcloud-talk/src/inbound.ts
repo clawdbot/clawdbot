@@ -3,6 +3,7 @@ import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-
 import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
@@ -182,7 +183,10 @@ export async function handleNextcloudTalkInbound(params: {
     ? normalizeStringEntries(account.config.groupAllowFrom)
     : allowFrom;
   const roomAllowFrom = normalizeStringEntries(roomConfig?.allowFrom);
-  const resolveAccess = async (wasMentioned?: boolean) =>
+  const resolveAccess = async (
+    wasMentioned?: boolean,
+    contextBinding?: ChannelIngressContextBinding,
+  ) =>
     await resolveStableChannelMessageIngress({
       channelId: CHANNEL_ID,
       accountId: account.accountId,
@@ -200,6 +204,7 @@ export async function handleNextcloudTalkInbound(params: {
         kind: isGroup ? "group" : "direct",
         id: isGroup ? roomToken : senderId,
       },
+      contextBinding,
       route: roomRoutes({
         isGroup,
         groupPolicy,
@@ -300,14 +305,6 @@ export async function handleNextcloudTalkInbound(params: {
   const wasMentioned = mentionRegexes.length
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
     : false;
-  if (isGroup) {
-    access = await resolveAccess(wasMentioned);
-  }
-
-  if (isGroup && access.activationAccess.shouldSkip) {
-    runtime.log?.(`nextcloud-talk: drop room ${roomToken} (no mention)`);
-    return;
-  }
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
@@ -317,6 +314,21 @@ export async function handleNextcloudTalkInbound(params: {
       id: isGroup ? roomToken : senderId,
     },
   });
+  access = await resolveAccess(isGroup ? wasMentioned : undefined, {
+    agentId: route.agentId,
+    sessionKey: route.sessionKey,
+    messageId: message.messageId,
+    inboundEventKind: "user_request",
+  });
+
+  if (access.ingress.admission !== "dispatch") {
+    runtime.log?.(
+      isGroup && access.activationAccess.shouldSkip
+        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+    );
+    return;
+  }
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
   const body = buildEnvelope({
@@ -337,7 +349,11 @@ export async function handleNextcloudTalkInbound(params: {
     timestamp: message.timestamp,
     from: isGroup ? `nextcloud-talk:room:${roomToken}` : `nextcloud-talk:${senderId}`,
     sender: { id: senderId, name: senderName || undefined },
-    conversation: { kind: isGroup ? "group" : "direct", id: roomToken, label: fromLabel },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: isGroup ? roomToken : senderId,
+      label: fromLabel,
+    },
     route: {
       agentId: route.agentId,
       dmScope: route.dmScope,

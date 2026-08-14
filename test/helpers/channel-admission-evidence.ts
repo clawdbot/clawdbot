@@ -50,6 +50,11 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
       participantOutcomeAffecting: false,
       scope: {
         conversation: { kind: "direct", id: "test-conversation" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey: "agent:main:test:dm:test-conversation",
+          inboundEventKind: "user_request",
+        },
       },
     });
     const contextParams = {
@@ -57,8 +62,12 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
       accountId: params.accountId,
       sender: { id: params.participantId },
       conversation: { kind: "direct", id: "test-conversation" },
-      route: {},
+      route: {
+        agentId: "main",
+        routeSessionKey: "agent:main:test:dm:test-conversation",
+      },
       reply: {},
+      message: {},
     };
     const preparation = prepareHostChannelContextAdmissionEvidence({
       owner,

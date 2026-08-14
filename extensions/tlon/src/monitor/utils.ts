@@ -8,6 +8,7 @@ import {
 import {
   resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -160,6 +161,7 @@ export async function resolveTlonMessageIngress(params: {
   accountId?: string;
   dmPolicy?: "open" | "allowlist";
   groupPolicy?: "open" | "allowlist";
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   return await resolveStableChannelMessageIngress({
     channelId: "tlon",
@@ -167,6 +169,7 @@ export async function resolveTlonMessageIngress(params: {
     identity: tlonIngressIdentity,
     subject: { stableId: params.senderShip },
     conversation: params.conversation,
+    contextBinding: params.contextBinding,
     dmPolicy: params.dmPolicy ?? "allowlist",
     groupPolicy: params.groupPolicy ?? "open",
     allowFrom: params.allowFrom,

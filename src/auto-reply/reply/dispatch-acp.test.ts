@@ -563,6 +563,12 @@ describe("tryDispatchAcpReplyCore", () => {
         accountId: "default",
         subject: { stableId: "person-42" },
         conversation: { kind: "group", id: "room-1" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey,
+          messageId: "msg-acp",
+          inboundEventKind: "user_request",
+        },
         dmPolicy: "open",
         groupPolicy: "open",
       });

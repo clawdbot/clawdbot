@@ -114,18 +114,20 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     const authorizeInboundMessage = vi.fn<
       ReturnType<typeof createTelegramHandlerAuthorization>["authorizeInboundMessage"]
     >(async (inbound) => {
-      const channelIngress = await createTelegramIngressResolver({ accountId: "default" }).message({
-        subject: createTelegramIngressSubject(inbound.senderId),
-        conversation: {
-          kind: inbound.isGroup ? "group" : "direct",
-          id: String(inbound.chatId),
-        },
-        dmPolicy: "open",
-        groupPolicy: "open",
-      });
+      const resolver = createTelegramIngressResolver({ accountId: "default" });
       return {
         allowed: true as const,
-        channelIngress,
+        resolveChannelIngress: async (contextBinding) =>
+          await resolver.message({
+            subject: createTelegramIngressSubject(inbound.senderId),
+            conversation: {
+              kind: inbound.isGroup ? "group" : "direct",
+              id: String(inbound.chatId),
+            },
+            contextBinding,
+            dmPolicy: "open",
+            groupPolicy: "open",
+          }),
         effectiveDmAllow: emptyAllow,
         context: {
           cfg: {},

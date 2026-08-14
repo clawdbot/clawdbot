@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
@@ -213,6 +214,9 @@ type ZaloImageMessageParams = ZaloProcessingContext & {
 };
 type ZaloMessageAuthorizationResult = {
   channelIngress: ResolvedChannelMessageIngress;
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
   chatId: string;
   commandAuthorized: boolean | undefined;
   isGroup: boolean;
@@ -476,30 +480,33 @@ async function authorizeZaloMessage(
     defaultGroupPolicy,
   });
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
-  const access = await resolveStableChannelMessageIngress({
-    channelId: "zalo",
-    accountId: account.accountId,
-    identity: {
-      key: "zalo-user-id",
-      normalize: normalizeZaloAllowEntry,
-      sensitivity: "pii",
-      entryIdPrefix: "zalo-entry",
-    },
-    cfg: config,
-    readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
-    subject: { stableId: senderId },
-    conversation: {
-      kind: isGroup ? "group" : "direct",
-      id: chatId,
-    },
-    providerMissingFallbackApplied,
-    dmPolicy,
-    groupPolicy,
-    policy: { groupAllowFromFallbackToAllowFrom: true },
-    allowFrom: normalizeStringEntries(account.config.allowFrom),
-    groupAllowFrom: normalizeStringEntries(account.config.groupAllowFrom),
-    command: shouldComputeAuth ? {} : undefined,
-  });
+  const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
+    await resolveStableChannelMessageIngress({
+      channelId: "zalo",
+      accountId: account.accountId,
+      identity: {
+        key: "zalo-user-id",
+        normalize: normalizeZaloAllowEntry,
+        sensitivity: "pii",
+        entryIdPrefix: "zalo-entry",
+      },
+      cfg: config,
+      readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+      subject: { stableId: senderId },
+      conversation: {
+        kind: isGroup ? "group" : "direct",
+        id: chatId,
+      },
+      contextBinding,
+      providerMissingFallbackApplied,
+      dmPolicy,
+      groupPolicy,
+      policy: { groupAllowFromFallbackToAllowFrom: true },
+      allowFrom: normalizeStringEntries(account.config.allowFrom),
+      groupAllowFrom: normalizeStringEntries(account.config.groupAllowFrom),
+      command: shouldComputeAuth ? {} : undefined,
+    });
+  const access = await resolveChannelIngress();
   const senderAccess = access.senderAccess;
   if (isGroup) {
     warnMissingProviderGroupPolicyFallbackOnce({
@@ -568,6 +575,7 @@ async function authorizeZaloMessage(
 
   return {
     channelIngress: access,
+    resolveChannelIngress,
     chatId,
     commandAuthorized: access.commandAccess.requested ? access.commandAccess.authorized : undefined,
     isGroup,
@@ -604,8 +612,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   if (!authorization) {
     return;
   }
-  const { channelIngress, isGroup, chatId, senderId, senderName, rawBody, commandAuthorized } =
-    authorization;
+  const { isGroup, chatId, senderId, senderName, rawBody } = authorization;
   const agentBody = agentBodyOverride ?? rawBody;
 
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
@@ -617,6 +624,19 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       id: chatId,
     },
   });
+  const channelIngress = await authorization.resolveChannelIngress({
+    agentId: route.agentId,
+    sessionKey: route.sessionKey,
+    messageId: message_id,
+    inboundEventKind: "user_request",
+  });
+  if (!channelIngress.senderAccess.allowed) {
+    logVerbose(core, runtime, `zalo: authorization changed before dispatch for ${senderId}`);
+    return;
+  }
+  const commandAuthorized = channelIngress.commandAccess.requested
+    ? channelIngress.commandAccess.authorized
+    : undefined;
 
   if (
     isGroup &&

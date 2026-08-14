@@ -60,6 +60,12 @@ export async function handleBuzzInbound(params: {
       id: channelId,
       threadId: message.threadId,
     },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: message.id,
+      inboundEventKind: "user_request",
+    },
     mentionFacts: { canDetectMention: true, wasMentioned },
     groupPolicy: account.config.groupPolicy,
     groupAllowFrom: account.config.groupAllowFrom,

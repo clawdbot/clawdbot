@@ -7,7 +7,6 @@
 
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
-import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -51,21 +50,34 @@ async function processTwitchMessage(params: {
   runtime: TwitchRuntimeEnv;
   core: TwitchCoreRuntime;
   turnAdoptionLifecycle: TwitchIngressLifecycle;
-  channelIngress: ResolvedChannelMessageIngress;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
-  const {
+  const { message, account, accountId, config, runtime, core, turnAdoptionLifecycle, statusSink } =
+    params;
+  const cfg = config as OpenClawConfig;
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg,
+    channel: "twitch",
+    accountId,
+    peer: {
+      kind: "group",
+      id: message.channel,
+    },
+  });
+  const exactAccess = await checkTwitchAccessControl({
     message,
     account,
-    accountId,
-    config,
-    runtime,
-    core,
-    turnAdoptionLifecycle,
-    channelIngress,
-    statusSink,
-  } = params;
-  const cfg = config as OpenClawConfig;
+    botUsername: normalizeLowercaseStringOrEmpty(account.username),
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: message.id,
+      inboundEventKind: "user_request",
+    },
+  });
+  if (!exactAccess.allowed) {
+    return;
+  }
 
   await core.channel.inbound.run({
     channel: "twitch",
@@ -82,15 +94,6 @@ async function processTwitchMessage(params: {
         raw: incoming,
       }),
       resolveTurn: async (input) => {
-        const route = core.channel.routing.resolveAgentRoute({
-          cfg,
-          channel: "twitch",
-          accountId,
-          peer: {
-            kind: "group",
-            id: message.channel,
-          },
-        });
         const senderId = message.userId ?? message.username;
         const fromLabel = message.displayName ?? message.username;
         const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
@@ -100,7 +103,7 @@ async function processTwitchMessage(params: {
           body: input.rawText,
         });
         const ctxPayload = core.channel.inbound.buildContext({
-          channelIngress,
+          channelIngress: exactAccess.channelIngress,
           channel: "twitch",
           accountId,
           messageId: input.id,
@@ -297,7 +300,6 @@ export async function monitorTwitchProvider(
         runtime,
         core,
         turnAdoptionLifecycle,
-        channelIngress: access.channelIngress,
         statusSink,
       });
     },

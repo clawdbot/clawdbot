@@ -104,7 +104,7 @@ export async function buildDiscordMessageProcessContext(params: {
     boundSessionKey,
     route,
     commandAuthorized,
-    channelIngress,
+    resolveChannelIngress,
   } = ctx;
 
   const fromLabel = isDirectMessage
@@ -360,6 +360,20 @@ export async function buildDiscordMessageProcessContext(params: {
           storePath,
           sessionKey: effectiveSessionKey,
         });
+
+  // Auto-threading owns the dispatch session, so bind admission only after that session is final.
+  const channelIngress = await resolveChannelIngress(
+    {
+      agentId: route.agentId,
+      sessionKey: effectiveSessionKey,
+      messageId: canonicalMessageId ?? message.id,
+      inboundEventKind: ctx.inboundEventKind,
+    },
+    {
+      parentId: threadChannel ? threadParentId : undefined,
+      threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
+    },
+  );
 
   const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
     channelIngress,

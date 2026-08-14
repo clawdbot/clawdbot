@@ -539,6 +539,14 @@ export async function resolveIMessageInboundDecision(params: {
   const groupAllowFromForAccess = isGroup
     ? groupAllowFromWithLegacyChatTargets
     : params.groupAllowFrom;
+  const route = resolveIMessageConversationRoute({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    isGroup,
+    peerId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+    sender,
+    chatId,
+  });
   const accessDecision = await createChannelIngressResolver({
     channelId: "imessage",
     accountId: params.accountId,
@@ -560,6 +568,15 @@ export async function resolveIMessageInboundDecision(params: {
         ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
         : normalizeIMessageHandle(sender),
     },
+    ...(reactionContext
+      ? {}
+      : {
+          contextBinding: {
+            agentId: route.agentId,
+            sessionKey: route.sessionKey,
+            inboundEventKind: "user_request",
+          },
+        }),
     dmPolicy: normalizeDmPolicy(params.dmPolicy),
     groupPolicy: normalizeGroupPolicy(params.groupPolicy),
     policy: { groupAllowFromFallbackToAllowFrom: false },
@@ -610,14 +627,6 @@ export async function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "group id not in allowlist" };
   }
 
-  const route = resolveIMessageConversationRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    isGroup,
-    peerId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
-    sender,
-    chatId,
-  });
   if (reactionContext) {
     const notificationMode = params.reactionNotifications ?? "own";
     if (notificationMode === "off") {

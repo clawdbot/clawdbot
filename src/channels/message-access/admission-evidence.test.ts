@@ -25,6 +25,12 @@ async function buildAdmittedContext(participantId: string, allowFrom = [particip
     accountId: "acct:primary",
     subject: { stableId: participantId },
     conversation: { kind: "direct", id: "dm-1" },
+    contextBinding: {
+      agentId: "main",
+      sessionKey: "agent:main:test:dm:dm-1",
+      messageId: "msg-1",
+      inboundEventKind: "user_request",
+    },
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
     allowFrom,
@@ -275,6 +281,12 @@ describe("channel admission evidence", () => {
         accountId: "default",
         subject: { stableId: "person-1" },
         conversation: { kind: "direct", id: "room-1" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey: "agent:main:legacy:dm:room-1",
+          messageId: "msg-1",
+          inboundEventKind: "user_request",
+        },
         dmPolicy: "open",
       });
       const mismatched = buildHostChannelInboundEventContext({
@@ -309,6 +321,11 @@ describe("channel admission evidence", () => {
         accountId: "default",
         subject: { stableId: "person-1" },
         conversation: { kind: "direct", id: "dm-1" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey: "agent:main:public-test:dm:dm-1",
+          inboundEventKind: "user_request",
+        },
         dmPolicy: "open",
       });
       const params = {

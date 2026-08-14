@@ -3,6 +3,7 @@ import {
   channelIngressRoutes,
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -207,6 +208,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   senderName: string;
   senderEmail?: string;
   rawBody: string;
+  contextBinding: ChannelIngressContextBinding;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   logVerbose: (message: string) => void;
 }): Promise<
@@ -345,6 +347,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       kind: isGroup ? "group" : "direct",
       id: spaceId,
     },
+    contextBinding: params.contextBinding,
     route,
     allowFrom: rawConfigAllowFrom,
     groupAllowFrom,

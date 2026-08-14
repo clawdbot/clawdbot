@@ -307,6 +307,20 @@ export async function handleIrcInbound(params: {
     (hasEntries(account.config.groupAllowFrom) || hasEntries(routeGroupAllowFrom))
       ? "allowlist"
       : groupPolicy;
+  const channelTarget =
+    message.target.startsWith("#") || message.target.startsWith("&")
+      ? message.target
+      : `#${message.target}`;
+  const peerId = message.isGroup ? channelTarget : message.senderNick;
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    peer: {
+      kind: message.isGroup ? "group" : "direct",
+      id: peerId,
+    },
+  });
   const access = await createChannelIngressResolver({
     channelId: CHANNEL_ID,
     accountId: account.accountId,
@@ -318,6 +332,12 @@ export async function handleIrcInbound(params: {
     conversation: {
       kind: message.isGroup ? "group" : "direct",
       id: message.target,
+    },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      ...(message.messageId ? { messageId: message.messageId } : {}),
+      inboundEventKind: "user_request",
     },
     route: routeDescriptorsForIrcGroup({
       isGroup: message.isGroup,
@@ -414,21 +434,6 @@ export async function handleIrcInbound(params: {
       error: turnAdoptionLifecycle.abortSignal.reason,
     };
   }
-
-  const channelTarget =
-    message.target.startsWith("#") || message.target.startsWith("&")
-      ? message.target
-      : `#${message.target}`;
-  const peerId = message.isGroup ? channelTarget : message.senderNick;
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
-    cfg: config as OpenClawConfig,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-    peer: {
-      kind: message.isGroup ? "group" : "direct",
-      id: peerId,
-    },
-  });
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;
   const body = buildEnvelope({

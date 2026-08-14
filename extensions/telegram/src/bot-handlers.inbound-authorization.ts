@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type {
   DmPolicy,
   OpenClawConfig,
@@ -438,27 +439,34 @@ export function createTelegramHandlerAuthorization({
       }
     }
 
-    const channelIngress = await createTelegramIngressResolver({
+    // The canonical context builder owns final routing after any buffering.
+    // Memoize its first exact result so retries cannot mint replacement authority.
+    const ingressResolver = createTelegramIngressResolver({
       accountId,
       cfg: authorizationCfg,
-    }).message({
-      subject: createTelegramIngressSubject(params.senderId),
-      conversation: {
-        kind: params.isGroup ? "group" : "direct",
-        id: String(params.chatId),
-        ...(resolvedThreadId != null ? { threadId: String(resolvedThreadId) } : {}),
-      },
-      dmPolicy,
-      groupPolicy: resolveTelegramEffectiveGroupPolicy({
-        cfg: authorizationCfg,
-        telegramCfg: authorizationTelegramCfg,
-        groupConfig: params.isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
-        topicConfig,
-      }),
-      allowFrom: telegramAllowEntries(effectiveDmAllow),
-      groupAllowFrom: telegramAllowEntries(effectiveGroupAllow),
     });
-    return { allowed: true, context, effectiveDmAllow, channelIngress };
+    const groupPolicy = resolveTelegramEffectiveGroupPolicy({
+      cfg: authorizationCfg,
+      telegramCfg: authorizationTelegramCfg,
+      groupConfig: params.isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
+      topicConfig,
+    });
+    let admittedIngress: ReturnType<typeof ingressResolver.message> | undefined;
+    const resolveChannelIngress = (contextBinding: ChannelIngressContextBinding) =>
+      (admittedIngress ??= ingressResolver.message({
+        subject: createTelegramIngressSubject(params.senderId),
+        conversation: {
+          kind: params.isGroup ? "group" : "direct",
+          id: String(params.chatId),
+          ...(resolvedThreadId != null ? { threadId: String(resolvedThreadId) } : {}),
+        },
+        contextBinding,
+        dmPolicy,
+        groupPolicy,
+        allowFrom: telegramAllowEntries(effectiveDmAllow),
+        groupAllowFrom: telegramAllowEntries(effectiveGroupAllow),
+      }));
+    return { allowed: true, context, effectiveDmAllow, resolveChannelIngress };
   };
 
   return {
@@ -491,9 +499,9 @@ type TelegramInboundGate =
       allowed: true;
       context: TelegramEventAuthorizationContext;
       effectiveDmAllow: NormalizedAllowFrom;
-      channelIngress: Awaited<
-        ReturnType<ReturnType<typeof createTelegramIngressResolver>["message"]>
-      >;
+      resolveChannelIngress: (
+        contextBinding: ChannelIngressContextBinding,
+      ) => ReturnType<ReturnType<typeof createTelegramIngressResolver>["message"]>;
     };
 
 function shouldSkipTelegramGroupMessage(

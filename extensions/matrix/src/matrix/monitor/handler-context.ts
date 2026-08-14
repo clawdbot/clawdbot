@@ -2,7 +2,10 @@ import {
   createChannelInboundEnvelopeBuilder,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
-import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
@@ -32,7 +35,10 @@ export async function resolveMatrixInboundContext(config: {
   core: PluginRuntime;
   cfg: CoreConfig;
   accountId: string;
-  channelIngress: ResolvedChannelMessageIngress;
+  resolveMessageIngress: (
+    contextBinding: ChannelIngressContextBinding,
+    conversation?: { kind: "direct" | "channel"; id: string; threadId?: string },
+  ) => Promise<ResolvedChannelMessageIngress>;
   runtime: RuntimeEnv;
   logVerboseMessage: (message: string) => void;
   roomId: string;
@@ -82,7 +88,7 @@ export async function resolveMatrixInboundContext(config: {
     core,
     cfg,
     accountId,
-    channelIngress,
+    resolveMessageIngress,
     runtime,
     logVerboseMessage,
     roomId,
@@ -220,6 +226,20 @@ export async function resolveMatrixInboundContext(config: {
       kind: "quote",
       senderAllowed: replySenderAllowed,
     }).include,
+  );
+  // Thread and conversation bindings finalize the Matrix session after the access preflight.
+  const channelIngress = await resolveMessageIngress(
+    {
+      agentId: _route.agentId,
+      sessionKey: _route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    },
+    {
+      kind: isDirectMessage ? "direct" : "channel",
+      id: roomId,
+      threadId: threadTarget,
+    },
   );
   const ctxPayload = core.channel.inbound.buildContext({
     channelIngress,

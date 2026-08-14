@@ -6,7 +6,7 @@ import type { TelegramContext } from "./bot/types.js";
 import { createTelegramIngressResolver, createTelegramIngressSubject } from "./ingress.js";
 
 describe("Telegram inbound provenance buffering", () => {
-  it("preserves every exact authorization result through debounce collection", async () => {
+  it("preserves every exact authorization resolver through debounce collection", async () => {
     const processMessageWithReplyChain = vi.fn<
       TelegramMessagePipeline["processMessageWithReplyChain"]
     >(async () => ({ kind: "completed" as const }));
@@ -53,6 +53,7 @@ describe("Telegram inbound provenance buffering", () => {
         dmPolicy: "open",
       }),
     ]);
+    const ingressResolvers = ingress.map((result) => async () => await Promise.resolve(result));
     const baseMessage = {
       message_id: 1,
       date: 1,
@@ -62,7 +63,7 @@ describe("Telegram inbound provenance buffering", () => {
     } as Message;
     const ctx = { message: baseMessage } as TelegramContext;
 
-    for (const [index, channelIngress] of ingress.entries()) {
+    for (const [index, channelIngressResolver] of ingressResolvers.entries()) {
       await inboundDebouncer.enqueue({
         ctx,
         msg: { ...baseMessage, message_id: index + 1, text: `message ${index + 1}` },
@@ -72,14 +73,15 @@ describe("Telegram inbound provenance buffering", () => {
         debounceKey: "telegram:default:42:42:default",
         debounceLane: "default",
         dispatchDedupeClaims: [],
-        channelIngress: [channelIngress],
+        channelIngressResolvers: [channelIngressResolver],
       });
     }
     await inboundDebouncer.drain();
 
-    const carried = processMessageWithReplyChain.mock.calls[0]?.[0]?.options?.channelIngress;
-    expect(carried).toEqual(ingress);
-    expect(carried?.[0]).toBe(ingress[0]);
-    expect(carried?.[1]).toBe(ingress[1]);
+    const carried =
+      processMessageWithReplyChain.mock.calls[0]?.[0]?.options?.channelIngressResolvers;
+    expect(carried).toEqual(ingressResolvers);
+    expect(carried?.[0]).toBe(ingressResolvers[0]);
+    expect(carried?.[1]).toBe(ingressResolvers[1]);
   });
 });

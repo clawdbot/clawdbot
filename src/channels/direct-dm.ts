@@ -11,7 +11,10 @@ import {
   resolveChannelInboundRouteEnvelope,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
-import type { ResolvedChannelMessageIngress } from "./message-access/runtime-types.js";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "./message-access/runtime-types.js";
 import { createChannelReplyPipeline } from "./message/reply-pipeline.js";
 import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
 import type { ChannelTurnPlan } from "./turn/types.js";
@@ -48,6 +51,10 @@ type DispatchInboundDirectDmParams = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Shipped SDK callers may omit provenance; bundled callers must classify it explicitly. */
   channelIngress?: ResolvedChannelMessageIngress | "unsupported";
+  /** Resolve the exact admitted result after this helper owns the final route. */
+  resolveChannelIngress?: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
   /** Opaque record-scoped runtime injected by a registered native channel. */
   channelRuntime?: { inbound?: { buildContext?: unknown } };
   /** Set only after the channel's sender/pairing guard admits this event. */
@@ -75,7 +82,7 @@ async function buildDirectDmContext(
     typeof injectedBuilder === "function"
       ? (injectedBuilder as typeof buildChannelInboundEventContext)
       : buildChannelInboundEventContext;
-  return await buildContext({
+  return buildContext({
     channel: params.channel,
     accountId,
     provider: params.provider,
@@ -122,8 +129,18 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     accountId: params.accountId,
     peer: params.peer,
   });
+  const channelIngress = params.resolveChannelIngress
+    ? await params.resolveChannelIngress({
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        messageId: params.messageId,
+        inboundEventKind: "user_request",
+      })
+    : params.channelIngress;
+  const boundParams =
+    channelIngress === params.channelIngress ? params : { ...params, channelIngress };
   const ctxPayload = await buildDirectDmContext(
-    params,
+    boundParams,
     route,
     buildEnvelope({
       channel: params.channelLabel,
@@ -132,7 +149,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
       timestamp: params.timestamp,
     }),
   );
-  await dispatchRoutedChannelTurn(buildDirectDmTurnPlan(params, route, ctxPayload));
+  await dispatchRoutedChannelTurn(buildDirectDmTurnPlan(boundParams, route, ctxPayload));
 
   return { route, ctxPayload };
 }
@@ -173,7 +190,9 @@ function buildDirectDmTurnPlan(
 }
 
 export async function dispatchInboundDirectDmWithRuntime(
-  params: DispatchInboundDirectDmParams & { runtime: PluginRuntime },
+  params: Omit<DispatchInboundDirectDmParams, "resolveChannelIngress"> & {
+    runtime: PluginRuntime;
+  },
 ): Promise<{
   route: DirectDmRoute;
   storePath: string;

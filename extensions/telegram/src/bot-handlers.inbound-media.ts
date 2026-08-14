@@ -5,7 +5,6 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type {
   OpenClawConfig,
@@ -24,7 +23,10 @@ import {
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
-import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
+import type {
+  TelegramAmbientTranscriptWatermark,
+  TelegramChannelIngressResolver,
+} from "./bot-message-context.types.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
@@ -54,7 +56,6 @@ type MediaAuthorization = {
   effectiveDmAllow: NormalizedAllowFrom;
   groupConfig?: TelegramGroupConfig;
   topicConfig?: TelegramTopicConfig;
-  channelIngress: readonly ResolvedChannelMessageIngress[];
 };
 
 type TelegramMediaGroupInput = MediaAuthorization & {
@@ -64,6 +65,7 @@ type TelegramMediaGroupInput = MediaAuthorization & {
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+  channelIngressResolvers: readonly TelegramChannelIngressResolver[];
 };
 
 type BufferedMediaGroupEntry = MediaGroupEntry &
@@ -267,6 +269,7 @@ export function createTelegramInboundMedia({
 
   const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
     try {
+      const finalIngressMessageId = entry.messages.at(-1)?.msg.message_id;
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
       let primary =
         entry.messages.find((item) => item.msg.caption || item.msg.text) ?? entry.messages[0];
@@ -403,12 +406,15 @@ export function createTelegramInboundMedia({
         promptContextMessageSelection: selection,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
+          ...(finalIngressMessageId != null
+            ? { messageIdOverride: String(finalIngressMessageId) }
+            : {}),
           ...promptContextBoundaryOptions(
             entry.promptContextMinTimestampMs,
             entry.promptContextAmbientWatermark,
           ),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
-          channelIngress: entry.channelIngress,
+          channelIngressResolvers: entry.channelIngressResolvers,
         },
         dispatchDedupeClaims: entry.dispatchDedupeClaims,
         spooledReplayParticipants: entry.spooledReplayParticipants,
@@ -457,8 +463,11 @@ export function createTelegramInboundMedia({
         existing.dispatchDedupeClaims,
         input.dispatchDedupeClaims,
       );
-      // An album can span separately authorized updates; preserve each exact resolver result.
-      existing.channelIngress = [...existing.channelIngress, ...input.channelIngress];
+      // An album can span separately authorized updates; preserve each exact resolver once.
+      existing.channelIngressResolvers = [
+        ...existing.channelIngressResolvers,
+        ...input.channelIngressResolvers,
+      ];
       existing.timer = setTimeout(() => {
         buffer.delete(key);
         queueEntry(key, existing);

@@ -351,6 +351,7 @@ export async function preflightDiscordMessage(
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   let commandAuthorized = true;
   let channelIngress;
+  let resolveChannelIngress;
   if (isDirectMessage) {
     const access = await resolveDiscordDmPreflightAccess({
       preflight: params,
@@ -359,6 +360,7 @@ export async function preflightDiscordMessage(
       dmPolicy,
       resolvedAccountId,
       allowNameMatching,
+      conversationId: messageChannelId,
     });
     if (isPreflightAborted(params.abortSignal)) {
       return null;
@@ -368,6 +370,7 @@ export async function preflightDiscordMessage(
     }
     commandAuthorized = access.commandAuthorized;
     channelIngress = access.channelIngress;
+    resolveChannelIngress = access.resolveChannelIngress;
   }
 
   const botId = params.botUserId;
@@ -633,23 +636,33 @@ export async function preflightDiscordMessage(
   const hasAbortRequest = isAbortRequestText(baseText);
 
   if (!isDirectMessage) {
-    const commandAccess = await resolveDiscordTextCommandAccess({
-      accountId: params.accountId,
-      cfg: params.cfg,
-      ownerAllowFrom: params.allowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
-      memberAccessConfigured: hasAccessRestrictions,
-      memberAllowed,
-      allowNameMatching,
-      allowTextCommands,
-      hasControlCommand: hasControlCommandInMessage,
-    });
+    const resolveCommandIngress = async (
+      contextBinding?: Parameters<typeof resolveDiscordTextCommandAccess>[0]["contextBinding"],
+      conversation?: { parentId?: string; threadId?: string },
+    ) =>
+      await resolveDiscordTextCommandAccess({
+        accountId: params.accountId,
+        cfg: params.cfg,
+        ownerAllowFrom: params.allowFrom,
+        sender: {
+          id: sender.id,
+          name: sender.name,
+          tag: sender.tag,
+        },
+        memberAccessConfigured: hasAccessRestrictions,
+        memberAllowed,
+        allowNameMatching,
+        allowTextCommands,
+        hasControlCommand: hasControlCommandInMessage,
+        conversationId: messageChannelId,
+        conversationParentId: conversation?.parentId,
+        conversationThreadId: conversation?.threadId,
+        ...(contextBinding ? { contextBinding } : {}),
+      });
+    const commandAccess = await resolveCommandIngress();
     commandAuthorized = commandAccess.commandAccess.authorized;
     channelIngress = commandAccess;
+    resolveChannelIngress = resolveCommandIngress;
 
     if (commandAccess.commandAccess.shouldBlockControlCommand) {
       logInboundDrop({
@@ -849,6 +862,7 @@ export async function preflightDiscordMessage(
     isGroupDm,
     commandAuthorized,
     channelIngress: channelIngress!,
+    resolveChannelIngress: resolveChannelIngress!,
     baseText,
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),

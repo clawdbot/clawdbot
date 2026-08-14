@@ -568,12 +568,14 @@ async function resolveSynologyReplyDeliveryUserId(params: {
 async function authorizeClaimedSynologyWebhook(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
+  contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding;
 }) {
   const auth = await authorizeUserForDmWithIngress({
     accountId: params.account.accountId,
     userId: params.payload.user_id,
     dmPolicy: params.account.dmPolicy,
     allowedUserIds: params.account.allowedUserIds,
+    contextBinding: params.contextBinding,
   });
   if (!auth.senderAccess.allowed) {
     throw new SynologyIngressPermanentError(
@@ -601,10 +603,15 @@ export async function processSynologyWebhookIngressEvent(params: {
       "Synology Chat claimed webhook cannot be normalized.",
     );
   }
-  const channelIngress = await authorizeClaimedSynologyWebhook({
-    account: params.account,
-    payload,
-  });
+  const resolveChannelIngress = async (
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
+    await authorizeClaimedSynologyWebhook({
+      account: params.account,
+      payload,
+      contextBinding,
+    });
+  const channelIngress = await resolveChannelIngress();
   const body = sanitizeSynologyWebhookText(payload);
   if (!body) {
     return;
@@ -622,6 +629,8 @@ export async function processSynologyWebhookIngressEvent(params: {
     {
       body,
       channelIngress,
+      resolveChannelIngress,
+      messageId: payload.post_id,
       from: authorizedWebhookUserId,
       senderName: payload.username,
       provider: "synology-chat",

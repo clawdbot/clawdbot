@@ -2,6 +2,7 @@
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
   type IngressReasonCode,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -51,6 +52,7 @@ export async function checkTwitchAccessControl(params: {
   message: TwitchChatMessage;
   account: TwitchAccountConfig;
   botUsername: string;
+  contextBinding?: ChannelIngressContextBinding;
 }): Promise<TwitchAccessControlResult> {
   const { message, account, botUsername } = params;
   const policyKind = resolveTwitchPolicyKind(account);
@@ -67,6 +69,7 @@ export async function checkTwitchAccessControl(params: {
       kind: "group",
       id: message.channel,
     },
+    contextBinding: params.contextBinding,
     event: { mayPair: false },
     mentionFacts: {
       canDetectMention: true,

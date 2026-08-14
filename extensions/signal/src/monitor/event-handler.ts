@@ -32,7 +32,11 @@ import {
   type ChannelInboundMediaInput,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  fanInChannelIngressLifecycles,
+  type ChannelIngressContextBinding,
+  type ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
@@ -600,8 +604,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!last) {
       return;
     }
+    const channelIngress = await resolveSignalBatchChannelIngress(entries, last);
+    if (channelIngress.some((entry) => !entry.senderAccess.allowed)) {
+      logVerbose("signal: authorization changed before dispatch");
+      await settle();
+      return;
+    }
     if (entries.length === 1) {
-      await handleSignalInboundMessage({ ...last, turnAdoptionLifecycle: lifecycle });
+      await handleSignalInboundMessage({
+        ...last,
+        channelIngress,
+        turnAdoptionLifecycle: lifecycle,
+      });
       await settle();
       return;
     }
@@ -625,9 +639,42 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       isBatched: true,
       nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
       media: entries.flatMap((entry) => entry.media ?? []),
-      channelIngress: entries.flatMap((entry) => entry.channelIngress ?? []),
+      channelIngress,
     });
     await settle();
+  }
+
+  async function resolveSignalBatchChannelIngress(
+    entries: SignalInboundEntry[],
+    last: SignalInboundEntry,
+  ): Promise<readonly ResolvedChannelMessageIngress[]> {
+    if (last.boundChannelIngress) {
+      return last.boundChannelIngress;
+    }
+    const route = resolveSignalInboundRoute({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      isGroup: last.isGroup,
+      groupId: last.groupId,
+      senderPeerId: last.senderPeerId,
+    });
+    const contextBinding: ChannelIngressContextBinding = {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      ...(last.messageId ? { messageId: last.messageId } : {}),
+      inboundEventKind: "user_request",
+    };
+    const resolved = await Promise.all(
+      entries.flatMap((entry) =>
+        entry.resolveChannelIngress
+          ? [entry.resolveChannelIngress(contextBinding)]
+          : (entry.channelIngress ?? []).map(async (ingress) => ingress),
+      ),
+    );
+    // The original last entry survives retry attempts; cache this exact aggregate
+    // so session-conflict retries cannot mint replacement provenance.
+    last.boundChannelIngress = resolved;
+    return resolved;
   }
 
   async function retrySignalInboundFlush(
@@ -931,18 +978,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const hasControlCommandInMessage = isControlCommandMessage(messageText, deps.cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
-    const accessDecision = await resolveSignalAccessState({
-      accountId: deps.accountId,
-      dmPolicy: deps.dmPolicy,
-      groupPolicy: deps.groupPolicy,
-      allowFrom: deps.allowFrom,
-      groupAllowFrom: deps.groupAllowFrom,
-      sender,
-      groupId,
-      isGroup,
-      cfg: deps.cfg,
-      hasControlCommand: hasControlCommandInMessage,
-    });
+    const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
+      await resolveSignalAccessState({
+        accountId: deps.accountId,
+        dmPolicy: deps.dmPolicy,
+        groupPolicy: deps.groupPolicy,
+        allowFrom: deps.allowFrom,
+        groupAllowFrom: deps.groupAllowFrom,
+        sender,
+        groupId,
+        isGroup,
+        cfg: deps.cfg,
+        hasControlCommand: hasControlCommandInMessage,
+        contextBinding,
+      });
+    const accessDecision = await resolveChannelIngress();
     const { senderAccess, commandAccess } = accessDecision;
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
     const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
@@ -1276,7 +1326,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
       turnAdoptionLifecycle,
-      channelIngress: [accessDecision],
+      resolveChannelIngress,
     };
     pendingInboundRegistry.cancelPendingOnAbort(entry, debouncer.cancelKey);
     // Normal and stateful turns stay on the existing ingress path so core session admission owns

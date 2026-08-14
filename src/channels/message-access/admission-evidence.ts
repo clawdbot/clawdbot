@@ -2,6 +2,7 @@
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { ResolvedChannelMessageIngress } from "./runtime-types.js";
+import type { ChannelIngressContextBinding } from "./runtime-types.js";
 
 export type ChannelAdmissionEvidence = Readonly<{
   kind: "channel-admission-evidence";
@@ -47,6 +48,7 @@ type ChannelIngressResolutionBinding = Readonly<{
   owner?: ChannelAdmissionEvidenceOwner;
   ownerEpoch?: object;
   scope?: ChannelIngressResolutionScope;
+  contextBinding?: Readonly<ChannelIngressContextBinding>;
   publicScopeKey?: string;
   handoff: { consumed: boolean };
 }>;
@@ -168,17 +170,14 @@ type ChannelIngressResolutionScope = {
     parentId?: string;
     threadId?: string;
   };
+  contextBinding?: ChannelIngressContextBinding;
 };
 
 const MAX_CHANNEL_ADMISSION_SCOPE_BYTES = 32_768;
 const MAX_CHANNEL_ADMISSION_SCOPE_NODES = 256;
 const INVALID_SCOPE_VALUE = Symbol("invalid-channel-admission-scope-value");
 
-function snapshotOwnedData(
-  value: unknown,
-  budget = { nodes: 0 },
-  depth = 0,
-): unknown | typeof INVALID_SCOPE_VALUE {
+function snapshotOwnedData(value: unknown, budget = { nodes: 0 }, depth = 0): unknown {
   budget.nodes += 1;
   if (budget.nodes > MAX_CHANNEL_ADMISSION_SCOPE_NODES || depth > 6) {
     return INVALID_SCOPE_VALUE;
@@ -278,6 +277,29 @@ function publicResultScopeKey(result: ResolvedChannelMessageIngress): string | u
 }
 
 /** Brand an exact resolver object with its non-authoritative input binding. */
+function snapshotContextBinding(
+  value: unknown,
+): Readonly<ChannelIngressContextBinding> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const agentId = ownDataValue(value, "agentId");
+  const sessionKey = ownDataValue(value, "sessionKey");
+  const messageId = ownDataValue(value, "messageId");
+  const nativeChannelId = ownDataValue(value, "nativeChannelId");
+  const inboundEventKind = ownDataValue(value, "inboundEventKind");
+  if (
+    typeof agentId !== "string" ||
+    typeof sessionKey !== "string" ||
+    (messageId !== undefined && typeof messageId !== "string") ||
+    (nativeChannelId !== undefined && typeof nativeChannelId !== "string") ||
+    (inboundEventKind !== "user_request" && inboundEventKind !== "room_event")
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ agentId, sessionKey, messageId, nativeChannelId, inboundEventKind });
+}
+
 export function recordChannelIngressResolution(params: {
   result: ResolvedChannelMessageIngress;
   channelId: string;
@@ -297,7 +319,8 @@ export function recordChannelIngressResolution(params: {
       participantOutcomeAffecting: params.participantOutcomeAffecting,
       owner: activeOwner,
       ownerEpoch: activeOwner?.epoch,
-      scope: Object.freeze(params.scope),
+      scope: Object.freeze({ conversation: Object.freeze({ ...params.scope.conversation }) }),
+      contextBinding: snapshotContextBinding(params.scope.contextBinding),
       publicScopeKey: publicResultScopeKey(params.result),
       handoff: { consumed: false },
     }),
@@ -305,7 +328,7 @@ export function recordChannelIngressResolution(params: {
   return params.result;
 }
 
-function ownDataValue(value: object, key: PropertyKey): unknown | typeof INVALID_SCOPE_VALUE {
+function ownDataValue(value: object, key: PropertyKey): unknown {
   let descriptor: PropertyDescriptor | undefined;
   try {
     descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -348,18 +371,22 @@ function contextHandoffMatches(params: {
   const conversation = ownDataValue(params.contextParams, "conversation");
   const route = ownDataValue(params.contextParams, "route");
   const reply = ownDataValue(params.contextParams, "reply");
+  const message = ownDataValue(params.contextParams, "message");
   if (
     !conversation ||
     typeof conversation !== "object" ||
     !route ||
     typeof route !== "object" ||
     !reply ||
-    typeof reply !== "object"
+    typeof reply !== "object" ||
+    !message ||
+    typeof message !== "object"
   ) {
     return false;
   }
   const expected = params.binding.scope?.conversation;
-  if (!expected) {
+  const expectedContext = params.binding.contextBinding;
+  if (!expected || !expectedContext) {
     return false;
   }
   const routeAccountId = ownDataValue(route, "accountId");
@@ -373,6 +400,14 @@ function contextHandoffMatches(params: {
   const replyParentId = normalizeScopeId(ownDataValue(reply, "threadParentId"));
   const nativeConversationId = normalizeScopeId(ownDataValue(conversation, "nativeChannelId"));
   const nativeReplyId = normalizeScopeId(ownDataValue(reply, "nativeChannelId"));
+  const routeAgentId = normalizeScopeId(ownDataValue(route, "agentId"));
+  const dispatchSessionKey = normalizeScopeId(ownDataValue(route, "dispatchSessionKey"));
+  const routeSessionKey = normalizeScopeId(ownDataValue(route, "routeSessionKey"));
+  const inboundEventKindValue = ownDataValue(message, "inboundEventKind");
+  const inboundEventKind =
+    inboundEventKindValue === undefined || inboundEventKindValue === null
+      ? "user_request"
+      : normalizeScopeId(inboundEventKindValue);
   const values = [
     effectiveAccountId,
     conversationId,
@@ -382,14 +417,21 @@ function contextHandoffMatches(params: {
     replyParentId,
     nativeConversationId,
     nativeReplyId,
+    routeAgentId,
+    dispatchSessionKey,
+    routeSessionKey,
+    inboundEventKind,
   ];
   if (values.includes(INVALID_SCOPE_VALUE)) {
     return false;
   }
   const nativeId = nativeReplyId ?? nativeConversationId;
   if (
-    typeof nativeId === "string" &&
-    ![expected.id, expected.parentId, expected.threadId].includes(nativeId)
+    (expectedContext.nativeChannelId !== undefined &&
+      nativeId !== expectedContext.nativeChannelId) ||
+    (expectedContext.nativeChannelId === undefined &&
+      typeof nativeId === "string" &&
+      ![expected.id, expected.parentId, expected.threadId].includes(nativeId))
   ) {
     return false;
   }
@@ -416,7 +458,10 @@ function contextHandoffMatches(params: {
     conversationKind === expected.kind &&
     conversationId === expected.id &&
     (replyParentId ?? conversationParentId) === expected.parentId &&
-    (replyThreadId ?? conversationThreadId) === expected.threadId
+    (replyThreadId ?? conversationThreadId) === expected.threadId &&
+    routeAgentId === expectedContext.agentId &&
+    (dispatchSessionKey ?? routeSessionKey) === expectedContext.sessionKey &&
+    inboundEventKind === expectedContext.inboundEventKind
   );
 }
 
@@ -486,6 +531,14 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
     } else {
       validBindings.push(binding);
     }
+  }
+  const contextMessageId = normalizeScopeId(ownDataValue(params.contextParams, "messageId"));
+  const finalMessageId = validBindings.at(-1)?.contextBinding?.messageId;
+  if (
+    contextMessageId === INVALID_SCOPE_VALUE ||
+    (finalMessageId !== undefined && contextMessageId !== finalMessageId)
+  ) {
+    valid = false;
   }
   const sources = valid
     ? validBindings.map((binding) => {

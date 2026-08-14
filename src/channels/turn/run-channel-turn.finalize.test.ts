@@ -9,6 +9,7 @@ import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   configureChannelAdmissionEvidenceCollection,
+  consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "../message-access/admission-evidence.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
@@ -772,11 +773,11 @@ describe("channel turn finalize", () => {
     expect(finalizedResult.routeSessionKey).toBe("agent:observer:test:peer");
   });
 
-  it("preserves private channel admission evidence when routing adds a DM scope", async () => {
+  it("degrades private channel admission evidence when routing changes the DM scope", async () => {
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);
     try {
       const ctx = createCtx();
-      const evidence = bindTestChannelParticipantAdmissionEvidence({
+      bindTestChannelParticipantAdmissionEvidence({
         context: ctx,
         channelId: "test",
         participantId: "person-1",
@@ -805,7 +806,9 @@ describe("channel turn finalize", () => {
 
       const dispatched = dispatchReplyWithRoutedChannelDispatcherCore.mock.calls[0]?.[0];
       expect(dispatched?.ctx.DmScope).toBe("per-channel-peer");
-      expect(readChannelContextAdmissionEvidence(dispatched?.ctx ?? {})).toBe(evidence);
+      expect(
+        consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(dispatched?.ctx ?? {})),
+      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
     } finally {
       clearCollection();
     }

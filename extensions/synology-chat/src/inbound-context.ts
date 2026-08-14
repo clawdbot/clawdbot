@@ -1,7 +1,14 @@
 // Synology Chat plugin module implements inbound context behavior.
-import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 export type SynologyInboundMessage = {
   channelIngress: ResolvedChannelMessageIngress;
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
+  messageId: string;
   body: string;
   from: string;
   senderName: string;

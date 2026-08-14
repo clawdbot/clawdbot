@@ -222,6 +222,7 @@ export function createChannelIngressResolver(
       identity: base.identity,
       subject: input.subject,
       conversation: input.conversation,
+      contextBinding: input.contextBinding,
       event: channelIngressEvent({
         isGroup,
         ...eventDefaults,
@@ -681,6 +682,7 @@ export async function resolveChannelMessageIngress(
         parentId: params.conversation.parentId,
         threadId: params.conversation.threadId,
       },
+      contextBinding: params.contextBinding,
     },
     participantOutcomeAffecting:
       senderAccess.gate?.match?.matched === true &&

@@ -292,6 +292,12 @@ export async function resolveClickClackInboundAccess(params: {
         ? (params.message.direct_conversation_id ?? params.message.author_id)
         : (params.message.channel_id ?? params.message.thread_root_id),
     },
+    contextBinding: {
+      agentId: preparedRoute.route.agentId,
+      sessionKey: preparedRoute.route.sessionKey,
+      messageId: params.message.id,
+      inboundEventKind: "user_request",
+    },
     allowFrom: ingressAllowFrom,
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",

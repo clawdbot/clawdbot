@@ -36,6 +36,12 @@ const result = await resolveChannelMessageIngress({
   identity,
   subject: { stableId: platformUserId },
   conversation: { kind: isGroup ? "group" : "direct", id: conversationId },
+  contextBinding: {
+    agentId: agentRoute.agentId,
+    sessionKey: agentRoute.sessionKey,
+    messageId,
+    inboundEventKind: "user_request",
+  },
   event: { kind: "message", authMode: "inbound", mayPair: !isGroup },
   policy: {
     dmPolicy: config.dmPolicy,
@@ -62,6 +68,14 @@ Do not precompute effective allowlists, command owners, or command groups.
 The resolver derives them from raw allowlists, store callbacks, route
 descriptors, access groups, policy, and conversation kind.
 
+For a result that will enter a host context, resolve after the channel's route
+owner has selected the final agent and session. `contextBinding` freezes those
+facts with the stable transport message id (when present) and final inbound
+event kind. Decision-only checks may omit it, but such a result is not valid
+execution provenance and must not be passed as `channelIngress`. When a channel
+batches several admitted messages, pass their exact results in source order;
+the finalized context message id identifies the last source result.
+
 ## Result
 
 Bundled plugins should consume modern projections directly:
@@ -85,7 +99,7 @@ When execution-identity audit collection is enabled, a trusted active native
 plugin is the authoritative in-process producer of its remote participant
 fact. The host-injected registered runtime binds the resolver result to the
 exact plugin record and registry lifecycle epoch, then validates its complete
-available conversation, route, thread, event, and participant scope during a
+available conversation, route, agent, session, message, event, and participant scope during a
 one-shot context handoff. The public standalone builder remains
 non-authoritative and cannot mint participant evidence.
 Queue collection retains attribution only when every contribution has valid
