@@ -518,6 +518,7 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
       approvalKind: target.approvalKind,
       decision: target.decision,
       channel: "whatsapp",
+      accountId: params.accountId,
       senderId: actorId,
       gatewayUrl: params.gatewayUrl,
     });

@@ -141,7 +141,7 @@ describe("discord exec approval monitor helpers", () => {
       await button.run(interaction, { kind: approvalKind, id: "abc", action: "allow-once" });
 
       expect(interaction["acknowledge"]).toHaveBeenCalled();
-      expect(resolveApproval).toHaveBeenCalledWith("abc", approvalKind, "allow-once");
+      expect(resolveApproval).toHaveBeenCalledWith("abc", approvalKind, "allow-once", "123");
       expect(JSON.stringify(editReply.mock.calls[0]?.[0])).toContain("Approval resolved");
       expect(interaction["followUp"]).not.toHaveBeenCalled();
     },
@@ -262,7 +262,7 @@ describe("discord exec approval monitor helpers", () => {
       });
 
       expect(ctx.getApprovers()).toEqual(["123"]);
-      await expect(ctx.resolveApproval("abc", approvalKind, "allow-once")).resolves.toEqual({
+      await expect(ctx.resolveApproval("abc", approvalKind, "allow-once", "123")).resolves.toEqual({
         ok: true,
         resolution,
       });
@@ -272,7 +272,8 @@ describe("discord exec approval monitor helpers", () => {
         approvalKind,
         decision: "allow-once",
         channel: "discord",
-        senderId: "default",
+        accountId: "default",
+        senderId: "123",
         gatewayUrl: "ws://127.0.0.1:18789",
       });
     },
@@ -286,7 +287,7 @@ describe("discord exec approval monitor helpers", () => {
       config: { enabled: true, approvers: ["123"] },
     });
 
-    await expect(ctx.resolveApproval("abc", "exec", "allow-once")).resolves.toEqual({
+    await expect(ctx.resolveApproval("abc", "exec", "allow-once", "123")).resolves.toEqual({
       ok: false,
       reason: "error",
     });
@@ -304,7 +305,7 @@ describe("discord exec approval monitor helpers", () => {
       config: { enabled: true, approvers: ["123"] },
     });
 
-    await expect(ctx.resolveApproval("abc", "plugin", "allow-once")).resolves.toEqual({
+    await expect(ctx.resolveApproval("abc", "plugin", "allow-once", "123")).resolves.toEqual({
       ok: false,
       reason: "not-found",
     });
@@ -318,7 +319,7 @@ describe("discord exec approval monitor helpers", () => {
       config: { enabled: true, approvers: ["123"] },
     });
 
-    await expect(ctx.resolveApproval("abc", "exec", "allow-once")).resolves.toEqual({
+    await expect(ctx.resolveApproval("abc", "exec", "allow-once", "123")).resolves.toEqual({
       ok: false,
       reason: "error",
     });

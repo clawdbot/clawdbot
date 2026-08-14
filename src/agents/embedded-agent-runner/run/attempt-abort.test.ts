@@ -5,7 +5,7 @@ import {
   createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
   type EmbeddedAttemptAbortStatePort,
-} from "./attempt-abort.js";
+} from "./attempt-finalize.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 

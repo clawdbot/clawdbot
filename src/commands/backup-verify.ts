@@ -1,20 +1,26 @@
-// Verifies backup archives by validating their manifest, payload entries, and hardlink targets.
+// Verifies backup archives, including payload paths and hardlink/symbolic-link targets.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import {
+  assertArchiveSymbolicLinkTarget,
+  isArchivePathWithin,
+  normalizeArchivePath,
+  normalizeArchiveRoot,
+} from "../infra/backup-archive-path-policy.js";
 import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 
-const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
@@ -64,6 +70,7 @@ type BackupVerifyResult = {
   runtimeVersion: string;
   assetCount: number;
   entryCount: number;
+  symlinkCount: number;
 };
 
 type ArchiveEntry = {
@@ -85,45 +92,6 @@ type SqliteSnapshotEntry = NormalizedArchiveEntry & {
 };
 
 type ExpectedSqliteRole = "agent" | "global";
-
-function stripTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/u, "");
-}
-
-function normalizeArchivePath(entryPath: string, label: string): string {
-  const trimmed = stripTrailingSlashes(entryPath.trim());
-  if (!trimmed) {
-    throw new Error(`${label} is empty.`);
-  }
-  if (trimmed.startsWith("/") || WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE.test(trimmed)) {
-    throw new Error(`${label} must be relative: ${entryPath}`);
-  }
-  if (trimmed.includes("\\")) {
-    throw new Error(`${label} must use forward slashes: ${entryPath}`);
-  }
-  if (trimmed.split("/").some((segment) => segment === "." || segment === "..")) {
-    throw new Error(`${label} contains path traversal segments: ${entryPath}`);
-  }
-
-  const normalized = stripTrailingSlashes(path.posix.normalize(trimmed));
-  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
-    throw new Error(`${label} resolves outside the archive root: ${entryPath}`);
-  }
-  return normalized;
-}
-
-function normalizeArchiveRoot(rootName: string): string {
-  const normalized = normalizeArchivePath(rootName, "Backup manifest archiveRoot");
-  if (normalized.includes("/")) {
-    throw new Error(`Backup manifest archiveRoot must be a single path segment: ${rootName}`);
-  }
-  return normalized;
-}
-
-function isArchivePathWithin(child: string, parent: string): boolean {
-  const relative = path.posix.relative(parent, child);
-  return relative === "" || (!relative.startsWith("../") && relative !== "..");
-}
 
 function parseManifest(raw: string): BackupManifest {
   let parsed: unknown;
@@ -205,6 +173,7 @@ async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> 
   await tar.t({
     file: archivePath,
     gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     onReadEntry: (entry) => {
       entries.push({
         path: entry.path,
@@ -226,16 +195,13 @@ async function extractManifest(params: {
   await tar.t({
     file: params.archivePath,
     gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     filter: (entryPath) => entryPath === params.manifestEntryPath,
     onReadEntry: (entry) => {
       manifestContentPromise =
         entry.size > MAX_MANIFEST_BYTES
           ? Promise.resolve(limitError)
-          : entry
-              .concat()
-              .catch((error: unknown) =>
-                error instanceof Error ? error : new Error(String(error)),
-              );
+          : entry.concat().catch((error: unknown) => toStringifiedError(error));
     },
   });
 
@@ -320,6 +286,7 @@ function formatResult(result: BackupVerifyResult): string {
     `Runtime version: ${result.runtimeVersion}`,
     `Assets verified: ${result.assetCount}`,
     `Archive entries scanned: ${result.entryCount}`,
+    `Symbolic links checked: ${result.symlinkCount}`,
   ].join("\n");
 }
 
@@ -649,6 +616,7 @@ async function verifySqliteSnapshots(params: {
     await tar.x({
       file: params.archivePath,
       gzip: true,
+      maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
       cwd: tempDir,
       strict: true,
       preserveOwner: false,
@@ -709,12 +677,9 @@ async function verifySqliteSnapshots(params: {
   }
 }
 
-/** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
-export async function backupVerifyCommand(
-  runtime: RuntimeEnv,
-  opts: BackupVerifyOptions,
-): Promise<BackupVerifyResult> {
-  const archivePath = resolveUserPath(opts.archive);
+/** Verify a backup archive and return its normalized, integrity-checked inventory. */
+export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+  const archivePath = resolveUserPath(archive);
   const rawEntries = await listArchiveEntries(archivePath);
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
@@ -735,6 +700,9 @@ export async function backupVerifyCommand(
         `Archive hardlink target for ${entry.path}`,
       ),
     }));
+  const symbolicLinks = rawEntries
+    .filter((entry) => entry.type === "SymbolicLink")
+    .map((entry) => ({ entryPath: entry.path, linkpath: entry.linkpath }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
   const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
@@ -764,6 +732,9 @@ export async function backupVerifyCommand(
     manifest.archiveRoot,
     normalizedEntrySet,
   );
+  for (const link of symbolicLinks) {
+    assertArchiveSymbolicLinkTarget({ ...link, archiveRoot: manifest.archiveRoot });
+  }
   await verifySqliteSnapshots({ archivePath, entries, manifest });
 
   const result: BackupVerifyResult = {
@@ -774,7 +745,18 @@ export async function backupVerifyCommand(
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
+    symlinkCount: symbolicLinks.length,
   };
+
+  return result;
+}
+
+/** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
+export async function backupVerifyCommand(
+  runtime: RuntimeEnv,
+  opts: BackupVerifyOptions,
+): Promise<BackupVerifyResult> {
+  const result = await verifyBackupArchive(opts.archive);
 
   if (opts.json) {
     writeRuntimeJson(runtime, result);
@@ -787,4 +769,3 @@ export async function backupVerifyCommand(
 export const testApi = {
   assertSqliteExtractionBudget,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,12 +13,11 @@ import {
   rememberUnifiedTalkSession,
 } from "./talk-session-registry.js";
 import {
-  cancelTalkTranscriptionRelayTurn,
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
 } from "./talk-transcription-relay.js";
-import { expectRecordFields, isRecord, requireRecord } from "./test-helpers.assertions.js";
+import { expectRecordFields, isRecord, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type BroadcastEvent = {
   event: string;
@@ -95,7 +94,7 @@ function findPayloadByType(events: BroadcastEvent[], type: string): Record<strin
     throw new Error(`expected relay event type ${type}`);
   }
   expect(event.event).toBe("talk.event");
-  return requireRecord(event.payload, `${type} payload`);
+  return requireGatewayRecord(event.payload, `${type} payload`);
 }
 
 function findPayloadByTalkEventType(
@@ -109,7 +108,7 @@ function findPayloadByTalkEventType(
   if (!event) {
     throw new Error(`expected talk event type ${type}`);
   }
-  return requireRecord(event.payload, `${type} payload`);
+  return requireGatewayRecord(event.payload, `${type} payload`);
 }
 
 function expectTalkEventFields(
@@ -236,7 +235,7 @@ describe("talk transcription gateway relay", () => {
       final: true,
     });
     for (const { payload, opts } of events) {
-      const { type } = requireRecord(payload, "transcription relay event");
+      const { type } = requireGatewayRecord(payload, "transcription relay event");
       expect(opts, `${String(type)} delivery`).toEqual({
         dropIfSlow: type === "partial" || type === "inputAudio",
       });
@@ -286,7 +285,7 @@ describe("talk transcription gateway relay", () => {
       await vi.advanceTimersByTimeAsync(1_000);
 
       const transcripts = events
-        .map((event) => requireRecord(event.payload, "transcription relay event"))
+        .map((event) => requireGatewayRecord(event.payload, "transcription relay event"))
         .filter(
           (payload) => isRecord(payload.talkEvent) && payload.talkEvent.type === "transcript.done",
         );
@@ -300,7 +299,7 @@ describe("talk transcription gateway relay", () => {
       await vi.advanceTimersByTimeAsync(4_000);
       const terminalEvents = events
         .map((event) => {
-          const payload = requireRecord(event.payload, "transcription relay event");
+          const payload = requireGatewayRecord(event.payload, "transcription relay event");
           return isRecord(payload.talkEvent) ? payload.talkEvent.type : undefined;
         })
         .filter((type) =>
@@ -347,7 +346,7 @@ describe("talk transcription gateway relay", () => {
     });
 
     const transcripts = events
-      .map((event) => requireRecord(event.payload, "transcription relay event"))
+      .map((event) => requireGatewayRecord(event.payload, "transcription relay event"))
       .filter(
         (payload) => isRecord(payload.talkEvent) && payload.talkEvent.type === "transcript.done",
       );
@@ -422,7 +421,7 @@ describe("talk transcription gateway relay", () => {
     request?.onTranscript?.("second final");
 
     const updates = events
-      .map((event) => requireRecord(event.payload, "transcription relay event"))
+      .map((event) => requireGatewayRecord(event.payload, "transcription relay event"))
       .filter((payload) => typeof payload.text === "string" && payload.text)
       .map((payload) => ({ type: payload.type, text: payload.text }));
     expect(updates).toEqual([
@@ -774,49 +773,5 @@ describe("talk transcription gateway relay", () => {
       }),
     ).toThrow("Transcription relay session expiry is outside the supported Date range");
     expect(provider.createSession).not.toHaveBeenCalled();
-  });
-
-  it("cancels an active transcription turn and closes the provider session", async () => {
-    let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
-    const sttSession = createSttSessionMock(async () => {
-      sttRequest?.onSpeechStart?.();
-    });
-    const { events, session } = await createStartedRelaySession(sttSession, {}, (req) => {
-      sttRequest = req;
-    });
-    sttSession.close.mockImplementationOnce(() => {
-      sttRequest?.onTranscript?.("cancelled provider transcript");
-    });
-
-    cancelTalkTranscriptionRelayTurn({
-      transcriptionSessionId: session.transcriptionSessionId,
-      connId: "conn-1",
-      reason: "barge-in",
-    });
-
-    expect(sttSession.close).toHaveBeenCalledOnce();
-    const cancelledPayload = findPayloadByTalkEventType(events, "turn.cancelled");
-    expectRecordFields(cancelledPayload, "cancelled payload", {
-      transcriptionSessionId: session.transcriptionSessionId,
-    });
-    expectTalkEventFields(cancelledPayload, {
-      type: "turn.cancelled",
-      turnId: "turn-1",
-      payload: { reason: "barge-in" },
-      final: true,
-    });
-
-    const closePayload = findPayloadByType(events, "close");
-    expectRecordFields(closePayload, "close payload", {
-      transcriptionSessionId: session.transcriptionSessionId,
-      type: "close",
-      reason: "completed",
-    });
-    expect(
-      events.some(
-        (event) =>
-          isRecord(event.payload) && event.payload.text === "cancelled provider transcript",
-      ),
-    ).toBe(false);
   });
 });

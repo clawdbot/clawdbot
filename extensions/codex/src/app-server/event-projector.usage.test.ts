@@ -19,10 +19,24 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector usage projection", () => {
+  it("keeps the startup harness window when no token-usage update arrives", async () => {
+    const projector = await createProjector(undefined, { initialContextTokens: 1_050_000 });
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(turnCompleted());
+
+    expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+      contextTokens: 1_050_000,
+    });
+  });
+
   it("emits native context-window and prompt-token snapshots", async () => {
     const params = await createParams();
     const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...params, onAgentEvent });
+    const projector = await createProjector(
+      { ...params, onAgentEvent },
+      { initialContextTokens: 1_050_000 },
+    );
 
     await projector.handleNotification(
       forCurrentTurn("thread/tokenUsage/updated", {
@@ -52,6 +66,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
         promptTokens: 300_000,
         reasoningOutputTokens: 4,
       },
+    });
+    expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+      contextTokens: 875_900,
     });
   });
 

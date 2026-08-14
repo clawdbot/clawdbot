@@ -13,7 +13,7 @@ import {
   getCurrentPluginMetadataSnapshotRuntime,
   resolvePluginMetadataSnapshotRuntime,
 } from "./plugin-metadata-snapshot.runtime.js";
-import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-workspace-state.js";
+import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-workspace-state.js";
 
 type ManifestModelIdNormalizationLookupParams = {
   config?: OpenClawConfig;
@@ -37,7 +37,7 @@ function resolveMetadataSnapshotForPolicies(
   cacheable: boolean;
 } {
   const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromStateCore();
   if (params.config === undefined) {
     const currentSnapshot = getCurrentPluginMetadataSnapshotRuntime({
       env,

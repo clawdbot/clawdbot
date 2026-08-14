@@ -41,7 +41,6 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
-import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
@@ -1638,7 +1637,7 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("keeps omitted source-reply finality non-terminal until a successful attempt settles", async () => {
+  it("treats omitted source-reply finality as terminal", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", { messageId: "imessage-6264" }),
@@ -1651,19 +1650,15 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBeUndefined();
+    expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).not.toHaveProperty("sourceReplyFinal");
-
-    expect(settleCodexSourceReplyFinality(bridge.telemetry, true)).toBe(true);
-
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
     expect(Object.keys(result)).not.toContain("terminate");
   });
 
-  it("settles omitted source-reply finality as progress when the attempt fails", async () => {
+  it("keeps omitted source-reply finality terminal when the tool requests termination", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       {
@@ -1677,68 +1672,11 @@ describe("createCodexDynamicToolBridge", () => {
       action: "send",
       message: "visible reply",
     });
-    expect(result.terminate).toBeUndefined();
-    expect(settleCodexSourceReplyFinality(bridge.telemetry, false)).toBe(false);
+    expect(result.terminate).toBe(true);
 
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
-      sourceReplyFinal: false,
+      sourceReplyFinal: true,
     });
-  });
-
-  it("settles only the latest omitted source reply as final after success", async () => {
-    const bridge = createBridgeWithToolResult(
-      "message",
-      textToolResult("Sent.", { messageId: "imessage-6264" }),
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
-
-    await handleMessageToolCall(bridge, { action: "send", message: "first update" });
-    await handleMessageToolCall(bridge, { action: "send", message: "second update" });
-    settleCodexSourceReplyFinality(bridge.telemetry, true);
-
-    expect(
-      bridge.telemetry.messagingToolSentTargets.map((target) => target.sourceReplyFinal),
-    ).toEqual([false, true]);
-  });
-
-  it("does not promote an omitted reply past a later explicit progress reply", async () => {
-    const bridge = createBridgeWithToolResult(
-      "message",
-      textToolResult("Sent.", { messageId: "imessage-6264" }),
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
-
-    await handleMessageToolCall(bridge, { action: "send", message: "first update" });
-    await handleMessageToolCall(bridge, {
-      action: "send",
-      message: "still working",
-      final: false,
-    });
-    settleCodexSourceReplyFinality(bridge.telemetry, true);
-
-    expect(
-      bridge.telemetry.messagingToolSentTargets.map((target) => target.sourceReplyFinal),
-    ).toEqual([false, false]);
-  });
-
-  it("keeps a later explicit final reply authoritative over an omitted reply", async () => {
-    const bridge = createBridgeWithToolResult(
-      "message",
-      textToolResult("Sent.", { messageId: "imessage-6264" }),
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
-
-    await handleMessageToolCall(bridge, { action: "send", message: "first update" });
-    await handleMessageToolCall(bridge, {
-      action: "send",
-      message: "finished",
-      final: true,
-    });
-    settleCodexSourceReplyFinality(bridge.telemetry, true);
-
-    expect(
-      bridge.telemetry.messagingToolSentTargets.map((target) => target.sourceReplyFinal),
-    ).toEqual([false, true]);
   });
 
   it("honors explicit finality for delivered message-tool-only source replies", async () => {
@@ -2094,7 +2032,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(Object.keys(result)).not.toContain("terminate");
   });
 
-  it("defers omitted finality even when the message tool returns legacy termination", async () => {
+  it("keeps omitted finality terminal when the message tool returns termination", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       {
@@ -2114,12 +2052,8 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBeUndefined();
+    expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).not.toHaveProperty("sourceReplyFinal");
-
-    settleCodexSourceReplyFinality(bridge.telemetry, true);
-
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
@@ -2193,7 +2127,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { action: "inspect" },
     });
 
-    expect(firstResult.terminate).toBeUndefined();
+    expect(firstResult.terminate).toBe(true);
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
     expect(secondResult).toEqual(expectInputText("No message sent."));
     expect(secondResult.terminate).toBeUndefined();

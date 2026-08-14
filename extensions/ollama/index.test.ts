@@ -10,7 +10,6 @@ import { OLLAMA_DEFAULT_API_KEY } from "./src/discovery-shared.js";
 
 const promptAndConfigureOllamaMock = vi.hoisted(() =>
   vi.fn(async () => ({
-    credential: "ollama-local",
     defaultModel: "ollama/qwen-tool",
     config: {
       models: {
@@ -18,7 +17,8 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
           ollama: {
             baseUrl: "http://127.0.0.1:11434",
             api: "ollama",
-            models: [],
+            apiKey: "ollama-local",
+            models: [{ id: "qwen-tool", name: "qwen-tool" }],
           },
         },
       },
@@ -238,8 +238,12 @@ async function augmentOllamaCatalog(
 
 function captureWrappedOllamaPayload(
   thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "max" | undefined,
+  route: { provider?: string; modelId?: string; baseUrl?: string } = {},
 ) {
   const provider = registerProvider();
+  const providerId = route.provider ?? "ollama";
+  const modelId = route.modelId ?? "qwen3.5:9b";
+  const baseUrl = route.baseUrl ?? "http://127.0.0.1:11434";
   let payloadSeen: Record<string, unknown> | undefined;
   const baseStreamFn = vi.fn((_model, _context, options) => {
     const payload: Record<string, unknown> = {
@@ -256,22 +260,22 @@ function captureWrappedOllamaPayload(
     config: {
       models: {
         providers: {
-          ollama: {
+          [providerId]: {
             api: "ollama",
-            baseUrl: "http://127.0.0.1:11434",
+            baseUrl,
             models: [],
           },
         },
       },
     },
-    provider: "ollama",
-    modelId: "qwen3.5:9b",
+    provider: providerId,
+    modelId,
     thinkingLevel,
     model: {
       api: "ollama",
-      provider: "ollama",
-      id: "qwen3.5:9b",
-      baseUrl: "http://127.0.0.1:11434",
+      provider: providerId,
+      id: modelId,
+      baseUrl,
       contextWindow: 131_072,
     },
     streamFn: baseStreamFn,
@@ -283,8 +287,8 @@ function captureWrappedOllamaPayload(
   void wrapped(
     {
       api: "ollama",
-      provider: "ollama",
-      id: "qwen3.5:9b",
+      provider: providerId,
+      id: modelId,
     } as never,
     {} as never,
     {},
@@ -522,12 +526,15 @@ describe("ollama plugin", () => {
           ollama: {
             baseUrl: "http://127.0.0.1:11434",
             api: "ollama",
-            models: [],
+            apiKey: "ollama-local",
+            models: [{ id: "qwen-tool", name: "qwen-tool" }],
           },
         },
       },
     });
+    expect(result.profiles).toEqual([]);
     expect(result.defaultModel).toBe("ollama/qwen-tool");
+    expect(result.configPatch?.models?.providers?.ollama?.apiKey).toBe("ollama-local");
   });
 
   it("discovers and prepares a loaded tool-capable model without pulling it", async () => {
@@ -2422,13 +2429,13 @@ describe("ollama plugin", () => {
       thinkingLevel: "off" as const,
       expectedThink: false,
     },
+    ...(["low", "medium", "high"] as const).map((thinkingLevel) => ({
+      name: `preserves native Ollama ${thinkingLevel} thinking on the wire`,
+      thinkingLevel,
+      expectedThink: thinkingLevel,
+    })),
     {
-      name: "wraps native Ollama payloads with top-level think effort when thinking is enabled",
-      thinkingLevel: "low" as const,
-      expectedThink: "low",
-    },
-    {
-      name: "maps native Ollama max thinking to the highest supported wire effort",
+      name: "keeps the compatible local Ollama max mapping",
       thinkingLevel: "max" as const,
       expectedThink: "high",
     },
@@ -2442,6 +2449,16 @@ describe("ollama plugin", () => {
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(payloadSeen?.think).toBe(expectedThink);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.think).toBeUndefined();
+  });
+
+  it("preserves native Ollama Cloud max thinking on the wire", () => {
+    const { payloadSeen } = captureWrappedOllamaPayload("max", {
+      provider: "ollama-cloud",
+      modelId: "glm-5.2",
+      baseUrl: "https://ollama.com",
+    });
+
+    expect(payloadSeen?.think).toBe("max");
   });
 
   it("keeps native Ollama thinking off by default while exposing opt-in effort levels", () => {

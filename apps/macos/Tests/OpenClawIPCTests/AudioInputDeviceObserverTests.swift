@@ -65,13 +65,6 @@ struct AudioInputDeviceObserverTests {
         #expect(selected.shouldRestart(availableUIDs: ["built-in"], defaultUID: "built-in"))
     }
 
-    @Test func `has usable default input device returns bool`() {
-        // Smoke test: verifies the composition logic runs without crashing.
-        // Actual result depends on whether the host has an audio input device.
-        let result = AudioInputDeviceObserver.hasUsableDefaultInputDevice()
-        _ = result // suppress unused-variable warning; the assertion is "no crash"
-    }
-
     @Test func `has usable default input device consistent with components`() {
         // When no default UID exists, the method must return false.
         // When a default UID exists, the result must match alive-set membership.

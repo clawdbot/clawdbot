@@ -820,4 +820,42 @@ describe("message hook mappers", () => {
       groupId: "demo-chat:chat:456",
     });
   });
+
+  it("projects normalized location and stable provider update identity", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        LocationLat: 43.8376,
+        LocationLon: 18.4534,
+        LocationAccuracy: 12,
+        LocationSource: "live",
+        LocationIsLive: true,
+        LocationLivePeriodSeconds: 900,
+        ProviderUpdateId: "9002",
+        ProviderUpdateKind: "edited_message",
+        ProviderMessageTimestamp: 1_786_094_460_000,
+        ProviderEditTimestamp: 1_786_094_520_000,
+      }),
+    );
+
+    const { event } = toPluginInboundClaimPair(canonical);
+    expect(event.location).toEqual({
+      latitude: 43.8376,
+      longitude: 18.4534,
+      accuracy: 12,
+      source: "live",
+      isLive: true,
+      livePeriodSeconds: 900,
+    });
+    expect(event.providerUpdate).toEqual({
+      id: "9002",
+      kind: "edited_message",
+      messageId: "msg-1",
+      messageTimestamp: 1_786_094_460_000,
+      editedTimestamp: 1_786_094_520_000,
+    });
+    expect(toPluginMessageReceivedEvent(canonical)).toMatchObject({
+      location: event.location,
+      providerUpdate: event.providerUpdate,
+    });
+  });
 });

@@ -55,6 +55,8 @@ function placementRecord(
       lastTranscriptAckCursor: null,
       lastLiveEventAckCursor: null,
       recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
     };
   }
   return {
@@ -69,6 +71,8 @@ function placementRecord(
     lastTranscriptAckCursor: null,
     lastLiveEventAckCursor: null,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
   };
 }
 
@@ -101,6 +105,8 @@ function terminalPlacementRecord(
       ...terminalMetadata,
       state,
       recoveryError: "worker recovery stopped",
+      terminalReason: "worker recovery stopped",
+      terminalAtMs: 2,
     };
   }
   return {
@@ -108,6 +114,8 @@ function terminalPlacementRecord(
     ...terminalMetadata,
     state,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
   };
 }
 

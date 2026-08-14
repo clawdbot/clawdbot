@@ -29,7 +29,7 @@ import { startGatewayServer } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 /** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getFreeGatewayPort(): Promise<number> {
+export async function getGatewayE2ePortBlock(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
@@ -278,7 +278,7 @@ export async function startGatewayWithClient(params: {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const startedServer = await startGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token: params.token },

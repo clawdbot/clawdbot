@@ -7,7 +7,7 @@ import { withEnv } from "../test-utils/env.js";
 import {
   buildGroupDisplayName,
   deriveSessionKey,
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
@@ -219,7 +219,7 @@ describe("sessions", () => {
 
   it("uses agent id when resolving session file fallback paths", () => {
     withStateDir("/custom/state", () => {
-      const sessionFile = resolveSessionFilePath("sess-2", undefined, {
+      const sessionFile = resolveSessionFilePathCore("sess-2", undefined, {
         agentId: "codex",
       });
       expect(sessionFile).toBe(
@@ -232,7 +232,7 @@ describe("sessions", () => {
     const { stateDir, bot2SessionPath } = await createAgentSessionsLayout("cross-agent");
     const sessionFile = withStateDir(stateDir, () =>
       // Agent bot1 resolves a sessionFile that belongs to agent bot2
-      resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, { agentId: "bot1" }),
+      resolveSessionFilePathCore("sess-1", { sessionFile: bot2SessionPath }, { agentId: "bot1" }),
     );
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(bot2SessionPath),
@@ -244,7 +244,7 @@ describe("sessions", () => {
       const originalBase = path.resolve("/original/state");
       const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
       // sessionFile was created under a different state dir than current env
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: bot2Session },
         { agentId: "bot1" },
@@ -257,7 +257,7 @@ describe("sessions", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");
       const unsafe = path.join(originalBase, "agents", "bot2", "sessions", "..", "..", "etc");
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: path.join(unsafe, "passwd") },
         { agentId: "bot1" },
@@ -277,7 +277,7 @@ describe("sessions", () => {
         "nested",
         "sess-1.jsonl",
       );
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: nested },
         { agentId: "bot1" },
@@ -305,7 +305,7 @@ describe("sessions", () => {
         storePath: mainStorePath,
       });
 
-      return resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, opts);
+      return resolveSessionFilePathCore("sess-1", { sessionFile: bot2SessionPath }, opts);
     });
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(bot2SessionPath),
@@ -315,7 +315,7 @@ describe("sessions", () => {
   it("falls back to derived transcript path when sessionFile is outside agent sessions directories", async () => {
     const { stateDir, outsidePath } = await createAgentSessionsLayout("outside-fallback");
     const sessionFile = withStateDir(stateDir, () =>
-      resolveSessionFilePath("sess-1", { sessionFile: outsidePath }, { agentId: "bot1" }),
+      resolveSessionFilePathCore("sess-1", { sessionFile: outsidePath }, { agentId: "bot1" }),
     );
     const expectedPath = path.join(stateDir, "agents", "bot1", "sessions", "sess-1.jsonl");
     expect(await normalizePathForComparison(sessionFile)).toBe(

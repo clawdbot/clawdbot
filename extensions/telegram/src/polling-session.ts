@@ -86,7 +86,9 @@ type TelegramPollingSessionOpts = {
   token: string;
   config: NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
   accountId: string;
+  ownerAgentId?: string;
   runtime: Parameters<typeof createTelegramBot>[0]["runtime"];
+  buildContext?: Parameters<typeof createTelegramBot>[0]["buildContext"];
   proxyFetch: Parameters<typeof createTelegramBot>[0]["proxyFetch"];
   botInfo?: Parameters<typeof createTelegramBot>[0]["botInfo"];
   abortSignal?: AbortSignal;
@@ -307,9 +309,11 @@ export class TelegramPollingSession {
       return createTelegramBot({
         token: this.opts.token,
         runtime: this.opts.runtime,
+        buildContext: this.opts.buildContext,
         proxyFetch: this.opts.proxyFetch,
         config: this.opts.config,
         accountId: this.opts.accountId,
+        ownerAgentId: this.opts.ownerAgentId,
         botInfo: this.opts.botInfo,
         ...(botApiAbortSignal ? { fetchAbortSignal: botApiAbortSignal } : {}),
         ...(this.opts.abortSignal ? { accountAbortSignal: this.opts.abortSignal } : {}),

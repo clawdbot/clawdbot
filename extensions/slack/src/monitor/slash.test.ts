@@ -3,6 +3,13 @@ import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-nat
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -117,8 +124,33 @@ const slashCommandFixtures = vi.hoisted(() => {
 });
 
 const pluginCommandFixtures = vi.hoisted(() => ({
-  specs: [] as NativeCommandSpec[],
+  specs: [] as Array<
+    NativeCommandSpec & {
+      channels?: string[];
+      execute?: (args?: string) => Promise<{ text: string }>;
+    }
+  >,
 }));
+
+const retainNativeCatalog = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/plugin-command-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/plugin-command-runtime")>();
+  return {
+    ...actual,
+    createPluginCommandRuntime: () => {
+      const runtime = actual.createPluginCommandRuntime();
+      return {
+        ...runtime,
+        retainNativeCatalog: (provider: string) => {
+          retainNativeCatalog(provider);
+          runtime.retainNativeCatalog(provider);
+        },
+      };
+    },
+  };
+});
 
 const skillCommandFixtures = vi.hoisted(() => ({
   commands: [] as Array<{ name: string; skillName: string; description: string }>,
@@ -152,16 +184,6 @@ vi.mock("./slash-commands.runtime.js", async () => {
   };
 });
 
-vi.mock("./slash-plugin-commands.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./slash-plugin-commands.runtime.js")>(
-    "./slash-plugin-commands.runtime.js",
-  );
-  return {
-    ...actual,
-    listProviderPluginCommandSpecs: () => pluginCommandFixtures.specs,
-  };
-});
-
 vi.mock("./slash-skill-commands.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./slash-skill-commands.runtime.js")>(
     "./slash-skill-commands.runtime.js",
@@ -181,21 +203,40 @@ const { registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
 };
 
 const { dispatchMock } = getSlackSlashMocks();
+setActivePluginRegistry(createEmptyPluginRegistry());
 
 beforeEach(() => {
   pluginCommandFixtures.specs = [];
   skillCommandFixtures.commands = [];
   clearRuntimeConfigSnapshot();
   resetSlackSlashMocks();
+  clearPluginCommands();
+  retainNativeCatalog.mockClear();
 });
 
 afterEach(() => {
   pluginCommandFixtures.specs = [];
   skillCommandFixtures.commands = [];
   clearRuntimeConfigSnapshot();
+  clearPluginCommands();
 });
 
 async function registerCommands(ctx: unknown, account: unknown, trackEvent?: () => void) {
+  const registry = getActivePluginRegistry();
+  for (const spec of pluginCommandFixtures.specs) {
+    if (registry?.commands.some((entry) => entry.command.name === spec.name)) {
+      continue;
+    }
+    expect(
+      registerPluginCommand(`test-${spec.name}`, {
+        name: spec.name,
+        description: spec.description,
+        acceptsArgs: spec.acceptsArgs,
+        channels: spec.channels,
+        handler: async ({ args }) => (spec.execute ? await spec.execute(args) : { text: "plugin" }),
+      }),
+    ).toEqual({ ok: true });
+  }
   return await registerSlackMonitorSlashCommands({
     ctx: ctx as never,
     account: account as never,
@@ -221,6 +262,12 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
 
 function createArgMenusHarness(
   cfg: OpenClawConfig = { commands: { native: true, nativeSkills: false } },
+  scope?: {
+    installationIdentity?:
+      | { kind: "workspace"; teamId: string }
+      | { kind: "enterprise"; enterpriseId: string };
+    teamId?: string;
+  },
 ) {
   const commands = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const commandRegistrations: Array<string | RegExp> = [];
@@ -229,18 +276,39 @@ function createArgMenusHarness(
   const optionsReceiverContexts: unknown[] = [];
 
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+  const listenerClient = { chat: { postEphemeral } };
+  const installationIdentity = scope?.installationIdentity ?? {
+    kind: "workspace" as const,
+    teamId: scope?.teamId ?? "T1",
+  };
+  const boltContext =
+    installationIdentity.kind === "enterprise"
+      ? {
+          teamId: scope?.teamId,
+          enterpriseId: installationIdentity.enterpriseId,
+          isEnterpriseInstall: true,
+        }
+      : { teamId: installationIdentity.teamId, isEnterpriseInstall: false };
+  const withBoltScope = (args: unknown) => {
+    const typed = args as { context?: Record<string, unknown>; client?: unknown };
+    return {
+      ...typed,
+      context: { ...boltContext, ...typed.context },
+      client: typed.client ?? listenerClient,
+    };
+  };
   const app = {
-    client: { chat: { postEphemeral } },
+    client: listenerClient,
     command: (name: string | RegExp, handler: (args: unknown) => Promise<void>) => {
       commandRegistrations.push(name);
-      commands.set(name, handler);
+      commands.set(name, async (args) => await handler(withBoltScope(args)));
     },
     action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
-      actions.set(id, handler);
+      actions.set(id, async (args) => await handler(withBoltScope(args)));
     },
     options(this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
       optionsReceiverContexts.push(this);
-      options.set(id, handler);
+      options.set(id, async (args) => await handler(withBoltScope(args)));
     },
   };
 
@@ -249,7 +317,8 @@ function createArgMenusHarness(
     runtime: {},
     botToken: "bot-token",
     botUserId: "bot",
-    teamId: "T1",
+    teamId: installationIdentity.kind === "enterprise" ? "" : installationIdentity.teamId,
+    installationIdentity,
     allowFrom: ["*"],
     dmEnabled: true,
     dmPolicy: "open",
@@ -328,6 +397,16 @@ async function runCommandHandler(handler: (args: unknown) => Promise<void>) {
     respond,
   });
   return { respond, ack };
+}
+
+function setAsyncDispatchMock(
+  implementation: (params: { replyOptions?: Record<PropertyKey, unknown> }) => Promise<unknown>,
+) {
+  (
+    dispatchMock as unknown as {
+      mockImplementation: (callback: typeof implementation) => unknown;
+    }
+  ).mockImplementation(implementation);
 }
 
 function expectArgMenuLayout(respond: ReturnType<typeof vi.fn>): {
@@ -711,6 +790,9 @@ describe("Slack native command argument menus", () => {
   });
 
   it("prefers the configured slash command over native commands", async () => {
+    pluginCommandFixtures.specs = [
+      { name: "slackplugin", description: "Plugin command", acceptsArgs: false },
+    ];
     const configuredHarness = createArgMenusHarness();
     (
       configuredHarness.ctx as {
@@ -726,6 +808,7 @@ describe("Slack native command argument menus", () => {
       ),
     ).toBe(true);
     expect(configuredHarness.commands.has("/usage")).toBe(false);
+    expect(retainNativeCatalog).not.toHaveBeenCalled();
   });
 
   it("does not register native argument handlers for a configured slash command", async () => {
@@ -782,6 +865,101 @@ describe("Slack native command argument menus", () => {
     );
     expect(runtimeLog).not.toHaveBeenCalled();
     expect(runtimeError).not.toHaveBeenCalled();
+    expect(retainNativeCatalog).toHaveBeenCalledOnce();
+    expect(retainNativeCatalog).toHaveBeenCalledWith("slack");
+  });
+
+  it("executes the exact selected plugin candidate with its native arguments", async () => {
+    const execute = vi.fn(async (args?: string) => ({ text: `plugin:${args}` }));
+    pluginCommandFixtures.specs = [
+      {
+        name: "slackplugin",
+        description: "Unique plugin command",
+        acceptsArgs: true,
+        execute,
+      },
+    ];
+    setAsyncDispatchMock(
+      async (params) => await dispatchReplyWithBufferedBlockDispatcher(params as never),
+    );
+    const pluginHarness = createArgMenusHarness();
+    await registerCommands(pluginHarness.ctx, pluginHarness.account);
+    const handler = requireHandler(pluginHarness.commands, "/slackplugin", "plugin command");
+
+    await handler({
+      command: createSlashCommand({ text: "now please" }),
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(execute).toHaveBeenCalledWith("now please");
+  });
+
+  it.each(["login", "reportlong"])(
+    "does not execute a plugin skipped behind the primary /%s command",
+    async (name) => {
+      const execute = vi.fn(async () => ({ text: "wrong owner" }));
+      pluginCommandFixtures.specs = [
+        { name, description: "Skipped plugin", acceptsArgs: false, execute },
+      ];
+      setAsyncDispatchMock(
+        async (params) => await dispatchReplyWithBufferedBlockDispatcher(params as never),
+      );
+      const collisionHarness = createArgMenusHarness();
+      await registerCommands(collisionHarness.ctx, collisionHarness.account);
+      const handler = requireHandler(collisionHarness.commands, `/${name}`, `${name} command`);
+
+      await runCommandHandler(handler);
+
+      expect(execute).not.toHaveBeenCalled();
+      expect(retainNativeCatalog).not.toHaveBeenCalled();
+    },
+  );
+
+  it("filters a same-name plugin owned by another channel", async () => {
+    const execute = vi.fn(async () => ({ text: "wrong channel" }));
+    pluginCommandFixtures.specs = [
+      {
+        name: "reportlong",
+        description: "Telegram-only plugin",
+        acceptsArgs: false,
+        channels: ["telegram"],
+        execute,
+      },
+    ];
+    const channelHarness = createArgMenusHarness();
+    await registerCommands(channelHarness.ctx, channelHarness.account);
+
+    await runCommandHandler(
+      requireHandler(channelHarness.commands, "/reportlong", "report command"),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["same name", "skill-only"],
+    ["dash/underscore", "foo-bar"],
+  ])("keeps the selected route skill for a %s plugin collision", async (_label, pluginName) => {
+    const skillName = pluginName === "foo-bar" ? "foo_bar" : pluginName;
+    skillCommandFixtures.commands = [
+      { name: skillName, skillName: "Selected Skill", description: "Selected skill" },
+    ];
+    const execute = vi.fn(async () => ({ text: "wrong owner" }));
+    pluginCommandFixtures.specs = [
+      { name: pluginName, description: "Colliding plugin", acceptsArgs: false, execute },
+    ];
+    const skillHarness = createArgMenusHarness({ commands: { native: true, nativeSkills: true } });
+    (skillHarness.account as { config: OpenClawConfig }).config = {
+      commands: { native: true, nativeSkills: true },
+    };
+    await registerCommands(skillHarness.ctx, skillHarness.account);
+
+    await runCommandHandler(
+      requireHandler(skillHarness.commands, `/${skillName}`, "skill command"),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("deduplicates a skill after the Slack status native rename", async () => {
@@ -982,6 +1160,36 @@ describe("Slack native command argument menus", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = firstDispatchArg() as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/tools compact");
+  });
+
+  it("keeps the Enterprise Grid team on deferred argument-menu actions", async () => {
+    const enterpriseHarness = createArgMenusHarness(
+      { commands: { native: true, nativeSkills: false } },
+      {
+        installationIdentity: { kind: "enterprise", enterpriseId: "EGRID" },
+        teamId: "TGRID1",
+      },
+    );
+    await registerCommands(enterpriseHarness.ctx, enterpriseHarness.account);
+    const enterpriseArgMenuHandler = requireHandler(
+      enterpriseHarness.actions,
+      /^openclaw_cmdarg/,
+      "Enterprise arg-menu action",
+    );
+
+    await runArgMenuAction(enterpriseArgMenuHandler, {
+      action: {
+        value: encodeValue({ command: "tools", arg: "mode", value: "compact", userId: "U1" }),
+      },
+    });
+
+    expect(getSlackSlashMocks().resolveAgentRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: "TGRID1",
+        peer: { kind: "direct", id: "team:TGRID1:user:U1" },
+      }),
+    );
+    expect(firstDispatchArg().ctx?.OriginatingTo).toBe("team:TGRID1:user:U1");
   });
 
   it("does not apply the response_url call cap to Web API action replies", async () => {
@@ -1285,15 +1493,39 @@ function createPolicyHarness(overrides?: {
   slashEphemeral?: boolean;
   slashCommandEnabled?: boolean;
   slashCommandName?: string;
+  teamId?: string;
+  installationIdentity?:
+    | { kind: "workspace"; teamId: string }
+    | { kind: "enterprise"; enterpriseId: string };
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
   const commands = new Map<unknown, (args: unknown) => Promise<void>>();
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+  const listenerClient = { chat: { postEphemeral } };
+  const installationIdentity = overrides?.installationIdentity ?? {
+    kind: "workspace" as const,
+    teamId: overrides?.teamId ?? "T1",
+  };
+  const boltContext =
+    installationIdentity.kind === "enterprise"
+      ? {
+          teamId: overrides?.teamId,
+          enterpriseId: installationIdentity.enterpriseId,
+          isEnterpriseInstall: true,
+        }
+      : { teamId: installationIdentity.teamId, isEnterpriseInstall: false };
   const app = {
-    client: { chat: { postEphemeral } },
+    client: listenerClient,
     command: (name: unknown, handler: (args: unknown) => Promise<void>) => {
-      commands.set(name, handler);
+      commands.set(name, async (args) => {
+        const typed = args as { context?: Record<string, unknown>; client?: unknown };
+        await handler({
+          ...typed,
+          context: { ...boltContext, ...typed.context },
+          client: typed.client ?? listenerClient,
+        });
+      });
     },
   };
 
@@ -1305,7 +1537,8 @@ function createPolicyHarness(overrides?: {
     runtime: {},
     botToken: "bot-token",
     botUserId: "bot",
-    teamId: "T1",
+    teamId: installationIdentity.kind === "enterprise" ? "" : installationIdentity.teamId,
+    installationIdentity,
     allowFrom: overrides?.allowFrom ?? ["*"],
     dmEnabled: true,
     dmPolicy: "open",
@@ -1711,6 +1944,32 @@ describe("slack slash command session metadata", () => {
     expect(call.ctx?.GroupSpace).toBe("T1");
     expect(call.sessionKey).toBeTypeOf("string");
     expect(call.sessionKey).not.toBe("");
+  });
+
+  it("partitions Enterprise Grid slash sessions and replies by event team", async () => {
+    const harness = createPolicyHarness({
+      groupPolicy: "open",
+      slashEphemeral: false,
+      installationIdentity: { kind: "enterprise", enterpriseId: "EGRID" },
+      teamId: "TGRID1",
+      channelId: "CGRID1",
+      channelName: "grid",
+    });
+
+    await registerAndRunPolicySlash({ harness });
+
+    expect(resolveAgentRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: "TGRID1",
+        peer: { kind: "channel", id: "team:TGRID1:channel:CGRID1" },
+      }),
+    );
+    expect(firstDispatchArg().ctx).toMatchObject({
+      From: "slack:channel:team:TGRID1:channel:CGRID1",
+      To: "slash:team:TGRID1:user:U1",
+      OriginatingTo: "team:TGRID1:channel:CGRID1",
+      SessionKey: expect.stringContaining("team:tgrid1:user:u1"),
+    });
   });
 
   it("passes canonical hook correlation to slash reply delivery", async () => {

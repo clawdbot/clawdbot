@@ -2,26 +2,36 @@ import { describe, expect, it } from "vitest";
 import { resolveDynamicSessionMutationRequiredScope } from "./session-method-scopes.js";
 
 describe("resolveDynamicSessionMutationRequiredScope", () => {
-  it("keeps ordinary session creation write-scoped", () => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.create", {
-        agentId: "main",
-        message: "hello",
-        worktree: true,
-      }),
-    ).toBe("operator.write");
+  it("keeps explicit restart recovery at write scope", () => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.recover")).toBe("operator.write");
+  });
+
+  it.each([
+    { agentId: "main", message: "hello", worktree: true },
+    { agentId: "main", message: "hello", projectId: "openclaw" },
+  ])("keeps ordinary session creation write-scoped %#", (params) => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.create", params)).toBe(
+      "operator.write",
+    );
   });
 
   it.each([
     { incognito: true },
     { key: "agent:main:dashboard:incognito-123" },
     { parentSessionKey: "agent:main:subagent:incognito-123" },
-    { cwd: "/tmp/workspace" },
     { execNode: "node-1" },
   ])("requires admin for privileged session creation params %#", (params) => {
     expect(resolveDynamicSessionMutationRequiredScope("sessions.create", params)).toBe(
       "operator.admin",
     );
+  });
+
+  it("leaves Gateway cwd containment to the state-aware create handler", () => {
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.create", {
+        cwd: "/configured/workspace/packages/app",
+      }),
+    ).toBe("operator.write");
   });
 
   it.each([

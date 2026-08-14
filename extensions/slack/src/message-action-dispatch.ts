@@ -31,6 +31,12 @@ type SlackActionInvoke = (
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
 
+function readSlackForceDocument(params: Record<string, unknown>): boolean {
+  return (
+    readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false
+  );
+}
+
 function resolveSlackPresentationText(
   content: string | undefined,
   presentation: ReturnType<typeof normalizeMessagePresentation>,
@@ -131,6 +137,7 @@ export async function handleSlackMessageAction(params: {
         to,
         content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
+        ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
         ...(topLevel ? { topLevel: true } : {}),
@@ -355,6 +362,7 @@ export async function handleSlackMessageAction(params: {
         filename: readStringParam(actionParams, "filename"),
         title: readStringParam(actionParams, "title"),
         threadTs: threadId ?? undefined,
+        ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         ...(topLevel ? { topLevel: true } : {}),
         accountId,
       },

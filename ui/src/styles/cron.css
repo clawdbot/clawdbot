@@ -38,7 +38,7 @@
   text-align: left;
   font: inherit;
   color: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   border: 0;
   background: transparent;
   margin: calc(-1 * var(--space-2));
@@ -289,7 +289,7 @@
 .cron-table__row {
   padding-top: var(--space-2);
   padding-bottom: var(--space-2);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -468,7 +468,7 @@
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   padding: 2px 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
 
@@ -686,7 +686,7 @@
 /* Advanced (collapsible section: summary stands in for the heading) */
 
 .cron-advanced__summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .cron-advanced > .settings-section__desc {
@@ -731,7 +731,7 @@
   text-align: left;
   text-decoration: underline;
   text-underline-offset: 2px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .cron-form-status__link:hover {
@@ -783,14 +783,15 @@
 }
 
 .cron-job-menu__item {
+  min-height: var(--menu-item-height);
   border: 0;
   background: transparent;
   color: var(--text);
   font-size: 13px;
   text-align: left;
   padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
+  border-radius: var(--menu-item-radius);
+  cursor: var(--cursor-action);
 }
 
 .cron-job-menu__item:hover {
@@ -831,7 +832,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .cron-run-sort:hover {
@@ -979,7 +980,7 @@
   margin-bottom: 0;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .cron-run-entry__body table {
     display: block;
     overflow-x: auto;
@@ -1028,6 +1029,7 @@
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */
+/* stylelint-disable-next-line no-duplicate-selectors -- popover sizing stays with its Web Awesome part overrides */
 .cron-filter-popover {
   --max-width: min(280px, calc(100vw - 48px));
 }
@@ -1043,18 +1045,18 @@
 
 .cron-job-menu::part(menu) {
   min-width: 170px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  padding: var(--space-1);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .cron-filter-dropdown__details::part(menu) {
   width: min(300px, calc(100vw - 48px));
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }

@@ -17,7 +17,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
 import {
@@ -32,7 +32,7 @@ import {
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
   isAuthCooldownBypassedForProvider,
@@ -183,7 +183,7 @@ export function createModelAuthAvailabilityResolver(
   const runtimeStore =
     params.preparedRuntimeAuthStore ??
     (params.allowPreparedRuntimeAuth !== false
-      ? getRuntimeAuthProfileStoreSnapshot(params.agentDir)
+      ? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)
       : undefined);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (

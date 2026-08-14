@@ -5,6 +5,7 @@ import type { ChatPostMessageArguments, WebClient } from "@slack/web-api";
 import type { ChannelMessageUnknownSendContext } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { reconcileSlackUnknownSend, sendMessageSlack } from "./send.js";
 
 const slackClientMocks = vi.hoisted(() => ({
@@ -118,7 +119,7 @@ describe("reconcileSlackUnknownSend", () => {
     slackClientMocks.getSlackWriteClient.mockReset();
   });
 
-  it("uses workspace-scoped clients for an Enterprise reconciliation", async () => {
+  it("uses workspace-scoped clients for a qualified reconciliation", async () => {
     const readClient = createSlackReconcileTestClient();
     const writeClient = createSlackReconcileTestClient();
     slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
@@ -130,7 +131,6 @@ describe("reconcileSlackUnknownSend", () => {
           channels: {
             slack: {
               botToken: "xoxb-org",
-              enterpriseOrgInstall: true,
             },
           },
         } as OpenClawConfig,
@@ -147,6 +147,20 @@ describe("reconcileSlackUnknownSend", () => {
     expect(readClient.conversations.history).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "C123" }),
     );
+  });
+
+  it("returns a terminal unresolved result for bare Enterprise reconciliation", async () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(reconcileSlackUnknownSend(createUnknownSendContext())).resolves.toEqual({
+        status: "unresolved",
+        error: expect.stringContaining("unsupported_enterprise_slack_delivery"),
+        retryable: false,
+      });
+      expect(slackClientMocks.createSlackReadClient).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
   });
 
   it("attaches an opaque durable id and reconciles the exact posted message", async () => {

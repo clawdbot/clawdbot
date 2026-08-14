@@ -29,7 +29,7 @@ import { getActiveCronTaskRunId } from "../service/task-runs.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
-  CronJob,
+  CronStoredJob,
 } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare.js";
@@ -39,10 +39,6 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
-
-async function loadCronExecutorRuntime() {
-  return await cronExecutorRuntimeLoader.load();
-}
 
 function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
   return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
@@ -84,7 +80,7 @@ async function disposeCronRunContext(params: {
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
-  job: CronJob;
+  job: CronStoredJob;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
@@ -211,7 +207,7 @@ export async function runCronIsolatedAgentTurn(params: {
         bindAgentRunTaskRunId(initialSessionId, runContextOwnerToken, taskRunId);
       }
     }
-    const { executeCronRun } = await loadCronExecutorRuntime();
+    const { executeCronRun } = await cronExecutorRuntimeLoader.load();
     const executionParams: Parameters<typeof executeCronRun>[0] = {
       cfg: params.cfg,
       cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,

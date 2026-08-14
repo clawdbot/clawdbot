@@ -1,11 +1,11 @@
 import path from "node:path";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
 
 function resolveDeviceIdentityCoordinatorFilename(databasePath: string): string {
   const canonicalPath = resolvePathViaExistingAncestorSync(databasePath);
-  const databaseHash = sha256HexPrefix(canonicalPath, 8);
+  const databaseHash = sha256HexPrefixCore(canonicalPath, 8);
   return `device-identity.${databaseHash}.lock.sqlite`;
 }
 

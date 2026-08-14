@@ -43,10 +43,6 @@ function isOpencodeGoModel(model: unknown, providerId: string): boolean {
     : false;
 }
 
-function validTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
 function resolveTimeoutMs(model: unknown, fallbackMs: number): number {
   return validTimeoutMs((model as { requestTimeoutMs?: unknown })?.requestTimeoutMs) ?? fallbackMs;
 }
@@ -342,3 +338,4 @@ export function createOpencodeGoStalledStreamWrapper(
     return output;
   };
 }
+import { asPositiveFiniteNumber as validTimeoutMs } from "openclaw/plugin-sdk/number-runtime";

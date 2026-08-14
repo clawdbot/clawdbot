@@ -75,6 +75,28 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("keeps the cron authority companion table compatible with the previous schema", () => {
+    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+      "CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (",
+    );
+    const endMarker = "\n) STRICT;";
+    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const previousSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(
+      0,
+      start,
+    )}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
+    const database = createGlobalDatabase();
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts compatible future columns in shared-state and agent databases", () => {
     const globalDatabase = createGlobalDatabase();
     const agentDatabase = createAgentDatabase();
@@ -138,6 +160,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "claw_installs.bootstrap_content_digest TEXT",
       "claw_installs.bootstrap_source_path TEXT",
       "worker_environments.desktop_json TEXT",
+      "worker_environments.bootstrap_install_kind TEXT",
       "claw_package_refs.extension_adapter_identity TEXT",
       "claw_package_refs.extension_detected_format TEXT",
       "claw_package_refs.extension_format TEXT",
@@ -145,7 +168,11 @@ describe("OpenClaw database maintenance schema validation", () => {
       "claw_package_refs.extension_mapped_json TEXT",
       "claw_package_refs.extension_unavailable_json TEXT",
       "worker_environments.shared_host INTEGER",
+      "worker_session_placements.terminal_reason TEXT",
+      "worker_session_placements.terminal_at_ms INTEGER",
       "worktrees.run_end_cleanup_json TEXT",
+      "installed_plugin_index.workspace_dir TEXT",
+      "secret_store_entries.allowed_hosts TEXT",
     ]);
 
     const database = createGlobalDatabase();
@@ -287,39 +314,39 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it("allows the lazy worker SSH fallback table to be absent but rejects drift", () => {
-    const database = createGlobalDatabase();
-    try {
-      const canonicalTable = database
-        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("worker_environment_ssh_fallback_ports") as { sql?: unknown } | undefined;
-      if (typeof canonicalTable?.sql !== "string") {
-        throw new Error("missing canonical worker SSH fallback port table");
+  it.each(["node_worker_launches", "worker_environment_ssh_fallback_ports"])(
+    "allows lazy table %s to be absent but rejects drift",
+    (tableName) => {
+      const database = createGlobalDatabase();
+      try {
+        const canonicalTable = database
+          .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(tableName) as { sql?: unknown } | undefined;
+        if (typeof canonicalTable?.sql !== "string") {
+          throw new Error(`missing canonical ${tableName} table`);
+        }
+        database.exec(`DROP TABLE ${tableName};`);
+
+        expect(() =>
+          assertOpenClawStateDatabaseForMaintenance(database, {
+            pathname: "global.sqlite",
+          }),
+        ).not.toThrow();
+
+        const driftedTableSql = canonicalTable.sql.replace("(\n", "(\n  unexpected TEXT,\n");
+        expect(driftedTableSql).not.toBe(canonicalTable.sql);
+        database.exec(driftedTableSql);
+
+        expect(() =>
+          assertOpenClawStateDatabaseForMaintenance(database, {
+            pathname: "global.sqlite",
+          }),
+        ).toThrow(`column definitions differ for ${tableName}`);
+      } finally {
+        database.close();
       }
-      database.exec("DROP TABLE worker_environment_ssh_fallback_ports;");
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).not.toThrow();
-
-      const driftedTableSql = canonicalTable.sql.replace(
-        "  PRIMARY KEY (environment_id, position)",
-        "  unexpected TEXT,\n  PRIMARY KEY (environment_id, position)",
-      );
-      expect(driftedTableSql).not.toBe(canonicalTable.sql);
-      database.exec(driftedTableSql);
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).toThrow("column definitions differ for worker_environment_ssh_fallback_ports");
-    } finally {
-      database.close();
-    }
-  });
+    },
+  );
 
   it("rejects a current agent database with a missing canonical table", () => {
     const database = createAgentDatabase();

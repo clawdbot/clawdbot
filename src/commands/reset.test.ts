@@ -4,6 +4,7 @@ import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
   gatewayService,
+  listAgentSessionDirs,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
   resetCleanupCommandMocks,
@@ -104,5 +105,21 @@ describe("resetCommand", () => {
       dryRun: false,
       removeStateRows: true,
     });
+  });
+
+  it("continues a scoped reset when session directory inspection fails", async () => {
+    listAgentSessionDirs.mockRejectedValueOnce(new Error("permission denied"));
+
+    await expect(
+      resetCommand(runtime, {
+        scope: "config+creds+sessions",
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Failed to inspect session directories: Error: permission denied",
+    );
   });
 });

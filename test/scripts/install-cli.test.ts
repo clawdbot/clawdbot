@@ -14,13 +14,15 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
 } from "./install-npm-fixtures.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runInstallCliShell(script: string, env: NodeJS.ProcessEnv = {}) {
   return spawnSync("/bin/bash", ["-c", script], {
@@ -477,6 +479,73 @@ describe("install-cli.sh", () => {
     }
   });
 
+  it.each([
+    { args: "--json", mode: "JSON" },
+    { args: "", mode: "human" },
+  ])(
+    "rejects a package without a runnable CLI in $mode mode before service refresh",
+    ({ args }) => {
+      const tmp = tempDirs.make("openclaw-install-cli-invalid-package-");
+      const prefix = join(tmp, "prefix");
+      const refreshLog = join(tmp, "gateway-refresh.log");
+
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "install_node() { :; }",
+          "ensure_git() { :; }",
+          'npm_bin() { printf "/usr/bin/true\\n"; }',
+          `refresh_gateway_service_if_loaded() { touch ${JSON.stringify(refreshLog)}; }`,
+          `main ${args} --prefix ${JSON.stringify(prefix)} --version 0.0.0`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("Installed OpenClaw CLI did not return a version");
+      expect(result.stdout).not.toContain('"event":"done"');
+      expect(result.stdout).not.toContain("OpenClaw installed.");
+      expect(existsSync(refreshLog)).toBe(false);
+    },
+  );
+
+  it.each([
+    { args: "--json", mode: "JSON" },
+    { args: "", mode: "human" },
+  ])(
+    "rejects a version command that prints output and fails in $mode mode before service refresh",
+    ({ args }) => {
+      const tmp = tempDirs.make("openclaw-install-cli-failed-version-");
+      const prefix = join(tmp, "prefix");
+      const bin = join(prefix, "bin");
+      const openclaw = join(bin, "openclaw");
+      const refreshLog = join(tmp, "gateway-refresh.log");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(openclaw, '#!/bin/bash\nprintf "OpenClaw 2026.8.1\\n"\nexit 1\n');
+      chmodSync(openclaw, 0o755);
+
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "install_node() { :; }",
+          "ensure_git() { :; }",
+          "install_openclaw() { :; }",
+          `refresh_gateway_service_if_loaded() { touch ${JSON.stringify(refreshLog)}; }`,
+          `main ${args} --prefix ${JSON.stringify(prefix)} --version 0.0.0`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("Installed OpenClaw CLI did not return a version");
+      expect(result.stdout).not.toContain('"event":"done"');
+      expect(result.stdout).not.toContain("OpenClaw installed.");
+      expect(existsSync(refreshLog)).toBe(false);
+    },
+  );
+
   it("keeps HOME for default prefix while OPENCLAW_HOME controls git checkout paths", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-home-"));
     const osHome = join(tmp, "os-home");
@@ -508,6 +577,94 @@ describe("install-cli.sh", () => {
     expect(output).toContain(`prefix=${join(osHome, ".openclaw")}`);
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
   });
+
+  it.each([
+    { input: "arguments", method: "npm" },
+    { input: "environment", method: "npm" },
+    { input: "literal tilde", method: "npm" },
+    { input: "arguments", method: "git" },
+    { input: "environment", method: "git" },
+    { input: "literal tilde", method: "git" },
+  ] as const)(
+    "keeps a generated $method launcher working after $input supplied paths change cwd",
+    ({ input, method }) => {
+      const tmp = mkdtempSync(join(tmpdir(), `openclaw-install-cli-relative-${method}-`));
+      const installRoot = join(tmp, "install-root");
+      const otherRoot = join(tmp, "other-root");
+      const home = join(tmp, "home");
+      const prefixInput = input === "literal tilde" ? "~/openclaw-local" : "openclaw-local";
+      const prefix = join(input === "literal tilde" ? home : installRoot, "openclaw-local");
+      const nodeDir = join(prefix, "tools", "node-v24.15.0");
+      const repoInput = input === "literal tilde" ? "~/openclaw-source" : "openclaw-source";
+      const repo = join(input === "literal tilde" ? home : installRoot, "openclaw-source");
+      mkdirSync(installRoot, { recursive: true });
+      mkdirSync(join(nodeDir, "bin"), { recursive: true });
+      mkdirSync(join(nodeDir, "lib", "node_modules", "openclaw", "dist"), { recursive: true });
+      mkdirSync(join(repo, ".git"), { recursive: true });
+      mkdirSync(join(repo, "dist"), { recursive: true });
+      mkdirSync(otherRoot, { recursive: true });
+      symlinkSync(process.execPath, join(nodeDir, "bin", "node"));
+      symlinkSync("node-v24.15.0", join(prefix, "tools", "node"));
+      writeFileSync(
+        join(nodeDir, "bin", "npm"),
+        '#!/bin/bash\nif [[ "$1" == "config" ]]; then printf "null\\n"; fi\n',
+      );
+      chmodSync(join(nodeDir, "bin", "npm"), 0o755);
+      for (const entry of [
+        join(nodeDir, "lib", "node_modules", "openclaw", "dist", "entry.js"),
+        join(repo, "dist", "entry.js"),
+      ]) {
+        writeFileSync(entry, 'console.log("fixture cli");\n');
+      }
+
+      try {
+        const args =
+          input !== "environment"
+            ? `--prefix ${JSON.stringify(prefixInput)}${
+                method === "git" ? ` --git-dir ${JSON.stringify(repoInput)}` : ""
+              }`
+            : "";
+        const result = runInstallCliShell(
+          [
+            "set -euo pipefail",
+            `cd ${JSON.stringify(installRoot)}`,
+            `source ${JSON.stringify(join(process.cwd(), SCRIPT_PATH))}`,
+            "install_node() { :; }",
+            "ensure_git() { :; }",
+            "refresh_gateway_service_if_loaded() { :; }",
+            ...(method === "git"
+              ? [
+                  "preflight_fresh_git_disk_space() { :; }",
+                  "ensure_pnpm() { :; }",
+                  "ensure_pnpm_binary_for_scripts() { :; }",
+                  "ensure_pnpm_git_prepare_allowlist() { :; }",
+                  "activate_repo_pnpm_version() { :; }",
+                  "cleanup_legacy_submodules() { :; }",
+                  "resolve_git_openclaw_ref() { printf 'main\\n'; }",
+                  "checkout_git_openclaw_ref() { :; }",
+                  "git_install_lockfile_flag() { printf '%s\\n' '--no-frozen-lockfile'; }",
+                  "run_pnpm() { :; }",
+                  "git() { return 0; }",
+                ]
+              : []),
+            `main --${method} ${args}`,
+            `cd ${JSON.stringify(otherRoot)}`,
+            `${JSON.stringify(join(prefix, "bin", "openclaw"))} --version`,
+          ].join("\n"),
+          {
+            HOME: home,
+            OPENCLAW_GIT_DIR: input === "environment" && method === "git" ? repoInput : undefined,
+            OPENCLAW_PREFIX: input === "environment" ? prefixInput : undefined,
+          },
+        );
+
+        expect(result.status, result.stderr || result.stdout).toBe(0);
+        expect(result.stdout.trim().split("\n").at(-1)).toBe("fixture cli");
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("resolves requested git install versions to checkout refs", () => {
     const result = runInstallCliShell(`

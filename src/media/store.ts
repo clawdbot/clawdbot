@@ -84,7 +84,7 @@ function resolveMediaSubdir(subdir: string, caller: string): string {
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     throw new Error(`${caller}: unsafe media subdir: ${JSON.stringify(subdir)}`);
   }
-  return path.join(...segments);
+  return path.posix.join(...segments);
 }
 
 function resolveMediaScopedDir(subdir: string, caller: string): string {
@@ -102,7 +102,7 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
     throw new Error(`${caller}: unsafe media ID: ${JSON.stringify(id)}`);
   }
   const safeSubdir = resolveMediaSubdir(subdir, caller);
-  return safeSubdir ? path.join(safeSubdir, id) : id;
+  return safeSubdir ? path.posix.join(safeSubdir, id) : id;
 }
 
 function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
@@ -487,7 +487,7 @@ async function writeMediaStreamToFile(params: {
         sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
         sniffLen += Math.min(buffer.byteLength, remaining);
       }
-      await handle.write(buffer);
+      await handle.writeFile(buffer);
     }
     return {
       sniffBuffer: Buffer.concat(sniffChunks, sniffLen),

@@ -43,13 +43,33 @@ const OXLINT_VALUE_FLAGS = new Set([
   "--tsconfig",
   "--warn",
 ]);
+const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
+  "config/tsconfig/oxlint.core.json",
+  "config/tsconfig/oxlint.scripts.json",
+]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
 
 /**
  * Returns whether oxlint args need package-boundary declaration artifacts first.
  */
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
-  return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
+  if (args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg))) {
+    return false;
+  }
+
+  const tsconfigs = args.flatMap((arg, index) => {
+    if (arg === "--tsconfig") {
+      const value = args[index + 1];
+      return value === undefined ? [] : [value];
+    }
+    return arg.startsWith("--tsconfig=") ? [arg.slice("--tsconfig=".length)] : [];
+  });
+  // Core and script lint resolve workspace sources through the root tsconfig;
+  // generated plugin package declarations are only an extension-lint input.
+  return (
+    tsconfigs.length === 0 ||
+    tsconfigs.some((tsconfig) => !OXLINT_BOUNDARY_FREE_TS_CONFIGS.has(tsconfig))
+  );
 }
 
 /**

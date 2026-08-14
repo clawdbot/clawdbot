@@ -1,6 +1,6 @@
 // Coverage for attempt timeout ownership and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmbeddedAttemptRunAbort } from "./attempt-abort.js";
+import { createEmbeddedAttemptRunAbort } from "./attempt-finalize.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 
 function createTimeoutHarness(options?: { pendingCompaction?: boolean; timeoutMs?: number }) {

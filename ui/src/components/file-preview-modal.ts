@@ -1,9 +1,10 @@
 // Control UI component implements the file preview modal element.
-import { css, html, type PropertyValues } from "lit";
+import { css, html, type PropertyValues, type TemplateResult } from "lit";
 import { property, query } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { renderCopyButton } from "./copy-button.ts";
+import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { icons } from "./icons.ts";
 import "./modal-dialog.ts";
 
@@ -102,12 +103,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       background: var(--bg-elevated);
-    }
-
-    .kbd {
-      font-family: var(--mono);
-      border: 1px solid var(--border);
-      color: var(--muted);
     }
 
     .body {
@@ -398,8 +393,10 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
 
     .kbd {
+      font-family: var(--mono);
       font-size: 10.5px;
       padding: 2px 6px;
+      border: 1px solid var(--border);
       border-radius: 4px;
       background: var(--bg-elevated);
       color: var(--text);
@@ -746,42 +743,22 @@ function fileKind(path: string): string {
   return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
 }
 
-const CODE_EXTENSIONS = new Set([
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mjs",
-  "cjs",
-  "py",
-  "sh",
-  "bash",
-  "zsh",
-  "rb",
-  "go",
-  "rs",
-  "java",
-  "kt",
-  "swift",
-  "c",
-  "cc",
-  "cpp",
-  "h",
-  "hpp",
-  "json",
-  "yaml",
-  "yml",
-  "toml",
-  "xml",
-  "html",
-  "css",
-  "scss",
-  "sql",
-]);
+// Same glyph vocabulary chat file links paint through CSS masks
+// (styles/chat/text.css), resolved from the shared kind so a file looks the
+// same wherever the Control UI names it.
+const FILE_KIND_ICONS: Record<FileKind, TemplateResult> = {
+  code: icons.fileCode,
+  component: icons.layoutGrid,
+  data: icons.braces,
+  file: icons.fileText,
+  image: icons.image,
+  markdown: icons.book,
+  package: icons.box,
+  shell: icons.terminal,
+};
 
 function iconForFile(path: string) {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  return CODE_EXTENSIONS.has(ext) ? icons.fileCode : icons.fileText;
+  return FILE_KIND_ICONS[fileKindForPath(path)];
 }
 
 declare global {

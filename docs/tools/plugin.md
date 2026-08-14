@@ -151,10 +151,10 @@ and Gateway-backed install/update paths. Plugin `before_install` hooks run
 later, and only in OpenClaw processes where plugin hooks are loaded, so use
 `security.installPolicy` for operator-owned install decisions instead. The
 deprecated `--dangerously-force-unsafe-install` flag is accepted for
-compatibility but is a no-op: it does not bypass install policy or OpenClaw's
-built-in plugin dependency denylist.
+compatibility but is a no-op: it does not bypass install policy or
+`before_install` hook blocks.
 
-See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+See [Skills config](/tools/skills-config#operator-install-policy-security-installpolicy)
 for the shared `security.installPolicy` exec schema used by both skills and
 plugins.
 

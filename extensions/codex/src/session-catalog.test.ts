@@ -14,6 +14,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./app-server/auth-start-options.js";
 import { resolveCodexAppServerUserHomeDir } from "./app-server/config.js";
@@ -1163,16 +1164,10 @@ describe("Codex supervision catalog", () => {
       config,
       runtime,
       control,
+      includeLocal: false,
     });
 
     expect(result.hosts).toEqual([
-      {
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        label: "Local Codex",
-        kind: "gateway",
-        connected: true,
-        sessions: [{ threadId: "local", status: "idle", archived: false }],
-      },
       {
         hostId: "node:devbox",
         label: "Dev Box",
@@ -1183,9 +1178,7 @@ describe("Codex supervision catalog", () => {
         sessions: [{ threadId: "remote", name: "Remote task", status: "idle", archived: false }],
       },
     ]);
-    expect(control.listPage).toHaveBeenCalledWith(
-      expect.not.objectContaining({ archived: expect.anything() }),
-    );
+    expect(control.listPage).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "devbox",
@@ -1563,6 +1556,9 @@ describe("Codex supervision catalog", () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-node-terminal-"));
     tempDirs.push(binDir);
     const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n");
+    }
     await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
     if (process.platform !== "win32") {
       await fs.chmod(executable, 0o755);
@@ -3359,6 +3355,38 @@ describe("Codex supervision actions", () => {
       model: "openai/gpt-5.6-sol",
       agentRuntime: "codex",
     });
+    await withEnvAsync({ CODEX_HOME: undefined }, async () => {
+      await expect(
+        provider?.continueSession?.({
+          allowProcessHomeFallback: false,
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          threadId: "thread-1",
+          clientScopes: ["operator.admin"],
+        }),
+      ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
+      await expect(
+        provider?.archive?.({
+          allowProcessHomeFallback: false,
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          threadId: "thread-1",
+          confirmNoOtherRunner: true,
+        }),
+      ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
+      await expect(
+        provider?.openTerminal?.({
+          allowProcessHomeFallback: false,
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          threadId: "thread-1",
+        }),
+      ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
+      await expect(
+        provider?.startTerminalSession?.({
+          allowProcessHomeFallback: false,
+          agentId: "main",
+          cwd: process.cwd(),
+        }),
+      ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
+    });
     await expect(
       provider?.archive?.({
         hostId: CODEX_LOCAL_SESSION_HOST_ID,
@@ -3375,6 +3403,7 @@ describe("Codex supervision actions", () => {
     ).resolves.toEqual({ ok: true });
     await expect(
       provider?.archive?.({
+        allowProcessHomeFallback: false,
         hostId: "node:devbox",
         threadId: "thread-remote",
         confirmNoOtherRunner: true,
@@ -3382,6 +3411,7 @@ describe("Codex supervision actions", () => {
     ).rejects.toThrow("paired-node Codex sessions are view-only");
     await expect(
       provider?.continueSession?.({
+        allowProcessHomeFallback: false,
         hostId: "node:devbox",
         threadId: "thread-remote",
         clientScopes: ["operator.admin"],
@@ -3887,11 +3917,11 @@ describe("Codex supervision actions", () => {
       getProvider()?.startTerminalSession?.({
         agentId: "main",
         cwd: "/workspace/new",
-        initialMessage: "--help",
+        initialMessage: "Fix A&B and 100%",
       }),
     ).resolves.toEqual({
       kind: "local",
-      argv: [executable, "--", "--help"],
+      argv: [executable, "--", "Fix A&B and 100%"],
       cwd: "/workspace/new",
       env: {
         CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),

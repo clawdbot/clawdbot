@@ -5,8 +5,10 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
@@ -31,6 +33,7 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 /** Dependency hook for resolving implicit model providers while planning models.json. */
 type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
+  authStore?: AuthProfileStore;
   config: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -101,6 +104,7 @@ function buildPluginCatalogWrites(
 async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
+    authStore?: AuthProfileStore;
     discoveryAuthConfig?: OpenClawConfig;
     agentDir: string;
     env: NodeJS.ProcessEnv;
@@ -110,6 +114,7 @@ async function resolveProvidersForModelsJsonWithDeps(
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
+    onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
@@ -129,6 +134,7 @@ async function resolveProvidersForModelsJsonWithDeps(
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,
+    ...(params.authStore ? { authStore: params.authStore } : {}),
     config: cfg,
     ...(params.discoveryAuthConfig ? { discoveryAuthConfig: params.discoveryAuthConfig } : {}),
     env,
@@ -147,6 +153,9 @@ async function resolveProvidersForModelsJsonWithDeps(
       ? { providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs }
       : {}),
     ...(params.providerDiscoveryEntriesOnly === true ? { providerDiscoveryEntriesOnly: true } : {}),
+    ...(params.onProviderCatalogOutcome
+      ? { onProviderCatalogOutcome: params.onProviderCatalogOutcome }
+      : {}),
   });
   return mergeProviders({
     implicit: implicitProviders,
@@ -215,6 +224,7 @@ function filterWritableProviders(
 async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
+    authStore?: AuthProfileStore;
     discoveryAuthConfig?: OpenClawConfig;
     sourceConfigForSecrets?: OpenClawConfig;
     agentDir: string;
@@ -230,6 +240,7 @@ async function planOpenClawModelsJsonWithDeps(
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
+    onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
@@ -239,6 +250,7 @@ async function planOpenClawModelsJsonWithDeps(
   const providers = await resolveProvidersForModelsJsonWithDeps(
     {
       cfg,
+      ...(params.authStore ? { authStore: params.authStore } : {}),
       ...(params.discoveryAuthConfig ? { discoveryAuthConfig: params.discoveryAuthConfig } : {}),
       agentDir,
       env,
@@ -257,6 +269,9 @@ async function planOpenClawModelsJsonWithDeps(
         : {}),
       ...(params.providerDiscoveryEntriesOnly === true
         ? { providerDiscoveryEntriesOnly: true }
+        : {}),
+      ...(params.onProviderCatalogOutcome
+        ? { onProviderCatalogOutcome: params.onProviderCatalogOutcome }
         : {}),
     },
     deps,

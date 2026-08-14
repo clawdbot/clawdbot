@@ -13,6 +13,72 @@ const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCR
 const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it("opens a new dock terminal for a selection changed without navigation", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        assistantAgentId: "main",
+        defaultAgentId: "main",
+        featureMethods: ["terminal.open"],
+        methodResponses: {
+          "agents.list": {
+            agents: [
+              { id: "main", identity: { name: "Main" }, name: "Main" },
+              { id: "research", identity: { name: "Research" }, name: "Research" },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          "terminal.open": {
+            agentId: "research",
+            confined: false,
+            cwd: "/workspace/research",
+            sessionId: "terminal-selection-e2e",
+            shell: "/bin/bash",
+          },
+        },
+        terminalEnabled: true,
+      });
+
+      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("connect");
+      await gateway.waitForRequest("agents.list");
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean })
+          | null;
+        const shell = document.querySelector("openclaw-app-shell") as
+          | (HTMLElement & {
+              runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
+            })
+          | null;
+        return (
+          customElements.get("openclaw-terminal-panel") !== undefined &&
+          panel?.available &&
+          typeof shell?.runtime?.context?.agentSelection?.set === "function"
+        );
+      });
+      await page.evaluate(() => {
+        const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
+          runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
+        };
+        const setAgent = shell.runtime?.context?.agentSelection?.set;
+        if (!setAgent) {
+          throw new Error("Agent selection is not ready");
+        }
+        setAgent("research");
+        window.dispatchEvent(
+          new CustomEvent("openclaw:terminal-toggle", {
+            detail: { agentId: "research", open: true },
+          }),
+        );
+      });
+
+      const terminalOpen = await gateway.waitForRequest("terminal.open");
+      expect(terminalOpen.params).toMatchObject({ agentId: "research" });
+    });
+  });
+
   it("renders only the terminal with a tab-attached close control while native auth connects", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await page.addInitScript(() => {
@@ -97,8 +163,8 @@ suite.define(() => {
             width: closeBounds.width,
           };
         });
-      expect(closeControlMetrics.width).toBe(24);
-      expect(closeControlMetrics.height).toBe(36);
+      expect(closeControlMetrics.width).toBe(28);
+      expect(closeControlMetrics.height).toBe(28);
       expect(closeControlMetrics.centerOffset).toBeLessThanOrEqual(0.5);
       const closeControl = page.locator("openclaw-terminal-panel").locator(".tabstrip-tab__close");
       expect(await closeControl.getAttribute("aria-label")).toBe("Close terminal session: bash");

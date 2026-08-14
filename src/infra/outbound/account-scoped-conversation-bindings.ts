@@ -1,5 +1,5 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 // Account-scoped conversation binding managers adapt channel-local thread maps
 // into the shared session binding service.
 import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
@@ -8,7 +8,7 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
 } from "../../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   registerSessionBindingAdapter,
@@ -193,13 +193,13 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         targetKind: params.toStoredTargetKind(targetKind),
         targetSessionKey: normalizedTargetSessionKey,
         agentId:
-          typeof metadata?.agentId === "string" && metadata.agentId.trim()
+          (typeof metadata?.agentId === "string" && metadata.agentId.trim()
             ? metadata.agentId.trim()
-            : (existingLocal?.agentId ??
-              resolveAgentIdFromSessionKey(
-                normalizedTargetSessionKey,
-                resolveDefaultAgentId(params.cfg),
-              )),
+            : existingLocal?.agentId) ??
+          resolveSessionAgentId({
+            config: params.cfg,
+            sessionKey: normalizedTargetSessionKey,
+          }),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()

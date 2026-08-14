@@ -23,7 +23,7 @@ type ActiveTranscriptDatabase = Pick<
   | "transcript_events"
 >;
 
-type CurrentTranscriptProjection = {
+export type CurrentTranscriptProjection = {
   database: OpenClawAgentDatabase;
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;

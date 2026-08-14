@@ -24,10 +24,8 @@ import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshotPluginIdScope } from "./plugin-metadata-snapshot.types.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
-import {
-  collectConfiguredWorkerProviderIds,
-  normalizeWorkerProviderIds,
-} from "./worker-provider-registry.js";
+import { collectConfiguredWorkerProviderIds } from "./worker-provider-config.js";
+import { normalizeWorkerProviderIds } from "./worker-provider-id.js";
 
 export function resolveGatewayStartupMetadataPluginIds(params: {
   config: OpenClawConfig;
@@ -99,6 +97,7 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     activationSourceConfig,
     env: params.env,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    includePersistedAuthState: false,
   });
   if (!lookup.hasDirectChannelOwners(configuredChannelIds)) {
     return undefined;
@@ -181,6 +180,7 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
     activationSourceConfig: params.activationSourceConfig ?? params.config,
     env: params.env,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    includePersistedAuthState: false,
   });
   const workerProviderIds = normalizeWorkerProviderIds(params.workerProviderIds ?? []);
   return {

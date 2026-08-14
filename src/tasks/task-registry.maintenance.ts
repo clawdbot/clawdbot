@@ -11,8 +11,8 @@ import { isBackgroundExecSessionActive } from "../agents/bash-process-control.js
 import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
-} from "../agents/subagent-recovery-state.js";
-import { resolveStorePath } from "../config/sessions.js";
+} from "../agents/subagents/registry/subagent-recovery-state.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
@@ -97,7 +97,7 @@ type TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
   listSessionEntries: typeof listSessionEntriesReadOnly;
-  resolveStorePath: typeof resolveStorePath;
+  resolveStorePath: typeof resolveSessionStorePathCore;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
@@ -136,7 +136,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
   listSessionEntries: listSessionEntriesReadOnly,
-  resolveStorePath,
+  resolveStorePath: resolveSessionStorePathCore,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
@@ -562,6 +562,7 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   }
   const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
     sessionKey,
+    agentId: task.agentId,
     clone: false,
   });
   if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.acp) {
@@ -603,6 +604,7 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   }
   const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
     sessionKey,
+    agentId: task.agentId,
     clone: false,
   });
   const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;

@@ -6,11 +6,12 @@ import {
   readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { asObject, trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const FISH_AUDIO_BASE_URL = "https://api.fish.audio";
 const FISH_AUDIO_VOICES_MAX_BYTES = 2 * 1024 * 1024;
@@ -205,7 +206,7 @@ type FishAudioVoicePayload = {
 };
 
 function parseVoiceItem(value: unknown): SpeechVoiceOption | undefined {
-  const item = asObject(value);
+  const item = asOptionalRecord(value);
   const id = trimToUndefined(item?.["_id"]);
   if (!id) {
     return undefined;

@@ -1,14 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
-import {
-  isIndexedSessionEntry,
-  isJsonRecord,
-  parseOpaqueLeafEntry,
-} from "./session-manager-codec.js";
+import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import type { AppendPersistenceOptions, SessionEntry } from "./session-manager-types.js";
 
@@ -104,7 +101,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
     });
     this.opaqueFileEntries = this.opaqueFileEntries.map((opaqueEntry) => {
-      if (!isJsonRecord(opaqueEntry.record)) {
+      if (!isRecord(opaqueEntry.record)) {
         return opaqueEntry;
       }
       const record = opaqueEntry.record;

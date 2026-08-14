@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -10,8 +11,8 @@ import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-
 
 function launchDescriptor(): WorkerLaunchDescriptor {
   return {
-    version: 2,
-    socketPath: "/tmp/openclaw-worker/gateway.sock",
+    version: 3,
+    connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
     admission: {
       environmentId: "environment-1",
       credential: ["worker", "fixture", "value"].join("-"),
@@ -25,6 +26,9 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       },
     },
     assignment: {
+      agentId: "agent-1",
+      operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+      agentRuntimeIdentityToken: "signed-runtime-token",
       runId: "run-1",
       turnId: "turn-1",
       prompt: "Inspect the workspace.",
@@ -58,6 +62,41 @@ describe("worker launch descriptor", () => {
     });
   });
 
+  it("accepts only closed Unix or public WebSocket connection endpoints", () => {
+    const descriptor = launchDescriptor();
+    descriptor.connectionEndpoint = {
+      kind: "websocket",
+      url: "wss://gateway.example/tenant/__openclaw__/worker",
+      tlsFingerprint: "ab:".repeat(31) + "ab",
+    };
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    const invalidEndpoints: unknown[] = [
+      { kind: "unix", socketPath: "gateway.sock" },
+      { kind: "unix", socketPath: "/tmp/gateway:sock" },
+      { kind: "websocket", url: "https://gateway.example/__openclaw__/worker" },
+      { kind: "websocket", url: "ws://user@gateway.example/__openclaw__/worker" },
+      { kind: "websocket", url: "wss://gateway.example/other" },
+      { kind: "websocket", url: "wss://gateway.example/__openclaw__/worker?token=x" },
+      {
+        kind: "websocket",
+        url: "ws://127.0.0.1/__openclaw__/worker",
+        tlsFingerprint: "ab".repeat(32),
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "",
+      },
+      { ...descriptor.connectionEndpoint, unexpected: true },
+    ];
+    for (const connectionEndpoint of invalidEndpoints) {
+      expect(() => parseWorkerLaunchDescriptor({ ...descriptor, connectionEndpoint })).toThrow(
+        "invalid worker launch descriptor",
+      );
+    }
+  });
+
   it("rejects unknown fields at every launch-owned boundary", () => {
     const descriptor = launchDescriptor();
     const cases: unknown[] = [
@@ -69,6 +108,13 @@ describe("worker launch descriptor", () => {
       {
         ...descriptor,
         assignment: { ...descriptor.assignment, unexpected: true },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "other-run" },
+        },
       },
       {
         ...descriptor,
@@ -118,7 +164,7 @@ describe("worker launch descriptor", () => {
     const descriptor = launchDescriptor();
     const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
     const cases: unknown[] = [
-      { ...descriptor, version: 1 },
+      { ...descriptor, version: 2 },
       { ...descriptor, assignment: assignmentWithoutAuthority },
       {
         ...descriptor,
@@ -144,12 +190,75 @@ describe("worker launch descriptor", () => {
 
     descriptor.assignment.toolAuthority.allowedToolNames = [];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+  });
+
+  it("accepts only a closed absolute loopback browser attachment descriptor", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.browser = {
+      cdpUrl: "http://127.0.0.1:9222",
+      launcherPath: "/usr/local/bin/openclaw-worker-browser",
+    };
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    const browser = descriptor.assignment.browser;
+    const cases: unknown[] = [
+      { ...browser, unexpected: true },
+      { ...browser, cdpUrl: "https://127.0.0.1:9222" },
+      { ...browser, cdpUrl: "http://localhost:9222" },
+      { ...browser, cdpUrl: "http://127.0.0.1" },
+      { ...browser, cdpUrl: "http://127.0.0.1:9222/json/version" },
+      { ...browser, launcherPath: "openclaw-worker-browser" },
+    ];
+    for (const invalidBrowser of cases) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, browser: invalidBrowser },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+  });
+
+  it("rejects the legacy v2 assignment without admitted execution context", () => {
+    const descriptor = launchDescriptor();
+    const {
+      operationalRunInstance: _operationalRunInstance,
+      agentRuntimeIdentityToken: _agentRuntimeIdentityToken,
+      ...legacyAssignment
+    } = descriptor.assignment;
+
+    expect(() =>
+      parseWorkerLaunchDescriptor({ ...descriptor, assignment: legacyAssignment }),
+    ).toThrow("invalid worker launch descriptor");
+  });
+
+  it("requires the host-assigned agent identity", () => {
+    const descriptor = launchDescriptor();
+    const { agentId: _agentId, ...assignmentWithoutAgent } = descriptor.assignment;
+
+    expect(() =>
+      parseWorkerLaunchDescriptor({ ...descriptor, assignment: assignmentWithoutAgent }),
+    ).toThrow("invalid worker launch descriptor");
+    for (const agentId of ["", " agent-1", "a".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH + 1)]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, agentId },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
   });
 
   it("rejects non-absolute paths, unattached sessions, and discontinuous event sequences", () => {
     const descriptor = launchDescriptor();
     const cases: unknown[] = [
-      { ...descriptor, socketPath: "gateway.sock" },
+      {
+        ...descriptor,
+        connectionEndpoint: { kind: "unix", socketPath: "gateway.sock" },
+      },
       {
         ...descriptor,
         assignment: { ...descriptor.assignment, workspaceDir: "workspace" },

@@ -2,7 +2,7 @@
 // Apple Watch cannot use generic WebSockets on-device, so node events use bounded HTTPS polls.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isRecord as isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -33,6 +33,7 @@ import {
   releaseNodePairingCleanupClaim,
   requestNodePairing,
   recordPairedNodeConnection,
+  recordPairedNodeDisconnection,
   type RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
 import {
@@ -61,7 +62,10 @@ import {
 } from "./http-common.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { isLoopbackAddress, resolveRequestClientIp } from "./net.js";
-import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
+import {
+  reconcileNodePairingOnConnect,
+  resolveEffectiveComputerUseDescriptor,
+} from "./node-connect-reconcile.js";
 import type { NodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import type {
   NodeConnectivityResult,
@@ -320,13 +324,40 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       }
       session.waiter = undefined;
     }
+    const nodeSession = options.nodeRegistry.get(session.nodeId);
+    const disconnectHistory =
+      nodeSession?.connId === session.connId && nodeSession.pairingGeneration
+        ? {
+            nodeId: nodeSession.nodeId,
+            connectedAtMs: nodeSession.connectedAtMs,
+            pairingGeneration: nodeSession.pairingGeneration,
+          }
+        : undefined;
     const disconnectedNodeId = options.nodeRegistry.unregister(session.connId);
     if (disconnectedNodeId) {
-      try {
-        options.onNodeDisconnected?.(disconnectedNodeId, reason);
-      } catch (error) {
-        options.onError?.("watch node disconnect cleanup failed", error);
-      }
+      void (async () => {
+        try {
+          if (disconnectHistory && disconnectHistory.nodeId === disconnectedNodeId) {
+            await recordPairedNodeDisconnection({
+              nodeId: disconnectHistory.nodeId,
+              connectedAtMs: disconnectHistory.connectedAtMs,
+              disconnectedAtMs: now(),
+              expectedPairingGeneration: {
+                nodeId: disconnectHistory.nodeId,
+                key: disconnectHistory.pairingGeneration,
+              },
+              baseDir: options.pairingBaseDir,
+            });
+          }
+        } catch (error) {
+          options.onError?.("watch node disconnect persistence failed", error);
+        }
+        try {
+          options.onNodeDisconnected?.(disconnectedNodeId, reason);
+        } catch (error) {
+          options.onError?.("watch node disconnect cleanup failed", error);
+        }
+      })();
     }
   };
 
@@ -834,6 +865,10 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       registeredConnect.declaredPermissions = reconciliation.declaredPermissions;
       registeredConnect.caps = reconciliation.effectiveCaps;
       registeredConnect.commands = reconciliation.effectiveCommands;
+      registeredConnect.computerUse = resolveEffectiveComputerUseDescriptor({
+        commands: reconciliation.effectiveCommands,
+        declared: reconciliation.declaredComputerUse,
+      });
       registeredConnect.permissions = reconciliation.effectivePermissions;
 
       let session: WatchNodeSession | undefined;
@@ -1013,11 +1048,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     if (body === undefined) {
       return;
     }
-    if (!isStringRecord(body) || typeof body.id !== "string" || typeof body.ok !== "boolean") {
+    if (!isRecord(body) || typeof body.id !== "string" || typeof body.ok !== "boolean") {
       sendInvalidRequest(res, "invalid node invoke result");
       return;
     }
-    const error = isStringRecord(body.error)
+    const error = isRecord(body.error)
       ? {
           ...(typeof body.error.code === "string" ? { code: body.error.code } : {}),
           ...(typeof body.error.message === "string" ? { message: body.error.message } : {}),

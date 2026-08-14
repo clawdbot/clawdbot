@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import {
   parseNonNegativeInt,
@@ -70,10 +71,6 @@ type ConcurrencyReport = {
     controlUiLatencyMs?: { p99?: number };
   };
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
@@ -458,6 +455,13 @@ async function runGatewayCpuScenarios(
               "scripts/bench-gateway-concurrency.ts",
               "--concurrency",
               String(DEFAULT_GATEWAY_CONCURRENCY),
+              "--workspace-fanout",
+              // Post-fix readyz/sessions.list p100 is 1.3-2.6s across environments;
+              // 4s still catches the pre-fix 8s+ stalls and handshake timeouts.
+              "--max-control-ms",
+              "4000",
+              "--max-handshake-ms",
+              "2000",
               "--runs",
               String(options.runs),
               "--warmup",

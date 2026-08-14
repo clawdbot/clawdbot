@@ -21,10 +21,10 @@ describe.runIf(process.platform === "win32")("Windows web media file URLs", () =
     }
   });
 
-  it("loads uppercase file URLs with spaces and Unicode", async () => {
+  it("loads single-slash uppercase file URLs with spaces and Unicode", async () => {
     const filePath = path.join(fixtureRoot, "café image.png");
     await fs.writeFile(filePath, TINY_PNG);
-    const fileUrl = pathToFileURL(filePath).href.replace(/^file:/u, "FILE:");
+    const fileUrl = pathToFileURL(filePath).href.replace(/^file:\/\//u, "FILE:");
 
     const result = await loadWebMedia(fileUrl, {
       maxBytes: 1024 * 1024,

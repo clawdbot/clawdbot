@@ -6,24 +6,23 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  isValidAgentId,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
-import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
-import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
-import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
-import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagent-spawn-plan.js";
-import { resolveSubagentTargetPolicy } from "../subagent-target-policy.js";
-import { normalizeToolModelOverride, readStringParam, ToolInputError } from "./common.js";
+import {
+  countActiveRunsForSession,
+  registerSubagentRun,
+} from "../subagents/registry/subagent-registry.js";
+import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
+import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
+import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
+import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import {
   callInProcessGatewayTool,
   callInProcessGatewayToolWithCreation,
@@ -96,8 +95,8 @@ export async function maybeSpawnVisibleSession(params: {
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const worktree = params.raw.worktree === true;
-  const worktreeName = readStringParam(params.raw, "worktreeName");
-  const worktreeBaseRef = readStringParam(params.raw, "worktreeBaseRef");
+  const worktreeName = readToolStringParam(params.raw, "worktreeName");
+  const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
       ["worktree", worktree],
@@ -114,8 +113,8 @@ export async function maybeSpawnVisibleSession(params: {
     }
     return undefined;
   }
-  const modelOverride = normalizeToolModelOverride(readStringParam(params.raw, "model"));
-  const requestedCwd = readStringParam(params.raw, "cwd");
+  const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
+  const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
   const unsupported = [
     [
@@ -125,7 +124,7 @@ export async function maybeSpawnVisibleSession(params: {
     ],
     [
       "thinking",
-      readStringParam(params.raw, "thinking"),
+      readToolStringParam(params.raw, "thinking"),
       "thinking overrides are not wired to the sessions.create path",
     ],
     [
@@ -166,7 +165,10 @@ export async function maybeSpawnVisibleSession(params: {
     completionOwnerKey: params.options?.completionOwnerKey,
   });
   const requesterKey = ownership.controllerSessionKey;
-  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, { cfg });
+  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
+    cfg,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
   const maxDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxDepth) {
@@ -183,9 +185,11 @@ export async function maybeSpawnVisibleSession(params: {
       error: `Invalid agentId "${params.requestedAgentId}". Use agents_list.`,
     };
   }
-  const requesterAgentId = normalizeAgentId(
-    params.options?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterKey)?.agentId,
-  );
+  const requesterAgentId = resolveSessionAgentId({
+    config: cfg,
+    sessionKey: requesterKey,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??

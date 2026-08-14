@@ -12,7 +12,7 @@ import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
   inlineChannelPluginEntryFactorySource,
-  makeTempDir,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -81,7 +81,7 @@ describe("plugin loader CLI metadata", () => {
 
   it("suppresses trust warning logs during CLI metadata loads", async () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     const globalDir = path.join(stateDir, "extensions", "rogue");
     fs.mkdirSync(globalDir, { recursive: true });
     writePlugin({
@@ -189,7 +189,7 @@ describe("plugin loader CLI metadata", () => {
 
   it("uses the real channel entry in cli-metadata mode for CLI metadata capture", async () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
@@ -294,7 +294,7 @@ module.exports = {
   });
 
   it("skips bundled channel full entries that do not provide a dedicated cli-metadata entry", async () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = makePluginLoaderTempDir();
     const pluginDir = path.join(bundledRoot, "bundled-skip-channel");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
@@ -361,7 +361,7 @@ module.exports = {
   });
 
   it("prefers bundled channel cli-metadata entries over full channel entries", async () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = makePluginLoaderTempDir();
     const pluginDir = path.join(bundledRoot, "bundled-cli-channel");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const cliMarker = path.join(pluginDir, "cli-loaded.txt");
@@ -453,7 +453,7 @@ module.exports = {
   });
 
   it("skips bundled non-channel full entries that do not provide a dedicated cli-metadata entry", async () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = makePluginLoaderTempDir();
     const pluginDir = path.join(bundledRoot, "bundled-skip-provider");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
@@ -520,7 +520,7 @@ module.exports = {
 
   it("collects channel CLI metadata during full plugin loads", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
@@ -616,7 +616,7 @@ module.exports = {
 
   it("collects channel CLI metadata during discovery plugin loads", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
@@ -723,7 +723,7 @@ module.exports = {
 
   it("can force channel runtime entries for CLI registration when setup entries exist", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const setupMarker = path.join(pluginDir, "setup-loaded.txt");
 
@@ -827,7 +827,7 @@ module.exports = {
   });
 
   it("sets bundled channel runtime before discovery CLI metadata registration", () => {
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
     const channelPluginPath = path.join(pluginDir, "channel.cjs");
     const runtimePath = path.join(pluginDir, "runtime.cjs");

@@ -15,7 +15,7 @@ import {
 import type { SessionEntry } from "./types.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 
-export type SqliteParentForkSourceTranscript = {
+export type ParentForkSourceTranscript = {
   appendMode?: "side";
   appendParentId: string | null;
   branchEntries: TranscriptEvent[];
@@ -42,7 +42,7 @@ function formatParentForkTooLargeMessage(params: {
   );
 }
 
-export function resolveSqliteParentForkDecision(
+export function planParentForkDecision(
   parentEntry: SessionEntry,
   transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
 ): SessionParentForkDecision {
@@ -64,7 +64,7 @@ export function resolveSqliteParentForkDecision(
   };
 }
 
-export function estimateSqliteTranscriptPromptTokens(
+export function estimateTranscriptPromptTokens(
   events: readonly TranscriptEvent[],
 ): SqliteTranscriptParentTokenEstimate | undefined {
   let byteEstimate = 0;
@@ -180,9 +180,9 @@ function readTranscriptContextUsage(
   return totalTokens === undefined ? undefined : { state: "available", totalTokens };
 }
 
-export function resolveSqliteParentForkSourceTranscript(
+export function resolveParentForkSourceTranscript(
   fileEntries: readonly TranscriptEvent[],
-): SqliteParentForkSourceTranscript | null {
+): ParentForkSourceTranscript | null {
   if (fileEntries.length === 0) {
     return null;
   }
@@ -283,9 +283,9 @@ function hasAssistantEntry(entries: readonly TranscriptEvent[]): boolean {
   );
 }
 
-export function buildSqliteForkedChildTranscriptEvents(params: {
+export function buildForkedChildTranscriptEvents(params: {
   parentSessionFile: string;
-  source: SqliteParentForkSourceTranscript;
+  source: ParentForkSourceTranscript;
   targetSessionId: string;
 }): TranscriptEvent[] {
   const header = {

@@ -37,6 +37,11 @@ type ProviderApiKeyAuthMethodOptions = {
   noteMessage?: string;
   noteTitle?: string;
   applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
+  resolveDefaultModel?: (params: {
+    apiKey: string;
+    config: OpenClawConfig;
+    signal?: AbortSignal;
+  }) => Promise<string | undefined>;
 };
 
 const loadProviderApiKeyAuthRuntime = createLazyRuntimeSurface(
@@ -62,6 +67,23 @@ function resolveProfileIds(params: {
     return explicit;
   }
   return [resolveProfileId(params)];
+}
+
+async function resolveDefaultModel(
+  params: ProviderApiKeyAuthMethodOptions,
+  context: { apiKey: string; config: OpenClawConfig; signal?: AbortSignal },
+): Promise<string | undefined> {
+  if (!params.resolveDefaultModel) {
+    return params.defaultModel;
+  }
+  try {
+    return await params.resolveDefaultModel(context);
+  } catch {
+    // Key-scoped discovery improves the first-run default, but an advisory
+    // catalog outage must not discard credentials or block onboarding.
+    context.signal?.throwIfAborted();
+    return params.defaultModel;
+  }
 }
 
 async function applyApiKeyConfig(params: {
@@ -132,7 +154,7 @@ export function createProviderApiKeyAuthMethod(
         validateApiKeyInput,
       } = await loadProviderApiKeyAuthRuntime();
 
-      await ensureApiKeyFromOptionEnvOrPrompt({
+      const apiKey = await ensureApiKeyFromOptionEnvOrPrompt({
         token: flagValue ?? normalizeOptionalSecretInput(ctx.opts?.token),
         tokenProvider: flagValue
           ? params.providerId
@@ -152,8 +174,8 @@ export function createProviderApiKeyAuthMethod(
         prompter: ctx.prompter,
         noteMessage: params.noteMessage,
         noteTitle: params.noteTitle,
-        setCredential: async (apiKey, mode) => {
-          capturedSecretInput = apiKey;
+        setCredential: async (credential, mode) => {
+          capturedSecretInput = credential;
           capturedCredential = true;
           capturedMode = mode;
         },
@@ -164,6 +186,11 @@ export function createProviderApiKeyAuthMethod(
       }
       const credentialInput = capturedSecretInput ?? "";
       const profileIds = resolveProfileIds(params);
+      const defaultModel = await resolveDefaultModel(params, {
+        apiKey,
+        config: ctx.config,
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+      });
 
       return {
         profiles: profileIds.map((profileId) => ({
@@ -181,7 +208,7 @@ export function createProviderApiKeyAuthMethod(
           ),
         })),
         ...(params.applyConfig ? { configPatch: params.applyConfig(ctx.config) } : {}),
-        ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
+        ...(defaultModel ? { defaultModel } : {}),
       };
     },
     validateNonInteractive: async (ctx) => Boolean(await resolveNonInteractiveCredential(ctx)),
@@ -214,7 +241,10 @@ export function createProviderApiKeyAuthMethod(
         ctx,
         providerId: params.providerId,
         profileIds,
-        defaultModel: params.defaultModel,
+        defaultModel: await resolveDefaultModel(params, {
+          apiKey: resolved.key,
+          config: ctx.config,
+        }),
         preserveExistingPrimary: params.preserveExistingPrimary,
         applyConfig: params.applyConfig,
       });

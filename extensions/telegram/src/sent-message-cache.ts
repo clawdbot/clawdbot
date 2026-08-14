@@ -95,9 +95,14 @@ function readPersistedSentMessages(scopeKey: string): SentMessageStore {
   return store;
 }
 
-function getSentMessageBucket(cfg?: SentMessageConfig): SentMessageBucket {
+type SentMessageOwner = { accountId?: string; agentId?: string };
+
+function getSentMessageBucket(
+  cfg?: SentMessageConfig,
+  owner?: SentMessageOwner,
+): SentMessageBucket {
   const state = getSentMessageState();
-  const scopeKey = resolveSentMessageScopeKey(cfg);
+  const scopeKey = resolveSentMessageScopeKey(cfg, owner);
   const existing = state.bucketsByScope.get(scopeKey);
   if (existing) {
     return existing;
@@ -111,8 +116,8 @@ function getSentMessageBucket(cfg?: SentMessageConfig): SentMessageBucket {
   return bucket;
 }
 
-function getSentMessages(cfg?: SentMessageConfig): SentMessageStore {
-  return getSentMessageBucket(cfg).store;
+function getSentMessages(cfg?: SentMessageConfig, owner?: SentMessageOwner): SentMessageStore {
+  return getSentMessageBucket(cfg, owner).store;
 }
 
 function persistSentMessage(
@@ -132,11 +137,12 @@ export function recordSentMessage(
   chatId: number | string,
   messageId: number,
   cfg?: SentMessageConfig,
+  owner?: SentMessageOwner,
 ): void {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
   const now = Date.now();
-  const bucket = getSentMessageBucket(cfg);
+  const bucket = getSentMessageBucket(cfg, owner);
   const { store } = bucket;
   let entry = store.get(scopeKey);
   if (!entry) {
@@ -159,10 +165,11 @@ export function wasSentByBot(
   chatId: number | string,
   messageId: number,
   cfg?: SentMessageConfig,
+  owner?: SentMessageOwner,
 ): boolean {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
-  const store = getSentMessages(cfg);
+  const store = getSentMessages(cfg, owner);
   const entry = store.get(scopeKey);
   if (!entry) {
     return false;

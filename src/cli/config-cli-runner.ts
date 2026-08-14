@@ -12,6 +12,7 @@ import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.
 import { danger, info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import {
   ConfigSetDryRunValidationError,
@@ -28,7 +29,6 @@ import {
   getAtPath,
   mergeAtPath,
   setAtPath,
-  toDotPath,
   type JsonSchemaRecord,
   type PathSegment,
   unsetAtPath,
@@ -235,10 +235,10 @@ export function configApplyHintForOperations(
     beforeConfig,
     afterConfig,
   );
-  if (
-    paths.length === 0 ||
-    paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))
-  ) {
+  if (paths.length === 0) {
+    return "No gateway restart needed.";
+  }
+  if (paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))) {
     return "Restart the gateway to apply.";
   }
   const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });

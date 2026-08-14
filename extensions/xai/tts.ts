@@ -1,4 +1,5 @@
 // Xai plugin module implements tts behavior.
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -6,11 +7,12 @@ import {
   readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { asObject, trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket from "ws";
 import { XAI_BASE_URL } from "./model-definitions.js";
@@ -48,12 +50,12 @@ export async function listXaiTtsVoices(params: {
     const payload = await readProviderJsonResponse<unknown>(response, "xAI TTS voices", {
       maxBytes: XAI_TTS_VOICE_LIST_MAX_BYTES,
     });
-    const voices = asObject(payload)?.voices;
+    const voices = asOptionalRecord(payload)?.voices;
     if (!Array.isArray(voices)) {
       throw new Error("xAI TTS voices: malformed JSON response");
     }
     return voices.flatMap((value) => {
-      const voice = asObject(value);
+      const voice = asOptionalRecord(value);
       const id = trimToUndefined(voice?.voice_id);
       if (!id) {
         return [];
@@ -256,7 +258,7 @@ export async function xaiTTSStream(params: {
         },
       });
     } catch (error) {
-      failConnect(error instanceof Error ? error : new Error(String(error)));
+      failConnect(toStringifiedError(error));
       return;
     }
 
@@ -275,7 +277,7 @@ export async function xaiTTSStream(params: {
     });
 
     ws.once("error", (error) => {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = toStringifiedError(error);
       if (connectSettled) {
         failStream(normalized);
         return;
@@ -372,7 +374,7 @@ export async function xaiTTSStream(params: {
           const payload = rawDataToString(data);
           handleServerEvent(JSON.parse(payload) as XaiTtsStreamServerEvent);
         } catch (error) {
-          failStream(error instanceof Error ? error : new Error(String(error)));
+          failStream(toStringifiedError(error));
         }
       });
 
@@ -406,7 +408,7 @@ export async function xaiTTSStream(params: {
         }
         ws?.send(JSON.stringify({ type: "text.done" }));
       } catch (error) {
-        failStream(error instanceof Error ? error : new Error(String(error)));
+        failStream(toStringifiedError(error));
       }
 
       resolve({ audioStream: wiredStream, release });

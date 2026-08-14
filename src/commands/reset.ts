@@ -146,7 +146,10 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   if (scope === "config+creds+sessions") {
     await removePath(configPath, runtime, { dryRun, label: configPath });
     await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    const sessionDirs = await listAgentSessionDirs(stateDir);
+    const sessionDirs = await listAgentSessionDirs(stateDir).catch((error: unknown) => {
+      runtime.error(`Failed to inspect session directories: ${String(error)}`);
+      return [];
+    });
     // Session stores are per-agent directories under state; enumerate them from
     // disk so reset handles agents that are no longer present in config.
     for (const dir of sessionDirs) {

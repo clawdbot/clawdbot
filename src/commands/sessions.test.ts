@@ -17,7 +17,6 @@ process.env.FORCE_COLOR = "0";
 mockSessionsConfig();
 
 import { sessionsCommand } from "./sessions.js";
-import { testing } from "./sessions.test-support.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -341,8 +340,75 @@ describe("sessionsCommand", () => {
     expect(main?.runtimePolicySessionKey).toBe("agent:main:telegram:default:direct:42");
   });
 
-  it("uses a default JSON output limit of 100 sessions", () => {
-    expect(testing.parseSessionsLimit(undefined)).toBe(100);
+  it("projects a bare row with its resolved fixed-store owner", async () => {
+    const store = await writeStore(
+      {
+        global: {
+          sessionId: "telegram-global",
+          updatedAt: Date.now() - 60_000,
+          delivery: normalizeSessionDeliveryState({
+            origin: {
+              provider: "telegram",
+              chatType: "direct",
+              to: "telegram:42",
+              accountId: "default",
+            },
+          }),
+        },
+      },
+      "sessions-runtime-policy-owner",
+      { agentId: "ops" },
+    );
+    setMockSessionsConfig(() => ({
+      session: { scope: "global", store },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "test:opus" },
+          models: { "test:opus": {} },
+          contextTokens: 32000,
+          sessionStore: { agentId: "ops" },
+        },
+        entries: { ops: {}, research: {} },
+      },
+    }));
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ agentId?: string; key: string; runtimePolicySessionKey?: string }>;
+    }>(sessionsCommand, store, { active: "10" });
+
+    expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
+      agentId: "ops",
+      runtimePolicySessionKey: "agent:ops:telegram:default:direct:42",
+    });
+  });
+
+  it("uses a default JSON output limit of 100 sessions", async () => {
+    const entries = Object.fromEntries(
+      Array.from({ length: 101 }, (_, index) => [
+        `agent:main:session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: Date.now() - index,
+          model: "test:opus",
+        },
+      ]),
+    );
+    const store = await writeStore(entries, "sessions-default-limit");
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store);
+
+    expect(payload.count).toBe(100);
+    expect(payload.totalCount).toBe(101);
+    expect(payload.limitApplied).toBe(100);
+    expect(payload.hasMore).toBe(true);
+    expect(payload.sessions).toHaveLength(100);
   });
 
   it("honors explicit JSON output limits", async () => {

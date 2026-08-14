@@ -1,7 +1,7 @@
 // Atomic persistence for broad auto-reply session snapshots.
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   mergeSessionSnapshotChanges,
   sessionSnapshotTouchedFieldsConflict,
@@ -31,7 +31,7 @@ export async function persistReplySessionEntry(
   let lifecycleError: string | undefined;
   let lifecycleEntry: SessionEntry | undefined;
   let lockedEntry: SessionEntry | undefined;
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       if (!context.existingEntry) {

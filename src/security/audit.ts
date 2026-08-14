@@ -1336,7 +1336,9 @@ async function createAuditExecutionContext(
   };
 }
 
-export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
+export async function runSecurityAuditCore(
+  opts: SecurityAuditOptions,
+): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const context = await createAuditExecutionContext(opts);
   const { cfg, env, platform, stateDir, configPath } = context;

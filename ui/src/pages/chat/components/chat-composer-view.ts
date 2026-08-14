@@ -16,6 +16,7 @@ import {
   renderAttachmentPreview,
   renderChatAttachmentInputs,
 } from "./chat-attachments.ts";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import { renderChatPrimaryActions } from "./chat-composer-controls.ts";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
@@ -106,16 +107,37 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   } = context;
   const disabledBanner = props.disabledBanner
     ? html`
-        <div class="agent-chat__disabled-banner callout info callout--action" role="status">
-          <span class="callout__content">${props.disabledBanner.text}</span>
+        <div
+          class="agent-chat__disabled-banner callout ${props.disabledBanner.tone === "neutral"
+            ? "agent-chat__disabled-banner--neutral"
+            : "info"} callout--action"
+          role="status"
+        >
+          ${props.disabledBanner.icon === "warning"
+            ? html`<span class="agent-chat__disabled-banner-icon" aria-hidden="true"
+                >${icons.alertTriangle}</span
+              >`
+            : nothing}
+          <div class="callout__content">
+            ${props.disabledBanner.title
+              ? html`<div class="agent-chat__disabled-banner-title">
+                  ${props.disabledBanner.title}
+                </div>`
+              : nothing}
+            <div class="agent-chat__disabled-banner-detail">${props.disabledBanner.text}</div>
+          </div>
           <button
             type="button"
-            class="btn btn--xs"
-            ?disabled=${Boolean(props.disabledBanner.disabledReason)}
+            class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
+            ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
+            aria-busy=${props.disabledBanner.busy ? "true" : "false"}
             title=${props.disabledBanner.disabledReason ?? nothing}
             @click=${props.disabledBanner.onAction}
           >
-            ${props.disabledBanner.actionLabel}
+            ${props.disabledBanner.busy
+              ? html`<span class="btn__spinner" aria-hidden="true"></span>${props.disabledBanner
+                    .busyLabel ?? props.disabledBanner.actionLabel}`
+              : props.disabledBanner.actionLabel}
           </button>
           ${props.disabledBanner.kind === "composer-replacement" && showAbortableUi
             ? renderChatPrimaryActions(runControlsProps)
@@ -139,6 +161,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       canAbort: showAbortableUi,
       onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
+      // Reordering is local bookkeeping, so it stays available while offline —
+      // exactly when a queue is long enough to need it.
+      onQueueMove: props.onQueueMove,
+      onQueueEdit: props.queuedEdit?.onEdit,
+      editingId: props.queuedEdit?.editingId ?? null,
       onQueueRemove: props.onQueueRemove,
     })}
     ${props.runError
@@ -148,6 +175,29 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             <span class="chat-run-error__summary">${props.runError.summary}</span>
           </div>
         `
+      : nothing}
+    ${showComposerInput && props.typingActors?.length
+      ? html`<div
+          class="agent-chat__typing-indicator agent-chat__typing-indicator--outside"
+          role="status"
+        >
+          <!-- Avatars stay aria-hidden: the status text already names every
+               typer, and role="img" avatars would announce each name twice. -->
+          <span class="agent-chat__typing-avatars" aria-hidden="true">
+            ${props.typingActors
+              .slice(0, 3)
+              .map((actor) => renderChatAuthorAvatar({ id: actor.id, name: actor.label }))}
+          </span>
+          <span class="agent-chat__typing-text"
+            >${props.typingActors.length === 1
+              ? t("chat.sessionSuggestions.typing", {
+                  name: props.typingActors[0]?.label ?? "",
+                })
+              : t("chat.sessionSuggestions.typingMany", {
+                  names: props.typingActors.map((actor) => actor.label).join(", "),
+                })}</span
+          >
+        </div>`
       : nothing}
     <div class="agent-chat__composer-shell">
       ${questionPanelProps
@@ -164,6 +214,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ? html`<div
             class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
+            @pointerdown=${(event: PointerEvent) => focusComposerFromChrome(event, canCompose)}
+            ${ref(state.composerInputRef ?? undefined)}
           >
             ${props.offline
               ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
@@ -172,11 +224,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                         count: String(props.queuedOutboxCount),
                       })
                     : t("chat.composer.offlineHint")}
-                </div>`
-              : nothing}
-            ${props.typingLabel
-              ? html`<div class="agent-chat__typing-indicator" role="status">
-                  ${props.typingLabel}
                 </div>`
               : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
@@ -348,6 +395,24 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
                 onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
+              ${props.queuedEdit?.editingId
+                ? html`
+                    <span class="agent-chat__composer-edit" role="status">
+                      <span class="agent-chat__composer-edit-icon" aria-hidden="true"
+                        >${icons.pencil}</span
+                      >
+                      <span class="agent-chat__sr-only">${t("chat.queue.editing")}</span>
+                      <button
+                        class="agent-chat__composer-edit-cancel"
+                        type="button"
+                        aria-label=${t("chat.queue.cancelEdit")}
+                        @click=${() => props.queuedEdit?.onCancel()}
+                      >
+                        ${icons.x}
+                      </button>
+                    </span>
+                  `
+                : nothing}
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}
@@ -390,14 +455,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 ></textarea>
                 <span
                   id=${slashMenuAnnouncementId}
-                  class="agent-chat__sr-only"
+                  class="sr-only"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"
                   >${activeSlashMenuOptionLabel}</span
                 >
                 <span
-                  class="agent-chat__run-status-announcement agent-chat__sr-only"
+                  class="agent-chat__run-status-announcement sr-only"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"

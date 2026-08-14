@@ -2,6 +2,7 @@
 // Gateway dedupe retains response payloads only for idempotent RPC replay.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeAgentRunTerminalDeliverySnapshot,
   type AgentRunTerminalDeliverySnapshot,
@@ -380,10 +381,6 @@ function ensureAgentRunListener() {
   });
 }
 
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
   const payload = entry.payload as
     | {
@@ -422,8 +419,10 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
   );
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
-  const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
-  const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
+  const stopReason =
+    readNonBlankString(payload?.stopReason) ?? readNonBlankString(resultMeta?.stopReason);
+  const livenessState =
+    readNonBlankString(payload?.livenessState) ?? readNonBlankString(resultMeta?.livenessState);
   const terminalOutcome = buildAgentRunTerminalOutcome({
     status: terminalStatus,
     startedAt,

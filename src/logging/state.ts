@@ -13,7 +13,6 @@ function createLoggingState() {
     earlyConsoleRoutingRestore: null as boolean | null,
     consoleTimestampPrefix: false,
     consoleSubsystemFilter: null as string[] | null,
-    resolvingConsoleSettings: false,
     streamErrorHandlersInstalled: false,
     rawConsole: null as {
       log: typeof console.log;

@@ -56,8 +56,6 @@ const ROOT_TEST_ENTRY_GLOBS = [
   // Invoked directly by the Docker image-auth scenario.
   "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts!",
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",
-  // Loaded through NODE_OPTIONS by the Doctor SecretRef E2E; no static import edge exists.
-  "test/fixtures/windows-acl-tools-unavailable.mjs!",
   // QA scenario YAML dispatches these scripts/tests by path rather than import.
   ...QA_SCENARIO_EXECUTION_ENTRIES,
   // Invoked directly by the sandbox bind-conflict E2E verification script.

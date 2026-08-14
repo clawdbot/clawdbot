@@ -43,6 +43,44 @@ require the `node` role.
 Unknown future `operator.*` scopes require an exact match unless the caller
 already holds `operator.admin`.
 
+## Identity scope grants
+
+`gateway.auth.identityScopes` grants operator scopes to verified user
+identities from trusted-proxy auth or Tailscale WhoIs:
+
+```json5
+{
+  gateway: {
+    auth: {
+      identityScopes: {
+        "admin@example.com": ["operator.admin"],
+        "operator@example.com": ["operator.read", "operator.write"],
+      },
+    },
+  },
+}
+```
+
+The key is the verified proxy identity or Tailscale WhoIs login. Email keys
+match case-insensitively; non-email identities match exactly. Config validation
+rejects scope names outside the closed set above.
+
+Connection authority is resolved in this order:
+
+1. For trusted-proxy Control UI connections, `x-openclaw-scopes` first caps
+   device enrollment or upgrade requests. Device authorization then establishes
+   the persistent scopes; a device-less session contributes no self-declared
+   scopes.
+2. OpenClaw unions a matching server-side identity grant with those scopes.
+3. OpenClaw applies `x-openclaw-scopes` to the final union as the session cap.
+   An absent header means no cap; a present-but-empty header yields no scopes.
+
+The result is used for both `hello.auth.scopes` and Gateway method
+authorization. Identity grants are session-only: they do not create or modify
+pairing records or request a device scope upgrade. Token, password, and no-auth
+connections carry no verified identity and receive no grant.
+Identity grants apply only to `operator`-role connections; `node`-role connections never receive them.
+
 ## Method scope is only the first gate
 
 Each Gateway RPC has a least-privilege method scope that decides whether a
@@ -52,8 +90,18 @@ dispatch so authorization failures have one canonical structured response:
 - `agent` needs `operator.write` for ordinary turns and `operator.admin` for
   `/new` or `/reset` session lifecycle commands.
 - `node.invoke` needs `operator.write` for ordinary relay commands and
-  `operator.admin` for `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
-  and `terminal.upload`.
+  `operator.admin` when relaying `browser.proxy`, `browser.proxy.upload.v1`,
+  `fs.listDir`, or `terminal.upload` to a node.
+- The top-level `fs.listDir` RPC needs `operator.write` for Gateway-host
+  requests and `operator.admin` when `nodeId` targets a node. Its handler limits
+  non-admin Gateway-host browsing to configured agent workspaces.
+- `sessions.create` needs `operator.write` for ordinary creation, including a
+  `projectId`, and `operator.admin` for incognito sessions or any `execNode`
+  request. For non-admin callers, the handler limits `cwd` to configured agent
+  workspaces; `projectId` cannot be combined with `cwd` or `execNode`.
+- `worktrees.branches` needs `operator.write`. Its handler limits non-admin
+  callers to workspace-contained paths or registered-project roots; other host
+  paths require `operator.admin`.
 - `talk.config` needs `operator.read`; `includeSecrets: true` also needs
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
@@ -63,6 +111,15 @@ dispatch so authorization failures have one canonical structured response:
   thinking, fast, verbose, trace, and reasoning levels, need `operator.admin`.
   Persisting a selected model as the configured agent default is also
   admin-only.
+
+Project RPCs use these scopes:
+
+| Method                                 | Required scope and additional gate                                                            |
+| -------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `projects.list`                        | `operator.read`; only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
+| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                     |
+| `projects.register`, `projects.remove` | `operator.admin`.                                                                             |
+| `projects.searchRemote`                | `operator.read`.                                                                              |
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:
@@ -96,6 +153,15 @@ Device pairing records are the durable source of approved roles and scopes.
 An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
+
+A connected limited Control UI can file that same pending request through its
+**Request admin** banner without attempting a broader reconnect. The request is
+bound to the signed device identity on the live connection. Approval still
+comes from `device.pair.approve` and therefore requires `operator.pairing` plus
+authority for every requested scope. After approval rotates the operator token,
+the Gateway returns the new token only to that device's live waiter; the browser
+stores it before reconnecting. Canceling the wait or disconnecting before
+approval falls back to the ordinary pairing repair flow on the next connection.
 
 The explicit exception is the administrator-capable Control UI owner profile
 issued directly on the Gateway host by `openclaw dashboard` or graphical
@@ -144,6 +210,9 @@ command list:
 | none                                                                                                                                            | `operator.pairing`                    |
 | ordinary node commands                                                                                                                          | `operator.pairing` + `operator.write` |
 | `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+
+Here, `fs.listDir` is the node command declared for relay through `node.invoke`,
+not the top-level Gateway RPC described above.
 
 Approving a node declaration records its command surface. For `computer.act`,
 the node advertises that surface only after Computer Control is enabled locally;

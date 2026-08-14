@@ -3,11 +3,13 @@
 
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
+import { readBackupFreshness } from "./backup-health.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 
 type StatusJsonScanLike = {
+  env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   summary: Record<string, unknown>;
@@ -76,7 +78,7 @@ export async function resolveStatusJsonOutput(params: {
       suppressHealthErrors: params.suppressHealthErrors,
     });
 
-  return buildStatusJsonPayload({
+  const payload = buildStatusJsonPayload({
     summary: scan.summary,
     surface: buildStatusOverviewSurfaceFromScan({
       // The scan shape is intentionally narrower than the surface helper's full scan type.
@@ -95,4 +97,9 @@ export async function resolveStatusJsonOutput(params: {
     lastHeartbeat,
     pluginCompatibility: params.includePluginCompatibility ? scan.pluginCompatibility : undefined,
   });
+  const backups = readBackupFreshness(scan.env ?? {});
+  if (backups.latest || backups.latestOk) {
+    Object.assign(payload, { backups });
+  }
+  return payload;
 }

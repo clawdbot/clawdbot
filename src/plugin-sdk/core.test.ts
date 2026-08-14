@@ -183,6 +183,26 @@ describe("createChannelPluginBase", () => {
 });
 
 describe("createChatChannelPlugin", () => {
+  it("preserves DM routing through the declarative security shorthand", () => {
+    const dmRouting = {
+      resolveDmScope: () => "per-peer" as const,
+      resolveDmRoute: () => ({ kind: "core" as const }),
+    };
+    const plugin = createChatChannelPlugin({
+      base: createChannelPlugin("security-routing") as ChannelPlugin<{ accountId: string }>,
+      security: {
+        dm: {
+          channelKey: "security-routing",
+          resolvePolicy: () => "allowlist",
+          resolveAllowFrom: () => [],
+        },
+        dmRouting,
+      },
+    });
+
+    expect(plugin.security?.dmRouting).toBe(dmRouting);
+  });
+
   it("preserves account-scoped current-conversation binding support", () => {
     const conversationBindings: NonNullable<ChannelPlugin["conversationBindings"]> = {
       isCurrentConversationBindingSupported: ({ accountId }) => accountId !== "enterprise",

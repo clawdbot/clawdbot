@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { titleForRoute } from "../app-navigation.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
@@ -45,7 +44,7 @@ type SessionCatalogRenderSnapshot = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  sidebarRowsByKey: ReadonlyMap<string, SidebarRecentSession>;
+  toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
   creatorId: string | null;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
@@ -54,11 +53,9 @@ type SessionCatalogRenderSnapshot = {
 function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
-  showDraft?: boolean;
   nativeSessionsHaveMore?: boolean;
 }) {
   const { host, section } = params;
-  const showDraft = params.showDraft ?? false;
   const totalRowCount = section.totalRowCount;
   const group = section.category;
   // zonedVisibleSections removes pinned rows; AppSidebar renders them through
@@ -230,9 +227,8 @@ function renderSessionSection(params: {
                   >${t("chat.sidebar.noSessionsForAgent")}</span
                 >`
               : nothing}
-            ${section.rows.length > 0 || showDraft
+            ${section.rows.length > 0
               ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
-                  ${showDraft ? renderDraftSessionRow() : nothing}
                   ${section.rows.map((session) => renderSessionTree({ host, session }))}
                 </div>`
               : nothing}
@@ -242,19 +238,6 @@ function renderSessionSection(params: {
               nativeSessionsHaveMore: params.nativeSessionsHaveMore ?? false,
             })}
           `}
-    </div>
-  `;
-}
-
-function renderDraftSessionRow() {
-  return html`
-    <div class="sidebar-recent-session sidebar-recent-session--draft">
-      <span class="sidebar-recent-session__link">
-        <span class="sidebar-session-indicator"></span>
-        <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name">${t("newSession.draftRow")}</span>
-        </span>
-      </span>
     </div>
   `;
 }
@@ -336,7 +319,7 @@ function renderSessionCatalog(params: {
       renderLiveRow: (row, display) =>
         renderRecentSession({
           host,
-          session: snapshot.sidebarRowsByKey.get(row.key)!,
+          session: snapshot.toSidebarSession(row),
           display,
         }),
       onToggleSection: (sectionId) => host.toggleSection(sectionId),
@@ -372,7 +355,6 @@ function renderSessionCatalog(params: {
 function renderSessionListBody(params: {
   host: SidebarSessionListHost;
   sections: RenderableSessionSection[];
-  showDraft: boolean;
   nativeSessionsHaveMore: boolean;
   catalogs: SessionCatalogRenderSnapshot;
   catalogRenderer: SessionCatalogGroupsRenderer | null;
@@ -399,7 +381,6 @@ function renderSessionListBody(params: {
   );
   return html`
     ${params.sections.map((section, index) => {
-      const showDraft = section.id === "ungrouped" && params.showDraft;
       if (section.id.startsWith("catalog:")) {
         const catalog = catalogsBySectionId.get(section.id);
         return html`${index === firstCatalogSectionIndex ? catalogStatus : nothing}${catalog
@@ -424,7 +405,6 @@ function renderSessionListBody(params: {
       if (
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
-        !showDraft &&
         !params.nativeSessionsHaveMore &&
         !hasCategorizedThreads &&
         !host.sessionOwnershipVisible &&
@@ -436,7 +416,6 @@ function renderSessionListBody(params: {
       return renderSessionSection({
         host,
         section,
-        showDraft,
         nativeSessionsHaveMore: params.nativeSessionsHaveMore,
       });
     })}
@@ -448,7 +427,6 @@ export function renderSessionList(params: {
   host: SidebarSessionListHost;
   empty: boolean;
   sections: RenderableSessionSection[];
-  showDraft: boolean;
   nativeSessionsHaveMore: boolean;
   catalogs: SessionCatalogRenderSnapshot;
   catalogRenderer: SessionCatalogGroupsRenderer | null;
@@ -484,11 +462,10 @@ export function renderSessionList(params: {
             </div>
           `
         : nothing}
-      <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+      <div class="sidebar-recent-sessions">
         ${renderSessionListBody({
           host,
           sections: params.sections,
-          showDraft: params.showDraft,
           nativeSessionsHaveMore: params.nativeSessionsHaveMore,
           catalogs: params.catalogs,
           catalogRenderer: params.catalogRenderer,

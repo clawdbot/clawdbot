@@ -2,7 +2,7 @@
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import { createTelegramMessageSessionRuntime } from "./bot-handlers.message-session.runtime.js";
+import { createTelegramMessageSessionRuntime } from "./bot-handlers.message-context.js";
 
 describe("createTelegramMessageSessionRuntime", () => {
   it("inherits a DM topic model override through keyed session loads", () => {

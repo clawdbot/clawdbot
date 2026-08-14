@@ -41,6 +41,9 @@ function serializeManifest(baseCommit, entries, comparePaths = compareManifestPa
 }`;
 
 export const REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS = String.raw`function publishManifest(manifestRoot, manifest) {
+  if (Buffer.byteLength(manifest) > MAX_WORKSPACE_MANIFEST_BYTES) {
+    fail("worker workspace manifest exceeds its serialized byte limit");
+  }
   const digest = crypto.createHash("sha256").update(manifest).digest("hex");
   const manifestPath = path.join(manifestRoot, digest + ".json");
   const temporaryPath = manifestPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
@@ -68,7 +71,7 @@ function readManifestFile(manifestPath) {
   const descriptor = fs.openSync(manifestPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
     const stats = fs.fstatSync(descriptor);
-    if (!stats.isFile() || stats.size > 64 * 1024 * 1024) {
+    if (!stats.isFile() || stats.size > MAX_WORKSPACE_MANIFEST_BYTES) {
       fail("unsafe worker workspace manifest file");
     }
     return fs.readFileSync(descriptor, "utf8");

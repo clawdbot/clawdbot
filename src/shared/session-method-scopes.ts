@@ -7,12 +7,15 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "label",
   "category",
   "boardFace",
-  "icon",
   "pinned",
   "archived",
   "unread",
   "model",
 ]);
+
+// Beta v4 clients may still send this ignored field to sessions.patch. It is
+// not a sessions.patchMany mutation and must not gain admin scope while retiring.
+const SESSIONS_PATCH_RETIRED_COMPATIBILITY_FIELDS: ReadonlySet<string> = new Set(["icon"]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
   "key",
@@ -37,7 +40,8 @@ function resolveSessionsPatchRequiredScope(params: unknown): SessionMutationOper
   return Object.keys(params).every(
     (key) =>
       SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS.has(key) ||
-      SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key),
+      SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key) ||
+      SESSIONS_PATCH_RETIRED_COMPATIBILITY_FIELDS.has(key),
   )
     ? "operator.write"
     : "operator.admin";
@@ -58,14 +62,14 @@ function resolveSessionsCreateRequiredScope(params: unknown): SessionMutationOpe
   if (!isRecord(params)) {
     return "operator.write";
   }
-  // Incognito creation and inheritance expose process-only session state; cwd and
-  // execNode target privileged host resources. All require operator.admin.
+  // Incognito creation and inheritance expose process-only session state, while
+  // execNode targets privileged host resources. Gateway cwd containment needs
+  // runtime config and filesystem facts, so the create handler owns that check.
   if (
     params.incognito === true ||
     (typeof params.key === "string" && isIncognitoSessionKey(params.key)) ||
     (typeof params.parentSessionKey === "string" &&
       isIncognitoSessionKey(params.parentSessionKey)) ||
-    Object.hasOwn(params, "cwd") ||
     Object.hasOwn(params, "execNode")
   ) {
     return "operator.admin";
@@ -89,6 +93,9 @@ export function resolveDynamicSessionMutationRequiredScope(
   method: string,
   params?: unknown,
 ): SessionMutationOperatorScope | undefined {
+  if (method === "sessions.recover") {
+    return "operator.write";
+  }
   if (method === "sessions.create") {
     return resolveSessionsCreateRequiredScope(params);
   }

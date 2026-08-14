@@ -64,7 +64,11 @@ export async function gatherDispatchRequest(
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
-  const normalizedParams = ctx === params.ctx ? params : { ...params, ctx };
+  const normalizedParams: DispatchFromConfigParams = {
+    ...params,
+    ctx,
+    replyOptions: { ...params.replyOptions },
+  };
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
@@ -324,10 +328,17 @@ export async function gatherDispatchRequest(
   const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
   const inboundAudio = hasInboundAudio(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+  // A bound ACP key names an external harness, not a configured model-runtime owner.
+  // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
+  const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
+    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    : sessionAgentId;
   const preparedReplyDispatchRuntime = params.usePublishedModelRuntime
     ? await traceReplyPhase("reply.load_prepared_dispatch_runtime", async () => {
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
-        return await loadPublishedGatewayReplyDispatchRuntime({ agentId: sessionAgentId });
+        return await loadPublishedGatewayReplyDispatchRuntime({
+          agentId: preparedReplyDispatchAgentId,
+        });
       })
     : undefined;
   const workspaceDir =
@@ -339,7 +350,7 @@ export async function gatherDispatchRequest(
     initialDispatchReplyOperation,
     messageAuditTerminal,
     operationSessionStoreEntry,
-    replyOptions: params.replyOptions,
+    replyOptions: normalizedParams.replyOptions,
     resolveOperationExpectedSessionId,
     routeThreadId,
   });
@@ -348,6 +359,7 @@ export async function gatherDispatchRequest(
     dispatchHookDispatcher,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation,
@@ -486,6 +498,7 @@ export async function gatherDispatchRequest(
     dispatchHookDispatcher,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation,

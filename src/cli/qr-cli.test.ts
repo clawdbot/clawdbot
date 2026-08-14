@@ -159,6 +159,7 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url,
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
   }
@@ -209,6 +210,7 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url: "ws://127.0.0.1:18789",
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(renderTerminal).not.toHaveBeenCalled();
@@ -290,6 +292,7 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url: "ws://127.0.0.1:18789",
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(renderTerminal).toHaveBeenCalledWith(expected, { small: true });
     const output = runtimeLog.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
@@ -495,6 +498,7 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url: "wss://remote.example.com:444",
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     const request = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as
@@ -557,6 +561,7 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url: "wss://remote.example.com:444",
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
   });

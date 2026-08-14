@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 
@@ -14,11 +14,11 @@ type LifecycleInternals = {
   } | null;
   frameFailureKey: string;
   frameRefreshAttempts: number;
-  refreshFailedFrame: (widget: BoardViewWidget) => void;
+  refreshFailedFrame: (widget: BoardWidget) => void;
 };
 
 function createTicketRefreshLifecycle(
-  widget: BoardViewWidget,
+  widget: BoardWidget,
   refreshFrame: (name: string) => Promise<void>,
 ): BoardWidgetFrameLifecycle {
   const lifecycle = new BoardWidgetFrameLifecycle({
@@ -46,10 +46,10 @@ afterEach(() => {
 // Drives the private terminal-failure path directly: attempts are exhausted so
 // refreshFailedFrame surfaces the terminal message for the given sandbox origin.
 function terminalFailureError(params: {
-  widget: Partial<BoardViewWidget>;
+  widget: Partial<BoardWidget>;
   resolvedSandboxOrigin: string;
 }): string {
-  const widget = { name: "clock", revision: 1, ...params.widget } as BoardViewWidget;
+  const widget = { name: "clock", revision: 1, ...params.widget } as BoardWidget;
   const lifecycle = new BoardWidgetFrameLifecycle({
     active: () => true,
     connected: () => true,
@@ -116,7 +116,7 @@ describe("board widget frame ticket refresh", () => {
       revision: 1,
       viewTicket: "ticket",
       viewTicketTtlMs: 30_000,
-    } as BoardViewWidget;
+    } as BoardWidget;
     recordBoardWidgetTicketReceipt(widget);
     const lifecycle = new BoardWidgetFrameLifecycle({
       active: () => active,
@@ -187,7 +187,7 @@ describe("board widget frame ticket refresh", () => {
       revision: 1,
       viewTicket: "ticket",
       viewTicketTtlMs: 30_000,
-    } as BoardViewWidget;
+    } as BoardWidget;
     recordBoardWidgetTicketReceipt(widget);
     const lifecycle = createTicketRefreshLifecycle(widget, refreshFrame);
 
@@ -215,7 +215,7 @@ describe("board widget frame ticket refresh", () => {
       revision: 1,
       viewTicket: "ticket",
       viewTicketTtlMs: 30_000,
-    } as BoardViewWidget;
+    } as BoardWidget;
     recordBoardWidgetTicketReceipt(widget);
     await vi.advanceTimersByTimeAsync(10_000);
     const lifecycle = createTicketRefreshLifecycle(widget, refreshFrame);

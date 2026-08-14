@@ -2,7 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
@@ -80,11 +80,6 @@ type HostedGateEvidence = {
   notApplicableWorkflows?: string[];
 };
 
-function optionalString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
-
 function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" ? value : undefined;
@@ -100,7 +95,7 @@ function optionalNullableString(
 
 function toWorkflowRun(run: Record<string, unknown>) {
   const headRepository = isRecord(run.head_repository)
-    ? { full_name: optionalString(run.head_repository, "full_name") }
+    ? { full_name: readStringField(run.head_repository, "full_name") }
     : undefined;
   const pullRequests = Array.isArray(run.pull_requests)
     ? run.pull_requests.filter(isRecord).map((pullRequest) => ({
@@ -111,30 +106,30 @@ function toWorkflowRun(run: Record<string, unknown>) {
     id: optionalNumber(run, "id"),
     run_number: optionalNumber(run, "run_number"),
     run_attempt: optionalNumber(run, "run_attempt"),
-    name: optionalString(run, "name"),
-    event: optionalString(run, "event"),
-    head_sha: optionalString(run, "head_sha"),
-    head_branch: optionalString(run, "head_branch"),
+    name: readStringField(run, "name"),
+    event: readStringField(run, "event"),
+    head_sha: readStringField(run, "head_sha"),
+    head_branch: readStringField(run, "head_branch"),
     head_repository: headRepository,
-    path: optionalString(run, "path"),
-    display_title: optionalString(run, "display_title"),
-    status: optionalString(run, "status"),
+    path: readStringField(run, "path"),
+    display_title: readStringField(run, "display_title"),
+    status: readStringField(run, "status"),
     conclusion: optionalNullableString(run, "conclusion"),
-    created_at: optionalString(run, "created_at"),
-    updated_at: optionalString(run, "updated_at"),
-    html_url: optionalString(run, "html_url"),
+    created_at: readStringField(run, "created_at"),
+    updated_at: readStringField(run, "updated_at"),
+    html_url: readStringField(run, "html_url"),
     pull_requests: pullRequests,
   };
 }
 
 function toCiGateJob(job: Record<string, unknown>) {
   return {
-    name: optionalString(job, "name"),
+    name: readStringField(job, "name"),
     run_id: optionalNumber(job, "run_id"),
     run_attempt: optionalNumber(job, "run_attempt"),
-    status: optionalString(job, "status"),
-    conclusion: optionalString(job, "conclusion"),
-    completed_at: optionalString(job, "completed_at"),
+    status: readStringField(job, "status"),
+    conclusion: readStringField(job, "conclusion"),
+    completed_at: readStringField(job, "completed_at"),
   };
 }
 
@@ -962,17 +957,17 @@ function loadCiReuseCandidateRuns(repo: string, headBranch: string) {
   return runs.map(
     (run): WorkflowRun => ({
       id: optionalNumber(run, "databaseId"),
-      name: optionalString(run, "workflowName"),
-      event: optionalString(run, "event"),
-      status: optionalString(run, "status"),
+      name: readStringField(run, "workflowName"),
+      event: readStringField(run, "event"),
+      status: readStringField(run, "status"),
       conclusion: optionalNullableString(run, "conclusion"),
-      head_sha: optionalString(run, "headSha"),
-      head_branch: optionalString(run, "headBranch"),
+      head_sha: readStringField(run, "headSha"),
+      head_branch: readStringField(run, "headBranch"),
       path: CI_WORKFLOW_PATH,
-      created_at: optionalString(run, "createdAt"),
-      updated_at: optionalString(run, "updatedAt"),
-      html_url: optionalString(run, "url"),
-      display_title: optionalString(run, "displayTitle"),
+      created_at: readStringField(run, "createdAt"),
+      updated_at: readStringField(run, "updatedAt"),
+      html_url: readStringField(run, "url"),
+      display_title: readStringField(run, "displayTitle"),
     }),
   );
 }
@@ -1114,10 +1109,10 @@ function main(argv = process.argv.slice(2)) {
   const head = isRecord(pullRequest) && isRecord(pullRequest.head) ? pullRequest.head : undefined;
   const base = isRecord(pullRequest) && isRecord(pullRequest.base) ? pullRequest.base : undefined;
   const headRepo = head && isRecord(head.repo) ? head.repo : undefined;
-  const headBranch = head ? optionalString(head, "ref") : undefined;
-  const headRepository = headRepo ? optionalString(headRepo, "full_name") : undefined;
-  const baseSha = base ? optionalString(base, "sha") : undefined;
-  const headSha = head ? optionalString(head, "sha") : undefined;
+  const headBranch = head ? readStringField(head, "ref") : undefined;
+  const headRepository = headRepo ? readStringField(headRepo, "full_name") : undefined;
+  const baseSha = base ? readStringField(base, "sha") : undefined;
+  const headSha = head ? readStringField(head, "sha") : undefined;
   if (!headBranch || !headRepository || !baseSha || !headSha) {
     throw new Error(`PR #${args.pr} is missing head or base metadata.`);
   }

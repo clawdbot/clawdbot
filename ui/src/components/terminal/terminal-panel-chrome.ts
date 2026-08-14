@@ -17,6 +17,7 @@ export function renderTerminalPanelToolbar(
   uploadController: TerminalPanelUploadController,
   sessionPicker: TemplateResult,
   setDock: (dock: TerminalDock) => void,
+  openFullscreen: () => void,
   hidePanel: () => void,
 ): TemplateResult {
   return renderTerminalPanelActions({
@@ -25,6 +26,7 @@ export function renderTerminalPanelToolbar(
     upload: uploadController,
     sessionPicker,
     onDock: setDock,
+    onOpenFullscreen: openFullscreen,
     onHide: hidePanel,
   });
 }
@@ -35,10 +37,10 @@ export function renderTerminalPanelHeader(
   booting: boolean,
   toolbar: TemplateResult,
   selectTab: (id: string) => void,
-  closeTab: (id: string) => void,
+  closeTab: (id: string) => void | Promise<void>,
   openSession: () => void,
 ): TemplateResult {
-  return html`<header class="tp-header">
+  return html`<header class="rail-header tp-header">
     ${renderTerminalPanelTabs({
       tabs,
       activeId,

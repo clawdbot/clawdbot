@@ -20,7 +20,12 @@ import {
   listStagedChangedPaths,
 } from "./changed-lanes.mts";
 import type { ChangedLaneResult } from "./changed-lanes.mts";
-import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import {
+  booleanFlag,
+  isOpenEndedTruthyValue,
+  parseFlagArgs,
+  stringFlag,
+} from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -95,12 +100,12 @@ const DOCTOR_CONTRACT_OWNER_TEST_PATH_RE =
   /^extensions\/[^/]+\/(?:openclaw\.plugin\.json$|(?!.*\.test\.).*\.(?:c|m)?[jt]s$)/u;
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
-const PLUGIN_SDK_API_BASELINE_PATH_RE =
-  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
-  /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
+  /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
+const WRAPPER_SHADOWING_PATH_RE =
+  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/ts-guard-utils\.mts$))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
@@ -112,9 +117,10 @@ const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/src\/.+\.(?:css|ts)$/u;
 const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/src\/.+\.css$/u;
 const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
@@ -126,7 +132,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/version.json",
 ]);
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
@@ -153,11 +159,6 @@ export function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.
     OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
     OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
   };
-}
-
-function isTruthyEnvFlag(value: string | undefined) {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -210,10 +211,7 @@ export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
   if (!result || result.paths.length === 0) {
     return false;
   }
-  if (
-    shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
-    shouldRunPluginSdkApiBaselineCheck(result.paths)
-  ) {
+  if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     return true;
   }
   if (result.docsOnly) {
@@ -229,10 +227,10 @@ export function shouldDelegateChangedCheckToCrabbox(
   env: NodeJS.ProcessEnv = process.env,
   options: ChangedCheckDelegateOptions = {},
 ) {
-  if (isTruthyEnvFlag(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
+  if (isOpenEndedTruthyValue(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
     return false;
   }
-  if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
+  if (isOpenEndedTruthyValue(env.CI) || isOpenEndedTruthyValue(env.GITHUB_ACTIONS)) {
     return false;
   }
   if (argv.includes("--dry-run")) {
@@ -245,7 +243,7 @@ export function shouldDelegateChangedCheckToCrabbox(
   if (result.paths.length === 0) {
     return false;
   }
-  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+  if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
   }
   // Release metadata plans diff the supplied commits after classification. A missing
@@ -357,17 +355,6 @@ export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
   );
 }
 
-/** Returns whether changed files can alter the published Plugin SDK API contract. */
-export function shouldRunPluginSdkApiBaselineCheck(paths: string[]) {
-  return paths.some((changedPath) => {
-    const normalizedPath = normalizeChangedPath(changedPath);
-    return (
-      !getChangedPathFacts(normalizedPath).isTestOnly &&
-      PLUGIN_SDK_API_BASELINE_PATH_RE.test(normalizedPath)
-    );
-  });
-}
-
 /** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
 export function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
   return paths.some((changedPath) =>
@@ -379,6 +366,13 @@ export function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
 export function shouldRunDeprecationHygieneChecks(paths: string[]) {
   return paths.some((changedPath) =>
     DEPRECATION_HYGIENE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
+/** Returns whether changed files can alter wrapper-shadowing results. */
+export function shouldRunWrapperShadowingCheck(paths: string[]) {
+  return paths.some((changedPath) =>
+    WRAPPER_SHADOWING_PATH_RE.test(normalizeChangedPath(changedPath)),
   );
 }
 
@@ -429,13 +423,16 @@ const DELEGATION_OUTPUT_TAIL_LIMIT = 64 * 1024;
 
 /**
  * Signatures of a failure that happened before the remote command was dispatched:
- * the broker or its API was unreachable, or no lease was ever obtained.
+ * the broker or its API was unreachable, no lease was ever obtained, or workload
+ * routing exhausted its provider chain (every provider doctor failed).
  */
 const BACKEND_UNAVAILABLE_SIGNATURES = [
   /request failed: \w+ "https?:\/\/[^"]*blacksmith[^"]*"/iu,
   /context deadline exceeded/iu,
   /(?:no such host|dial tcp|connection refused|network is unreachable)/iu,
   /failed to (?:acquire|create|warm|start)\b[^\n]*\b(?:lease|testbox)/iu,
+  // crabbox-wrapper prints this and exits before dispatching anything remote.
+  /\[crabbox\] no ready provider for workload=/u,
 ];
 
 /**
@@ -528,6 +525,7 @@ export function createChangedCheckPlan(
     fallbackName: string,
     fallbackArgs: string[],
     ignoredPaths?: Set<string>,
+    fallbackWithoutTargets = true,
   ) => {
     const candidatePaths = ignoredPaths
       ? result.paths.filter((changedPath) => !ignoredPaths.has(changedPath))
@@ -549,8 +547,10 @@ export function createChangedCheckPlan(
     }
 
     if (targetedCommands.length === 0) {
-      addLint(fallbackName, fallbackArgs);
-      return false;
+      if (fallbackWithoutTargets) {
+        addLint(fallbackName, fallbackArgs);
+      }
+      return !fallbackWithoutTargets;
     }
     for (const command of targetedCommands) {
       addCommand(command.name, command.bin, command.args, command.env);
@@ -608,6 +608,7 @@ export function createChangedCheckPlan(
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
+  add("coercion helper declaration guard", ["check:coercion-helpers"]);
   add("dependency pin guard", ["deps:pins:check"]);
   if (result.paths.length > 0) {
     add("format changed files", [
@@ -661,9 +662,6 @@ export function createChangedCheckPlan(
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
-  if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
-    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
-  }
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
     add("Plugin SDK surface budget", ["plugin-sdk:surface:check"]);
@@ -673,6 +671,9 @@ export function createChangedCheckPlan(
     // After 2026-07-24, lapsed compatibility windows intentionally fail this gate
     // until their scheduled deletion PRs land.
     add("plugin boundaries", ["plugins:boundary-report:ci"]);
+  }
+  if (result.lanes.all || shouldRunWrapperShadowingCheck(result.paths)) {
+    add("wrapper shadowing", ["check:wrapper-shadowing"]);
   }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(
@@ -692,7 +693,7 @@ export function createChangedCheckPlan(
   add("package patch guard", ["deps:patches:check"]);
   if (
     hasDeadcodeScannedSource(result.paths) &&
-    !isTruthyEnvFlag(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
+    !isOpenEndedTruthyValue(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
   ) {
     addCommand(
       "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
@@ -723,7 +724,6 @@ export function createChangedCheckPlan(
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
     add("Android version sync", ["android:version:check"]);
-    add("iOS version sync", ["ios:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("config docs baseline", ["config:docs:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
@@ -776,9 +776,40 @@ export function createChangedCheckPlan(
   }
 
   if (lanes.core || lanes.coreTests || lanes.ui) {
-    addTargetedLint(createTargetedCoreLintCommand, LINTABLE_CORE_PATH_RE, "lint core", [
-      "lint:core",
-    ]);
+    // CSS is covered by targeted Stylelint below. Other non-Oxlint core/UI
+    // inputs keep the full lane so changed checks do not silently drop lint.
+    const fallbackWithoutTargets = result.paths.some((changedPath) => {
+      const surface = getChangedPathFacts(changedPath).surface;
+      return (
+        (surface === "source" || surface === "package" || surface === "ui") &&
+        !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath) &&
+        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
+      );
+    });
+    addTargetedLint(
+      createTargetedCoreLintCommand,
+      LINTABLE_CORE_PATH_RE,
+      "lint core",
+      ["lint:core"],
+      undefined,
+      fallbackWithoutTargets,
+    );
+  }
+  if (lanes.ui) {
+    const targets = result.paths
+      .filter(
+        (changedPath) => LINTABLE_UI_STYLE_PATH_RE.test(changedPath) && existsSync(changedPath),
+      )
+      .toSorted((left, right) => left.localeCompare(right));
+    for (let offset = 0; offset < targets.length; offset += TARGETED_LINT_PATH_LIMIT) {
+      const batch = targets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
+      addCommand(
+        batch.length === 1 ? "lint UI changed style file" : "lint UI changed style files",
+        "node",
+        ["--import", "tsx", "scripts/run-stylelint.mts", ...batch],
+        baseEnv,
+      );
+    }
   }
   if (
     lanes.liveDockerTooling &&
@@ -1051,7 +1082,7 @@ export function createPnpmManagedCommand<T extends ChangedCheckCommand>(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
-  if (isTruthyEnvFlag(commandEnv.CI) || isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)) {
+  if (isOpenEndedTruthyValue(commandEnv.CI) || isOpenEndedTruthyValue(commandEnv.GITHUB_ACTIONS)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
       ...command,
@@ -1257,7 +1288,7 @@ async function main() {
           // Say this loudly: the proof below is local, so whoever reads the run
           // knows which machine produced it and that Linux-only lanes are unproven.
           console.error(
-            "[check:changed] Blacksmith never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+            "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
           );
         }
         process.exitCode = delegated.backendUnavailable

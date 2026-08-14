@@ -48,6 +48,7 @@ export type PluginAppPolicyContextEntry = {
   marketplaceName: ResolvedCodexPluginPolicy["marketplaceName"];
   pluginName: string;
   allowDestructiveActions: boolean;
+  allowOpenWorld?: boolean;
   destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   mcpServerNames: string[];
 };
@@ -57,6 +58,7 @@ type AccountAppPolicyContextEntry = {
   source: "account";
   appName: string;
   allowDestructiveActions: boolean;
+  allowOpenWorld?: boolean;
   destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   mcpServerNames: string[];
 };
@@ -219,6 +221,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       deferAppInventoryRefresh: true,
       targetAppIds: record.ownedAppIds,
@@ -311,13 +314,27 @@ export async function buildCodexPluginThreadConfig(
     accountApps: accountAppsResult.apps,
   });
   const unresolvedDisabledPluginOwnership = policy.allowAllPlugins
-    ? policy.pluginPolicies.find(
-        (pluginPolicy) =>
-          !pluginPolicy.enabled &&
-          !inventory.records.some(
-            (record) => record.policy.configKey === pluginPolicy.configKey && record.detail,
-          ),
-      )
+    ? policy.pluginPolicies.find((pluginPolicy) => {
+        const record = inventory.records.find(
+          (candidate) => candidate.policy.configKey === pluginPolicy.configKey,
+        );
+        const disabledByMarketplacePolicy =
+          record?.summary.availability === "DISABLED_BY_ADMIN" ||
+          record?.summary.installPolicy === "NOT_AVAILABLE";
+        const unresolvedPluginIdentity =
+          !record &&
+          inventory.diagnostics.some(
+            (diagnostic) =>
+              diagnostic.plugin?.configKey === pluginPolicy.configKey &&
+              (diagnostic.code === "plugin_disabled" ||
+                diagnostic.code === "plugin_missing" ||
+                diagnostic.code === "marketplace_missing"),
+          );
+        return (
+          (!pluginPolicy.enabled || disabledByMarketplacePolicy || unresolvedPluginIdentity) &&
+          !record?.detail
+        );
+      })
     : undefined;
   if (unresolvedDisabledPluginOwnership) {
     // Codex omits disabled plugin ownership from app/read display names. A
@@ -379,6 +396,7 @@ export async function buildCodexPluginThreadConfig(
         marketplaceName: record.policy.marketplaceName,
         pluginName: record.policy.pluginName,
         allowDestructiveActions: record.policy.allowDestructiveActions,
+        allowOpenWorld: true,
         destructiveApprovalMode: record.policy.destructiveApprovalMode,
         mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
       };
@@ -425,6 +443,7 @@ export async function buildCodexPluginThreadConfig(
       source: "account",
       appName: app.name,
       allowDestructiveActions: policy.allowDestructiveActions,
+      allowOpenWorld: true,
       destructiveApprovalMode: policy.destructiveApprovalMode,
       mcpServerNames: [],
     };
@@ -551,7 +570,7 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
     apps[appId] = {
       enabled: true,
       destructive_enabled: policy.allowDestructiveActions,
-      open_world_enabled: true,
+      open_world_enabled: policy.allowOpenWorld !== false,
       default_tools_approval_mode: "auto",
       ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
     };
@@ -559,7 +578,7 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   return { apps };
 }
 
-function buildPluginAppPolicyContext(
+export function buildPluginAppPolicyContext(
   apps: Record<string, CodexAppPolicyContextEntry>,
   pluginAppIds: Record<string, string[]>,
 ): PluginAppPolicyContext {
@@ -711,15 +730,9 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
   for (const [key, value] of Object.entries(right)) {
     const existing = merged[key];
     merged[key] =
-      isPlainJsonObject(existing) && isPlainJsonObject(value)
-        ? mergeJsonObjects(existing, value)
-        : value;
+      isJsonObject(existing) && isJsonObject(value) ? mergeJsonObjects(existing, value) : value;
   }
   return merged;
-}
-
-function isPlainJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function fingerprintJson(value: JsonValue): string {

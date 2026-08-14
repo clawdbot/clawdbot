@@ -1,4 +1,5 @@
-// Status, health, sessions, commitments, and task/flow command registration.
+// Status, health, sessions, and task/flow command registration.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -6,7 +7,6 @@ import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parsePositiveIntOrUndefined, parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
@@ -60,7 +60,6 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
   return () => (promise ??= load());
 }
 
-const loadCommitmentsCommands = createModuleLoader(() => import("../../commands/commitments.js"));
 const loadTasksCommands = createModuleLoader(() => import("../../commands/tasks.js"));
 const loadFlowsCommands = createModuleLoader(() => import("../../commands/flows.js"));
 
@@ -179,7 +178,7 @@ function registerSessionsLifecycleCommand(
       ) {
         return;
       }
-      const timeoutMs = parseStrictPositiveIntOrUndefined(opts.timeout);
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
       if (opts.timeout !== undefined && timeoutMs === undefined) {
         defaultRuntime.error("--timeout must be a positive integer (milliseconds).");
         defaultRuntime.exit(1);
@@ -209,7 +208,7 @@ function registerSessionsLifecycleCommand(
 }
 
 function parseTimeoutMs(timeout: unknown): number | null | undefined {
-  const parsed = parsePositiveIntOrUndefined(timeout);
+  const parsed = parseStrictPositiveInteger(timeout);
   if (timeout !== undefined && parsed === undefined) {
     defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
     defaultRuntime.exit(1);
@@ -219,7 +218,7 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
 }
 
 function parseTasksAuditLimit(limit: unknown): number | null | undefined {
-  const parsed = parseStrictPositiveIntOrUndefined(limit);
+  const parsed = parseStrictPositiveInteger(limit);
   if (limit !== undefined && parsed === undefined) {
     defaultRuntime.error("--limit must be a positive integer, for example --limit 25.");
     defaultRuntime.exit(1);
@@ -556,13 +555,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       ) {
         return;
       }
-      const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);
+      const maxLines = parseStrictPositiveInteger(opts.maxLines);
       if (opts.maxLines !== undefined && maxLines === undefined) {
         defaultRuntime.error("--max-lines must be a positive integer.");
         defaultRuntime.exit(1);
         return;
       }
-      const timeoutMs = parseStrictPositiveIntOrUndefined(opts.timeout);
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
       if (opts.timeout !== undefined && timeoutMs === undefined) {
         defaultRuntime.error("--timeout must be a positive integer (milliseconds).");
         defaultRuntime.exit(1);
@@ -579,82 +578,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             url: opts.url as string | undefined,
             token: opts.token as string | undefined,
             password: opts.password as string | undefined,
-            json: Boolean(opts.json || parentOpts?.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  const commitmentsCmd = program
-    .command("commitments")
-    .description("List and manage inferred follow-up commitments")
-    .option("--json", "Output JSON instead of text", false)
-    .option("--agent <id>", "Agent id to inspect")
-    .option("--status <status>", "Filter by status (pending, sent, dismissed, snoozed, expired)")
-    .option("--all", "Show all statuses", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw commitments", "List pending inferred follow-ups."],
-          ["openclaw commitments --all", "List all inferred follow-ups."],
-          ["openclaw commitments --agent work", "List one agent's inferred follow-ups."],
-          ["openclaw commitments dismiss cm_abc123", "Dismiss a follow-up."],
-        ])}`,
-    )
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { commitmentsListCommand } = await loadCommitmentsCommands();
-        await commitmentsListCommand(
-          {
-            json: Boolean(opts.json),
-            agent: opts.agent as string | undefined,
-            status: opts.status as string | undefined,
-            all: Boolean(opts.all),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-  commitmentsCmd.enablePositionalOptions();
-
-  commitmentsCmd
-    .command("list")
-    .description("List inferred follow-up commitments")
-    .option("--json", "Output JSON instead of text", false)
-    .option("--agent <id>", "Agent id to inspect")
-    .option("--status <status>", "Filter by status (pending, sent, dismissed, snoozed, expired)")
-    .option("--all", "Show all statuses", false)
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as
-        | { json?: boolean; agent?: string; status?: string; all?: boolean }
-        | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { commitmentsListCommand } = await loadCommitmentsCommands();
-        await commitmentsListCommand(
-          {
-            json: Boolean(opts.json || parentOpts?.json),
-            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
-            status: (opts.status as string | undefined) ?? parentOpts?.status,
-            all: Boolean(opts.all || parentOpts?.all),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  commitmentsCmd
-    .command("dismiss <ids...>")
-    .description("Dismiss inferred follow-up commitments")
-    .option("--json", "Output JSON instead of text", false)
-    .action(async (ids: string[], opts, command) => {
-      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { commitmentsDismissCommand } = await loadCommitmentsCommands();
-        await commitmentsDismissCommand(
-          {
-            ids,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,

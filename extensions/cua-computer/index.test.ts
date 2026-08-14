@@ -50,6 +50,7 @@ describe("cua-computer plugin registration", () => {
     expect(validateManifestConfig(config).ok).toBe(true);
     expect(plugin.configSchema.safeParse?.({ unexpected: true }).success).toBe(false);
     expect(validateManifestConfig({ unexpected: true }).ok).toBe(false);
+    expect(plugin.configSchema).not.toHaveProperty("uiHints");
 
     const commands: OpenClawPluginNodeHostCommand[] = [];
     plugin.register({

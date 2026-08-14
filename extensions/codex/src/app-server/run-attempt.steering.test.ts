@@ -19,6 +19,7 @@ import {
 } from "./run-attempt-test-harness.js";
 
 const activeRunRegistrationMocks = vi.hoisted(() => ({
+  cancelPendingAgentQuestionForSession: vi.fn(),
   clearActiveEmbeddedRun: vi.fn(),
   setActiveEmbeddedRun: vi.fn(),
   questionWaiters: new Map<string, (value: unknown) => void>(),
@@ -32,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
     cancelPendingAgentQuestionForSession: async (
       ...args: Parameters<typeof actual.cancelPendingAgentQuestionForSession>
     ) => {
+      activeRunRegistrationMocks.cancelPendingAgentQuestionForSession(...args);
       const error = activeRunRegistrationMocks.cancelQuestionError;
       activeRunRegistrationMocks.cancelQuestionError = undefined;
       if (error) {
@@ -90,6 +92,7 @@ function createSteeringParams() {
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
   params.runId = `run-${sessionId}`;
+  params.toolAuthorityFingerprint = `authority-${sessionId}`;
   return params;
 }
 
@@ -142,6 +145,31 @@ describe("runCodexAppServerAttempt steering", () => {
     });
   });
 
+  it("exposes pending-question cancellation for queued image fallback", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createSteeringParams();
+    activeRunRegistrationMocks.cancelPendingAgentQuestionForSession.mockClear();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    let handle: { cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean> } | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle?.cancelPendingUserInput).toBeTypeOf("function");
+    }, fastWait);
+
+    await expect(handle?.cancelPendingUserInput?.("image-reply")).resolves.toBe(false);
+    expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
+      sessionKey: params.sessionKey,
+      resolvedBy: "image-reply",
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
@@ -166,6 +194,7 @@ describe("runCodexAppServerAttempt steering", () => {
     await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
       debounceMs: 0,
       isInboundUserMessage: true,
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       taskSuggestionDeliveryMode: "gateway",
       waitForTranscriptCommit: true,
       onQueueAccepted,
@@ -495,7 +524,10 @@ describe("runCodexAppServerAttempt steering", () => {
     expect(onLateAccepted).toHaveBeenCalledWith(false);
   });
 
-  it("routes request_user_input prompts through the active run follow-up queue", async () => {
+  it.each([
+    { name: "gateway-backed", isSecret: false },
+    { name: "secret", isSecret: true },
+  ])("routes $name user prompts without consuming internal steering", async ({ isSecret }) => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
@@ -533,6 +565,8 @@ describe("runCodexAppServerAttempt steering", () => {
 
     const params = createSteeringParams();
     params.onBlockReply = vi.fn();
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
       () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
@@ -547,13 +581,14 @@ describe("runCodexAppServerAttempt steering", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "ask-1",
+        isBlocking: true,
         questions: [
           {
             id: "mode",
             header: "Mode",
             question: "Pick a mode",
             isOther: false,
-            isSecret: false,
+            isSecret,
             options: [
               { label: "Fast", description: "Use less reasoning" },
               { label: "Deep", description: "Use more reasoning" },
@@ -583,14 +618,24 @@ describe("runCodexAppServerAttempt steering", () => {
         item: { id: "source-message", type: "userMessage", clientId: sourceMessageId },
       },
     });
+    expect(
+      onRunProgress.mock.calls.some(
+        ([event]) =>
+          (event as { reason?: string }).reason === "request:item/tool/requestUserInput:response",
+      ),
+    ).toBe(false);
     const onQuestionAccepted = vi.fn();
     await waitAndQueueActiveRunMessage(params.sessionId, "2", {
       isInboundUserMessage: true,
       onQueueAccepted: onQuestionAccepted,
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     });
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });
+    expect(onRunProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "request:item/tool/requestUserInput:response" }),
+    );
     expect(onQuestionAccepted).toHaveBeenCalledWith(true);
     expect(request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
 

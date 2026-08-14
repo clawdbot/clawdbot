@@ -6,7 +6,7 @@ import path from "node:path";
 import {
   AgentHarnessPreflightError,
   type CodexBundleMcpThreadConfig,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
@@ -19,6 +19,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
 } from "./config.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import {
   resetCodexTestBindingStore,
@@ -59,9 +60,10 @@ function createAttemptPaths(): AttemptPaths {
 
 function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptParams {
   return {
+    hostCapabilities: createCodexTestHostCapabilities(),
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey: "agent:agent-1:session-1",
     agentDir: paths.agentDir,
     sessionFile: paths.sessionFile,
     effectiveCwd: paths.cwd,

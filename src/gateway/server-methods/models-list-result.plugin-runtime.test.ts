@@ -1,26 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { GatewayRequestContext } from "./types.js";
-
-const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
-const loadPluginRegistrySnapshotWithMetadataMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
-}));
-
-vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/plugin-registry.js")>()),
-  loadPluginRegistrySnapshotWithMetadata: loadPluginRegistrySnapshotWithMetadataMock,
-}));
-
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
 } from "./models-list-result.js";
+import type { GatewayRequestContext } from "./types.js";
 
 function catalogEntry(id: string): ModelCatalogEntry {
   return { id, name: id, provider: "custom", api: "openai-responses" };
@@ -53,11 +39,6 @@ function preparedMetadataSnapshot() {
 }
 
 describe("models.list plugin metadata handoff", () => {
-  beforeEach(() => {
-    getCurrentPluginMetadataSnapshotMock.mockReset();
-    loadPluginRegistrySnapshotWithMetadataMock.mockReset();
-  });
-
   it("reuses one Gateway-owned metadata snapshot across startup projection and browse", async () => {
     await withOpenClawTestState(
       {
@@ -82,11 +63,12 @@ describe("models.list plugin metadata handoff", () => {
           entries: [catalogEntry("modern"), catalogEntry("another")],
           routeVariants: [],
         };
-        getCurrentPluginMetadataSnapshotMock.mockReturnValue(preparedMetadataSnapshot());
         const projector = createGatewayAgentModelCatalogProjector({
           cfg,
           agentId: "main",
           snapshot,
+          metadataSnapshot: preparedMetadataSnapshot(),
+          preparedAuthStore: { version: 1, profiles: {} },
         });
         await projector.projectCatalog();
 
@@ -103,55 +85,37 @@ describe("models.list plugin metadata handoff", () => {
           preloadedOnly: true,
           catalogProjector: projector,
         });
-
-        expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-          config: cfg,
-          allowWorkspaceScopedSnapshot: true,
-        });
-        expect(loadPluginRegistrySnapshotWithMetadataMock).not.toHaveBeenCalled();
       },
     );
   });
 
-  it("preserves registry fallback when no compatible Gateway snapshot exists", async () => {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-models-list-plugin-runtime-fallback-",
-        agentEnv: "main",
-      },
-      async (state) => {
-        const cfg = {
-          agents: {
-            defaults: {
-              workspace: state.workspaceDir,
-              model: { primary: "custom/modern" },
-              models: { "custom/modern": {} },
-            },
-          },
-        } as OpenClawConfig;
-        getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
-        loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
-          source: "provided",
-          snapshot: {
-            plugins: [
-              {
-                enabled: true,
-                syntheticAuthRefs: ["custom"],
-              },
-            ],
-          },
-        });
-        const projector = createGatewayAgentModelCatalogProjector({
-          cfg,
-          agentId: "main",
-          snapshot: { entries: [catalogEntry("modern")], routeVariants: [] },
-        });
+  it("keeps prepared owner facts when preloaded-only browse requires full discovery", async () => {
+    const cfg = {
+      agents: { defaults: { models: { "custom/*": {} } } },
+    } as OpenClawConfig;
+    const snapshot: ModelCatalogSnapshot = { entries: [], routeVariants: [] };
+    const loadGatewayModelCatalogSnapshot = vi.fn();
+    const context = {
+      getRuntimeConfig: () => cfg,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+    const projector = createGatewayAgentModelCatalogProjector({
+      cfg,
+      agentId: "main",
+      snapshot,
+      metadataSnapshot: preparedMetadataSnapshot(),
+      preparedAuthStore: { version: 1, profiles: {} },
+    });
 
-        await projector.projectCatalog();
+    await buildModelsListResult({
+      context,
+      params: { view: "configured" },
+      preloadedCatalog: { agentId: "main", config: cfg, snapshot },
+      preloadedOnly: true,
+      catalogProjector: projector,
+    });
 
-        expect(loadPluginRegistrySnapshotWithMetadataMock).toHaveBeenCalled();
-      },
-    );
+    expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 });

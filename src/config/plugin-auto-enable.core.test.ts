@@ -697,35 +697,6 @@ describe("applyPluginAutoEnable core", () => {
     ]);
   });
 
-  it("auto-enables Codex when OpenAI agent models use the implicit runtime default", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai"] },
-        {
-          id: "codex",
-          channels: [],
-          providers: ["codex"],
-          activation: { onAgentHarnesses: ["codex"] },
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
-    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.changes).toEqual([
-      "openai/gpt-5.5 model configured, enabled automatically.",
-      "codex agent runtime configured, enabled automatically.",
-    ]);
-  });
-
   it("auto-enables Codex when OpenAI is a selectable default agent model", () => {
     const result = applyPluginAutoEnable({
       config: {

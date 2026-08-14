@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RuntimeConfigCapability } from "../config/index.ts";
+import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 
 export type SkillConfigMutationOwner = Pick<RuntimeConfigCapability, "runExternalMutation">;
 

@@ -148,7 +148,6 @@ describe("oxlint config", () => {
       ".agents/skills/autoreview/tests/fixtures/**",
       "test/fixtures/oxlint-boundary-guards/**",
       "**/a2ui.bundle.js",
-      "extensions/browser/chrome-extension/modules/copilot-runtime.js",
       "extensions/diffs/assets/viewer-runtime.js",
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
       "node_modules/",
@@ -211,8 +210,8 @@ describe("oxlint config", () => {
       },
       {
         files: [
-          "**/*.test.ts",
-          "**/*.test.tsx",
+          "**/*.{test,suite}.ts",
+          "**/*.{test,suite}.tsx",
           "**/*.e2e.test.ts",
           "**/*.live.test.ts",
           "**/*test-harness.ts",
@@ -247,6 +246,17 @@ describe("oxlint config", () => {
       expect(override.excludeFiles).toContain("ui/src/i18n/locales/**");
       expect(override.excludeFiles).toContain("src/wizard/i18n/locales/**");
     }
+    for (const override of scopedBudgets.slice(0, 3)) {
+      expect(override.excludeFiles).toContain("**/*.{test,spec,suite}.*");
+    }
+    expect(scopedBudgets[3]?.files).toEqual(
+      expect.arrayContaining([
+        "src/**/*.{test,spec,suite}.*",
+        "ui/src/**/*.{test,spec,suite}.*",
+        "packages/**/*.{test,spec,suite}.*",
+        "extensions/**/*.{test,spec,suite}.*",
+      ]),
+    );
     expect(exactExceptions).toEqual([
       {
         files: ["extensions/copilot/src/event-bridge.ts"],

@@ -15,8 +15,10 @@ import {
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
+  isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   parkCurrentLaunchAgentForMaintenance,
+  parseLaunchAgentEnabled,
   parseLaunchctlPrint,
   parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
@@ -34,6 +36,9 @@ const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
   printOutput: "",
+  printDisabledOutput: "",
+  printDisabledError: "",
+  printDisabledCode: 0,
   printNotLoadedRemaining: 0,
   printError: "",
   printCode: 1,
@@ -340,6 +345,13 @@ function executeLaunchctlMock(file: string, args: string[]) {
   if (call[0] === "list") {
     return { stdout: state.listOutput, stderr: "", code: 0 };
   }
+  if (call[0] === "print-disabled") {
+    return {
+      stdout: state.printDisabledOutput,
+      stderr: state.printDisabledError,
+      code: state.printDisabledCode,
+    };
+  }
   if (call[0] === "print") {
     if (state.printNotLoadedRemaining > 0) {
       state.printNotLoadedRemaining -= 1;
@@ -584,6 +596,9 @@ beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
+  state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => enabled\n}';
+  state.printDisabledError = "";
+  state.printDisabledCode = 0;
   state.printNotLoadedRemaining = 0;
   state.printError = "";
   state.printCode = 1;
@@ -651,6 +666,42 @@ beforeEach(() => {
 });
 
 describe("launchd runtime parsing", () => {
+  it.each([
+    ['disabled services = {\n\t"ai.openclaw.gateway" => enabled\n}', true],
+    ['disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}', false],
+    ['disabled services = {\n\t"other.service" => disabled\n}', true],
+  ])("parses the LaunchAgent enabled override", (output, expected) => {
+    expect(parseLaunchAgentEnabled(output, "ai.openclaw.gateway")).toBe(expected);
+  });
+
+  it("rejects an unrecognized LaunchAgent enabled override", () => {
+    expect(() =>
+      parseLaunchAgentEnabled(
+        'disabled services = {\n\t"ai.openclaw.gateway" => unexpected\n}',
+        "ai.openclaw.gateway",
+      ),
+    ).toThrow("unrecognized state");
+  });
+
+  it("reads the persistent LaunchAgent enabled state", async () => {
+    state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}';
+
+    await expect(isLaunchAgentEnabled({ env: createDefaultLaunchdEnv() })).resolves.toBe(false);
+    expect(state.launchctlCalls).toContainEqual([
+      "print-disabled",
+      typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501",
+    ]);
+  });
+
+  it("fails closed when the LaunchAgent enabled state cannot be read", async () => {
+    state.printDisabledError = "Operation not permitted";
+    state.printDisabledCode = 1;
+
+    await expect(isLaunchAgentEnabled({ env: createDefaultLaunchdEnv() })).rejects.toThrow(
+      "launchctl print-disabled failed: Operation not permitted",
+    );
+  });
+
   it("parses state, pid, and exit status", () => {
     const output = [
       "state = running",

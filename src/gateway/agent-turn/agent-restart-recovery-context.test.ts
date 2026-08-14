@@ -106,24 +106,24 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
         executionIdentity: token,
       },
     };
-    expect(
-      resolveAgentRestartRecoveryExecutionIdentityAdmission({
-        collectionEnabled: true,
-        isRestartRecoveryResumeRun: true,
-        retryOnly: false,
-        runId: token.runId,
-        sessionEntry,
-      }),
-    ).toEqual({ token, retryOnly: false });
-    expect(
-      resolveAgentRestartRecoveryExecutionIdentityAdmission({
-        collectionEnabled: true,
-        isRestartRecoveryResumeRun: true,
-        retryOnly: true,
-        runId: token.runId,
-        sessionEntry,
-      }),
-    ).toEqual({ token, retryOnly: true });
+    const first = resolveAgentRestartRecoveryExecutionIdentityAdmission({
+      collectionEnabled: true,
+      isRestartRecoveryResumeRun: true,
+      retryOnly: false,
+      runId: token.runId,
+      sessionEntry,
+    });
+    const retry = resolveAgentRestartRecoveryExecutionIdentityAdmission({
+      collectionEnabled: true,
+      isRestartRecoveryResumeRun: true,
+      retryOnly: true,
+      runId: token.runId,
+      sessionEntry,
+    });
+    expect(first).toMatchObject({ retryOnly: false, consume: expect.any(Function) });
+    expect(retry).toMatchObject({ retryOnly: true, consume: expect.any(Function) });
+    expect(first?.consume(token.runId)).toEqual({ accepted: true, token });
+    expect(retry?.consume(token.runId)).toEqual({ accepted: true, token });
   });
 
   it("returns no token for ordinary runs and refuses lost recovery evidence", () => {
@@ -136,15 +136,14 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
         sessionEntry: matchingParams.sessionEntry,
       }),
     ).toBeUndefined();
-    expect(() =>
-      resolveAgentRestartRecoveryExecutionIdentityAdmission({
-        collectionEnabled: true,
-        isRestartRecoveryResumeRun: true,
-        retryOnly: true,
-        runId: token.runId,
-        sessionEntry: matchingParams.sessionEntry,
-      }),
-    ).toThrow("token is unavailable");
+    const missing = resolveAgentRestartRecoveryExecutionIdentityAdmission({
+      collectionEnabled: true,
+      isRestartRecoveryResumeRun: true,
+      retryOnly: true,
+      runId: token.runId,
+      sessionEntry: matchingParams.sessionEntry,
+    });
+    expect(missing?.consume(token.runId)).toEqual({ accepted: true });
   });
 
   it("omits retained recovery identity while collection is disabled", () => {

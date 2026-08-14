@@ -528,16 +528,16 @@ voice, model, persona, or auto-TTS mode. The agent block deep-merges over
     },
   },
   agents: {
-    list: [
-      {
-        id: "reader",
+    entries: {
+      reader: {
+        default: true,
         tts: {
           providers: {
             elevenlabs: { speakerVoiceId: "EXAVITQu4vr4xnSDxMaL" },
           },
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -744,13 +744,13 @@ directive warnings.
 **Disable model overrides entirely:**
 
 ```json5
-{ messages: { tts: { modelOverrides: { enabled: false } } } }
+{ tts: { modelOverrides: { enabled: false } } }
 ```
 
 **Allow provider switching while keeping other knobs configurable:**
 
 ```json5
-{ messages: { tts: { modelOverrides: { enabled: true, allowProvider: true, allowSeed: false } } } }
+{ tts: { modelOverrides: { enabled: true, allowProvider: true, allowSeed: false } } }
 ```
 
 ## Slash commands

@@ -4,4 +4,4 @@
 // session accessor/state-database graph. Doctor legacy-state closures only need
 // to locate a store file, and doctor enumeration cold-loads those closures.
 
-export { resolveStorePath } from "../config/sessions/paths.js";
+export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";

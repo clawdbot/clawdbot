@@ -185,6 +185,53 @@ function createCompactionContext(
   };
 }
 
+function createOrphanedToolOutputCompactionContext(
+  model: Model,
+  identity: { authProfileId: string; sessionId: string },
+): Context {
+  const callId = "call_compacted";
+  const prior: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: callId, name: "lookup", arguments: {} }],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  };
+  captureOpenAIResponsesCompaction(
+    prior,
+    { type: "compaction", id: "cmp_orphaned_output", encrypted_content: "opaque-compaction" },
+    1,
+    model,
+    buildOpenAIResponsesReasoningReplayMetadata(model, identity),
+  );
+  return {
+    systemPrompt: "PRIVATE-ORPHANED-OUTPUT-RECOVERY-PROMPT",
+    messages: [
+      { role: "user", content: SDK_FULL_HISTORY_PREFIX, timestamp: 0 },
+      prior,
+      {
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "lookup",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+        timestamp: 2,
+      },
+      { role: "user", content: "continue", timestamp: 3 },
+    ],
+  };
+}
+
 function requestHasCompaction(request: Record<string, unknown> | undefined): boolean {
   return Array.isArray(request?.input) && request.input.some((item) => item?.type === "compaction");
 }
@@ -338,6 +385,43 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(observations)).not.toContain("opaque-azure-compaction");
   });
 
+  it("rebuilds full history when compaction leaves an orphaned function output", async () => {
+    const identity = { sessionId: "orphan-recovery-session", authProfileId: "openai-profile" };
+    const openAIModel = createModel();
+    const context = createOrphanedToolOutputCompactionContext(openAIModel, identity);
+    const observations: ResponsesPromptObservation[] = [];
+    const options = { apiKey: "test-key", ...identity };
+    responsesPromptObserver.set(options, (observation) => observations.push(observation));
+    sdkState.outcomes = [
+      Object.assign(
+        new Error("400 No tool call found for function call output with call_id call_compacted."),
+        { status: 400, type: "invalid_request_error", param: "input", code: null },
+      ),
+      completedSdkResponse("resp_orphan_recovered"),
+    ];
+
+    const stream = await Promise.resolve(
+      createOpenAIResponsesTransportStreamFn()(openAIModel, context, options as never),
+    );
+    const recovered = await stream.result();
+
+    expect(recovered).toMatchObject({
+      stopReason: "stop",
+      providerReplay: { type: "openai-responses-compaction-suppression", data: "rejected" },
+    });
+    expect(sdkState.requests).toHaveLength(2);
+    expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
+    expect(JSON.stringify(sdkState.requests[0]?.input)).toContain("function_call_output");
+    expect(JSON.stringify(sdkState.requests[0]?.input)).not.toContain('"type":"function_call"');
+    expect(requestHasCompaction(sdkState.requests[1])).toBe(false);
+    expect(JSON.stringify(sdkState.requests[1]?.input)).toContain('"type":"function_call"');
+    expect(JSON.stringify(sdkState.requests[1]?.input)).toContain("function_call_output");
+    expect(observations.map((entry) => entry.payloadVariant)).toEqual([
+      "initial",
+      "compaction-stripped",
+    ]);
+  });
+
   it("lazily rebuilds full history after reasoning and compaction rejection", async () => {
     const identity = { sessionId: "sdk-recovery-session", authProfileId: "sdk-profile" };
     const openAIModel = createModel();
@@ -347,6 +431,7 @@ describe("OpenAI Responses provider prompt observer", () => {
         code: "invalid_encrypted_content",
       });
     const onPayload = vi.fn((request: unknown) => request);
+    const onCompactionRejected = vi.fn();
     sdkState.outcomes = [
       invalidEncryptedContent(),
       invalidEncryptedContent(),
@@ -357,6 +442,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       createOpenAIResponsesTransportStreamFn()(openAIModel, context, {
         apiKey: "test-key",
         ...identity,
+        onCompactionRejected,
         onPayload,
       } as never),
     );
@@ -372,6 +458,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(sdkState.requests[2]?.input)).toContain(SDK_FULL_HISTORY_PREFIX);
     expect(JSON.stringify(sdkState.requests[2]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
     expect(onPayload).toHaveBeenCalledTimes(2);
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
   });
 
   it("does not invoke the provider or retry when prompt observation throws", async () => {
@@ -416,6 +503,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       context: createContext(prompt, { tools: [tool("exec"), tool("wait")] as never }),
       options: {
         openclawCodeModeToolSurface: true,
+        openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
         onPayload: async () => {
           await Promise.resolve();
           return {
@@ -430,7 +518,13 @@ describe("OpenAI Responses provider prompt observer", () => {
                 content: [{ type: "input_image", image_url: "data:image/png;base64,invalid!" }],
               },
             ],
-            tools: [tool("exec"), tool("wait"), tool("rogue")],
+            tools: [
+              tool("exec"),
+              tool("wait"),
+              tool("rogue"),
+              { type: "web_search" },
+              { type: "file_search" },
+            ],
           };
         },
       },
@@ -439,7 +533,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(run.order).toEqual(["observe", "openai.create"]);
     expect(run.observations[0]?.matchesAssembledPrompt).toBe(true);
     expect(run.requests[0]?.metadata).toEqual({ caller: "kept", host: "added" });
-    expect(run.requests[0]?.tools).toEqual([tool("exec"), tool("wait")]);
+    expect(run.requests[0]?.tools).toEqual([tool("exec"), tool("wait"), { type: "web_search" }]);
     expect(JSON.stringify(run.requests[0]?.input)).toContain("omitted image payload");
   });
 

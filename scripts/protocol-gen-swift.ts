@@ -610,7 +610,10 @@ function swiftUnionCaseName(value: boolean | number | string | null, fallback: s
   return safeName(String(value));
 }
 
-function emitDiscriminatedUnionCompatibility(name: string): string[] {
+function emitDiscriminatedUnionCompatibility(
+  name: string,
+  cases: readonly { caseName: string }[],
+): string[] {
   if (name !== "GatewayErrorDetails") {
     return [];
   }
@@ -629,10 +632,7 @@ function emitDiscriminatedUnionCompatibility(name: string): string[] {
     "",
     "    public var code: String {",
     "        switch self {",
-    "        case .missingScope(let value): value.code",
-    "        case .mcpAppViewExpired(let value): value.code",
-    "        case .unknownAgentId(let value): value.code",
-    "        case .wizardNotFound(let value): value.code",
+    ...cases.map((entry) => `        case .${entry.caseName}(let value): value.code`),
     "        }",
     "    }",
     "",
@@ -708,7 +708,7 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
       `public enum ${name}: Codable, Sendable {`,
       ...resolvedCases.map((entry) => `    case ${entry.caseName}(${entry.branchName})`),
       "",
-      ...emitDiscriminatedUnionCompatibility(name),
+      ...emitDiscriminatedUnionCompatibility(name, resolvedCases),
       "    private enum CodingKeys: String, CodingKey {",
       `        case discriminator = "${discriminator}"`,
       "    }",

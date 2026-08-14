@@ -260,7 +260,8 @@ struct OnboardingSystemAgentChatTests {
         let task = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         await task.value
 
-        #expect(view.aiSetup.connectedModelRef == "openai/gpt-5.5")
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "existing-model")
         #expect(view.finishState.didFinish)
         #expect(dashboardOpenCount == 1)
         #expect(!view.finish())
@@ -268,7 +269,8 @@ struct OnboardingSystemAgentChatTests {
         let repeatedResume = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         await repeatedResume.value
 
-        #expect(view.aiSetup.connectedModelRef == "openai/gpt-5.5")
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "existing-model")
         #expect(dashboardOpenCount == 1)
         #expect(await methods.snapshot() == [
             "health",

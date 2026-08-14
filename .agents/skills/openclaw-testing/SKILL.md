@@ -288,21 +288,25 @@ rerun after a focused patch.
 ### Full Release Validation
 
 `Full Release Validation` (`.github/workflows/full-release-validation.yml`) is
-the manual product-validation umbrella. Run the full child matrix on the
-product-complete pre-changelog **Code SHA**. It resolves a target ref, then
+the manual product-validation umbrella. Bind each run to the immutable
+**Validation SHA + Tooling SHA** tuple. Validation SHA maps to the Code SHA for
+product validation or the Release SHA for changelog-only validation; it is not
+a third release identity. The workflow resolves it before child dispatch, then
 dispatches:
 
 - manual `CI` for the full normal CI graph, with Android enabled via
   `include_android=true`
 - `Plugin Prerelease` for release-only plugin static checks, extension shards,
   the release-only `agentic-plugins` shard, and plugin product Docker lanes
-- `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
-  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
-  Telegram release lanes
+- `OpenClaw Release Checks` for install smoke, cross-OS release checks, package
+  acceptance, and QA parity; broad live/E2E and QA-live lanes join `all` only
+  when release soak is enabled
 - optional post-publish Telegram E2E when a package spec is supplied
 
-Run the full matrix only when validating an actual Code SHA, after broad shared
-CI or release orchestration changes, or when explicitly asked:
+For beta-publish, use `release_profile=beta` with
+`run_release_soak=false`. Postpublish-confidence uses the exact published
+package with `run_release_soak=true` or explicit focused groups.
+Stable-publish uses `release_profile=stable`.
 
 ```bash
 node scripts/full-release-validation-at-sha.mjs \
@@ -316,14 +320,12 @@ Validation directly from and against `extended-stable/YYYY.M.33` with
 replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
 classification and run-identity rules.
 
-The helper pins the trusted workflow revision on current `main` while targeting
-the historical release SHA and recording the canonical release branch as
-context. It infers `beta` for alpha/beta package versions and `stable` for
+The helper pins the Tooling SHA on trusted `main`, passes the resolved Code SHA
+as `expected_sha`, and records the canonical release branch as context. It
+infers `beta` for alpha/beta package versions and `stable` for
 stable/correction versions. Pass `-f release_profile=full` only for the broad
 advisory provider/media sweep. Do not make `full` faster by silently dropping
-suites; optimize setup, artifact reuse, and sharding instead. The parent
-verifier job appends a child overview plus slowest-job tables for child runs;
-rerun only that verifier after a child rerun turns green.
+suites; use the bounded phase that matches the release decision.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
 extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
@@ -331,15 +333,16 @@ lanes are intentionally reserved for the separate `Plugin Prerelease` child so
 PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
-If a full run is already active on a newer `origin/main`, prefer watching that
-run over dispatching a duplicate. Do not cancel release, release-check, or child
-workflow runs unless Peter explicitly asks for cancellation.
+Use one operator, one transition-only watcher, and at most one investigator for
+the current failed surface. Parent timeout or cancellation leaves adopted exact
+children running; cancel an exact child only by explicit operator action or the
+workflow's identity-mismatch/fail-fast path.
 
-The child-dispatch jobs record the child run ids. The final
-`Verify full validation` job re-queries those child runs and is the canonical
-parent gate. If a child workflow failed but was later rerun successfully, rerun
-only the failed parent verifier job; do not dispatch a new full umbrella unless
-the release evidence is stale.
+The child-dispatch jobs record child run ids, and `Verify full validation`
+re-queries them during that parent attempt. A later narrow green run is useful
+recovery evidence but is not publish authorization by itself and there is no
+standalone finalizer. The release owner must reassess the recorded evidence and
+current publish gate.
 
 Once the Code SHA is green, generate and commit only `CHANGELOG.md`. The new
 **Release SHA** is eligible for product-evidence reuse only when GitHub proves
@@ -350,14 +353,16 @@ SHA children. Package, install/update, and release-note proof still runs on the
 Release SHA because its tarball bytes changed. Any non-changelog path
 invalidates reuse and requires a new Code SHA full matrix.
 
-For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
+For bounded recovery, classify the failure as product,
+harness/tooling/provenance, infrastructure/credential, or wrapper before
+editing. Only a confirmed product failure changes the Code SHA. Use one
+diagnosis, one fix when needed, and one narrow retry with
+`-f rerun_group=<group>`, then reassess.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
 `release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
 `qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
-the failed box. After a targeted release-check fix, do not restart the full
-umbrella by habit: dispatch the matching `rerun_group` and rerun only the parent
-verifier/evidence step after the child is green unless the release evidence is
-stale. For a single failed live/E2E shard, use
+the failed box. Do not automatically dispatch `all` after a narrow retry. For a
+single failed live/E2E shard, use
 `-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
 workflow only spends setup and queue time on that suite.
 

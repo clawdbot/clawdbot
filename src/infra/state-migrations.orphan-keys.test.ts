@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   migrateOrphanedSessionKeys,
   resolveSessionStoreOwnership,
@@ -43,7 +43,7 @@ function requireStoreEntry(
 async function withStateFixture(
   run: (params: { tmpDir: string; stateDir: string }) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "orphan-keys-test-" }, async (tmpDir) => {
+  await withTestDir({ prefix: "orphan-keys-test-" }, async (tmpDir) => {
     const stateDir = path.join(tmpDir, ".openclaw");
     fs.mkdirSync(stateDir, { recursive: true });
     await run({ tmpDir, stateDir });
@@ -900,6 +900,32 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(result.warnings).toContain(
         `Preserved 1 ambiguous session key(s) in potentially shared store ${sharedStorePath}`,
       );
+    });
+  });
+
+  it("uses the persisted owner for raw keys in a fixed multi-agent store", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
+      writeStore(sharedStorePath, {
+        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2000 },
+      });
+      const cfg = {
+        session: { mainKey: "work", store: sharedStorePath },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { main: {}, ops: {} },
+        },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      const store = readStore(sharedStorePath);
+      expect(requireStoreEntry(store, "agent:ops:voice:15550001111").sessionId).toBe(
+        "legacy-voice",
+      );
+      expect(store["voice:15550001111"]).toBeUndefined();
+      expect(result.warnings).toHaveLength(0);
     });
   });
 

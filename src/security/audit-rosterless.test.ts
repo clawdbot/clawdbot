@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 vi.unmock("../agents/agent-scope-config.js");
 
-const { runSecurityAudit } = await import("./audit.js");
+const { runSecurityAuditCore } = await import("./audit.js");
 
 describe("security audit rosterless configs", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +23,7 @@ describe("security audit rosterless configs", () => {
     const { stateDir, workspaceDir } = makeAuditPaths("rosterless");
 
     await expect(
-      runSecurityAudit({
+      runSecurityAuditCore({
         config: {},
         stateDir,
         configPath: path.join(stateDir, "openclaw.json"),
@@ -48,7 +48,7 @@ describe("security audit rosterless configs", () => {
       includeChannelSecurity: false,
     };
 
-    const authoredEmpty = await runSecurityAudit({
+    const authoredEmpty = await runSecurityAuditCore({
       ...baseOptions,
       sourceConfig: { agents: { entries: {} } } as never,
     });
@@ -59,7 +59,7 @@ describe("security audit rosterless configs", () => {
       }),
     );
 
-    const absent = await runSecurityAudit({ ...baseOptions, sourceConfig: {} });
+    const absent = await runSecurityAuditCore({ ...baseOptions, sourceConfig: {} });
     expect(absent.findings).not.toContainEqual(
       expect.objectContaining({ checkId: "config.agent_roster.invalid_default_count" }),
     );
@@ -86,7 +86,7 @@ describe("security audit rosterless configs", () => {
     async ({ entries, expectedCount }) => {
       const { stateDir, workspaceDir } = makeAuditPaths("malformed-roster");
 
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: { agents: { entries } } as never,
         stateDir,
         configPath: path.join(stateDir, "openclaw.json"),

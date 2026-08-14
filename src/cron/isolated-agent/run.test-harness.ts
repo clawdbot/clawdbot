@@ -90,7 +90,6 @@ export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
 export const queueCronMessageToolDeliveryAwarenessMock = createMock();
-export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
@@ -138,7 +137,11 @@ vi.mock("./run.runtime.js", async () => ({
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
-  resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
+  tryResolveLegacyCompatibilityAgentId: (
+    await vi.importActual<typeof import("../../agents/agent-scope-config.js")>(
+      "../../agents/agent-scope-config.js",
+    )
+  ).tryResolveLegacyCompatibilityAgentId,
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
   isCliProvider: isCliProviderMock,
@@ -244,7 +247,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveSubagentModelConfigSelectionResult: ({
@@ -382,7 +385,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   return {
     ...actual,
     replaceSessionEntry: replaceSessionEntryMock,
-    patchSessionEntry: patchSessionEntryMock,
+    patchSessionEntryCore: patchSessionEntryMock,
   };
 });
 
@@ -397,7 +400,6 @@ vi.mock("./run-delivery.runtime.js", async () => {
   );
   return {
     ...actual,
-    cleanupDirectCronSession: cleanupDirectCronSessionMock,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
     queueCronMessageToolDeliveryAwareness: queueCronMessageToolDeliveryAwarenessMock,
@@ -760,8 +762,6 @@ function resetRunOutcomeMocks(): void {
   );
   queueCronMessageToolDeliveryAwarenessMock.mockReset();
   queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
-  cleanupDirectCronSessionMock.mockReset();
-  cleanupDirectCronSessionMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
   preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
   resolveSessionAuthProfileOverrideMock.mockReset();
@@ -793,7 +793,7 @@ function resetRunSessionMocks(): void {
 }
 
 /**
- * In-memory stand-in for the SQLite accessor `patchSessionEntry` used by the
+ * In-memory stand-in for the SQLite accessor `patchSessionEntryCore` used by the
  * cron persist path. Prod flips real session storage to per-agent SQLite, but
  * these orchestration tests must stay off disk. The store keys on
  * storePath+sessionKey so successive persists in one run observe the row the

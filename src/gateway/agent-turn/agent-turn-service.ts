@@ -4,11 +4,11 @@ import {
   errorShape,
   type AgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
-} from "../../agents/main-session-recovery-store.js";
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -70,9 +70,7 @@ function replayAgentTurnIfCached(params: {
         ? cached.payload.sessionKey.trim()
         : undefined;
     const cachedAgentId =
-      cachedSessionKey === "global" &&
-      typeof cached.payload.agentId === "string" &&
-      cached.payload.agentId.trim()
+      typeof cached.payload.agentId === "string" && cached.payload.agentId.trim()
         ? cached.payload.agentId.trim()
         : undefined;
     params.io.emitAcceptance(
@@ -312,6 +310,7 @@ export function createAgentTurnService({
 
       if (requestedSessionKey) {
         const preparedSession = prepareAgentSession({
+          cfg,
           requestedSessionKey,
           requestedSessionId,
           expectedExistingSessionId,

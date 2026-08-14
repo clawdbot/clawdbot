@@ -22,6 +22,7 @@ import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 type NewSessionComposerOptions = {
+  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments: ChatAttachment[];
   canSubmit: boolean;
   getAttachments: () => ChatAttachment[];
@@ -56,8 +57,9 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn"
+          class="chat-send-btn new-session-page__start-submit"
           ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${options.onSubmit}
         >
@@ -72,8 +74,9 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn new-session-page__start-primary"
+          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary"
           ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${options.onSubmit}
         >
@@ -195,6 +198,7 @@ function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposer
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
+    attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
     disabled: options.submitting || options.messageLocked,
     getAttachments: options.getAttachments,
@@ -221,7 +225,6 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       <div class="agent-chat__input">
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
-          ${renderChatAttachmentMenu(attachmentProps)}
           <div class="agent-chat__composer-combobox">
             <textarea
               ${ref(options.textareaController.ref)}
@@ -247,13 +250,14 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-controls">
+            ${renderChatAttachmentMenu(attachmentProps)}
             ${options.modelControl && options.modelControl !== nothing
               ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
               : nothing}
             ${options.draftAvailable
               ? renderVisibilityPill({
                   mode: "draft",
-                  icon: "👻",
+                  icon: icons.pencil,
                   label: t("newSession.draft"),
                   description: t("newSession.draftDescription"),
                   options,
@@ -261,7 +265,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               : nothing}
             ${renderVisibilityPill({
               mode: "incognito",
-              icon: icons.lock,
+              icon: icons.eyeOff,
               label: t("newSession.incognito"),
               description: t("newSession.incognitoDescription"),
               disabledReason: options.incognitoDisabledReason,
@@ -270,9 +274,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
           </div>
         </div>
         ${options.pendingAttachmentReads > 0
-          ? html`<span class="agent-chat__sr-only" role="status"
-              >${t("newSession.readingAttachment")}</span
-            >`
+          ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
           : nothing}
       </div>
     </div>
@@ -307,6 +309,7 @@ export function renderNewSessionDraftComposer(options: {
 }) {
   const readSignal = options.attachmentDraft.readSignal;
   return renderNewSessionComposer({
+    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,

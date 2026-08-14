@@ -12,7 +12,7 @@ const hoisted = vi.hoisted(() => ({
   withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
 }));
 
-vi.mock("./attempt.sessions-yield.js", () => ({
+vi.mock("./attempt-sessions-yield.js", () => ({
   isSessionsYieldAbortError: hoisted.isSessionsYieldAbortError,
   persistSessionsYieldContextMessage: hoisted.persistSessionsYieldContextMessage,
   stripSessionsYieldArtifacts: hoisted.stripSessionsYieldArtifacts,
@@ -22,7 +22,7 @@ vi.mock("./midturn-precheck.js", () => ({
   isMidTurnPrecheckSignal: hoisted.isMidTurnPrecheckSignal,
 }));
 
-import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
+import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-submit.js";
 
 type PromptErrorInput = Parameters<typeof handleEmbeddedAttemptPromptError>[0];
 

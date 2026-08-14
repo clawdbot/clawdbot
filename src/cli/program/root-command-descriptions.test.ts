@@ -9,7 +9,7 @@ import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registr
 import { createProgramContext } from "./context.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
-import { getSubCliEntries } from "./subcli-descriptors.js";
+import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 const RESERVED_CATALOG_ROOTS = {
   tool: "reserved so plugin registration cannot claim this unregistered root",
@@ -17,6 +17,7 @@ const RESERVED_CATALOG_ROOTS = {
 } as const;
 
 const PLUGIN_CATALOG_PATHS = {
+  "browser extension native-host": "registered and covered by the browser plugin",
   memory: "registered and covered by the memory-core plugin",
   "memory search": "registered and covered by the memory-core plugin",
   "memory status": "registered and covered by the memory-core plugin",
@@ -27,6 +28,7 @@ const JSON_NOT_APPLICABLE = {
     reason: "command group only; reporting subcommands declare JSON output individually",
     commands: [
       "backup",
+      "backup git",
       "backup sqlite",
       "database",
       "database ownership",
@@ -85,6 +87,7 @@ const JSON_NOT_APPLICABLE = {
       "directory groups",
       "security",
       "secrets",
+      "secrets store",
       "models aliases",
       "models fallbacks",
       "models image-fallbacks",
@@ -126,6 +129,7 @@ const JSON_NOT_APPLICABLE = {
       "mcp serve",
       "node worker",
       "node run",
+      "connect",
       "worker",
       "fleet logs",
       "proxy start",
@@ -140,6 +144,8 @@ const JSON_NOT_APPLICABLE = {
     commands: [
       "reset",
       "uninstall",
+      "backup enable",
+      "backup disable",
       "config set",
       "mcp add",
       "mcp set",
@@ -197,6 +203,9 @@ const JSON_NOT_APPLICABLE = {
       "channels remove",
       "channels login",
       "channels logout",
+      "secrets store set",
+      "secrets store rm",
+      "secrets store import",
     ],
   },
   rawArtifacts: {
@@ -228,7 +237,7 @@ async function registerAllBuiltInCommands(): Promise<Command> {
   for (const name of getCoreCliCommandNames()) {
     await registerCoreCliByName(program, ctx, name, argv);
   }
-  for (const entry of getSubCliEntries()) {
+  for (const entry of getSubCliEntriesCore()) {
     await registerSubCliByName(program, entry.name, argv, { purpose: "completion" });
   }
   return program;
@@ -290,7 +299,7 @@ describe("root command descriptions", () => {
       }
     }
 
-    const descriptors = [...getCoreCliCommandDescriptors(), ...getSubCliEntries()];
+    const descriptors = [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()];
     const missing: string[] = [];
     const mismatches: string[] = [];
     for (const descriptor of descriptors) {

@@ -24,7 +24,7 @@ export function resolveGatewayRestartIntentOptions(
 }
 
 /** Request an OpenClaw-aware restart through the running Gateway. */
-export async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
+export async function runSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
   if (opts.force) {
     throw new Error("--safe cannot be combined with --force; omit --safe to force restart now");
   }

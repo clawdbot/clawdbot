@@ -1884,14 +1884,10 @@ export {
 /** Test-only hooks for ACPX runtime behavior that is otherwise private. */
 export const testing = {
   appendCodexAcpConfigOverrides,
-  assertSupportedRuntimeSessionMode,
-  classifyCodexAcpModelRequest,
   isClaudeAcpCommand,
   isCodexAcpCommand,
   normalizeAgentCommand,
-  normalizeClaudeAcpModelOverride,
 };
 
 export type { AcpAgentRegistry, AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

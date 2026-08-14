@@ -477,7 +477,7 @@ describe("devices inventory rendering", () => {
   });
 
   it("shows token rows with rotate and revoke inside entry details", () => {
-    const rotations: Array<{ deviceId: string; role: string }> = [];
+    const rotations: Array<{ deviceId: string; name: string; role: string }> = [];
     const revocations: Array<{ deviceId: string; role: string }> = [];
     const container = renderDevicesContainer({
       devicesList: {
@@ -491,14 +491,16 @@ describe("devices inventory rendering", () => {
           },
         ],
       },
-      onDeviceRotate: (deviceId, role) => rotations.push({ deviceId, role }),
+      onDeviceRotate: (device, role) =>
+        rotations.push({ deviceId: device.id, name: device.name, role }),
       onDeviceRevoke: (deviceId, role) => revocations.push({ deviceId, role }),
     });
     const section = getInventorySection(container);
 
     expect(section.textContent).toContain("operator · active · scopes: operator.read");
     findButton(section, "Rotate").click();
-    expect(rotations).toEqual([{ deviceId: "device-1", role: "operator" }]);
+    // The rotate callback carries the row label, so the outcome dialog can name it.
+    expect(rotations).toEqual([{ deviceId: "device-1", name: "Device One", role: "operator" }]);
     findButton(section, "Revoke").click();
     expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
   });
@@ -654,7 +656,8 @@ describe("devices exec approvals rendering", () => {
 });
 
 describe("devices agent bindings", () => {
-  it("reports the keyed agent id when a binding changes", () => {
+  it("reports node bindings and translates each unbound sentinel", () => {
+    const onBindDefault = vi.fn();
     const onBindAgent = vi.fn();
     const container = renderDevicesContainer({
       nodes: [
@@ -672,14 +675,26 @@ describe("devices agent bindings", () => {
           },
         },
       },
+      onBindDefault,
       onBindAgent,
     });
     const bindingSection = getSection(container, "Exec node binding");
     const selects = bindingSection.querySelectorAll<HTMLSelectElement>("select.settings-select");
 
-    selects[1]!.value = "worker-node";
-    selects[1]!.dispatchEvent(new Event("change"));
+    const [defaultBinding, mainBinding] = selects;
+    defaultBinding!.value = "worker-node";
+    defaultBinding!.dispatchEvent(new Event("change"));
+    defaultBinding!.value = "";
+    defaultBinding!.dispatchEvent(new Event("change"));
+    mainBinding!.value = "worker-node";
+    mainBinding!.dispatchEvent(new Event("change"));
+    mainBinding!.value = "__default__";
+    mainBinding!.dispatchEvent(new Event("change"));
 
-    expect(onBindAgent).toHaveBeenCalledWith("MAIN", "worker-node");
+    expect(onBindDefault.mock.calls).toEqual([["worker-node"], [null]]);
+    expect(onBindAgent.mock.calls).toEqual([
+      ["MAIN", "worker-node"],
+      ["MAIN", null],
+    ]);
   });
 });

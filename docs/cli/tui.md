@@ -67,7 +67,7 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
   ambiguous, the CLI prints candidate names and longer ID prefixes without
   attaching to either session.
 - With no URL/host target or explicit `--url`, `tui` resolves configured Gateway
-  auth SecretRefs for token/password auth when possible (`env`/`file`/`exec`
+  auth SecretRefs for token/password auth when possible (`env`/`file`/`exec`/`store`
   providers).
 - With no explicit URL or port, `tui` follows the active local Gateway port
   recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,

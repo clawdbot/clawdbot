@@ -99,11 +99,6 @@ function requireString(value, key) {
   return value.trim();
 }
 
-// This release entrypoint runs before dependencies are installed.
-function asRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
-}
-
 function requireGradlePropertyNames(value) {
   if (
     !Array.isArray(value) ||
@@ -119,7 +114,8 @@ function requireGradlePropertyNames(value) {
 }
 
 function readManifest(manifestPath) {
-  const parsed = asRecord(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+  const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const parsed = isRecord(value) ? value : {};
   const manifest = {
     signingRepo: requireString(parsed.signingRepo, "signingRepo"),
     signingBranch: requireString(parsed.signingBranch, "signingBranch"),
@@ -484,3 +480,4 @@ try {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
 }
+import { isRecord } from "./lib/record-shared.mjs";

@@ -18,6 +18,7 @@ export {
   resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
+  withPluginRuntimeRegistryScope,
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
 export {

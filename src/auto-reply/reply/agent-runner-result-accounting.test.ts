@@ -47,7 +47,7 @@ vi.mock("../fallback-state.js", () => ({
 }));
 
 vi.mock("./agent-runner-core.js", () => ({
-  resolveConfiguredFallbackModel: () => ({
+  resolveFallbackOriginModel: () => ({
     provider: "anthropic",
     model: "claude",
   }),
@@ -128,6 +128,7 @@ function createParams(
     sessionKey: "main",
   } satisfies FollowupRunnerParams;
   const execution = {
+    commentaryPayloadsEnabled: false,
     execution: {
       runId: "run-1",
       outcome: {

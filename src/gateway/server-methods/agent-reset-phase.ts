@@ -93,9 +93,7 @@ export async function runAgentResetPhase(params: {
   try {
     resetResult = await runSessionResetFromAgent({
       key: params.requestedSessionKey,
-      ...(params.requestedSessionKey === "global" && params.agentId
-        ? { agentId: params.agentId }
-        : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
       creation: resolveAgentRunSessionCreation(params.client),
       assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
@@ -184,7 +182,7 @@ export async function runAgentResetPhase(params: {
     params.respond(true, responsePayload, undefined, { runId: params.runId });
     emitSessionsChanged(params.context, {
       sessionKey: resetResult.key,
-      ...(resetResult.key === "global" && params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
     });
     return { ...next, stop: true, accepted: true };

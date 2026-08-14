@@ -96,20 +96,13 @@ function readMessageRange(
   ).rows.map(parseMessageEventRow);
 }
 
-function parseTranscriptEventType(eventJson: string): string | undefined {
-  try {
-    const parsed = JSON.parse(eventJson) as { type?: unknown };
-    return typeof parsed.type === "string" ? parsed.type : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function resetMessageWindowCacheKey(projection: ResetWindowProjection): string {
   return `${projection.database.path}\0${projection.resolved.sessionId}`;
 }
 
-function readTranscriptGeneration(projection: ResetWindowProjection): string | undefined {
+export function readTranscriptProjectionGeneration(
+  projection: ResetWindowProjection,
+): string | undefined {
   return executeSqliteQueryTakeFirstSync(
     projection.database.db,
     getResetWindowKysely(projection.database)
@@ -125,34 +118,70 @@ function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntr
   pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
 }
 
+function readLatestActiveBoundaryMetadataByType(
+  projection: ResetWindowProjection,
+  eventType: "compaction" | "reset",
+) {
+  const db = getResetWindowKysely(projection.database);
+  return executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    db
+      .selectFrom("session_transcript_active_events as active")
+      .innerJoin("transcript_event_identities as identity", (join) =>
+        join
+          .onRef("identity.session_id", "=", "active.session_id")
+          .onRef("identity.seq", "=", "active.event_seq"),
+      )
+      .select(["active.active_position", "identity.event_type", "identity.seq"])
+      .where("active.session_id", "=", projection.resolved.sessionId)
+      .where("identity.event_type", "=", eventType)
+      .orderBy("identity.seq", "desc")
+      .limit(1),
+  );
+}
+
+function readLatestActiveBoundaryMetadata(projection: ResetWindowProjection) {
+  const reset = readLatestActiveBoundaryMetadataByType(projection, "reset");
+  const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction");
+  if (!reset) {
+    return compaction;
+  }
+  if (!compaction) {
+    return reset;
+  }
+  return reset.seq > compaction.seq ? reset : compaction;
+}
+
+function readResetBoundary(projection: ResetWindowProjection, seq: number) {
+  const row = executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    getResetWindowKysely(projection.database)
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", projection.resolved.sessionId)
+      .where("seq", "=", seq)
+      .limit(1),
+  );
+  if (!row) {
+    throw new Error("Active transcript reset boundary is missing");
+  }
+  const parsed = JSON.parse(row.event_json) as { firstKeptEntryId?: unknown; type?: unknown };
+  if (parsed.type !== "reset") {
+    throw new Error("Active transcript reset boundary has invalid payload");
+  }
+  return parsed;
+}
+
 function findLatestResetMessageWindow(
   projection: ResetWindowProjection,
   generation: string | undefined,
 ): ResetMessageWindow | null {
   const db = getResetWindowKysely(projection.database);
-  const nonMessageRows = executeSqliteQuerySync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .select(["active.active_position", "event.event_json"])
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("active.message_position", "is", null)
-      .orderBy("active.active_position", "desc"),
-  ).rows;
-  const latestBoundaryRow = nonMessageRows.find((row) => {
-    const type = parseTranscriptEventType(row.event_json);
-    return type === "reset" || type === "compaction";
-  });
-  if (!latestBoundaryRow || parseTranscriptEventType(latestBoundaryRow.event_json) !== "reset") {
+  const latestBoundary = readLatestActiveBoundaryMetadata(projection);
+  if (!latestBoundary || latestBoundary.event_type !== "reset") {
     return null;
   }
-  const resetRow = latestBoundaryRow;
-  const reset = JSON.parse(resetRow.event_json) as { firstKeptEntryId?: unknown };
+  const reset = readResetBoundary(projection, latestBoundary.seq);
   const postBoundaryMessagePosition =
     executeSqliteQueryTakeFirstSync(
       projection.database.db,
@@ -160,7 +189,7 @@ function findLatestResetMessageWindow(
         .selectFrom("session_transcript_active_events")
         .select("message_position")
         .where("session_id", "=", projection.resolved.sessionId)
-        .where("active_position", ">", resetRow.active_position)
+        .where("active_position", ">", latestBoundary.active_position)
         .where("message_position", "is not", null)
         .orderBy("active_position", "asc")
         .limit(1),
@@ -180,7 +209,7 @@ function findLatestResetMessageWindow(
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.event_id", "=", reset.firstKeptEntryId),
     );
-    if (firstKept && firstKept.active_position < resetRow.active_position) {
+    if (firstKept && firstKept.active_position < latestBoundary.active_position) {
       keptMessagePositions = executeSqliteQuerySync(
         projection.database.db,
         db
@@ -193,7 +222,7 @@ function findLatestResetMessageWindow(
           .select(["active.message_position", "event.event_json"])
           .where("active.session_id", "=", projection.resolved.sessionId)
           .where("active.active_position", ">=", firstKept.active_position)
-          .where("active.active_position", "<", resetRow.active_position)
+          .where("active.active_position", "<", latestBoundary.active_position)
           .where("active.message_position", "is not", null)
           .orderBy("active.active_position", "asc"),
       ).rows.flatMap((row) => {
@@ -221,7 +250,7 @@ function findLatestResetMessageWindow(
 function resolveResetMessageWindow(projection: ResetWindowProjection): ResetMessageWindow | null {
   const key = resetMessageWindowCacheKey(projection);
   const cached = resetMessageWindowCache.get(key);
-  const generation = readTranscriptGeneration(projection);
+  const generation = readTranscriptProjectionGeneration(projection);
   if (cached) {
     if (cached.generation === generation && cached.indexedSeq === projection.state.indexedSeq) {
       return cached.window;

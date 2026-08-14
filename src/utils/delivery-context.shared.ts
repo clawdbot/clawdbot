@@ -12,7 +12,7 @@ import {
   normalizeChannelRouteTarget,
   type ChannelRouteRef,
 } from "../plugin-sdk/channel-route.js";
-import { normalizeAccountId } from "./account-id.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import type { DeliveryContext } from "./delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -48,7 +48,7 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   const normalized: DeliveryContext = {
     channel: route.channel,
     to: channelRouteTarget(route),
-    accountId: normalizeAccountId(route.accountId),
+    accountId: normalizeOptionalAccountId(route.accountId),
   };
   const threadId = channelRouteThreadId(route);
   if (threadId != null) {

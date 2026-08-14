@@ -1,4 +1,4 @@
-import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recovery-clear.js";
+import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 

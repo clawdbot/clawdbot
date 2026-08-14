@@ -6,17 +6,11 @@ import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { listAuthProfileStoreAgentDirs as listAuthProfileStoreAgentDirsFromAuthStorePaths } from "./auth-store-paths.js";
 import { parseEnvValue } from "./shared.js";
 
 /** Parses one .env assignment value using the shared shell-ish env parser. */
 export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
-}
-
-/** Lists agent directories that own canonical auth-profile stores. */
-export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: string): string[] {
-  return listAuthProfileStoreAgentDirsFromAuthStorePaths(config, stateDir);
 }
 
 /** Lists global dotenv files that can supply secrets for the selected config and state roots. */

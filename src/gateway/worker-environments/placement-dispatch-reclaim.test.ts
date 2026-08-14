@@ -36,7 +36,7 @@ describe("worker placement dispatch reclaim", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("orders the migration barrier, provisioning, sync, attachment, and activation", async () => {
+  it("attaches before opening one tunnel for workspace sync and activation", async () => {
     const harness = createHarness(placementStore);
 
     await expect(harness.service.dispatch(REQUEST)).resolves.toMatchObject({
@@ -55,19 +55,26 @@ describe("worker placement dispatch reclaim", () => {
       "placement:provisioning",
       "create",
       "placement:syncing",
-      "tunnel:ready",
-      "sync",
-      "placement:starting",
       "attach",
       "tunnel:attached",
+      "sync",
+      "placement:starting",
       "activation",
       "placement:active",
     ]);
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
   });
 
-  it("reconciles the workspace before destroying and reclaiming an active worker", async () => {
-    const harness = createHarness(placementStore);
-    await harness.service.dispatch(REQUEST);
+  it("reclaims an unchanged active placement through the fenced teardown lifecycle", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    await expect(harness.service.dispatch(REQUEST)).resolves.toMatchObject({
+      state: "active",
+      turnClaim: null,
+      workspaceBaseManifestRef: MANIFEST_REF,
+    });
 
     await expect(
       harness.service.reclaim({
@@ -77,9 +84,11 @@ describe("worker placement dispatch reclaim", () => {
       }),
     ).resolves.toMatchObject({
       state: "reclaimed",
-      workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: null,
+      workspaceBaseManifestRef: MANIFEST_REF,
     });
 
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(harness.log.slice(-11)).toEqual([
       "tunnel:attached",
       "workspace:quiesce",
@@ -93,6 +102,34 @@ describe("worker placement dispatch reclaim", () => {
       "placement:reclaimed",
       "teardown:stop",
     ]);
+  });
+
+  it("reclaims an environment-free failed placement back to clean local state", async () => {
+    const harness = createHarness(placementStore);
+    const requested = placementStore.startDispatch(REQUEST);
+    const failed = placementStore.fail({
+      sessionId: REQUEST.sessionId,
+      expectedGeneration: requested.generation,
+      recoveryError: "device worker is offline",
+    });
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({
+      state: "local",
+      generation: failed.generation + 1,
+      environmentId: null,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+    });
+
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
   it("retains and reports cloud versions that conflict during an idle reclaim", async () => {

@@ -16,6 +16,11 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
 import pMap from "p-map";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "../packages/normalization-core/src/number-coercion.ts";
+import { toErrorObject } from "./lib/error-format.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -108,7 +113,6 @@ const FAILURE_OUTPUT_TAIL_LINES = 40;
 const STEP_OUTPUT_MAX_CHARS = 256 * 1024;
 const STEP_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const STEP_POST_FORCE_KILL_WAIT_MS = 1_000;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const SLOW_COMPILE_SUMMARY_LIMIT = 10;
 const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
@@ -427,15 +431,8 @@ function writeStampFile(filePath: string) {
   writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
 }
 
-function resolveStepTimerTimeoutMs(valueMs: number) {
-  if (!Number.isFinite(valueMs)) {
-    return MAX_TIMER_TIMEOUT_MS;
-  }
-  return Math.min(Math.max(Math.floor(valueMs), 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function runNodeStep(label: string, args: string[], timeoutMs: number) {
-  const resolvedTimeoutMs = resolveStepTimerTimeoutMs(timeoutMs);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
   const startedAt = Date.now();
   const result = spawnSync(process.execPath, args, {
     cwd: repoRoot,
@@ -493,7 +490,7 @@ export function runNodeStepAsync(
   timeoutMs: number,
   params: RunNodeStepParams = {},
 ) {
-  const resolvedTimeoutMs = resolveStepTimerTimeoutMs(timeoutMs);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
   const abortController = params.abortController;
   const killProcess = params.killProcess ?? process.kill.bind(process);
   const onFailure = params.onFailure;
@@ -562,7 +559,7 @@ export function runNodeStepAsync(
       signalChild("SIGKILL");
       await waitAfterForceKill();
       rejectPromise(
-        toLintErrorObject(
+        toErrorObject(
           attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
             kind: "canceled",
             elapsedMs: Date.now() - startedAt,
@@ -621,7 +618,7 @@ export function runNodeStepAsync(
         );
         onFailure?.(error);
         abortSiblingSteps(abortController);
-        rejectPromise(toLintErrorObject(error, "Step timed out"));
+        rejectPromise(toErrorObject(error, "Step timed out"));
       })();
     }, resolvedTimeoutMs);
 
@@ -666,7 +663,7 @@ export function runNodeStepAsync(
       );
       onFailure?.(failure);
       abortSiblingSteps(abortController);
-      rejectPromise(toLintErrorObject(failure, "Step spawn failed"));
+      rejectPromise(toErrorObject(failure, "Step spawn failed"));
     });
     child.on("close", (code) => {
       if (settled) {
@@ -715,7 +712,7 @@ export function runNodeStepAsync(
       );
       onFailure?.(error);
       abortSiblingSteps(abortController);
-      rejectPromise(toLintErrorObject(error, "Step failed"));
+      rejectPromise(toErrorObject(error, "Step failed"));
     });
   });
 }
@@ -750,7 +747,7 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
     { concurrency, stopOnError: false },
   );
   if (firstFailure) {
-    throw toLintErrorObject(firstFailure, "Non-Error thrown");
+    throw toErrorObject(firstFailure, "Non-Error thrown");
   }
 }
 
@@ -1107,18 +1104,4 @@ export async function main(argv: string[] = process.argv.slice(2)) {
 
 if (import.meta.main) {
   await main();
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

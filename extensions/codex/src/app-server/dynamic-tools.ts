@@ -20,7 +20,7 @@ import {
   embeddedAgentLog,
   getChannelAgentToolMeta,
   getPluginToolMeta,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   isReplaySafeToolCall,
@@ -46,6 +46,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import {
+  asNonArrayRecord,
   asOptionalRecord,
   isRecord,
   normalizeOptionalString,
@@ -79,7 +80,6 @@ import {
   prepareCodexRemoteWorkspaceMessageMedia,
   type CodexRemoteWorkspaceFileReader,
 } from "./remote-workspace-media.js";
-import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = NonNullable<
@@ -558,7 +558,7 @@ export function createCodexDynamicToolBridge(params: {
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
-        const executedArguments = jsonObjectToRecord(call.arguments);
+        const executedArguments = asNonArrayRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
           ? `OpenClaw tool is not available for this turn: ${call.tool}`
           : `Unknown OpenClaw tool: ${call.tool}`;
@@ -583,7 +583,7 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
-      const args = jsonObjectToRecord(call.arguments);
+      const args = asNonArrayRecord(call.arguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
       let didStartExecution = false;
@@ -779,17 +779,12 @@ export function createCodexDynamicToolBridge(params: {
           toolName === "message" &&
           !resultIsError &&
           (rawResult.terminate === true || result.terminate === true);
-        const hasExplicitFinalControl = typeof executedArgs.final === "boolean";
         const confirmedSourceReply =
           params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
           toolName === "message" &&
           (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply);
-        const sourceReplyFinal = confirmedSourceReply
-          ? hasExplicitFinalControl
-            ? executedArgs.final === true
-            : undefined
-          : undefined;
-        const sourceReplyRecord = collectToolTelemetry({
+        const sourceReplyFinal = confirmedSourceReply ? executedArgs.final !== false : undefined;
+        collectToolTelemetry({
           toolName,
           args: executedArgs,
           result,
@@ -799,26 +794,19 @@ export function createCodexDynamicToolBridge(params: {
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
         });
-        if (confirmedSourceReply && sourceReplyRecord) {
-          recordCodexSourceReplyDeliveryIntent(telemetry, {
-            record: sourceReplyRecord,
-            final: sourceReplyFinal,
-          });
-        }
         if (deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply) {
           telemetry.didDeliverSourceReplyViaMessageTool = true;
         }
-        const defersInferredSourceReplyTermination =
-          confirmedSourceReply && executedArgs.final !== true;
+        const continuesSourceReplyProgress = confirmedSourceReply && sourceReplyFinal === false;
         withDynamicToolTermination(
           response,
           ((rawResult.terminate === true || result.terminate === true) &&
-            !defersInferredSourceReplyTermination) ||
+            !continuesSourceReplyProgress) ||
             // Yield is an explicit owner-level turn handoff, not termination
             // inferred from source-reply delivery, so finality does not mask it.
             isToolResultYield(rawResult) ||
             isToolResultYield(result) ||
-            (confirmedSourceReply && executedArgs.final === true),
+            (confirmedSourceReply && sourceReplyFinal === true),
         );
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
@@ -1542,12 +1530,6 @@ function convertToolContent(
       imageUrl,
     },
   ];
-}
-function jsonObjectToRecord(value: JsonValue | undefined): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as Record<string, unknown>;
 }
 function readFirstString(record: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {

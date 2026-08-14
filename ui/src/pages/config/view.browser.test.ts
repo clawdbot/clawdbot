@@ -85,6 +85,7 @@ describe("config view", () => {
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
     hiddenSessionCatalogIds: new Set<string>(),
+    hiddenSessionCatalogLabels: new Map<string, string>(),
     setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
@@ -1550,6 +1551,14 @@ describe("config view", () => {
     ]) {
       expect(text).toContain(expected);
     }
+    const lobsterPreviews = container.querySelectorAll(".lobsterdex__mini");
+    expect(lobsterPreviews).toHaveLength(42);
+    expect([...lobsterPreviews].every((preview) => preview.getAttribute("role") === "img")).toBe(
+      true,
+    );
+    expect(
+      [...lobsterPreviews].every((preview) => Boolean(preview.getAttribute("aria-label")?.trim())),
+    ).toBe(true);
     expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
   });
 
@@ -2121,26 +2130,32 @@ describe("config view", () => {
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
   });
 
-  it("lists hidden session sections and offers to show them", () => {
+  it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
     const setSessionCatalogHidden = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
-      hiddenSessionCatalogIds: new Set(["codex"]),
+      hiddenSessionCatalogIds: new Set(["claude", "offline-catalog"]),
+      hiddenSessionCatalogLabels: new Map([["claude", "Claude Code"]]),
       setSessionCatalogHidden,
     });
 
     const heading = Array.from(container.querySelectorAll("h3")).find(
       (candidate) => candidate.textContent?.trim() === "Hidden session sections",
     );
-    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+    const labeledRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (candidate) =>
-        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "codex",
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "Claude Code",
+    );
+    const fallbackRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "offline-catalog",
     );
     expect(heading).toBeDefined();
-    expect(row).toBeDefined();
-    row?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(setSessionCatalogHidden).toHaveBeenCalledWith("codex", false);
+    expect(labeledRow).toBeDefined();
+    expect(fallbackRow).toBeDefined();
+    labeledRow?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(setSessionCatalogHidden).toHaveBeenCalledWith("claude", false);
   });
 
   it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {

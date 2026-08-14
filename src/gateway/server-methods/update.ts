@@ -34,6 +34,7 @@ import {
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
+import { devUpdateTargetFromGitCampaign } from "../../infra/update-dev-target.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   buildManagedServiceHandoffUnavailableMessage,
@@ -254,9 +255,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     const adoptedCampaign = gatewayUpdateCampaign.adopt();
     const adoptedCampaignId = adoptedCampaign?.campaignId;
-    const adoptedDevTargetRef =
+    const adoptedDevTarget =
       adoptedCampaign?.target.kind === "git"
-        ? adoptedCampaign.target.upstreamSha.trim() || undefined
+        ? devUpdateTargetFromGitCampaign(adoptedCampaign.target)
         : undefined;
     const adoptedPackageTargetVersion =
       adoptedCampaign?.target.kind === "package"
@@ -409,14 +410,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
               ...(handoffChannel ? { channel: handoffChannel } : {}),
               ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
-              ...(adoptedDevTargetRef
-                ? {
-                    env: {
-                      ...process.env,
-                      OPENCLAW_UPDATE_DEV_TARGET_REF: adoptedDevTargetRef,
-                    },
-                  }
-                : {}),
+              ...(adoptedDevTarget ? { devTarget: adoptedDevTarget } : {}),
               restartDelayMs: managedRestartDelayMs,
               meta: sentinelMeta,
               handoffId,
@@ -529,7 +523,7 @@ export const updateHandlers: GatewayRequestHandlers = {
                 ? effectiveChannel
                 : (configChannel ?? undefined),
           ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
-          ...(adoptedDevTargetRef ? { devTargetRef: adoptedDevTargetRef } : {}),
+          ...(adoptedDevTarget ? { devTarget: adoptedDevTarget } : {}),
           allowGatewayServiceRepair: false,
           allowGatewayActivation: false,
         });

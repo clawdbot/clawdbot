@@ -537,6 +537,66 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `adopts a Node row and creates primary while the global version zero migration is pending`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        try Self.seedCanonicalSchema(fixture.databaseURL)
+        try Self.execute(fixture.databaseURL, """
+        CREATE TABLE plugin_state_entries (entry_key TEXT NOT NULL PRIMARY KEY) STRICT;
+        INSERT INTO device_identities (
+          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+        ) VALUES (
+          'node', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
+          '\(Self.sql(Self.fixturePrivateKeyPEM))', 1800000000000, 1800000000123
+        )
+        """)
+
+        let nodeIdentity = try fixture.load(profile: .node)
+        let primaryIdentity = try fixture.load()
+
+        #expect(nodeIdentity.deviceId == Self.fixtureDeviceID)
+        #expect(nodeIdentity.createdAtMs == 1_800_000_000_000)
+        #expect(primaryIdentity.deviceId != nodeIdentity.deviceId)
+        #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 0)
+        #expect(try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT updated_at_ms FROM device_identities WHERE identity_key = 'node'") == 1_800_000_000_123)
+        #expect(try Self.scalarInt(fixture.databaseURL, "SELECT COUNT(*) FROM device_identities") == 2)
+    }
+
+    @Test
+    func `gateway identity failure names corrupt row and state directory without rotating it`() async throws {
+        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        try Self.seedCanonicalSchema(fixture.databaseURL)
+        try Self.execute(fixture.databaseURL, """
+        INSERT INTO device_identities (
+          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+        ) VALUES (
+          'primary', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
+          'not-a-private-key', 1800000000000, 1800000000123
+        )
+        """)
+
+        await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+            do {
+                _ = try GatewayChannelActor.loadDeviceIdentityForConnect(
+                    includeDeviceIdentity: true,
+                    profile: .primary)
+                Issue.record("corrupt identity unexpectedly loaded")
+            } catch {
+                let message = error.localizedDescription
+                #expect(message.contains("Could not access the persisted device identity"))
+                #expect(message.contains("row \"primary\""))
+                #expect(message.contains(fixture.destination.path))
+                #expect(message.contains("invalid key material"))
+            }
+        }
+        #expect(try Self.scalarText(
+            fixture.databaseURL,
+            "SELECT private_key_pem FROM device_identities WHERE identity_key = 'primary'") ==
+            "not-a-private-key")
+    }
+
+    @Test
     func `same key migration preserves the authoritative SQLite timestamp`() throws {
         let fixture = DeviceIdentityMigrationFixture()
         let source = try fixture.source()

@@ -423,7 +423,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
     const previousThreadId = binding.threadId;
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
-    mutable.startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+    const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       binding,
       bindingStore,
       identity: bindingIdentity,
@@ -437,6 +437,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         developerInstructions: buildRenderedCodexDeveloperInstructions(),
       }),
     });
+    mutable.startupBinding = startupBindingResolution.binding;
+    mutable.startupContextTokens = startupBindingResolution.startupContextTokens;
     if (mutable.startupBinding?.threadId) {
       return;
     }

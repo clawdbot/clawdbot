@@ -48,6 +48,8 @@ export type CreateManagedWorktreeParams = {
   // Repository checkout hooks and .openclaw/worktree-setup.sh execute repo-local code, so
   // callers reachable from less-privileged surfaces opt out; admin paths keep them on.
   runSetupScript?: boolean;
+  /** Synchronous caller-authority guard checked at allocation commit boundaries. */
+  commitGuard?: () => void;
 };
 
 export type RemoveManagedWorktreeResult = {

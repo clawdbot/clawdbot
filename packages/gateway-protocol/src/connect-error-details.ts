@@ -4,20 +4,14 @@
  * These details cross client/server boundaries, so readers normalize untrusted
  * payloads before using them in reconnect decisions or user-facing messages.
  */
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
+import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
 
-function normalizeArrayBackedTrimmedStringList(value: unknown): string[] | undefined {
+function normalizeOptionalConnectDetailStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
   const values = value
-    .map((entry) => normalizeOptionalString(entry))
+    .map((entry) => normalizeOptionalProtocolString(entry))
     .filter((entry): entry is string => Boolean(entry));
   // Pairing details omit absent lists. Emitting empty arrays makes clients think
   // the gateway intentionally supplied scope/role context when it did not.
@@ -246,7 +240,7 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
   };
   const canRetryWithDeviceToken =
     typeof raw.canRetryWithDeviceToken === "boolean" ? raw.canRetryWithDeviceToken : undefined;
-  const normalizedNextStep = normalizeOptionalString(raw.recommendedNextStep) ?? "";
+  const normalizedNextStep = normalizeOptionalProtocolString(raw.recommendedNextStep) ?? "";
   const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
     normalizedNextStep as ConnectRecoveryNextStep,
   )
@@ -259,7 +253,7 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
 }
 
 function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredReason | undefined {
-  const normalized = normalizeOptionalString(value) ?? "";
+  const normalized = normalizeOptionalProtocolString(value) ?? "";
   return CONNECT_PAIRING_REQUIRED_REASON_VALUES.has(normalized as ConnectPairingRequiredReason)
     ? (normalized as ConnectPairingRequiredReason)
     : undefined;
@@ -267,12 +261,12 @@ function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredRe
 
 /** Normalizes pairing request ids before echoing them in close reasons or UI text. */
 export function normalizePairingConnectRequestId(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
+  const normalized = normalizeOptionalProtocolString(value);
   return normalized && PAIRING_CONNECT_REQUEST_ID_PATTERN.test(normalized) ? normalized : undefined;
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  return normalizeArrayBackedTrimmedStringList(value);
+  return normalizeOptionalConnectDetailStringList(value);
 }
 
 function createPairingConnectErrorDetails(params: {
@@ -355,10 +349,10 @@ export function buildPairingConnectErrorDetails(params: {
 }): PairingConnectErrorDetails {
   const requestId = normalizePairingConnectRequestId(params.requestId);
   const remediationHint =
-    normalizeOptionalString(params.remediationHint) ??
+    normalizeOptionalProtocolString(params.remediationHint) ??
     buildPairingConnectRemediationHint(params.reason);
-  const deviceId = normalizeOptionalString(params.deviceId);
-  const requestedRole = normalizeOptionalString(params.requestedRole);
+  const deviceId = normalizeOptionalProtocolString(params.deviceId);
+  const requestedRole = normalizeOptionalProtocolString(params.requestedRole);
   const requestedScopes = normalizeStringArray(params.requestedScopes);
   const approvedRoles = normalizeStringArray(params.approvedRoles);
   const approvedScopes = normalizeStringArray(params.approvedScopes);
@@ -413,15 +407,16 @@ export function readPairingConnectErrorDetails(
   const reason = normalizePairingConnectReason(raw.reason);
   const requestId = normalizePairingConnectRequestId(raw.requestId);
   const remediationHint =
-    normalizeOptionalString(raw.remediationHint) ?? buildPairingConnectRemediationHint(reason);
-  const normalizedNextStep = normalizeOptionalString(raw.recommendedNextStep) ?? "";
+    normalizeOptionalProtocolString(raw.remediationHint) ??
+    buildPairingConnectRemediationHint(reason);
+  const normalizedNextStep = normalizeOptionalProtocolString(raw.recommendedNextStep) ?? "";
   const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
     normalizedNextStep as ConnectRecoveryNextStep,
   )
     ? (normalizedNextStep as ConnectRecoveryNextStep)
     : undefined;
-  const deviceId = normalizeOptionalString(raw.deviceId);
-  const requestedRole = normalizeOptionalString(raw.requestedRole);
+  const deviceId = normalizeOptionalProtocolString(raw.deviceId);
+  const requestedRole = normalizeOptionalProtocolString(raw.requestedRole);
   const requestedScopes = normalizeStringArray(raw.requestedScopes);
   const approvedRoles = normalizeStringArray(raw.approvedRoles);
   const approvedScopes = normalizeStringArray(raw.approvedScopes);
@@ -444,7 +439,7 @@ export function readPairingConnectErrorDetails(
 export function readConnectPairingRequiredMessage(
   message: string | null | undefined,
 ): ConnectPairingRequiredDetails | null {
-  const normalizedMessage = normalizeOptionalString(message);
+  const normalizedMessage = normalizeOptionalProtocolString(message);
   if (!normalizedMessage) {
     return null;
   }
@@ -496,8 +491,8 @@ export function classifyGatewayConnectFailure(input: {
   message?: string | null;
 }) {
   const code = readConnectErrorDetailCode(input.details);
-  const message = normalizeOptionalString(input.message);
-  const reason = normalizeOptionalString(input.reason);
+  const message = normalizeOptionalProtocolString(input.message);
+  const reason = normalizeOptionalProtocolString(input.reason);
   const userMessage = message ?? reason;
   const classificationText = [message, reason]
     .filter((value): value is string => Boolean(value))
@@ -583,7 +578,7 @@ export function formatConnectErrorMessage(params: { message?: string; details?: 
   if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
     return formatProtocolMismatchMessage(params.message, params.details);
   }
-  return normalizeOptionalString(params.message) ?? "gateway request failed";
+  return normalizeOptionalProtocolString(params.message) ?? "gateway request failed";
 }
 
 function formatProtocolMismatchMessage(message: string | undefined, details: unknown): string {
@@ -611,7 +606,7 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
   if (probeMin !== undefined) {
     parts.push(`probe min v${probeMin}`);
   }
-  const normalized = normalizeOptionalString(message) ?? "protocol mismatch";
+  const normalized = normalizeOptionalProtocolString(message) ?? "protocol mismatch";
   return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;
 }
 

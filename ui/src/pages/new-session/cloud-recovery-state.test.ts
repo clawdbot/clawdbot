@@ -1,12 +1,17 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cloudSessionRecoveryExactStorageKey } from "../../lib/sessions/cloud-recovery-storage-key.ts";
+import {
+  readCloudSessionRecovery,
+  writeCloudSessionRecovery,
+} from "../../lib/sessions/cloud-recovery.ts";
 import {
   PendingCloudRecoveryState,
   resolveSubmissionOutcomeReason,
 } from "./cloud-recovery-state.ts";
-import { readCloudSessionRecovery, writeCloudSessionRecovery } from "./cloud-recovery.ts";
 
 describe("pending cloud recovery state", () => {
   beforeEach(() => sessionStorage.clear());
+  afterEach(() => vi.unstubAllGlobals());
 
   it.each([
     {
@@ -50,7 +55,9 @@ describe("pending cloud recovery state", () => {
       thinkingLevel: "high",
       worktree: true,
     });
-    expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toMatchObject({
+    expect(
+      readCloudSessionRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+    ).toMatchObject({
       phase: "creating",
       sessionKey: createParams?.key,
       createParams,
@@ -69,13 +76,95 @@ describe("pending cloud recovery state", () => {
         createParams: { agentId: "cloud", message: "", worktree: true },
       }),
     ).not.toBeNull();
+    const provisionalSessionKey = pending.sessionKey;
+    const storage = sessionStorage;
+    const provisionalKey = cloudSessionRecoveryExactStorageKey(
+      "ws://gateway.example",
+      "principal-a",
+      provisionalSessionKey,
+    );
+    const canonicalKey = cloudSessionRecoveryExactStorageKey(
+      "ws://gateway.example",
+      "principal-a",
+      "agent:cloud:dashboard:server-key",
+    );
+    vi.stubGlobal("sessionStorage", {
+      get length() {
+        return storage.length;
+      },
+      getItem: storage.getItem.bind(storage),
+      key: storage.key.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem(key: string, value: string) {
+        if (key === canonicalKey && storage.getItem(provisionalKey) !== null) {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        }
+        storage.setItem(key, value);
+      },
+    });
 
     expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
-    expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toMatchObject({
+    expect(
+      readCloudSessionRecovery("ws://gateway.example", "principal-a", provisionalSessionKey),
+    ).toBeNull();
+    expect(
+      readCloudSessionRecovery(
+        "ws://gateway.example",
+        "principal-a",
+        "agent:cloud:dashboard:server-key",
+      ),
+    ).toMatchObject({
       phase: "dispatching",
       sessionKey: "agent:cloud:dashboard:server-key",
     });
     expect(pending.createParams).toBeUndefined();
+  });
+
+  it("restores the provisional row when canonical promotion cannot be written", () => {
+    const pending = new PendingCloudRecoveryState();
+    expect(
+      pending.stageCreate({
+        agentId: "cloud",
+        profileId: "aws",
+        message: "run remotely",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        createParams: { agentId: "cloud", message: "", worktree: true },
+      }),
+    ).not.toBeNull();
+    const storage = sessionStorage;
+    const provisionalSessionKey = pending.sessionKey;
+    const provisionalKey = cloudSessionRecoveryExactStorageKey(
+      "ws://gateway.example",
+      "principal-a",
+      provisionalSessionKey,
+    );
+    const canonicalSessionKey = "agent:cloud:dashboard:server-key";
+    const canonicalKey = cloudSessionRecoveryExactStorageKey(
+      "ws://gateway.example",
+      "principal-a",
+      canonicalSessionKey,
+    );
+    const raw = storage.getItem(provisionalKey);
+    vi.stubGlobal("sessionStorage", {
+      get length() {
+        return storage.length;
+      },
+      getItem: storage.getItem.bind(storage),
+      key: storage.key.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem(key: string, value: string) {
+        if (key === canonicalKey) {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        }
+        storage.setItem(key, value);
+      },
+    });
+
+    expect(pending.promoteToDispatching(canonicalSessionKey)).toBe(false);
+    expect(storage.getItem(provisionalKey)).toBe(raw);
+    expect(storage.getItem(canonicalKey)).toBeNull();
+    expect(pending.sessionKey).toBe(provisionalSessionKey);
   });
 
   it("keeps incognito cloud drafts in memory without writing recovery storage", () => {
@@ -102,10 +191,18 @@ describe("pending cloud recovery state", () => {
     });
     expect(createParams).not.toHaveProperty("key");
     expect(pending.persistent).toBe(false);
-    expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toBeNull();
+    expect(
+      readCloudSessionRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+    ).toBeNull();
     expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
     expect(pending.sessionKey).toBe("agent:cloud:dashboard:server-key");
-    expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toBeNull();
+    expect(
+      readCloudSessionRecovery(
+        "ws://gateway.example",
+        "principal-a",
+        "agent:cloud:dashboard:server-key",
+      ),
+    ).toBeNull();
   });
 
   it("rejects a persisted recovery record that claims to be incognito", () => {
@@ -159,6 +256,47 @@ describe("pending cloud recovery state", () => {
     expect(captured?.createParams).not.toBe(pending.createParams);
   });
 
+  it("restores only page-owned creating work", () => {
+    const dispatching = {
+      sessionKey: "agent:cloud:dispatching",
+      messageId: "message-dispatching",
+      message: "dispatching task",
+      profileId: "aws",
+      agentId: "cloud",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      phase: "dispatching" as const,
+    };
+    const sending = {
+      ...dispatching,
+      sessionKey: "agent:cloud:sending",
+      messageId: "message-sending",
+      phase: "sending" as const,
+    };
+    const creating = {
+      ...dispatching,
+      sessionKey: "agent:cloud:creating",
+      messageId: "message-creating",
+      phase: "creating" as const,
+      createParams: {
+        key: "agent:cloud:creating",
+        agentId: "cloud",
+        message: "" as const,
+        worktree: true as const,
+      },
+    };
+    expect(writeCloudSessionRecovery(dispatching)).toBe(true);
+    expect(writeCloudSessionRecovery(sending)).toBe(true);
+
+    const pending = new PendingCloudRecoveryState();
+    expect(pending.restore("ws://gateway.example", "principal-a")).toBeNull();
+    expect(pending.sessionKey).toBe("");
+
+    expect(writeCloudSessionRecovery(creating)).toBe(true);
+    expect(pending.restore("ws://gateway.example", "principal-a")).toEqual(creating);
+    expect(pending.sessionKey).toBe(creating.sessionKey);
+  });
+
   it("neutralizes a stale local owner without clearing newer durable recovery", () => {
     const pending = new PendingCloudRecoveryState();
     expect(
@@ -187,6 +325,8 @@ describe("pending cloud recovery state", () => {
     pending.clearFor("ws://gateway.example", "principal-a", staleKey);
 
     expect(pending.sessionKey).toBe("");
-    expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toEqual(newerRecovery);
+    expect(
+      readCloudSessionRecovery("ws://gateway.example", "principal-a", newerRecovery.sessionKey),
+    ).toEqual(newerRecovery);
   });
 });

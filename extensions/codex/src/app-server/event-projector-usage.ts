@@ -1,10 +1,13 @@
 import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readNonNegativeInteger, readNumber, readString } from "./event-projector-values.js";
+import {
+  asFiniteNumber,
+  asSafeIntegerInRange,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
 function readTokenCount(record: JsonObject, key: string): number | undefined {
-  const value = readNonNegativeInteger(record, key);
-  return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
+  return asSafeIntegerInRange(record[key], { min: 0 });
 }
 
 function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
@@ -13,7 +16,7 @@ function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normal
   return last ? normalizeCodexThreadTokenUsage(last) : undefined;
 }
 
-function readCodexThreadContextSnapshot(params: JsonObject): {
+export function readCodexThreadContextSnapshot(params: JsonObject): {
   activeContextTokens?: number;
   cachedInputTokens?: number;
   cacheWriteInputTokens?: number;
@@ -80,7 +83,10 @@ function normalizeCodexTokenUsageBreakdown(
 ): ReturnType<typeof normalizeUsage> {
   // v2 TokenUsageBreakdown. inputTokens includes cached input; OpenClaw usage
   // tracks uncached input, cache reads, and cache writes separately.
-  const readCount = source === "response" ? readTokenCount : readNumber;
+  const readCount =
+    source === "response"
+      ? readTokenCount
+      : (value: JsonObject, key: string) => asFiniteNumber(value[key]);
   const totalTokens = readCount(record, "totalTokens");
   const inputTokens = readCount(record, "inputTokens");
   const cacheRead = readCount(record, "cachedInputTokens");

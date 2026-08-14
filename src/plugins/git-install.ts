@@ -6,9 +6,14 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { withTempDir } from "../infra/install-source-utils.js";
+import {
+  installPackageDir,
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
+import { withInstallWorkspace } from "../infra/install-source-utils.js";
 import { replaceDirectoryAtomic } from "../infra/replace-file.js";
 import {
   createSafeNpmInstallArgs,
@@ -22,6 +27,11 @@ import {
   type InstallSafetyOverrides,
   type InstallSecurityScanResult,
 } from "./install-security-scan.js";
+import {
+  attachPluginInstallTransaction,
+  isPluginInstallCommitDeferred,
+  type PluginInstallTransaction,
+} from "./install-transaction.js";
 import {
   installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -242,7 +252,7 @@ function resolveGitInstallRepoDir(params: {
 }): string {
   const gitRoot = params.gitDir ? resolveUserPath(params.gitDir) : resolveDefaultPluginGitDir();
   const redactedSpec = redactSensitiveUrlLikeString(params.source.normalizedSpec);
-  return path.join(gitRoot, `git-${sha256HexPrefix(redactedSpec, 16)}`, "repo");
+  return path.join(gitRoot, `git-${sha256HexPrefixCore(redactedSpec, 16)}`, "repo");
 }
 
 async function withGitStagingDir<T>(
@@ -250,18 +260,18 @@ async function withGitStagingDir<T>(
   fn: (tmpDir: string) => Promise<T>,
 ): Promise<T> {
   if (!persistentRepoDir) {
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }
   const targetParent = path.dirname(persistentRepoDir);
   try {
     await fs.mkdir(targetParent, { recursive: true });
   } catch {
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }
 
   let callbackStarted = false;
   try {
-    return await withTempDir(
+    return await withInstallWorkspace(
       "openclaw-git-plugin-",
       async (tmpDir) => {
         callbackStarted = true;
@@ -275,15 +285,31 @@ async function withGitStagingDir<T>(
     if (callbackStarted) {
       throw err;
     }
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }
 }
 
 async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
   persistentRepoDir: string;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  deferCommit?: boolean;
+}): Promise<{ ok: true; transaction?: PluginInstallTransaction } | { ok: false; error: string }> {
   try {
+    if (params.deferCommit) {
+      const result = await installPackageDir(
+        requestDeferredPackageDirInstall({
+          sourceDir: params.stagedRepoDir,
+          targetDir: params.persistentRepoDir,
+          mode: (await pathExists(params.persistentRepoDir)) ? "update" : "install",
+          timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+          copyErrorPrefix: "failed to replace managed git plugin repository",
+          hasDeps: false,
+          depsLogMessage: "",
+        }),
+      );
+      const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
+      return result.ok ? { ok: true, ...(transaction ? { transaction } : {}) } : result;
+    }
     await replaceDirectoryAtomic({
       stagedDir: params.stagedRepoDir,
       targetDir: params.persistentRepoDir,
@@ -494,14 +520,17 @@ export async function installPluginFromGitSpec(
     if (!result.ok) {
       return result;
     }
+    let transaction: PluginInstallTransaction | undefined;
     if (!params.dryRun) {
       const replaceResult = await replaceManagedGitRepo({
         stagedRepoDir: repoDir,
         persistentRepoDir,
+        deferCommit: isPluginInstallCommitDeferred(params),
       });
       if (!replaceResult.ok) {
         return replaceResult;
       }
+      transaction = replaceResult.transaction;
       emitPluginInstallSecurityEvent({
         pluginId: result.pluginId,
         mode: effectiveMode,
@@ -512,7 +541,7 @@ export async function installPluginFromGitSpec(
       });
     }
 
-    return {
+    const installed = {
       ...result,
       targetDir: params.dryRun ? result.targetDir : persistentRepoDir,
       git: {
@@ -522,5 +551,6 @@ export async function installPluginFromGitSpec(
         resolvedAt: new Date().toISOString(),
       },
     };
+    return transaction ? attachPluginInstallTransaction(installed, transaction) : installed;
   });
 }

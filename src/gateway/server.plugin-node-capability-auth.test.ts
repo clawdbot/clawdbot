@@ -15,16 +15,13 @@ import {
 import { withTimeout } from "../utils/with-timeout.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } from "./desktop/observe-bridge.js";
 import { PLUGIN_NODE_CAPABILITY_PATH_PREFIX } from "./plugin-node-capability.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
-import {
-  mintWorkerDesktopObserverToken,
-  WORKER_DESKTOP_OBSERVE_PATH,
-} from "./worker-environments/desktop-observe.js";
 
 const WS_REJECT_TIMEOUT_MS = 2_000;
 const WS_CONNECT_TIMEOUT_MS = 5_000;
@@ -357,7 +354,9 @@ async function withCanvasGatewayHarness(params: {
   resolvePluginNodeCapabilityRoute?: Parameters<
     typeof attachGatewayUpgradeHandler
   >[0]["resolvePluginNodeCapabilityRoute"];
-  workerDesktopTunnels?: Parameters<typeof attachGatewayUpgradeHandler>[0]["workerDesktopTunnels"];
+  desktopSessionRegistry?: Parameters<
+    typeof attachGatewayUpgradeHandler
+  >[0]["desktopSessionRegistry"];
   run: (ctx: {
     listener: Awaited<ReturnType<typeof listen>>;
     clients: Set<GatewayWsClient>;
@@ -426,7 +425,7 @@ async function withCanvasGatewayHarness(params: {
     resolvedAuth: params.resolvedAuth,
     getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
-    workerDesktopTunnels: params.workerDesktopTunnels,
+    desktopSessionRegistry: params.desktopSessionRegistry,
   });
 
   const listener = await listen(httpServer, params.listenHost);
@@ -810,25 +809,25 @@ describe("gateway plugin node capability auth", () => {
       { message: "desktop unix server listen timed out" },
     );
     const release = vi.fn();
-    const workerDesktopTunnels = {
+    const desktopSessionRegistry = {
       attachObserver: () => ({ release }),
     } as unknown as NonNullable<
-      Parameters<typeof attachGatewayUpgradeHandler>[0]["workerDesktopTunnels"]
+      Parameters<typeof attachGatewayUpgradeHandler>[0]["desktopSessionRegistry"]
     >;
     try {
       await withCanvasGatewayHarness({
         resolvedAuth: tokenResolvedAuth,
         handleHttpRequest: async () => false,
         resolvePluginNodeCapabilityRoute: () => undefined,
-        workerDesktopTunnels,
+        desktopSessionRegistry,
         run: async ({ listener }) => {
-          const minted = mintWorkerDesktopObserverToken({
-            environmentId: "worker:boundary",
+          const minted = mintDesktopObserverToken({
+            sourceKey: "worker:boundary",
             ownerEpoch: 4,
             control: false,
-            localSocketPath,
+            attachment: { kind: "unix-socket", socketPath: localSocketPath },
           });
-          const url = `ws://127.0.0.1:${listener.port}${WORKER_DESKTOP_OBSERVE_PATH}?token=${minted.token}`;
+          const url = `ws://127.0.0.1:${listener.port}${DESKTOP_OBSERVE_PATH}?token=${minted.token}`;
           const ws = new WebSocket(url);
           const received = new Promise<Buffer>((resolve, reject) => {
             ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
@@ -843,16 +842,16 @@ describe("gateway plugin node capability auth", () => {
 
           // A draining Gateway must refuse new desktop observers like every other
           // core upgrade; otherwise restart/suspension leaks long-lived sockets.
-          const draining = mintWorkerDesktopObserverToken({
-            environmentId: "worker:boundary",
+          const draining = mintDesktopObserverToken({
+            sourceKey: "worker:boundary",
             ownerEpoch: 4,
             control: false,
-            localSocketPath,
+            attachment: { kind: "unix-socket", socketPath: localSocketPath },
           });
           markGatewayRestartDraining();
           try {
             await expectWsRejected(
-              `ws://127.0.0.1:${listener.port}${WORKER_DESKTOP_OBSERVE_PATH}?token=${draining.token}`,
+              `ws://127.0.0.1:${listener.port}${DESKTOP_OBSERVE_PATH}?token=${draining.token}`,
               {},
               503,
             );

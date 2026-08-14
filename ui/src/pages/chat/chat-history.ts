@@ -3,6 +3,7 @@ import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -13,7 +14,7 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/context.ts";
+import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -43,7 +44,6 @@ import {
   resolveUiSelectedGlobalAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
@@ -59,7 +59,6 @@ import {
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -1651,19 +1650,19 @@ async function loadChatHistoryUncached(
         messages: authoritativeMessages,
         options: { shouldIncludeMessage: (message) => !shouldHideHistoryMessage(message) },
       },
-      { scope, messages: retainsTranscriptIdentity ? state.chatMessages : [] },
+      {
+        scope,
+        messages: retainsTranscriptIdentity ? state.chatMessages : [],
+        runActive:
+          res.sessionInfo &&
+          (typeof res.sessionInfo.hasActiveRun === "boolean" ||
+            res.sessionInfo.status !== undefined)
+            ? isSessionRunActive(res.sessionInfo)
+            : undefined,
+      },
     );
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
-    }
-    if (state.initialUserMessage) {
-      reconcileInitialUserMessageHandoff(
-        state.initialUserMessage,
-        state,
-        sessionKey,
-        authoritativeMessages,
-        isSessionRunActive(res.sessionInfo ?? {}),
-      );
     }
     retireHistoryProvenSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;

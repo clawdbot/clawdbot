@@ -1,6 +1,5 @@
 // Slack tests cover Enterprise Grid event registration boundaries.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackMessageHandler } from "./message-handler.js";
 
@@ -8,6 +7,7 @@ const registrations = vi.hoisted(() => ({
   agent: vi.fn(),
   assistant: vi.fn(),
   channel: vi.fn(),
+  channelIdChanged: vi.fn(),
   home: vi.fn(),
   interaction: vi.fn(),
   member: vi.fn(),
@@ -20,7 +20,10 @@ vi.mock("./events/agent.js", () => ({ registerSlackAgentEvents: registrations.ag
 vi.mock("./events/assistant.js", () => ({
   registerSlackAssistantEvents: registrations.assistant,
 }));
-vi.mock("./events/channels.js", () => ({ registerSlackChannelEvents: registrations.channel }));
+vi.mock("./events/channels.js", () => ({
+  registerSlackChannelEvents: registrations.channel,
+  registerSlackChannelIdChangedEvent: registrations.channelIdChanged,
+}));
 vi.mock("./events/home.js", () => ({ registerSlackHomeEvents: registrations.home }));
 vi.mock("./events/interactions.js", () => ({
   registerSlackInteractionEvents: registrations.interaction,
@@ -32,23 +35,19 @@ vi.mock("./events/reactions.js", () => ({
   registerSlackReactionEvents: registrations.reaction,
 }));
 
-let registerSlackMonitorEvents: typeof import("./events.js").registerSlackMonitorEvents;
+let registerSlackCommonEvents: typeof import("./events.js").registerSlackCommonEvents;
+let registerSlackWorkspaceEvents: typeof import("./events.js").registerSlackWorkspaceEvents;
 
-function registerForInstallation(kind: "enterprise" | "workspace") {
-  const installationIdentity =
-    kind === "enterprise"
-      ? ({ kind, enterpriseId: "E_TEST" } as const)
-      : ({ kind, teamId: "T_TEST" } as const);
-  registerSlackMonitorEvents({
-    ctx: { installationIdentity } as SlackMonitorContext,
-    account: {} as ResolvedSlackAccount,
+function registerCommonEvents() {
+  registerSlackCommonEvents({
+    ctx: {} as SlackMonitorContext,
     handleSlackMessage: vi.fn() as SlackMessageHandler,
   });
 }
 
-describe("registerSlackMonitorEvents", () => {
+describe("Slack event registration", () => {
   beforeAll(async () => {
-    ({ registerSlackMonitorEvents } = await import("./events.js"));
+    ({ registerSlackCommonEvents, registerSlackWorkspaceEvents } = await import("./events.js"));
   });
 
   beforeEach(() => {
@@ -57,22 +56,24 @@ describe("registerSlackMonitorEvents", () => {
     }
   });
 
-  it("registers messages, reactions, pins, and member events for enterprise installs", () => {
-    registerForInstallation("enterprise");
+  it("registers the Enterprise-capable common event set without workspace-only listeners", () => {
+    registerCommonEvents();
 
     expect(registrations.message).toHaveBeenCalledOnce();
     expect(registrations.reaction).toHaveBeenCalledOnce();
     expect(registrations.pin).toHaveBeenCalledOnce();
     expect(registrations.member).toHaveBeenCalledOnce();
-    expect(registrations.channel).not.toHaveBeenCalled();
+    expect(registrations.channel).toHaveBeenCalledOnce();
+    expect(registrations.channelIdChanged).not.toHaveBeenCalled();
     expect(registrations.home).not.toHaveBeenCalled();
     expect(registrations.agent).not.toHaveBeenCalled();
-    expect(registrations.interaction).not.toHaveBeenCalled();
+    expect(registrations.interaction).toHaveBeenCalledOnce();
     expect(registrations.assistant).not.toHaveBeenCalled();
   });
 
-  it("preserves the full event set for workspace installs", () => {
-    registerForInstallation("workspace");
+  it("adds workspace-only listeners without duplicating the common event set", () => {
+    registerCommonEvents();
+    registerSlackWorkspaceEvents({ ctx: {} as SlackMonitorContext });
 
     for (const registration of Object.values(registrations)) {
       expect(registration).toHaveBeenCalledOnce();

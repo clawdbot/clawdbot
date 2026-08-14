@@ -8,7 +8,6 @@ export {
   registerTestPlugin,
   registerVirtualTestPlugin,
   requireProvider,
-  uniqueSortedStrings,
 } from "./test-helpers/contracts-testkit.js";
 export { runDirectImportSmoke } from "./test-helpers/direct-smoke.js";
 export { describePackageManifestContract } from "./test-helpers/package-manifest-contract.js";

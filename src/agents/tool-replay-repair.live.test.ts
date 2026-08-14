@@ -20,7 +20,7 @@ import {
   resolveLiveCredentialPrecedence,
   type CompleteSimpleContent,
 } from "./live-test-helpers.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
@@ -261,7 +261,7 @@ describeLive("tool replay repair live", () => {
 
         let apiKeyInfo;
         try {
-          apiKeyInfo = await getApiKeyForModel({
+          apiKeyInfo = await getApiKeyForModelCore({
             model,
             cfg,
             credentialPrecedence: resolveLiveCredentialPrecedence(
@@ -374,7 +374,7 @@ describeLive("tool replay repair live", () => {
 
         let apiKeyInfo;
         try {
-          apiKeyInfo = await getApiKeyForModel({
+          apiKeyInfo = await getApiKeyForModelCore({
             model,
             cfg,
             credentialPrecedence: resolveLiveCredentialPrecedence(

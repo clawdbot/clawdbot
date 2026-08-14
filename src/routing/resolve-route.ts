@@ -1,6 +1,11 @@
 // Route resolution helpers map user targets to configured channel routes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentEntries,
+  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -111,7 +116,7 @@ export function buildAgentSessionKey(params: {
 type AgentLookupCache = {
   agentsRef: OpenClawConfig["agents"] | undefined;
   byNormalizedId: Map<string, string>;
-  fallbackDefaultAgentId: string;
+  fallbackSoleAgentId?: string;
 };
 
 const agentLookupCacheByCfg = new WeakMap<OpenClawConfig, AgentLookupCache>();
@@ -134,7 +139,7 @@ function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
   const next: AgentLookupCache = {
     agentsRef,
     byNormalizedId,
-    fallbackDefaultAgentId: sanitizeAgentId(resolveDefaultAgentId(cfg)),
+    fallbackSoleAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
   };
   agentLookupCacheByCfg.set(cfg, next);
   return next;
@@ -144,20 +149,29 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
-    return lookup.fallbackDefaultAgentId;
+    return sanitizeAgentId(
+      lookup.fallbackSoleAgentId ??
+        resolveDefaultAgentId(cfg, {
+          surface: "agent lookup",
+          hint: "Pass an explicit agent id instead of relying on an implicit route.",
+        }),
+    );
   }
   const normalized = normalizeAgentId(trimmed);
   const resolved = lookup.byNormalizedId.get(normalized);
   if (resolved) {
     return resolved;
   }
-  if (trimmed === DEFAULT_AGENT_ID) {
+  if (normalized === DEFAULT_AGENT_ID) {
     return DEFAULT_AGENT_ID;
   }
   if (lookup.byNormalizedId.size === 0) {
     return sanitizeAgentId(trimmed);
   }
-  return lookup.fallbackDefaultAgentId;
+  throw new AgentSelectionRequiredError([...lookup.byNormalizedId.values()], {
+    surface: "route binding",
+    hint: `Update the binding agentId "${trimmed}" to a configured agent.`,
+  });
 }
 
 type NormalizedPeerConstraint =
@@ -466,6 +480,20 @@ function getEvaluatedBindingIndexForChannelAccount(
   return built;
 }
 
+/** @internal Lists exact DM peers from the canonical channel/account binding index. */
+export function listExactDirectMessageBindingPeerIds(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
+): string[] {
+  const prefix = "direct:";
+  return [
+    ...getEvaluatedBindingIndexForChannelAccount(
+      input.cfg,
+      normalizeLowercaseStringOrEmpty(input.channel),
+      normalizeAccountId(input.accountId),
+    ).byPeer.keys(),
+  ].flatMap((key) => (key.startsWith(prefix) ? [key.slice(prefix.length)] : []));
+}
+
 function normalizePeerConstraint(
   peer: { kind?: string; id?: string } | undefined,
 ): NormalizedPeerConstraint {
@@ -771,6 +799,20 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
-  return choose(resolveDefaultAgentId(input.cfg), "default");
+  return choose(
+    tryResolveLegacyCompatibilityAgentId(input.cfg) ??
+      resolveDefaultAgentId(input.cfg, {
+        surface: `${channel} account ${accountId} routing`,
+        hint: `Add a channel-wide binding for ${channel}:${accountId} or configure a sole agent.`,
+      }),
+    "default",
+  );
+}
+
+/** @internal Resolves fallback precedence for an unknown direct peer. */
+export function resolveUnknownDirectMessageRoute(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope">,
+): ResolvedAgentRoute {
+  return resolveAgentRoute({ ...input, peer: { kind: "direct", id: "" } });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -23,7 +23,7 @@ vi.mock("./bundled-plugin-metadata.js", () => ({
 }));
 
 vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadBundledManifestRegistry,
+  loadPluginManifestRegistryCore: mocks.loadBundledManifestRegistry,
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
@@ -157,6 +157,48 @@ describe("resolvePluginConfigContractsById", () => {
       }),
     ).toEqual(new Map());
     expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("hydrates supplied bundled registry records from explicit bundled discovery", () => {
+    mocks.loadBundledManifestRegistry.mockReturnValue(
+      createRegistry([
+        createPluginRecord({
+          id: "prepared-plugin",
+          origin: "bundled",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "credentials.token", expected: "string" }],
+            },
+          },
+        }),
+      ]),
+    );
+
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["prepared-plugin"],
+        manifestRegistry: createRegistry([
+          createPluginRecord({ id: "prepared-plugin", origin: "bundled" }),
+        ]),
+        fallbackToBundledMetadata: true,
+        fallbackToBundledMetadataForResolvedBundled: true,
+        fallbackBundledPluginIds: ["prepared-plugin"],
+      }),
+    ).toEqual(
+      new Map([
+        [
+          "prepared-plugin",
+          {
+            origin: "bundled",
+            configContracts: {
+              secretInputs: {
+                paths: [{ path: "credentials.token", expected: "string" }],
+              },
+            },
+          },
+        ],
+      ]),
+    );
   });
 
   it("can hydrate missing contracts from bundled registry for resolved bundled plugins", () => {

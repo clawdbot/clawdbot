@@ -14,7 +14,7 @@ export type {
 } from "./provider-dispatcher.types.js";
 
 /** Dispatch a reply using the buffered block dispatcher path. */
-export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =
+export const dispatchReplyWithBufferedBlockDispatcherCore: DispatchReplyWithBufferedBlockDispatcher =
   async (params) => {
     return await dispatchInboundMessageWithBufferedDispatcher({
       ctx: params.ctx,
@@ -27,7 +27,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBuffered
   };
 
 /** Dispatch a reply using the standard dispatcher path. */
-export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = async (params) => {
+export const dispatchReplyWithDispatcherCore: DispatchReplyWithDispatcher = async (params) => {
   return await dispatchInboundMessageWithDispatcher({
     ctx: params.ctx,
     cfg: params.cfg,

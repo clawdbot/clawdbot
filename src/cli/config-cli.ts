@@ -435,9 +435,9 @@ export function registerConfigCli(program: Command) {
       false,
     )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")
-    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec)")
+    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec|store)")
     .option("--ref-id <id>", "SecretRef builder: ref id")
-    .option("--provider-source <source>", "Provider builder: source (env|file|exec)")
+    .option("--provider-source <source>", "Provider builder: source (env|file|exec|store)")
     .option(
       "--provider-allowlist <envVar>",
       "Provider builder (env): allowlist entry (repeatable)",

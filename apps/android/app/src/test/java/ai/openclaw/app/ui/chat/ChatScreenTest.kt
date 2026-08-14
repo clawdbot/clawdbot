@@ -73,18 +73,22 @@ class ChatScreenTest {
   }
 
   @Test
-  fun activeTalkAlwaysKeepsTheStopControlVisible() {
+  fun composerTrailingActionPreservesTalkAndRunStopPrecedence() {
     assertEquals(
       ChatComposerTrailingAction.StopTalk,
-      resolveChatComposerTrailingAction(talkActive = true, sendEnabled = true),
+      resolveChatComposerTrailingAction(talkActive = true, runActive = true, sendEnabled = true),
+    )
+    assertEquals(
+      ChatComposerTrailingAction.Stop,
+      resolveChatComposerTrailingAction(talkActive = false, runActive = true, sendEnabled = true),
     )
     assertEquals(
       ChatComposerTrailingAction.Send,
-      resolveChatComposerTrailingAction(talkActive = false, sendEnabled = true),
+      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = true),
     )
     assertEquals(
       ChatComposerTrailingAction.StartTalk,
-      resolveChatComposerTrailingAction(talkActive = false, sendEnabled = false),
+      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = false),
     )
   }
 

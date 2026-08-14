@@ -78,6 +78,8 @@ describe("failed worker placement redispatch", () => {
       lastTranscriptAckCursor: null,
       lastLiveEventAckCursor: null,
       recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
     });
   });
 });
