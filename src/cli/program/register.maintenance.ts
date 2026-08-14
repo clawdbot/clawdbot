@@ -147,9 +147,7 @@ export function registerMaintenanceCommands(program: Command) {
             });
             defaultRuntime.exit(exitCode);
           },
-          (err) => {
-            exitDoctorError(String(err), opts.json === true || !process.stdout.isTTY);
-          },
+          (err) => exitDoctorError(String(err), opts.json === true || !process.stdout.isTTY),
         );
         return;
       }
@@ -165,34 +163,41 @@ export function registerMaintenanceCommands(program: Command) {
           opts.json === true,
         );
       }
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { doctorCommand } = await import("../../commands/doctor.js");
-        const stateSqlite = parseDoctorStateSqliteMode(opts.stateSqlite, opts.json === true);
-        const sessionSqlite = parseDoctorSessionSqliteMode(opts.sessionSqlite, opts.json === true);
-        await doctorCommand(defaultRuntime, {
-          workspaceSuggestions: opts.workspaceSuggestions,
-          yes: Boolean(opts.yes),
-          repair: Boolean(opts.repair) || Boolean(opts.fix),
-          force: Boolean(opts.force),
-          nonInteractive: Boolean(opts.nonInteractive),
-          generateGatewayToken: Boolean(opts.generateGatewayToken),
-          allowExec: Boolean(opts.allowExec),
-          deep: Boolean(opts.deep),
-          postUpgrade: Boolean(opts.postUpgrade),
-          ...(stateSqlite ? { stateSqlite } : {}),
-          ...(sessionSqlite ? { sessionSqlite } : {}),
-          ...(typeof opts.sessionSqliteStore === "string"
-            ? { sessionSqliteStore: opts.sessionSqliteStore }
-            : {}),
-          ...(typeof opts.sessionSqliteAgent === "string"
-            ? { sessionSqliteAgent: opts.sessionSqliteAgent }
-            : {}),
-          sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
-          sessionSqliteGithubIssue: Boolean(opts.githubIssue),
-          json: Boolean(opts.json),
-        });
-        defaultRuntime.exit(0);
-      });
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const { doctorCommand } = await import("../../commands/doctor.js");
+          const stateSqlite = parseDoctorStateSqliteMode(opts.stateSqlite, opts.json === true);
+          const sessionSqlite = parseDoctorSessionSqliteMode(
+            opts.sessionSqlite,
+            opts.json === true,
+          );
+          await doctorCommand(defaultRuntime, {
+            workspaceSuggestions: opts.workspaceSuggestions,
+            yes: Boolean(opts.yes),
+            repair: Boolean(opts.repair) || Boolean(opts.fix),
+            force: Boolean(opts.force),
+            nonInteractive: Boolean(opts.nonInteractive),
+            generateGatewayToken: Boolean(opts.generateGatewayToken),
+            allowExec: Boolean(opts.allowExec),
+            deep: Boolean(opts.deep),
+            postUpgrade: Boolean(opts.postUpgrade),
+            ...(stateSqlite ? { stateSqlite } : {}),
+            ...(sessionSqlite ? { sessionSqlite } : {}),
+            ...(typeof opts.sessionSqliteStore === "string"
+              ? { sessionSqliteStore: opts.sessionSqliteStore }
+              : {}),
+            ...(typeof opts.sessionSqliteAgent === "string"
+              ? { sessionSqliteAgent: opts.sessionSqliteAgent }
+              : {}),
+            sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
+            sessionSqliteGithubIssue: Boolean(opts.githubIssue),
+            json: Boolean(opts.json),
+          });
+          defaultRuntime.exit(0);
+        },
+        opts.json ? (err: unknown) => exitDoctorError(String(err), true) : undefined,
+      );
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
 
@@ -306,10 +311,7 @@ function hasSessionSqliteOnlyDoctorOptions(opts: {
 }
 
 function parseDoctorStateSqliteMode(value: unknown, json: boolean): "compact" | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === "compact") {
+  if (value === undefined || value === "compact") {
     return value;
   }
   exitDoctorError("Invalid --state-sqlite mode. Use compact.", json);
@@ -320,10 +322,8 @@ function parseDoctorSessionSqliteMode(
   value: unknown,
   json: boolean,
 ): "dry-run" | "import" | "validate" | "inspect" | "compact" | "restore" | "recover" | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
   if (
+    value === undefined ||
     value === "dry-run" ||
     value === "import" ||
     value === "validate" ||

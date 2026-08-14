@@ -112,6 +112,16 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).not.toHaveBeenCalledWith(0);
   });
 
+  it("writes JSON when Doctor maintenance fails before producing a report", async () => {
+    doctorCommand.mockRejectedValue(new Error("maintenance failed"));
+
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
+
+    expect(runtime.writeJson).toHaveBeenCalledWith({ error: "Error: maintenance failed" });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("maps --fix to repair=true", async () => {
     doctorCommand.mockResolvedValue(undefined);
 
