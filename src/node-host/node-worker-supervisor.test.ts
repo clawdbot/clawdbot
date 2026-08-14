@@ -611,6 +611,32 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
+  it("records the child's last gateway connection failure when cancelling admission", async () => {
+    const { supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "connection-failure-launch", "connection-failure");
+    expect(
+      await supervisor.launch(input, {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+      }),
+    ).toMatchObject({
+      state: "running",
+    });
+    await vi.waitFor(() =>
+      expect(fs.existsSync(path.join(workspaceDir, "connection-failure-reported"))).toBe(true),
+    );
+
+    const cancelled = await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+    expect(cancelled).toMatchObject({
+      state: "cancelled",
+      errorText: expect.stringMatching(
+        /^worker could not reach gateway gateway\.example: certificate rejected .+; check TLS pin\/publicUrl configuration$/u,
+      ),
+    });
+    expect(cancelled?.errorText).not.toContain(TEST_WORKER_CREDENTIAL);
+    await supervisor.close();
+  });
+
   it.each([
     ["cancel", "cancelled"],
     ["close", "interrupted"],

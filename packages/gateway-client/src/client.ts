@@ -258,6 +258,7 @@ export type GatewayClientOptions = {
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
+  clientBuildId?: string;
   platform?: string;
   deviceFamily?: string;
   mode?: GatewayClientMode;
@@ -760,6 +761,7 @@ export class GatewayClient {
           id: clientId,
           displayName: this.opts.clientDisplayName,
           version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
+          buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
           mode: clientMode,

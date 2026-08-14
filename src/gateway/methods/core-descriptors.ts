@@ -276,6 +276,13 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "<=2026.7",
     { advertise: false },
   ],
+  [
+    "device.pair.setupStatus",
+    "device-pair-setup",
+    "operator.admin",
+    "2026.8",
+    { advertise: false },
+  ],
   ["node.rename", "nodes", "operator.pairing", "<=2026.7"],
   ["node.list", "nodes", "operator.read", "<=2026.7"],
   ["node.describe", "nodes", "operator.read", "<=2026.7"],

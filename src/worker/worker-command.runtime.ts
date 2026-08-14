@@ -11,6 +11,7 @@ type RunWorkerCommandOptions = {
 
 export type WorkerCommandLifetime = {
   dispose: () => void;
+  reportConnectionFailure: (cause: string | undefined) => void;
   signal: AbortSignal;
   started: Promise<boolean>;
   terminateOwnedTree: () => void;
@@ -76,7 +77,12 @@ export async function runWorkerCommand(options: RunWorkerCommandOptions): Promis
     }
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
-    const result = await runWorkerDescriptor(descriptor, { signal: abortController.signal });
+    const result = await runWorkerDescriptor(descriptor, {
+      signal: abortController.signal,
+      ...(options.lifetime
+        ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
+        : {}),
+    });
     const encoded = `${JSON.stringify(result)}\n`;
     options.output.write(encoded);
   } finally {

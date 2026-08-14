@@ -74,6 +74,17 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
+function stubIsolatedProcessEnv(patch: NodeJS.ProcessEnv): void {
+  const isolatedProcess = Object.create(process) as NodeJS.Process;
+  Object.defineProperty(isolatedProcess, "env", {
+    configurable: true,
+    value: { ...process.env, ...patch },
+  });
+  // Test files share the host process environment. Replace only this file's
+  // global view so proxy-policy coverage cannot redirect sibling transports.
+  vi.stubGlobal("process", isolatedProcess);
+}
+
 type GoogleAuthFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 async function createGoogleAuthTransportFetch(): Promise<GoogleAuthFetch> {
@@ -216,8 +227,10 @@ describe("googlechat google auth runtime", () => {
       response: new Response("ok", { status: 200 }),
       release,
     });
-    vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
-    vi.stubEnv("https_proxy", "http://lower-proxy.example:8080");
+    stubIsolatedProcessEnv({
+      HTTPS_PROXY: "http://env-proxy.example:8080",
+      https_proxy: "http://lower-proxy.example:8080",
+    });
 
     const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {

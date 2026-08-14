@@ -6728,7 +6728,7 @@
       "surface": "android",
       "sites": [
         {
-          "kind": "ui-call",
+          "kind": "conditional-branch",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
         }
       ]
@@ -6741,6 +6741,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageActions.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.e5ad8016516600bb",
+      "source": "Fork from last completed message",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
         }
       ]
     },
@@ -29750,7 +29761,7 @@
       "surface": "apple",
       "sites": [
         {
-          "kind": "ui-call",
+          "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/CommandCenterSupport.swift"
         },
         {
@@ -29775,6 +29786,29 @@
         {
           "kind": "ui-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.d6c01cfe9e53e179",
+      "source": "Fork from last completed message",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/CommandCenterSupport.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift"
         }
       ]
     },

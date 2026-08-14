@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -104,6 +105,37 @@ test(
       lifecycleRevision: resetLifecycleRevision,
     });
     expect(placements.get(resetSessionId)).toBeUndefined();
+
+    const createdForExternalDelete = await rpcReq<{ key?: string; sessionId?: string }>(
+      ws,
+      "sessions.create",
+      { agentId: "main", key: "startup-placement-external-delete" },
+    );
+    const externalSessionId = createdForExternalDelete.payload?.sessionId;
+    const externalSessionKey = createdForExternalDelete.payload?.key;
+    if (!externalSessionId || !externalSessionKey) {
+      throw new Error("external-delete session creation did not return placement identity");
+    }
+    const externalClaim = placements.claimTurn({
+      sessionId: externalSessionId,
+      sessionKey: externalSessionKey,
+      agentId: "main",
+      owner: { kind: "local" },
+      claimId: "startup-placement-external-delete-claim",
+      runId: "startup-placement-external-delete-run",
+    });
+    placements.releaseTurn(externalClaim);
+    const externalTarget = loadSessionEntry(externalSessionKey);
+    await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath: externalTarget.storePath,
+      target: {
+        canonicalKey: externalTarget.canonicalKey,
+        storeKeys: externalTarget.storeKeys,
+      },
+    });
+    await vi.waitFor(() => expect(placements.get(externalSessionId)).toBeUndefined());
+
     expect(getFallbackGatewayContext()?.workerEnvironmentService).toBeDefined();
     ws.close();
   },

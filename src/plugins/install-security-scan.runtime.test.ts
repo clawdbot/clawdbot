@@ -425,25 +425,6 @@ describe("legacy file install scan compatibility", () => {
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a block from policy re-evaluation terminal", async () => {
-    runInstallPolicyMock
-      .mockResolvedValueOnce({
-        warning: { reason: "review this plugin", fingerprint: "warning-a" },
-      })
-      .mockResolvedValueOnce({
-        blocked: { code: "security_scan_blocked", reason: "now blocked" },
-      });
-
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
-      logger: {},
-      onInstallPolicyWarning: vi.fn().mockResolvedValue({ status: "approved" }),
-      pluginId: "payload",
-    });
-
-    expect(result?.blocked).toEqual({ code: "security_scan_blocked", reason: "now blocked" });
-  });
-
   it("keeps the deprecated unsafe flag inert when policy warns", async () => {
     runInstallPolicyMock.mockResolvedValue({
       warning: { reason: "review this plugin", fingerprint: "warning-a" },

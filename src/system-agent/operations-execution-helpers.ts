@@ -3,7 +3,6 @@ import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-conf
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -36,24 +35,6 @@ const loadOverviewModule = async () => await import("./overview.js");
 
 export const CONFIG_GET_OUTPUT_MAX_CHARS = 2_000;
 export const CONFIG_SCHEMA_CHILDREN_MAX = 40;
-
-export function redactConfigValue(value: unknown, configPath: string): unknown {
-  if (typeof value === "string" || typeof value === "number") {
-    return isSensitiveConfigPath(configPath) ? "<redacted>" : value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactConfigValue(entry, `${configPath}[]`));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
-        key,
-        redactConfigValue(entry, configPath ? `${configPath}.${key}` : key),
-      ]),
-    );
-  }
-  return value;
-}
 
 export function readConfigValueAtPath(
   config: unknown,

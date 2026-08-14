@@ -42,6 +42,7 @@ import {
   partitionSidebarVisibleSections,
   promoteSidebarSessionCreatedOrder,
   resolveSidebarAgentChipSubtitle,
+  resolveSidebarHomeAttention,
   resolveSidebarAgentResumeKey,
   resolveSidebarMainSessionKey,
   toggleSidebarSessionSelection,
@@ -272,10 +273,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     );
   }
 
-  outboxCountForSessionKey(sessionKey: string): number {
-    return this.outboxCountForSession(sessionKey);
-  }
-
   getSessionNavigationState(): SidebarSessionNavigationState {
     const routeSessionKey = this.getRouteSessionKey();
     return buildSidebarSessionNavigationState({
@@ -291,7 +288,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       highlightCurrentSession: isSessionRouteId(this.activeRouteId),
       runtimeSampledAtByRow: this.runtimeSampledAtByRow,
       loadingChildSessionKeys: this.sessionData.loadingChildSessionKeys,
-      outboxCountForSessionKey: (sessionKey) => this.outboxCountForSessionKey(sessionKey),
+      outboxCountForSessionKey: (sessionKey) => this.outboxCountForSession(sessionKey),
       hasSessionDraft: (sessionKey) => this.hasSessionDraft(sessionKey),
       resolveAttention: (row) => this.attention.resolveSessionAttention(row),
       resolveAgentStatusNote: (row) => this.attention.resolveSessionAgentStatus(row)?.note,
@@ -723,6 +720,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       agentsList: this.context?.agents.state.agentsList,
       hello: this.context?.gateway.snapshot.hello,
     });
+  }
+
+  resolveHomeSessionAttention(sessionKey: string, row: GatewaySessionRow | null) {
+    return resolveSidebarHomeAttention(this.attention, sessionKey, row);
   }
 
   /** Gateway row backing the identity card (unread/running state), if loaded. */
