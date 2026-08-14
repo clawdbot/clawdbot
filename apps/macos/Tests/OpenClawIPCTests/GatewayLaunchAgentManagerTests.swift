@@ -4,6 +4,13 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test func `attach-only marker belongs to the selected state directory`() {
+        let stateDirectory = URL(fileURLWithPath: "/tmp/openclaw-elevation-state", isDirectory: true)
+
+        #expect(GatewayLaunchAgentManager.disableLaunchAgentMarkerURL(in: stateDirectory).path ==
+            "/tmp/openclaw-elevation-state/disable-launchagent")
+    }
+
     @Test func `gateway launchd artifacts follow default and named profile labels`() {
         let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
         let directory = URL(fileURLWithPath: "/state/service-env", isDirectory: true)
