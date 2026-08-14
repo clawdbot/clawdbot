@@ -8,7 +8,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
@@ -64,6 +67,8 @@ export async function messageCommand(
   runtime: RuntimeEnv,
 ) {
   const loadedRaw = getRuntimeConfig();
+  const agentId =
+    tryResolveLegacyCompatibilityAgentId(loadedRaw) ?? resolveDefaultAgentId(loadedRaw);
   const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
   const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
@@ -128,7 +133,7 @@ export async function messageCommand(
       action,
       params: opts,
       deps: outboundDeps,
-      agentId: resolveDefaultAgentId(cfg),
+      agentId,
       senderIsOwner: opts.senderIsOwner !== false,
       conversationReadOrigin: "direct-operator",
       broadcastAccountPlan,

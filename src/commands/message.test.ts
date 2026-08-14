@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -416,6 +417,29 @@ describe("messageCommand", () => {
         (id) => !id.startsWith("channels.telegram."),
       ),
     ).toStrictEqual([]);
+  });
+
+  it("keeps the retained legacy owner after config load strips the default marker", async () => {
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: {
+        entries: {
+          ops: { default: true },
+          research: {},
+        },
+      },
+      channels: { telegram: {} },
+    }).config as Record<string, unknown>;
+    testConfig = migrated;
+    const effectiveConfig = structuredClone(migrated);
+    applyPluginAutoEnable.mockReturnValueOnce({ config: effectiveConfig, changes: [] });
+
+    await runMessageCommand();
+
+    expect(
+      (migrated.agents as { entries?: { ops?: { default?: boolean } } }).entries?.ops?.default,
+    ).toBeUndefined();
+    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
+    expect(readOnlyMessageActionCall().agentId).toBe("ops");
   });
 
   it("keeps local-fallback resolved cfg and logs diagnostics", async () => {
