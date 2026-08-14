@@ -62,6 +62,7 @@ import {
 } from "../sessions/agent-harness-session-key.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import { SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -222,6 +223,44 @@ type CreateGatewaySessionResult =
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape };
+
+const FORK_LABEL_MAX_COPIES = 99;
+
+/**
+ * A fork of a named session inherits that name with a numeric suffix. Two rows
+ * both reading "Release notes" are indistinguishable everywhere a session is
+ * listed, and the name is the only thing a fork does not otherwise inherit.
+ *
+ * This belongs to the producer: a renderer deriving it would have to count
+ * look-alikes at paint time, and would disagree with the stored name the moment
+ * either session were renamed. An unnamed parent stays unnamed - a generated
+ * display name is not a name to copy.
+ */
+export function forkedSessionLabel(
+  parentLabel: string | undefined,
+  isLabelInUse: (label: string) => boolean,
+): string | undefined {
+  const inherited = normalizeOptionalString(parentLabel)
+    ?.replace(/\s*\(\d+\)$/u, "")
+    .trim();
+  if (!inherited) {
+    return undefined;
+  }
+  // A parent may legally use the whole label budget, and the suffix still has to
+  // fit: appending to a full-length name would make the fork fail validation
+  // over a name the operator never typed.
+  const suffixBudget = ` (${FORK_LABEL_MAX_COPIES})`.length;
+  const base = inherited.slice(0, SESSION_LABEL_MAX_LENGTH - suffixBudget).trimEnd();
+  for (let copy = 2; copy <= FORK_LABEL_MAX_COPIES; copy += 1) {
+    const candidate = `${base} (${copy})`;
+    if (!isLabelInUse(candidate)) {
+      return candidate;
+    }
+  }
+  // Accepted tradeoff: past the cap the fork stays unnamed rather than growing
+  // an unbounded suffix search, and falls back to its generated display name.
+  return undefined;
+}
 
 export async function createGatewaySession(params: {
   cfg: OpenClawConfig;
@@ -956,18 +995,23 @@ export async function createGatewaySession(params: {
             };
           }
         }
+        const isLabelInUse = (label: string) =>
+          Object.entries(sessionEntries).some(
+            ([sessionKey, entry]) => sessionKey !== target.canonicalKey && entry.label === label,
+          );
         const patched = await projectSessionsPatchEntry({
           cfg: params.cfg,
           existingEntry: sessionEntries[target.canonicalKey],
-          isLabelInUse: (label) =>
-            Object.entries(sessionEntries).some(
-              ([sessionKey, entry]) => sessionKey !== target.canonicalKey && entry.label === label,
-            ),
+          isLabelInUse,
           storeKey: target.canonicalKey,
           agentId: target.agentId,
           patch: {
             key: target.canonicalKey,
-            label: normalizeOptionalString(params.label),
+            label:
+              normalizeOptionalString(params.label) ??
+              (params.fork === true
+                ? forkedSessionLabel(currentParentSessionEntry?.label, isLabelInUse)
+                : undefined),
             model: catalogModel ?? requestedModel,
             thinkingLevel: requestedThinkingLevel,
           },

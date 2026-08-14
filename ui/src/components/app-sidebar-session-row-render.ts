@@ -163,6 +163,8 @@ export function renderRecentSession(params: {
   session: SidebarRecentSession;
   display?: CatalogBackingSessionDisplay;
   listItem?: boolean;
+  /** Project heading this row already sits under, if any. */
+  project?: string;
 }) {
   const { host, session, display, listItem = true } = params;
   const pinAccess = host.readSessionMutationAccess({
@@ -170,7 +172,7 @@ export function renderRecentSession(params: {
     params: { key: session.key, pinned: !session.pinned },
   });
   const label = display?.label ?? session.label;
-  const subtitleSlot = resolveSidebarSessionSubtitle({
+  const subtitleValue = resolveSidebarSessionSubtitle({
     session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
@@ -178,7 +180,7 @@ export function renderRecentSession(params: {
     narrationLine: host.sidebarNarrationLines.get(session.key),
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
-  const { narration } = subtitleSlot;
+  const { narration } = subtitleValue;
   const pullRequestState = session.worktree
     ? host.sessionPullRequestIndicatorState(session.key, session.worktree.id)
     : "none";
@@ -351,7 +353,9 @@ export function renderRecentSession(params: {
                   : nothing}${label}</span
               >
             </span>
-            ${session.isChild ? nothing : renderSidebarSessionSubtitle(subtitleSlot)}
+            ${session.isChild
+              ? nothing
+              : renderSidebarSessionSubtitle(subtitleValue, params.project)}
           </span>
           ${!session.isChild && sessionHasBoard(session.key)
             ? html`<span
@@ -436,6 +440,7 @@ export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
   listItem?: boolean;
+  project?: string;
 }): TemplateResult {
   const { host, session, listItem = true } = params;
   const expanded = host.isSessionChildrenExpanded(session);
@@ -449,7 +454,7 @@ export function renderSessionTree(params: {
     data-session-tree=${session.key}
     role=${ifDefined(listItem ? "listitem" : undefined)}
   >
-    ${renderRecentSession({ host, session, listItem: false })}
+    ${renderRecentSession({ host, session, listItem: false, project: params.project })}
     ${expanded
       ? html`<div class="sidebar-session-tree__children">
           ${visibleChildren.length > 0

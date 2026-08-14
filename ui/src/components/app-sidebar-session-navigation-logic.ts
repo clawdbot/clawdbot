@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts";
+import {
+  SIDEBAR_NAV_ROUTES,
+  type NavigationRouteId,
+  type SidebarZoneEntry,
+} from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
@@ -8,9 +12,14 @@ import {
   isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
+  resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
+import {
+  resolveProjectRoot,
+  workProjectSectionId,
+} from "../lib/sessions/catalog-project-grouping.ts";
 import {
   groupSidebarSessionRows,
   sidebarSectionHasHeader,
@@ -208,6 +217,7 @@ export function buildSidebarSessionNavigationState(input: {
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
       subtitle: resolveSessionWorkSubtitle(row),
+      workContext: resolveSessionWorkContext(row),
       href: sessionNavigationTarget({
         face: resolveSessionPreferredFace(row),
         sessionKey: row.key,
@@ -296,6 +306,44 @@ export type SidebarVisibleSections = {
   expandedRows: SidebarRecentSession[];
   visibleRows: SidebarRecentSession[];
 };
+
+/**
+ * The canonical ordered list of sessions the operator can actually see: pinned
+ * entries first, then the expanded sections. Rows folded inside a collapsed
+ * Coding project are excluded here rather than only in the renderer, because
+ * selection, keyboard range, and batch archive/delete all read this projection
+ * and must not act on a session that is not on screen.
+ */
+export function projectVisibleSessionRows(input: {
+  rows: readonly SidebarRecentSession[];
+  zoned: SidebarVisibleSections;
+  pinnedEntries: readonly SidebarZoneEntry[];
+  collapsedSections: ReadonlySet<string>;
+}): SidebarRecentSession[] {
+  const { sections, visibleRows } = input.zoned;
+  const pinnedByKey = new Map(input.rows.filter((row) => row.pinned).map((row) => [row.key, row]));
+  const pinnedRows = input.pinnedEntries.flatMap((entry) => {
+    const pinned = entry.type === "session" ? pinnedByKey.get(entry.key) : undefined;
+    return pinned ? [pinned] : [];
+  });
+  const collapsedSections = input.collapsedSections;
+  const folded = new Set(
+    sections
+      .filter((section) => section.work)
+      .flatMap((section) => section.rows)
+      .filter((row) => {
+        const projectRoot = resolveProjectRoot(row.worktree?.repoRoot ?? row.execCwd);
+        return (
+          projectRoot !== undefined && collapsedSections.has(workProjectSectionId(projectRoot))
+        );
+      })
+      .map((row) => row.key),
+  );
+  return [
+    ...pinnedRows,
+    ...(folded.size === 0 ? visibleRows : visibleRows.filter((row) => !folded.has(row.key))),
+  ];
+}
 
 export function partitionSidebarVisibleSections(input: {
   rows: SidebarRecentSession[];

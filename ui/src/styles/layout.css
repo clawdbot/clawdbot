@@ -4187,6 +4187,58 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
 }
 
+/* A Git subtitle is a marked line: the branch glyph sits immediately before the
+   branch so a marked line always means a real Git fact, and a session running in
+   its own checkout keeps a trailing marker. Only the text scrolls and fades —
+   the marker must survive the truncation that hides the branch name. */
+.sidebar-recent-session__subtitle--git {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: visible;
+}
+
+.sidebar-recent-session__subtitle-text {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row-git-glyph,
+.session-row-worktree-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
+}
+
+.session-row-git-glyph svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Filled art on a 20px grid: matched optically to the 14px branch glyph rather
+   than boxed to the same number. */
+.session-row-worktree-glyph svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  stroke: none;
+}
+
+.session-row-worktree-glyph {
+  margin-left: auto;
+}
+
 .sidebar-session-attention__icon {
   display: inline-flex;
   align-items: center;

@@ -29,6 +29,7 @@ import {
 import {
   applySidebarSessionCreatorFilter,
   buildReconciledSidebarZone,
+  projectVisibleSessionRows,
   buildSidebarSessionNavigationState,
   collectPromotedMainChildRows,
   compareSidebarSessionRowsByMode,
@@ -374,18 +375,13 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   /** Rows in on-screen order; shift ranges and batch actions share this ordering. */
   protected visibleSessionRowsInOrder(): SidebarRecentSession[] {
-    const navigationState = this.getSessionNavigationState();
-    const rows = this.selectedAgentSessionRows(navigationState);
-    const { visibleRows } = this.zonedVisibleSections(rows);
-    const pinnedByKey = new Map(rows.filter((row) => row.pinned).map((row) => [row.key, row]));
-    const pinnedRows = this.reconciledSidebarZone().entries.flatMap((entry) =>
-      entry.type === "session"
-        ? pinnedByKey.get(entry.key)
-          ? [pinnedByKey.get(entry.key)!]
-          : []
-        : [],
-    );
-    return [...pinnedRows, ...visibleRows];
+    const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
+    return projectVisibleSessionRows({
+      rows,
+      zoned: this.zonedVisibleSections(rows),
+      pinnedEntries: this.reconciledSidebarZone().entries,
+      collapsedSections: this.collapsedSessionSections,
+    });
   }
 
   selectedVisibleSessions(): SidebarRecentSession[] {

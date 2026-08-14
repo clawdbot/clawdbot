@@ -6,6 +6,39 @@ export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGro
   return raw === "none" || raw === "person" ? raw : "project";
 }
 
+/**
+ * The repository a working directory belongs to, or nothing when the path says
+ * nothing useful. Every surface that groups by project has to agree on this, or
+ * one checkout ends up as two projects under two headings.
+ *
+ * Accepted tradeoff: filesystem-root paths are not real session roots and fall
+ * to the flat tail by design. A path at or under `.claude/worktrees/<name>`
+ * folds into its origin repo, matching Claude Code desktop; the lazy prefix
+ * picks the outermost repo root.
+ */
+export function resolveProjectRoot(path: string | undefined): string | undefined {
+  const trimmed = path?.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  const worktreeMatch = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  return worktreeMatch?.[1] || trimmed;
+}
+
+/**
+ * Section id a Coding project heading collapses under. It is shared so the
+ * renderer that folds the group and the projection that decides which rows are
+ * visible cannot disagree about which id they are talking about.
+ */
+export function workProjectSectionId(projectPath: string): string {
+  return `work-project:${projectPath}`;
+}
+
+/** Folder name a project heading shows for a repository path. */
+export function projectRootLabel(projectPath: string): string {
+  return projectPath.split(/[\\/]/).at(-1) || projectPath;
+}
+
 type CatalogProjectGroup = {
   key: string;
   label: string;
@@ -43,17 +76,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       group.sessions.push(session);
       continue;
     }
-    // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
-    // session roots; after trimming they fall to the ungrouped flat tail by design.
-    let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");
-    if (!projectPath) {
-      ungrouped.push(session);
-      continue;
-    }
-    // Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
-    // folds into the origin repo; the lazy prefix picks the outermost repo root.
-    const worktreeMatch = projectPath.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-    projectPath = worktreeMatch?.[1] ?? projectPath;
+    const projectPath = resolveProjectRoot(session.cwd);
     if (!projectPath) {
       ungrouped.push(session);
       continue;
@@ -62,7 +85,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
     if (!group) {
       group = {
         key: projectPath,
-        label: projectPath.split(/[\\/]/).at(-1) || projectPath,
+        label: projectRootLabel(projectPath),
         title: projectPath,
         sessions: [],
       };

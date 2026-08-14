@@ -842,6 +842,7 @@ export const en: TranslationMap = {
     archivedByLabel: "Archived by",
     projectLabel: "Project",
     branchLabel: "Branch",
+    worktreeSession: "Runs in its own worktree",
     people: "People",
     allCreators: "All people",
     filterControls: "Session filters",

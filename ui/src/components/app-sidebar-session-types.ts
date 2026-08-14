@@ -9,6 +9,7 @@ import type { SessionRunStatus, SessionWorktreeSummary } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,
@@ -85,6 +86,9 @@ export type SidebarRecentSession = {
   acpSession?: boolean;
   /** Git checkout this session runs in, when it has one. */
   worktree?: SessionWorktreeSummary;
+  /** Repo, branch, and node behind the work subtitle, kept unpacked so the
+      row can mark a branch as a branch. */
+  workContext?: SessionWorkContext;
   /** Working directory of a session that runs outside a checkout. */
   execCwd?: string;
   placementState?: SessionPlacementState;

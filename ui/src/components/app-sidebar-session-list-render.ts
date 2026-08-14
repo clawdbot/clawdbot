@@ -3,7 +3,12 @@ import type { SessionCatalog } from "../../../packages/gateway-protocol/src/inde
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
-import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import {
+  projectRootLabel,
+  resolveProjectRoot,
+  workProjectSectionId,
+  type CatalogProjectGrouping,
+} from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
@@ -70,6 +75,75 @@ function collapsedSectionStatus(section: RenderableSessionSection): SidebarSecti
     : SIDEBAR_SECTION_NO_STATUS;
 }
 
+type WorkProjectGroup = {
+  key: string;
+  label: string;
+  rows: SidebarRecentSession[];
+};
+
+/**
+ * Coding sessions carry a real checkout or working directory; grouping by it is
+ * the difference between one Coding pile and a list of the projects being worked
+ * on. A session with neither fact stays in the flat tail rather than being
+ * guessed into a project it may not belong to.
+ */
+function groupWorkSessionsByProject(rows: readonly SidebarRecentSession[]): {
+  groups: WorkProjectGroup[];
+  ungrouped: SidebarRecentSession[];
+} {
+  const byPath = new Map<string, WorkProjectGroup>();
+  const groups: WorkProjectGroup[] = [];
+  const ungrouped: SidebarRecentSession[] = [];
+  for (const row of rows) {
+    const projectPath = resolveProjectRoot(row.worktree?.repoRoot ?? row.execCwd);
+    if (!projectPath) {
+      ungrouped.push(row);
+      continue;
+    }
+    let group = byPath.get(projectPath);
+    if (!group) {
+      group = { key: projectPath, label: projectRootLabel(projectPath), rows: [] };
+      byPath.set(projectPath, group);
+      groups.push(group);
+    }
+    group.rows.push(row);
+  }
+  return { groups, ungrouped };
+}
+
+/**
+ * A project heading inside Coding. It shares the section grammar rather than
+ * inventing a second one, and carries no row count: the rows are listed
+ * directly beneath it, so counting them says nothing.
+ */
+function renderWorkProjectGroup(host: SidebarSessionListHost, group: WorkProjectGroup) {
+  const sectionId = workProjectSectionId(group.key);
+  const collapsed = host.collapsedSessionSections.has(sectionId);
+  return html`<div
+    class="sidebar-session-work-project"
+    data-session-work-project=${group.key}
+    role="listitem"
+  >
+    ${renderSidebarSessionSectionToggle({
+      label: group.label,
+      collapsed,
+      status: SIDEBAR_SECTION_NO_STATUS,
+      className: "sidebar-session-catalog-project__head",
+      labelClassName: "sidebar-session-catalog-project__label",
+      title: group.key,
+      lead: html`<span class="sidebar-session-group-toggle__lead" aria-hidden="true"
+        >${icons.folder}</span
+      >`,
+      onToggle: () => host.toggleSection(sectionId),
+    })}
+    ${collapsed
+      ? nothing
+      : html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${group.label}>
+          ${group.rows.map((session) => renderSessionTree({ host, session, project: group.label }))}
+        </div>`}
+  </div>`;
+}
+
 function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
@@ -90,6 +164,7 @@ function renderSessionSection(params: {
         : t("chat.sidebar.threads");
   const zone = section.groups ? "groups" : section.work ? "coding" : group ? "category" : "threads";
   const status = collapsed ? collapsedSectionStatus(section) : SIDEBAR_SECTION_NO_STATUS;
+  const workProjects = section.work ? groupWorkSessionsByProject(section.rows) : null;
   const newSessionAccess = host.readNewSessionAccess();
   const groupWriteAccess = host.readSessionMutationAccess({
     method: "sessions.groups.put",
@@ -218,7 +293,14 @@ function renderSessionSection(params: {
               : nothing}
             ${section.rows.length > 0
               ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
-                  ${section.rows.map((session) => renderSessionTree({ host, session }))}
+                  ${workProjects
+                    ? html`${workProjects.groups.map((project) =>
+                        renderWorkProjectGroup(host, project),
+                      )}
+                      ${workProjects.ungrouped.map((session) =>
+                        renderSessionTree({ host, session }),
+                      )}`
+                    : section.rows.map((session) => renderSessionTree({ host, session }))}
                 </div>`
               : nothing}
             ${renderSessionPagination({

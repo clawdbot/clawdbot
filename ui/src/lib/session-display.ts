@@ -69,23 +69,52 @@ export function repoName(repoRoot: string): string {
   return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
 }
 
-/** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
-export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
+/**
+ * The Git facts behind a work session's subtitle, kept apart so a renderer can
+ * mark the branch as a branch. Packing them into one string was what forced
+ * every surface to guess afterwards which part of the line was Git.
+ */
+export type SessionWorkContext = {
+  repo?: string;
+  branch?: string;
+  node?: string;
+  /** The branch lives in its own checkout, not in the shared one. */
+  worktree: boolean;
+};
+
+export function resolveSessionWorkContext(
+  row: SessionWorktreeDisplayRow,
+): SessionWorkContext | undefined {
   const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
   const branch = normalizeOptionalString(row.worktree?.branch);
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
   const repo = repoRoot ? repoName(repoRoot) : undefined;
-  const shortBranch = branch?.startsWith(WORKTREE_BRANCH_PREFIX)
-    ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
-    : branch;
-  const checkout = repo ? (shortBranch ? `${repo} ⎇ ${shortBranch}` : repo) : undefined;
-  if (checkout && node) {
-    // Checkout first: it names the work; the node is routing detail.
-    return `${checkout} · ${node}`;
+  const worktree = branch?.startsWith(WORKTREE_BRANCH_PREFIX) ?? false;
+  const shortBranch = worktree ? branch?.slice(WORKTREE_BRANCH_PREFIX.length) : branch;
+  if (!repo && !shortBranch && !node) {
+    return undefined;
   }
-  return checkout ?? node;
+  return { repo, branch: shortBranch, node, worktree };
+}
+
+/** Compact "repo ⎇ branch" (plus node host) line for surfaces that need one string. */
+export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
+  const context = resolveSessionWorkContext(row);
+  if (!context) {
+    return undefined;
+  }
+  const checkout = context.repo
+    ? context.branch
+      ? `${context.repo} ⎇ ${context.branch}`
+      : context.repo
+    : undefined;
+  if (checkout && context.node) {
+    // Checkout first: it names the work; the node is routing detail.
+    return `${checkout} · ${context.node}`;
+  }
+  return checkout ?? context.node;
 }
 
 /** Machine identity of a typed session, derived from the session key. */

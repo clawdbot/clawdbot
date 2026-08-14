@@ -70,6 +70,9 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
+  selectedSessionKeys: ReadonlySet<string>;
+  selectedVisibleSessions: () => readonly { key: string }[];
+  toggleSection: (sectionId: string) => void;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
