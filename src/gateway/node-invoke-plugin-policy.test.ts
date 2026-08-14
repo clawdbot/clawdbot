@@ -643,6 +643,29 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
+  it("sanitizes node-policy approval titles at creation like the RPC ingress", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const getApprovalClientConnIds = createApprovalClientLookup([
+      createApprovalClient({
+        connId: "conn-owner-approval",
+        clientId: "client-owner",
+        deviceId: "device-owner",
+      }),
+    ]);
+    setDangerousDemoCommandRegistry([
+      // Bidi override + zero-width space: reviewer-spoofing characters.
+      createApprovalRequestPolicy({ title: "Deploy‮yolped", description: "safe​text" }),
+    ]);
+    const { context } = createContext({ pluginApprovalManager: manager, getApprovalClientConnIds });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.title).toBe("Deploy\\u{202E}yolped");
+    expect(record.request.description).toBe("safe\\u{200B}text");
+
+    await expectApprovalResolution(resultPromise, manager, record);
+  });
+
   it("forwards plugin policy approvals to the originating turn source", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
       validateAgentRuntimeDelegatedAuthority: () => true,

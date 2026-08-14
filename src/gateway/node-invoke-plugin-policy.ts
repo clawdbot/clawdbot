@@ -3,6 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
+} from "../infra/exec-approval-command-display.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -107,8 +111,18 @@ function createApprovalRuntime(params: {
       }
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        title: truncateUtf16Safe(input.title, 80),
-        description: truncateUtf16Safe(input.description, 256),
+        // Same creation-boundary sanitize as the RPC ingress: this record
+        // feeds the identical broadcast/forwarder/push paths. Normalize first
+        // so a whitespace-only title still fails closed at register (escaping
+        // the whitespace would make an unrenderable prompt look renderable).
+        title: truncateUtf16Safe(
+          sanitizeExecApprovalDisplayText(normalizeOptionalString(input.title) ?? ""),
+          80,
+        ),
+        description: truncateUtf16Safe(
+          sanitizeExecApprovalWarningText(normalizeOptionalString(input.description) ?? ""),
+          256,
+        ),
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
