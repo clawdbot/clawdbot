@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -115,7 +116,7 @@ describe("orphan SQLite sidecar admission", () => {
       for (const kind of databaseKinds) {
         const regression =
           kind === "state" && testCase.suffix === "-wal" ? " (plugin lifecycle regression)" : "";
-        it(`opens a missing ${kind} database after quarantining a ${testCase.label}${regression}`, () => {
+        it(`opens a missing ${kind} database after copying a ${testCase.label}${regression}`, () => {
           const { databasePath, env } = prepareCase(kind);
           const sidecars = [
             { suffix: testCase.suffix, contents: testCase.contents },
@@ -150,7 +151,7 @@ describe("orphan SQLite sidecar admission", () => {
             expect.stringContaining(quarantinePath),
             expect.objectContaining({
               databasePath,
-              quarantinedSidecars: [{ quarantinePath, sourcePath }],
+              copiedSidecars: [{ quarantinePath, sourcePath }],
             }),
           );
           expect(String(loggerMocks.warn.mock.calls[0]?.[0])).toContain(
@@ -214,13 +215,33 @@ describe("orphan SQLite sidecar admission", () => {
     );
   });
 
-  it("fails closed with the typed error when quarantine rename fails", () => {
+  it("leaves the live sidecar untouched and reuses an identical preserved copy", () => {
+    const { databasePath } = prepareCase("state");
+    const sourcePath = `${databasePath}-wal`;
+    fs.writeFileSync(sourcePath, walFixture.withFrames);
+
+    quarantineOrphanedSqliteSidecars(databasePath);
+    const quarantinePaths = listQuarantinePaths(sourcePath);
+
+    expect(quarantinePaths).toHaveLength(1);
+    expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
+    expect(fs.readFileSync(quarantinePaths[0] ?? "")).toEqual(walFixture.withFrames);
+    loggerMocks.warn.mockClear();
+
+    quarantineOrphanedSqliteSidecars(databasePath);
+
+    expect(listQuarantinePaths(sourcePath)).toEqual(quarantinePaths);
+    expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with the typed error when quarantine copy fails", () => {
     const { databasePath, env } = prepareCase("state");
     const sourcePath = `${databasePath}-wal`;
     fs.writeFileSync(sourcePath, walFixture.withFrames);
-    const renameError = Object.assign(new Error("read-only volume"), { code: "EROFS" });
-    vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
-      throw renameError;
+    const copyError = Object.assign(new Error("read-only volume"), { code: "EROFS" });
+    vi.spyOn(fs, "copyFileSync").mockImplementationOnce(() => {
+      throw copyError;
     });
 
     let thrown: unknown;
