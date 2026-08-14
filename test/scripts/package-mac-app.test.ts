@@ -1342,6 +1342,29 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
+  it("stages the pinned universal CUA driver before nested-code signing", () => {
+    const packageScript = readFileSync(scriptPath, "utf8");
+    const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
+    const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
+
+    expect(stageScript).toContain('TAG="cua-driver-rs-v${VERSION}"');
+    expect(stageScript).toContain(
+      'EXPECTED_SHA256="733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e"',
+    );
+    expect(packageScript).toContain(
+      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
+    );
+    expect(packageScript.indexOf("Staging embedded CUA driver")).toBeLessThan(
+      packageScript.indexOf('echo "🔏 Signing bundle'),
+    );
+    expect(codesignScript).toContain(
+      'echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"',
+    );
+    expect(codesignScript.indexOf("Signing embedded CUA driver")).toBeLessThan(
+      codesignScript.indexOf("# Finally sign the bundle"),
+    );
+  });
+
   it("does not mask required Info.plist stamp failures", () => {
     const script = readFileSync(scriptPath, "utf8");
     const stampBlock = script.slice(

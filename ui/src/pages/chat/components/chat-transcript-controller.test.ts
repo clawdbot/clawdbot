@@ -51,6 +51,27 @@ describe("chat transcript controller", () => {
     }
   });
 
+  it("measures newly inserted rows after Lit connects them", async () => {
+    // Lit invokes ref callbacks while a new row is still detached. Browsers
+    // report a zero offsetHeight there, which must not become the row's
+    // durable virtual size before the following user bubble is positioned.
+    transcriptDomState.detachedRowHeight = 0;
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps("pane-commentary-insert", "agent:main:session-a", [
+      { role: "assistant", content: "commentary", timestamp: 1_000 },
+      { role: "user", content: "next turn", timestamp: 2_000 },
+    ]);
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+    render(renderChatThread(props, transcript), container);
+
+    expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(100px)");
+  });
+
   it("pauses an unmeasurable restore until loading commits an empty transcript", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));

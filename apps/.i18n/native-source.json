@@ -23153,6 +23153,17 @@
       ]
     },
     {
+      "id": "native.apple.02f52db82466e98a",
+      "source": "CUA (driver not bundled)",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.cfbd34b9f70ab403",
       "source": "Cache",
       "surface": "apple",
@@ -24119,6 +24130,17 @@
       ]
     },
     {
+      "id": "native.apple.f0969ec829f56eed",
+      "source": "Choose the node-local automation backend for snapshots and actions.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.e4b13f49bb435884",
       "source": "Choose where the Gateway runs and how this Mac app reaches it.",
       "surface": "apple",
@@ -24618,6 +24640,21 @@
       "source": "Computer Control access",
       "surface": "apple",
       "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.7b46ae17b22676bf",
+      "source": "Computer Control provider",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        },
         {
           "kind": "ui-named-argument",
           "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"

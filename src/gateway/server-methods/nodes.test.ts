@@ -45,6 +45,7 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
+import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import { nodeHandlers } from "./nodes.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -678,6 +679,37 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
     await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
+  });
+
+  it("reconciles device worker authority before reporting node-role removal", async () => {
+    const state = await createState("node-remove-worker-reconcile");
+    const nodeId = "worker-node-remove";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    const { opts } = createOptions({ nodeId });
+    const order: string[] = [];
+    const workerEnvironmentService = {};
+    bindDeviceWorkerReconciliation(workerEnvironmentService, async () => {
+      order.push("environment");
+      return ["environment-1"];
+    });
+    const reconcileActive = vi.fn(async () => {
+      order.push("placement");
+    });
+    Object.assign(opts.context, {
+      workerEnvironmentService,
+      workerPlacementDispatchService: { reconcileActive },
+    });
+    vi.mocked(opts.respond).mockImplementation(() => {
+      order.push("respond");
+    });
+
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
+
+    expect(reconcileActive).toHaveBeenCalledWith("environment-1");
+    expect(order).toEqual(["environment", "placement", "respond"]);
   });
 
   it("preserves an APNs registration created after node-role removal commits", async () => {
