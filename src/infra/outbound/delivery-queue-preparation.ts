@@ -7,11 +7,10 @@ import {
   upsertDeliveryQueueEntryOnceAcrossNamespaces,
 } from "../delivery-queue-sqlite-namespace.js";
 import {
-  failPendingDeliveryQueueEntry,
   loadDeliveryQueueEntry,
+  terminalizePendingDeliveryQueueEntry,
   type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
-import { unknownDeliveryTerminalPolicy } from "../delivery-queue-terminal-policy.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
@@ -60,33 +59,18 @@ function createStablePreparation(
     enqueuedAt: now,
     retryCount: 0,
     attemptCount: 0,
-    failureRetention: "permanent",
+    retainOnFailure: true,
     preparationState: "claimed",
     preparationOwnerId: ownerId,
     preparationLeaseExpiresAt: now + STABLE_PREPARATION_LEASE_MS,
   };
 }
 
-function failStablePreparation(
-  entry: StableDeliveryPreparation,
-  error: string,
-  stateDir?: string,
-): void {
-  failPendingDeliveryQueueEntry({
+function failStablePreparation(entry: StableDeliveryPreparation, stateDir?: string): void {
+  terminalizePendingDeliveryQueueEntry({
     queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
     id: entry.id,
-    expectedStatus: "pending",
-    lastError: error,
     entry,
-    // Policy may already have produced external side effects. Retain only a
-    // payload-free terminal fence so a later producer cannot rerun it.
-    failedEntry: {
-      id: entry.id,
-      enqueuedAt: entry.enqueuedAt,
-      retryCount: entry.retryCount,
-      attemptCount: entry.attemptCount,
-      terminalPolicy: unknownDeliveryTerminalPolicy(),
-    },
     stateDir,
   });
 }
@@ -120,7 +104,7 @@ function claimStablePreparation(
     return { status: "existing" };
   }
   if (current.preparationState !== "claimed") {
-    failStablePreparation(current, "stable outbound preparation was interrupted", stateDir);
+    failStablePreparation(current, stateDir);
     return { status: "existing" };
   }
   const reclaimed = createStablePreparation(id, ownerId);
@@ -223,7 +207,7 @@ export async function withStableDeliveryPreparation<T>(params: {
           stateDir: params.stateDir,
         });
       } else {
-        failStablePreparation(entry, "stable outbound preparation failed", params.stateDir);
+        failStablePreparation(entry, params.stateDir);
       }
     }
     throw error;

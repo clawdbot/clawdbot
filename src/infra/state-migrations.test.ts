@@ -2262,6 +2262,8 @@ describe("state migrations", () => {
         channel: "telegram",
         to: "123",
         accountId: "main",
+        lastAttemptAt: 1.5,
+        platformSendStartedAt: Number.MAX_SAFE_INTEGER + 1,
         payloads: [{ text: "hi" }],
       }),
       "utf8",
@@ -2276,6 +2278,8 @@ describe("state migrations", () => {
         messageId: "m1",
         retryCount: 0,
         enqueuedAt: 20,
+        lastAttemptAt: 21,
+        platformSendStartedAt: 22,
       }),
       "utf8",
     );
@@ -2288,6 +2292,7 @@ describe("state migrations", () => {
         channel: "telegram",
         to: "456",
         lastError: "permanent",
+        retainOnFailure: true,
         payloads: [{ text: "nope" }],
       }),
       "utf8",
@@ -2299,7 +2304,6 @@ describe("state migrations", () => {
         kind: "agentTurn",
         sessionKey: "agent:main:main",
         message: "failed resume",
-        messageId: "legacy-session-failed",
         lastError: "expired",
         retryCount: 3,
         enqueuedAt: 40,
@@ -2317,7 +2321,7 @@ describe("state migrations", () => {
       "Migrated 2 outbound delivery queue entries → shared SQLite state",
     );
     expect(result.changes).toContain(
-      "Migrated 2 session delivery queue entries → shared SQLite state",
+      "Migrated 1 session delivery queue entry → shared SQLite state",
     );
     const { db } = openOpenClawStateDatabase({ env });
     const rows = db
@@ -2350,98 +2354,51 @@ describe("state migrations", () => {
         target: null,
         retry_count: 0,
       },
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT id, last_attempt_at, platform_send_started_at
+             FROM delivery_queue_entries
+            WHERE status = 'pending'
+            ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      { id: "outbound-1", last_attempt_at: null, platform_send_started_at: null },
+      { id: "session-1", last_attempt_at: 21, platform_send_started_at: 22 },
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT entry_kind, session_key, account_id, last_attempt_at, last_error,
+                  recovery_state, platform_send_started_at, entry_json, failed_at
+             FROM delivery_queue_entries
+            WHERE status = 'failed'
+            ORDER BY queue_name, id`,
+        )
+        .all(),
+    ).toEqual([
       {
-        queue_name: "session",
-        id: "session-failed",
-        status: "failed",
-        channel: null,
-        target: null,
-        retry_count: 3,
+        entry_kind: null,
+        session_key: null,
+        account_id: null,
+        last_attempt_at: null,
+        last_error: null,
+        recovery_state: "completed_permanent",
+        platform_send_started_at: null,
+        entry_json: JSON.stringify({
+          id: "outbound-failed",
+          enqueuedAt: 30,
+          retryCount: 3,
+          failedAt: 30,
+          completionRetention: "permanent",
+          recoveryState: "completed_permanent",
+        }),
+        failed_at: 30,
       },
     ]);
-    const importedFailure = db
-      .prepare(
-        "SELECT last_error, recovery_state, entry_json FROM delivery_queue_entries WHERE queue_name='session' AND id='session-failed'",
-      )
-      .get() as Record<string, unknown>;
-    expect(importedFailure.last_error).toBe("expired");
-    expect(importedFailure.recovery_state).toBeNull();
-    expect(JSON.parse(String(importedFailure.entry_json))).toMatchObject({
-      terminalPolicy: {
-        detail: "full",
-        replay: "safe",
-        evidence: "pre_side_effect",
-        fence: { kind: "none" },
-        reason: "retry_exhausted",
-      },
-    });
     await expectMissingPath(path.join(stateDir, "delivery-queue"));
-    await expectMissingPath(path.join(stateDir, "session-delivery-queue"));
-  });
-
-  it("preserves exact valid subagent ownership during legacy queue import", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const cfg = createConfig();
-    const failedDir = path.join(stateDir, "session-delivery-queue", "failed");
-    await fs.mkdir(failedDir, { recursive: true });
-    const owner = {
-      kind: "subagent_completion",
-      runId: "run-filesystem-owner",
-      taskId: "task-filesystem-owner",
-      generation: 4,
-      deadlineAt: 90_000,
-    } as const;
-    const entry = {
-      id: "session-owner-failed",
-      kind: "agentTurn",
-      sessionKey: "agent:main:main",
-      message: "filesystem retained completion",
-      messageId: "completion:filesystem-owner",
-      route: { channel: "telegram", to: "123", chatType: "direct" },
-      owner,
-      failureRetention: "permanent",
-      availableAt: 41,
-      lastError: "requester unavailable",
-      retryCount: 3,
-      enqueuedAt: 40,
-      failedAt: 50,
-    };
-    await fs.writeFile(path.join(failedDir, `${entry.id}.json`), JSON.stringify(entry), "utf8");
-
-    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([]);
-    const { db } = openOpenClawStateDatabase({ env });
-    const row = db
-      .prepare(
-        `SELECT session_key, channel, target, last_error, entry_json
-           FROM delivery_queue_entries WHERE queue_name='session' AND id=?`,
-      )
-      .get(entry.id) as Record<string, unknown>;
-    expect(row).toMatchObject({
-      session_key: entry.sessionKey,
-      channel: entry.route.channel,
-      target: entry.route.to,
-      last_error: entry.lastError,
-    });
-    expect(JSON.parse(String(row.entry_json))).toEqual({
-      ...entry,
-      terminalPolicy: {
-        version: 1,
-        detail: "full",
-        replay: "owner-managed",
-        fence: { kind: "permanent" },
-        reason: "owner_settled",
-        payload: "present",
-        cleanup: "complete",
-        evidence: "owner_managed",
-        owner: "subagent_completion",
-        detailExpiresAt: 50 + 7 * 24 * 60 * 60_000,
-      },
-    });
     await expectMissingPath(path.join(stateDir, "session-delivery-queue"));
   });
 
@@ -4429,6 +4386,7 @@ describe("state migrations", () => {
         channel: "telegram",
         to: "789",
         lastError: "nope",
+        retainOnFailure: true,
         payloads: [{ text: "failed once" }],
       }),
       "utf8",
@@ -4480,17 +4438,10 @@ describe("state migrations", () => {
     expect(
       db
         .prepare(
-          "SELECT retry_count, failed_at, last_error, channel, target, recovery_state FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-failed'",
+          "SELECT retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-failed'",
         )
         .get(),
-    ).toEqual({
-      retry_count: 3,
-      failed_at: 12,
-      last_error: null,
-      channel: null,
-      target: null,
-      recovery_state: "failed_terminal_v1",
-    });
+    ).toEqual({ retry_count: 3, failed_at: 12 });
 
     vi.setSystemTime(2_000);
     const rerunDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });

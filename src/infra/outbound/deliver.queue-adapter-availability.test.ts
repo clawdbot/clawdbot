@@ -13,8 +13,8 @@ import {
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,

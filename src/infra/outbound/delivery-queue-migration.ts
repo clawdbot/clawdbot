@@ -8,8 +8,7 @@ import {
   movePendingDeliveryQueueEntryNamespace,
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
-import { failPendingDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
-import { unknownDeliveryTerminalPolicy } from "../delivery-queue-terminal-policy.js";
+import { terminalizePendingDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
 import {
   collectPayloadMediaSources,
   resolveOutboundMediaAccessForSend,
@@ -22,7 +21,7 @@ import {
   stageQueuePayloadMedia,
 } from "./delivery-queue-media-spool.js";
 import {
-  cancelDeliveryQueueMediaStage,
+  cancelDeliveryQueueMediaRetention,
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
@@ -56,6 +55,7 @@ function withLegacyPreparationLease(
 ): LegacyQueuedDeliveryPreparation {
   return {
     ...entry,
+    retainOnFailure: true,
     legacyPreparationOwnerId: ownerId,
     legacyPreparationLeaseExpiresAt: now + LEGACY_PREPARATION_LEASE_MS,
   };
@@ -126,19 +126,11 @@ async function prepareLegacyEntryCheckpoint(params: {
     (legacyUnknownSendReconciliation == null ||
       legacyUnknownSendReconciliation.status === "unresolved")
   ) {
-    const reconciliationError =
-      legacyUnknownSendReconciliation?.status === "unresolved"
-        ? legacyUnknownSendReconciliation.error
-        : undefined;
-    const error = reconciliationError
-      ? `legacy unknown-send reconciliation did not settle: ${reconciliationError}`
-      : "legacy unknown-send reconciliation is unavailable";
     // The migration owner has no safe canonical payload to publish and startup
     // recovery does not scan this private namespace. Settle payload-free instead
     // of retaining raw content in a permanently hidden pending row.
     await failInterruptedLegacyPreparation({
       entry: params.entry,
-      error,
       log: params.log,
       stateDir: params.stateDir,
     });
@@ -219,7 +211,6 @@ async function prepareLegacyEntryCheckpoint(params: {
       if (modifiersStarted) {
         await failInterruptedLegacyPreparation({
           entry: sourceEntry,
-          error: "legacy modifier preparation failed after policy entry",
           log: params.log,
           stateDir: params.stateDir,
         });
@@ -270,7 +261,7 @@ async function prepareLegacyEntryCheckpoint(params: {
   }
   const checkpoint: QueuedDelivery = {
     ...canonicalRetained,
-    failureRetention: params.entry.completionRetention ?? "permanent",
+    retainOnFailure: true,
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatch),
     renderedBatchPlan: createRenderedMessageBatchPlan(acceptedPayloads),
     ...(!prepareForReplay &&
@@ -296,28 +287,16 @@ async function prepareLegacyEntryCheckpoint(params: {
 
 async function failInterruptedLegacyPreparation(params: {
   entry: LegacyQueuedDeliveryPreparation;
-  error: string;
   log: RecoveryLogger;
   stateDir?: string;
 }): Promise<void> {
-  const failed = failPendingDeliveryQueueEntry({
+  const failed = terminalizePendingDeliveryQueueEntry({
     queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
     id: params.entry.id,
-    expectedStatus: "pending",
-    lastError: params.error,
     entry: params.entry,
-    // Once modifier execution has started, neither its raw input nor hook
-    // context is safe to retain. Keep only a payload-free failure fence.
-    failedEntry: {
-      id: params.entry.id,
-      enqueuedAt: params.entry.enqueuedAt,
-      retryCount: params.entry.retryCount,
-      attemptCount: params.entry.attemptCount,
-      terminalPolicy: unknownDeliveryTerminalPolicy(),
-    },
     stateDir: params.stateDir,
   });
-  if (failed.status !== "failed") {
+  if (failed.status !== "terminalized") {
     params.log.warn(`Legacy delivery ${params.entry.id} preparation owner was already settled`);
     return;
   }
@@ -469,7 +448,7 @@ async function finalizePreparedMigration(params: {
     return "moved";
   } finally {
     if (!stagedArtifactsTransferred) {
-      cancelDeliveryQueueMediaStage(mediaStageId, params.stateDir);
+      cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
       await releaseSpoolArtifacts(stagedArtifacts, params.stateDir);
     }
   }
@@ -511,7 +490,6 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
       await failInterruptedLegacyPreparation({
         ...params,
         entry,
-        error: "legacy modifier preparation was interrupted before publication",
       });
       skipped += 1;
       continue;

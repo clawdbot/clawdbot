@@ -8,10 +8,6 @@ import type {
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
-import type {
-  DeliveryQueueFailureRetention,
-  DeliveryQueueTerminalPolicy,
-} from "../delivery-queue-sqlite.types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -93,6 +89,7 @@ export interface LegacyQueuedDelivery extends LegacyQueuedDeliveryPayload {
 
 export type LegacyQueuedDeliveryPreparation = LegacyQueuedDelivery & {
   legacyPreparationState: "claimed" | "modifiers_started";
+  retainOnFailure?: true;
   legacyPreparationOwnerId?: string;
   legacyPreparationLeaseExpiresAt?: number;
 };
@@ -111,6 +108,5 @@ export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payl
   platformSendStartedAt?: number;
   effectiveReplyToId?: string | null;
   recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
-  terminalPolicy?: DeliveryQueueTerminalPolicy;
-  failureRetention?: DeliveryQueueFailureRetention;
+  retainOnFailure?: true;
 };

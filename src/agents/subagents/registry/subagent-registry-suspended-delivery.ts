@@ -1,10 +1,3 @@
-import { compactFailedDeliveryQueueEntry } from "../../../infra/delivery-queue-failures.js";
-import { loadDeliveryQueueEntryAnyStatus } from "../../../infra/delivery-queue-sqlite.js";
-import { parseDeliveryQueueTerminalPolicy } from "../../../infra/delivery-queue-terminal-policy.js";
-import {
-  SESSION_DELIVERY_QUEUE_NAME,
-  type QueuedSessionDelivery,
-} from "../../../infra/session-delivery-queue-storage.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -56,7 +49,6 @@ export async function discardSuspendedPendingFinalDelivery(params: {
 }): Promise<void> {
   const { runId, entry, now, reason, resumedRuns } = params;
   const snapshot = structuredClone(entry);
-  const failedQueueId = snapshot.delivery?.queueId;
   const wasResumed = resumedRuns.has(runId);
   params.discardTerminalDelivery(entry, now, reason);
   const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
@@ -79,25 +71,6 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       resumedRuns.add(runId);
     }
     throw error;
-  }
-  if (failedQueueId) {
-    const failed = loadDeliveryQueueEntryAnyStatus(
-      SESSION_DELIVERY_QUEUE_NAME,
-      failedQueueId,
-    ) as QueuedSessionDelivery | null;
-    const policy = parseDeliveryQueueTerminalPolicy(failed?.terminalPolicy);
-    if (
-      failed?.kind === "agentTurn" &&
-      failed.owner?.kind === "subagent_completion" &&
-      failed.owner.runId === snapshot.runId &&
-      policy?.owner === "subagent_completion"
-    ) {
-      compactFailedDeliveryQueueEntry({
-        queueName: SESSION_DELIVERY_QUEUE_NAME,
-        id: failedQueueId,
-        policy: { ...policy, reason: "owner_expired", cleanup: "complete" },
-      });
-    }
   }
   resumedRuns.delete(runId);
   params.clearPendingLifecycleError(runId);

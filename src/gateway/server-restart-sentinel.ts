@@ -30,19 +30,21 @@ import {
 } from "../infra/restart-sentinel.js";
 import {
   drainPendingSessionDeliveries,
+  recoverPendingSessionDeliveries,
+  type SessionDeliveryRecoveryLogger,
+  type SettleSessionDeliveryFn,
+} from "../infra/session-delivery-queue-recovery.js";
+import {
   enqueueSessionDelivery,
   loadPendingSessionDelivery,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
-  recoverPendingSessionDeliveries,
   SessionDeliveryDeadLetteredError,
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
-  type SettleSessionDeliveryFn,
-  type SessionDeliveryRecoveryLogger,
   type SessionDeliveryRoute,
-} from "../infra/session-delivery-queue.js";
+} from "../infra/session-delivery-queue-storage.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";

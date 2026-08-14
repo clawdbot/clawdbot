@@ -49,13 +49,6 @@ export type {
   SecretsStoreSetParams,
 } from "./schema/secrets.js";
 export * from "./schema/portals.js";
-export {
-  DeliveryFailureResubmitParamsSchema,
-  DeliveryFailureResubmitResultSchema,
-  type DeliveryFailureResubmitParams,
-  type DeliveryFailureResubmitReason,
-  type DeliveryFailureResubmitResult,
-} from "./schema/delivery-failures.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
