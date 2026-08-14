@@ -4,7 +4,7 @@ import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { isPathInside } from "../../infra/fs-safe.js";
-import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http.js";
+import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http-contract.js";
 import {
   prepareNodeWorkspaceTransferSnapshot,
   type NodeWorkspaceTransferSnapshot,

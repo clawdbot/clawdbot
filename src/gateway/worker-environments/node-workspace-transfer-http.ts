@@ -8,45 +8,24 @@ import { AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER, type AuthRateLimiter } from "../
 import { classifyNodeWorkspaceTransferPath } from "../gateway-http-route-contracts.js";
 import { sendJson, watchClientDisconnect } from "../http-common.js";
 import { withSerializedRateLimitAttempt } from "../rate-limit-attempt-serialization.js";
+import type {
+  NodeWorkspaceTransferHttpCallback,
+  NodeWorkspaceTransferHttpRoute,
+} from "./node-workspace-transfer-http-contract.js";
 import {
   isNodeWorkspaceTransferLimitError,
   type NodeWorkspaceTransferService,
 } from "./node-workspace-transfer-service.js";
 
+export type {
+  NodeWorkspaceTransferHttpCallback,
+  NodeWorkspaceTransferHttpRoute,
+} from "./node-workspace-transfer-http-contract.js";
+
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MAX_ENVIRONMENT_ID_LENGTH = 256;
 const OPAQUE_NOT_FOUND = { error: "not_found" } as const;
-
-export type NodeWorkspaceTransferHttpRoute =
-  | {
-      kind: "manifest" | "pack";
-      direction: "download";
-      environmentId: string;
-      manifestRef: string;
-    }
-  | { kind: "blob"; direction: "download"; environmentId: string; sha256: string }
-  | {
-      kind: "reconcile";
-      direction: "upload";
-      environmentId: string;
-      baseManifestRef: string;
-    };
-
-type NodeWorkspaceTransferHttpCallbackResult =
-  | { kind: "unauthorized" }
-  | { kind: "authorized"; handle: () => Promise<void> | void };
-
-/**
- * Authenticates one parsed transfer route without consuming its body. Long-running
- * streaming belongs in the returned handle so per-IP auth serialization stays brief.
- */
-export type NodeWorkspaceTransferHttpCallback = (params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  route: NodeWorkspaceTransferHttpRoute;
-  bearer: string;
-}) => Promise<NodeWorkspaceTransferHttpCallbackResult>;
 
 function decodeEnvironmentId(segment: string): string | undefined {
   let value: string;
@@ -145,7 +124,7 @@ function sendTransferRateLimited(res: ServerResponse, retryAfterMs: number): voi
 type TransferAdmission =
   | { kind: "rate-limited"; retryAfterMs: number }
   | { kind: "unauthorized" }
-  | Extract<NodeWorkspaceTransferHttpCallbackResult, { kind: "authorized" }>;
+  | Extract<Awaited<ReturnType<NodeWorkspaceTransferHttpCallback>>, { kind: "authorized" }>;
 
 /** Reserve and authenticate the node workspace transfer namespace before normal HTTP routing. */
 export async function handleNodeWorkspaceTransferHttpRequest(params: {
