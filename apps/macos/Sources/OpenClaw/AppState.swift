@@ -328,6 +328,26 @@ final class AppState {
         didSet { self.ifNotPreview { AppDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
     }
 
+    var cookieSyncEnabled: Bool {
+        didSet {
+            self.ifNotPreview { AppDefaults.standard.set(self.cookieSyncEnabled, forKey: cookieSyncEnabledKey) }
+        }
+    }
+
+    var cookieSyncIntoProfile: String {
+        didSet {
+            self.ifNotPreview {
+                AppDefaults.standard.set(self.cookieSyncIntoProfile, forKey: cookieSyncIntoProfileKey)
+            }
+        }
+    }
+
+    var cookieSyncDomains: [String] {
+        didSet {
+            self.ifNotPreview { AppDefaults.standard.set(self.cookieSyncDomains, forKey: cookieSyncDomainsKey) }
+        }
+    }
+
     var activeComputerPresenceEnabled: Bool {
         didSet { self.scheduleActiveComputerPresenceUpdate() }
     }
@@ -557,6 +577,9 @@ final class AppState {
         self.remoteCliPath = AppDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = AppDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         self.quickChatEnabled = AppDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
+        self.cookieSyncEnabled = AppDefaults.standard.object(forKey: cookieSyncEnabledKey) as? Bool ?? false
+        self.cookieSyncIntoProfile = AppDefaults.standard.string(forKey: cookieSyncIntoProfileKey) ?? "imported"
+        self.cookieSyncDomains = AppDefaults.standard.stringArray(forKey: cookieSyncDomainsKey) ?? []
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.execApprovalMode = .deny
         self.execApprovalPolicyLoadState = .loading
@@ -1548,6 +1571,9 @@ extension AppState {
         state.remoteTransport = .ssh
         state.canvasEnabled = true
         state.quickChatEnabled = true
+        state.cookieSyncEnabled = false
+        state.cookieSyncIntoProfile = "imported"
+        state.cookieSyncDomains = []
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteToken = "example-token"
