@@ -27,6 +27,21 @@ function sessionsList(placement: "local" | "active") {
   };
 }
 
+const workerDesktopEnvironment = {
+  id: "worker-desktop-1",
+  type: "worker",
+  status: "available",
+  desktop: true,
+  worker: {
+    providerId: "crabbox",
+    state: "attached",
+    ageMs: 1_000,
+    attachedSessionIds: ["main"],
+    tunnelStatus: "connected",
+    desktopApps: ["browser", "terminal"],
+  },
+} as const;
+
 async function openPalette(page: import("playwright").Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
@@ -41,6 +56,16 @@ async function openDesktopPanel(page: import("playwright").Page) {
   const panel = page.locator("openclaw-desktop-panel");
   await panel.locator("section[aria-label='Desktop']").waitFor();
   return panel;
+}
+
+async function openDirectDesktop(page: import("playwright").Page, environmentId: string) {
+  await page.evaluate((targetEnvironmentId) => {
+    window.dispatchEvent(
+      new CustomEvent("openclaw:desktop-toggle", {
+        detail: { open: true, environmentId: targetEnvironmentId },
+      }),
+    );
+  }, environmentId);
 }
 
 async function installDesktopClientFake(panel: import("playwright").Locator) {
@@ -105,8 +130,185 @@ suite.define(() => {
       expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(1);
 
       await page.getByRole("option", { name: "Desktop", exact: true }).click();
-      await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").waitFor();
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.locator("section[aria-label='Desktop']").waitFor();
+      await panel.getByText("Desktop sources", { exact: true }).waitFor();
       await gateway.waitForRequest("environments.list");
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+    });
+  });
+
+  it("refreshes direct-target inventory before observing the exact worker", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.launch", "desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": {
+            environments: [workerDesktopEnvironment],
+          },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=direct",
+            expiresAtMs: 60_000,
+            control: false,
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const panel = page.locator("openclaw-desktop-panel");
+      await installDesktopClientFake(panel);
+      const requestCount = (await gateway.getRequests()).length;
+
+      await openDirectDesktop(page, "worker-desktop-1");
+
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        control: false,
+      });
+      expect(
+        (await gateway.getRequests())
+          .slice(requestCount)
+          .filter((request) => ["environments.list", "desktop.observe"].includes(request.method))
+          .map((request) => request.method),
+      ).toEqual(["environments.list", "desktop.observe"]);
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
+      await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
+    });
+  });
+
+  it("reports an unavailable direct target without showing another source", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": {
+            environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
+          },
+          "desktop.observe": {
+            __mockError: {
+              code: "UNAVAILABLE",
+              message: "requested worker desktop is temporarily unavailable",
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      await openDirectDesktop(page, "missing-worker");
+
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "missing-worker" },
+        control: false,
+      });
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.getByText(/requested worker desktop is temporarily unavailable/).waitFor();
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+      expect(await panel.getByText("This machine", { exact: true }).count()).toBe(0);
+    });
+  });
+
+  it("shows direct-target inventory failure without observing or falling back", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": {
+            __mockError: {
+              code: "UNAVAILABLE",
+              message: "desktop inventory is temporarily unavailable",
+            },
+          },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=degraded",
+            expiresAtMs: 60_000,
+            control: false,
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await openDirectDesktop(page, "worker-desktop-1");
+
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.getByRole("alert").filter({ hasText: "inventory" }).waitFor();
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+      expect(await panel.getByText("This machine", { exact: true }).count()).toBe(0);
+
+      await gateway.setMethodResponse("environments.list", {
+        environments: [workerDesktopEnvironment],
+      });
+      await installDesktopClientFake(panel);
+      const requestCount = (await gateway.getRequests()).length;
+      await panel.getByRole("button", { name: "Retry", exact: true }).click();
+
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(2);
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        control: false,
+      });
+      expect(
+        (await gateway.getRequests())
+          .slice(requestCount)
+          .filter((request) => ["environments.list", "desktop.observe"].includes(request.method))
+          .map((request) => request.method),
+      ).toEqual(["environments.list", "desktop.observe"]);
+      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
+      await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
+      expect(await panel.getAttribute("data-connect-count")).toBe("1");
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+    });
+  });
+
+  it("does not observe a direct target after its inventory refresh is closed", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": { environments: [] },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=stale",
+            expiresAtMs: 60_000,
+            control: false,
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.deferNext("environments.list");
+      const inventoryCount = (await gateway.getRequests("environments.list")).length;
+
+      await openDirectDesktop(page, "worker-desktop-1");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(inventoryCount + 1);
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
+        );
+      });
+      await gateway.resolveDeferred("environments.list", { environments: [] });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+      expect(
+        await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").count(),
+      ).toBe(0);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
     });
   });
 
@@ -466,7 +668,24 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Connect", exact: true }).click();
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
 
-      await panel.getByRole("button", { name: "Take control", exact: true }).click();
+      const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
+      const overlayCoversStage = await panel.evaluate((element) => {
+        const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-stage");
+        const overlay = element.shadowRoot?.querySelector<HTMLElement>(
+          ".desktop-stage__take-control",
+        );
+        if (!stage || !overlay) {
+          return false;
+        }
+        const stageRect = stage.getBoundingClientRect();
+        const overlayRect = overlay.getBoundingClientRect();
+        return (
+          Math.abs(stageRect.width - overlayRect.width) < 1 &&
+          Math.abs(stageRect.height - overlayRect.height) < 1
+        );
+      });
+      expect(overlayCoversStage).toBe(true);
+      await takeControl.click();
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(3);
       const observeRequests = await gateway.getRequests("desktop.observe");
       expect(observeRequests[2]?.params).toEqual({
@@ -480,6 +699,145 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
       await panel.getByText("Desktop sources", { exact: true }).waitFor();
       expect(Number((await panel.getAttribute("data-disconnect-count")) ?? "0")).toBeGreaterThan(0);
+    });
+  });
+
+  it("takes control by clicking a real noVNC-mounted desktop", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": { environments: [workerDesktopEnvironment] },
+          "desktop.observe": {
+            cases: [
+              {
+                match: {
+                  source: { kind: "environment", environmentId: "worker-desktop-1" },
+                  control: false,
+                },
+                response: {
+                  transport: "rfb",
+                  wsPath: "/desktop/observe?token=view",
+                  expiresAtMs: 60_000,
+                  control: false,
+                },
+              },
+              {
+                match: {
+                  source: { kind: "environment", environmentId: "worker-desktop-1" },
+                  control: true,
+                },
+                response: {
+                  transport: "rfb",
+                  wsPath: "/desktop/observe?token=control",
+                  expiresAtMs: 60_000,
+                  control: true,
+                },
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      // Route desktop observe sockets to an in-page RFB 3.8 server (security
+      // None) so the production DesktopClient drives the real noVNC client.
+      await page.evaluate(() => {
+        const GatewaySocket = window.WebSocket;
+        class FakeRfbSocket extends EventTarget {
+          binaryType = "arraybuffer";
+          protocol = "";
+          readyState = 0;
+          onerror: ((event: Event) => void) | null = null;
+          onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null = null;
+          onopen: ((event: Event) => void) | null = null;
+          onclose: ((event: CloseEvent) => void) | null = null;
+          private handshake = 0;
+          constructor() {
+            super();
+            setTimeout(() => {
+              if (this.readyState !== 0) {
+                return;
+              }
+              this.readyState = 1;
+              this.onopen?.(new Event("open"));
+              this.deliver(new TextEncoder().encode("RFB 003.008\n"));
+            }, 0);
+          }
+          private deliver(bytes: Uint8Array<ArrayBuffer>): void {
+            setTimeout(() => {
+              if (this.readyState === 1) {
+                this.onmessage?.(new MessageEvent("message", { data: bytes.buffer }));
+              }
+            }, 0);
+          }
+          send(): void {
+            // Handshake replies are fixed-size, so respond by stage instead of
+            // parsing: version -> security types, choice -> ok, init -> ServerInit.
+            this.handshake += 1;
+            if (this.handshake === 1) {
+              this.deliver(new Uint8Array([1, 1]));
+            } else if (this.handshake === 2) {
+              this.deliver(new Uint8Array([0, 0, 0, 0]));
+            } else if (this.handshake === 3) {
+              const name = new TextEncoder().encode("fake-desktop");
+              const init = new Uint8Array(24 + name.length);
+              const view = new DataView(init.buffer);
+              view.setUint16(0, 800);
+              view.setUint16(2, 600);
+              init.set([32, 24, 0, 1], 4);
+              view.setUint16(8, 255);
+              view.setUint16(10, 255);
+              view.setUint16(12, 255);
+              init.set([16, 8, 0], 14);
+              view.setUint32(20, name.length);
+              init.set(name, 24);
+              this.deliver(init);
+            }
+          }
+          close(code = 1000, reason = ""): void {
+            if (this.readyState === 3) {
+              return;
+            }
+            this.readyState = 3;
+            const event = new CloseEvent("close", { code, reason });
+            this.onclose?.(event);
+            this.dispatchEvent(new CloseEvent("close", { code, reason }));
+          }
+        }
+        const RoutedSocket = function (url: string, protocols?: string | string[]) {
+          return url.includes("/desktop/observe")
+            ? new FakeRfbSocket()
+            : new GatewaySocket(url, protocols);
+        };
+        RoutedSocket.prototype = GatewaySocket.prototype;
+        Object.assign(RoutedSocket, {
+          CONNECTING: 0,
+          OPEN: 1,
+          CLOSING: 2,
+          CLOSED: 3,
+        });
+        window.WebSocket = RoutedSocket as unknown as typeof WebSocket;
+      });
+
+      await openDirectDesktop(page, "worker-desktop-1");
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.locator("section[aria-label='Desktop']").waitFor();
+      await panel.locator(".desktop-surface canvas").waitFor();
+
+      const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
+      await takeControl.waitFor();
+      // Playwright refuses the click if the noVNC canvas intercepted it, so a
+      // successful click proves the overlay hit-tests above the real surface.
+      await takeControl.click();
+      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
+      const observeRequests = await gateway.getRequests("desktop.observe");
+      expect(observeRequests[1]?.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        control: true,
+      });
+      await panel.locator(".desktop-surface canvas").waitFor();
+      expect(await takeControl.count()).toBe(0);
     });
   });
 

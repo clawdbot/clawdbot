@@ -228,10 +228,6 @@ function assertWritableInstalledPluginIndexStoreOptions(
   }
 }
 
-function parseJsonColumn(value: string): unknown {
-  return safeParseJson(value);
-}
-
 function parseInstalledPluginIndexSqliteRow(
   row: InstalledPluginIndexSqliteRow | undefined,
 ): InstalledPluginIndex | null {
@@ -247,9 +243,9 @@ function parseInstalledPluginIndexSqliteRow(
     policyHash: row.policy_hash,
     generatedAtMs: Number(row.generated_at_ms),
     ...(row.refresh_reason ? { refreshReason: row.refresh_reason } : {}),
-    installRecords: parseJsonColumn(row.install_records_json),
-    plugins: parseJsonColumn(row.plugins_json),
-    diagnostics: parseJsonColumn(row.diagnostics_json),
+    installRecords: safeParseJson(row.install_records_json),
+    plugins: safeParseJson(row.plugins_json),
+    diagnostics: safeParseJson(row.diagnostics_json),
   });
 }
 

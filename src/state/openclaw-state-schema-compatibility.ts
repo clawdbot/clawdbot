@@ -17,6 +17,7 @@ const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
   "claw_installs.bootstrap_content_digest",
   "claw_installs.bootstrap_source_path",
   "worker_environments.desktop_json",
+  "worker_environments.bootstrap_install_kind",
   "claw_package_refs.extension_adapter_identity",
   "claw_package_refs.extension_detected_format",
   "claw_package_refs.extension_format",
@@ -68,7 +69,9 @@ export function getOpenClawStateRuntimeSchema(options: {
     schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
   }
   for (const indexName of omittedIndexes) {
-    const start = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
+    const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
+    const uniqueStart = schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`);
+    const start = plainStart >= 0 ? plainStart : uniqueStart;
     const end = start >= 0 ? schema.indexOf(";", start) : -1;
     if (start < 0 || end < 0) {
       throw new Error(`lazy additive state schema index is missing for ${indexName}`);
@@ -101,6 +104,7 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
     "worker_environments.desktop_json": ["desktop_json TEXT"],
+    "worker_environments.bootstrap_install_kind": ["bootstrap_install_kind TEXT"],
     "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
     "worker_session_placements.terminal_reason": ["terminal_reason TEXT"],
     "worker_session_placements.terminal_at_ms": ["terminal_at_ms INTEGER"],

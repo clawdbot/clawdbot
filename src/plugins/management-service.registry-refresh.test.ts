@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
 const mocks = vi.hoisted(() => ({
   clawhubInstall: vi.fn(),
@@ -78,26 +80,47 @@ function mockClawHubWorkboardInstall() {
   });
 }
 
-function metadataSnapshot(enabled: boolean) {
-  const manifest = {
-    id: "workboard",
-    name: "Workboard",
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: "/tmp/workboard",
-    source: "/tmp/workboard/index.ts",
-    manifestPath: "/tmp/workboard/openclaw.plugin.json",
-  };
+function metadataSnapshot(enabled: boolean, installed = false) {
+  const installOwner = installed ? "workboard" : undefined;
+  const manifest = recordPluginManifestInstallOwner(
+    {
+      id: "workboard",
+      name: "Workboard",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/tmp/workboard",
+      source: "/tmp/workboard/index.ts",
+      manifestPath: "/tmp/workboard/openclaw.plugin.json",
+    },
+    installOwner,
+  );
   return {
     index: {
       plugins: [
-        { pluginId: "workboard", packageName: "@openclaw/workboard", origin: "bundled", enabled },
+        recordInstalledPluginIndexInstallOwner(
+          {
+            pluginId: "workboard",
+            packageName: "@openclaw/workboard",
+            origin: "bundled",
+            rootDir: "/tmp/workboard",
+            enabled,
+          },
+          installOwner,
+        ),
       ],
-      installRecords: {},
+      installRecords: installed
+        ? {
+            workboard: {
+              source: "clawhub",
+              spec: "clawhub:community/workboard",
+              installPath: "/tmp/workboard",
+            },
+          }
+        : {},
     },
     byPluginId: new Map([["workboard", manifest]]),
     plugins: [manifest],
@@ -169,7 +192,7 @@ describe("plugin management registry refresh", () => {
         return { plugins: { entries: { workboard: { enabled: false } } } };
       },
     );
-    mocks.metadata.mockReturnValue(metadataSnapshot(false));
+    mocks.metadata.mockReturnValue(metadataSnapshot(false, true));
 
     const result = await installManagedPlugin({
       request: { source: "clawhub", packageName: "community/workboard" },

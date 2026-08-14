@@ -450,6 +450,7 @@ export class CustodianSessionStore {
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     const chatSupported =
       client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
+    const chatUnsupported = isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false;
     const configuredInferenceState = this.resolveConfiguredInferenceState();
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
@@ -489,7 +490,7 @@ export class CustodianSessionStore {
       if (!chatSupported) {
         this.sessionStarted = false;
         this.abandonPendingUserTurn(pendingParams);
-        this.error = t("custodian.unsupportedGateway");
+        this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
         return;
       }
       this.chatAvailable = true;
@@ -506,7 +507,7 @@ export class CustodianSessionStore {
       return;
     }
     if (!chatSupported) {
-      this.error = t("custodian.unsupportedGateway");
+      this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
       return;
     }
     if (configuredInferenceState === "unresolved") {

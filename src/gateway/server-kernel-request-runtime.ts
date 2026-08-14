@@ -31,6 +31,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     sessionObserver,
     getMcpAppSandboxPort,
     ensureSandboxHostPort,
+    getPortalService,
     terminalLaunchPolicy,
     execApprovalManager,
     cancelRunBoundApprovals,
@@ -67,6 +68,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     workerEnvironmentService,
     hostDesktopService,
     workerEnvironmentStartup,
+    workerPlacementRuntime,
     workerPlacementControlAvailable,
     terminalSessions,
     agentRunSeq,
@@ -118,6 +120,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       sessionObserver,
       getMcpAppSandboxPort,
       ensureSandboxHostPort,
+      getPortalService,
       resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
       isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       execApprovalManager,
@@ -169,6 +172,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       ...(hostDesktopService ? { hostDesktopService } : {}),
       ...(workerEnvironmentStartup
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
+        : {}),
+      ...(workerPlacementRuntime
+        ? { workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }

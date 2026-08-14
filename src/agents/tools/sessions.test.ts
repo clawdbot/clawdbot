@@ -15,6 +15,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
@@ -39,9 +40,13 @@ const facadeRuntimeMock = vi.hoisted(() => ({
   >(),
 }));
 
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
+vi.mock("../../gateway/call.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/call.js")>();
+  return {
+    ...actual,
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  };
+});
 vi.mock("./in-process-gateway.js", () => ({
   callAgentToolGatewayRequest: (opts: unknown) => inProcessGatewayRequestMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
@@ -440,7 +445,10 @@ it("fails closed for cross-agent and resolution-derived bare keys", async () => 
         return {};
       }
       if (request.params?.key) {
-        throw new Error("not a session key");
+        throw new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: `No session found: ${request.params.key}`,
+        });
       }
       return request.params?.sessionId ? { key: "incident-42" } : {};
     });
@@ -1165,7 +1173,13 @@ describe("sessions_send gating", () => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
         if (request.params?.key === "session-id-only") {
-          throw new Error("not a session key");
+          throw new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: "No session found: session-id-only",
+          });
+        }
+        if (request.params?.spawnedBy === MAIN_AGENT_SESSION_KEY) {
+          return {};
         }
         return { key: "agent:other:main" };
       }
@@ -1204,10 +1218,50 @@ describe("sessions_send gating", () => {
       timeoutSeconds: 0,
     });
 
-    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
-    expect(requireGatewayRequest(1).method).toBe("sessions.list");
     expect(requireDetails(result).status).toBe("forbidden");
+  });
+
+  it("classifies a failed spawned-lookup as lookup-failed for sandboxed sends", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+      tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" } },
+    });
+    callGatewayMock.mockImplementation(async () => {
+      // A retryable request-level failure preserves the PR's evidence semantics
+      // (transient store read error) while exercising the retryable
+      // classification path (review P1: classify before prescribing retry).
+      throw new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "simulated transient store read error (evidence)",
+        retryable: true,
+      });
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      sandboxed: true,
+    });
+
+    const result = await tool.execute("call-lookup-failed", {
+      sessionKey: "agent:main:subagent:worker-1",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    // sessions_send hits the resolution preflight before the direct guard; the
+    // failed lookup must surface the same retryable classification, not the
+    // generic sandboxed-session denial.
+    const details = requireDetails(result);
+    expect(details.status).toBe("forbidden");
+    expect(String(details.error)).toBe(
+      "Session send denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
+    );
+    expect(String(details.error)).not.toContain(
+      "Session not visible from this sandboxed agent session",
+    );
   });
 
   it("rejects direct thread session targets before dispatching an agent run", async () => {

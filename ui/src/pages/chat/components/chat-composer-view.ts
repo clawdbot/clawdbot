@@ -176,6 +176,29 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           </div>
         `
       : nothing}
+    ${showComposerInput && props.typingActors?.length
+      ? html`<div
+          class="agent-chat__typing-indicator agent-chat__typing-indicator--outside"
+          role="status"
+        >
+          <!-- Avatars stay aria-hidden: the status text already names every
+               typer, and role="img" avatars would announce each name twice. -->
+          <span class="agent-chat__typing-avatars" aria-hidden="true">
+            ${props.typingActors
+              .slice(0, 3)
+              .map((actor) => renderChatAuthorAvatar({ id: actor.id, name: actor.label }))}
+          </span>
+          <span class="agent-chat__typing-text"
+            >${props.typingActors.length === 1
+              ? t("chat.sessionSuggestions.typing", {
+                  name: props.typingActors[0]?.label ?? "",
+                })
+              : t("chat.sessionSuggestions.typingMany", {
+                  names: props.typingActors.map((actor) => actor.label).join(", "),
+                })}</span
+          >
+        </div>`
+      : nothing}
     <div class="agent-chat__composer-shell">
       ${questionPanelProps
         ? html`
@@ -504,28 +527,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       ${composerControls}
                     </div>
                   `
-                : nothing}
-              ${props.typingActors?.length
-                ? html`<div class="agent-chat__typing-indicator" role="status">
-                    <!-- Avatars stay aria-hidden: the status text already names every
-                         typer, and role="img" avatars would announce each name twice. -->
-                    <span class="agent-chat__typing-avatars" aria-hidden="true">
-                      ${props.typingActors
-                        .slice(0, 3)
-                        .map((actor) =>
-                          renderChatAuthorAvatar({ id: actor.id, name: actor.label }),
-                        )}
-                    </span>
-                    <span class="agent-chat__typing-text"
-                      >${props.typingActors.length === 1
-                        ? t("chat.sessionSuggestions.typing", {
-                            name: props.typingActors[0]?.label ?? "",
-                          })
-                        : t("chat.sessionSuggestions.typingMany", {
-                            names: props.typingActors.map((actor) => actor.label).join(", "),
-                          })}</span
-                    >
-                  </div>`
                 : nothing}
               <div class="agent-chat__composer-meta">${contextNotice}</div>
             </div>

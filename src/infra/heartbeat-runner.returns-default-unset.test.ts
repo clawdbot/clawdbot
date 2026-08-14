@@ -1708,8 +1708,8 @@ describe("runHeartbeatOnce", () => {
 
   async function runHeartbeatScratchScenario(params: {
     fileState: HeartbeatScratchState;
-    source?: "notifications-event";
-    reason?: "interval" | "wake";
+    source?: "notifications-event" | "background-task" | "background-task-blocked";
+    reason?: "interval" | "wake" | "background-task" | "background-task-blocked";
     unscheduled?: boolean;
     queueCronEvent?: boolean;
     queueSystemEvent?: boolean;
@@ -1747,7 +1747,9 @@ describe("runHeartbeatOnce", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          ...(params.unscheduled ? {} : { heartbeat: { every: "5m", target: "whatsapp" } }),
+          heartbeat: params.unscheduled
+            ? { every: "0m", target: "whatsapp" }
+            : { every: "5m", target: "whatsapp" },
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -1962,8 +1964,8 @@ tasks:
     const cases: Array<{
       name: string;
       fileState: HeartbeatScratchState;
-      reason?: "interval" | "wake";
-      source?: "notifications-event";
+      reason?: "interval" | "wake" | "background-task" | "background-task-blocked";
+      source?: "notifications-event" | "background-task" | "background-task-blocked";
       unscheduled?: boolean;
       queueCronEvent?: boolean;
       queueSystemEvent?: boolean;
@@ -1972,6 +1974,7 @@ tasks:
       expectedSendCalls: number;
       expectedReplyCalls: number;
       expectCronContext?: boolean;
+      expectedVisibleReplyMarker?: string;
       replyText?: string;
     }> = [
       {
@@ -2010,6 +2013,32 @@ tasks:
         expectedSendCalls: 1,
         expectedReplyCalls: 1,
         replyText: "post-update event processed",
+      },
+      {
+        name: "empty file + background task wake runs",
+        fileState: "empty",
+        source: "background-task",
+        reason: "background-task",
+        unscheduled: true,
+        queueSystemEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        expectedVisibleReplyMarker: "background task result processed",
+        replyText: "background task result processed",
+      },
+      {
+        name: "empty file + blocked background task wake runs",
+        fileState: "empty",
+        source: "background-task-blocked",
+        reason: "background-task-blocked",
+        unscheduled: true,
+        queueSystemEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        expectedVisibleReplyMarker: "blocked background task follow-up processed",
+        replyText: "blocked background task follow-up processed",
       },
       {
         name: "empty file + queued cron interval runs",
@@ -2072,16 +2101,28 @@ tasks:
       expectedReplyCalls,
       expectedSendCalls,
       expectCronContext,
+      expectedVisibleReplyMarker,
       ...scenario
     } of cases) {
       const { res, replySpy, sendWhatsApp } = await runHeartbeatScratchScenario(scenario);
       try {
-        expect(res.status, name).toBe(expectedStatus);
-        if (res.status === "skipped") {
-          expect(res.reason, name).toBe(expectedSkipReason);
+        expect(
+          {
+            status: res.status,
+            skipReason: res.status === "skipped" ? res.reason : undefined,
+            replyCalls: replySpy.mock.calls.length,
+            sendCalls: sendWhatsApp.mock.calls.length,
+          },
+          name,
+        ).toEqual({
+          status: expectedStatus,
+          skipReason: expectedSkipReason,
+          replyCalls: expectedReplyCalls,
+          sendCalls: expectedSendCalls,
+        });
+        if (expectedVisibleReplyMarker) {
+          expect(sendWhatsApp.mock.calls[0]?.[1], name).toContain(expectedVisibleReplyMarker);
         }
-        expect(replySpy, name).toHaveBeenCalledTimes(expectedReplyCalls);
-        expect(sendWhatsApp, name).toHaveBeenCalledTimes(expectedSendCalls);
         if (expectCronContext) {
           const calledCtx = replyBody(replySpy);
           expect(calledCtx.Provider, name).toBe("cron-event");

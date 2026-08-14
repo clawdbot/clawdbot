@@ -7,6 +7,7 @@ import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
@@ -770,7 +771,9 @@ async function validateProjectedSecretsState(params: {
       // whole-runtime check.
       includeAuthStoreRefs: params.write || params.authStoreByPath.size > 0,
       loadAuthStore: (agentDir?: string) => {
-        const storePath = resolveUserPath(resolveAuthProfileDatabasePath(agentDir));
+        const storePath = resolveUserPath(
+          agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(),
+        );
         const override = authStoreLookup.get(storePath);
         if (override) {
           return (

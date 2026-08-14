@@ -171,6 +171,22 @@ function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
   );
 }
 
+function openCodeUsesProcessHomeFallback(env: NodeJS.ProcessEnv): boolean {
+  return !env.OPENCODE_DB?.trim() && !path.isAbsolute(env.XDG_DATA_HOME?.trim() ?? "");
+}
+
+function assertOpenCodeLocalAccess(hostId: string, allowProcessHomeFallback?: boolean): void {
+  if (
+    hostId === LOCAL_HOST_ID &&
+    allowProcessHomeFallback === false &&
+    openCodeUsesProcessHomeFallback(process.env)
+  ) {
+    throw new OpenCodeCatalogParamsError(
+      "local OpenCode sessions are unavailable in isolated state",
+    );
+  }
+}
+
 function createOpenCodeSessionNodeHostCommands(
   api: OpenClawPluginApi,
 ): OpenClawPluginNodeHostCommand[] {
@@ -350,6 +366,7 @@ async function listOpenCodeHosts(
   const hosts: SessionCatalogHost[] = [];
   if (
     (!requested || requested.has(LOCAL_HOST_ID)) &&
+    (query.allowProcessHomeFallback !== false || !openCodeUsesProcessHomeFallback(process.env)) &&
     resolveNodeHostExecutable("opencode", {
       env: process.env,
       pathEnv: process.env.PATH ?? "",
@@ -411,6 +428,7 @@ async function readOpenCodeTranscript(
     throw new Error("cursor is invalid");
   }
   if (request.hostId === LOCAL_HOST_ID) {
+    assertOpenCodeLocalAccess(request.hostId, request.allowProcessHomeFallback);
     return await readLocalOpenCodeTranscriptPage({
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
@@ -564,18 +582,31 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
   api.registerSessionCatalog({
     id: "opencode",
     label: "OpenCode",
+    supportsProcessHomeIsolation: true,
     list: async (query) => await listOpenCodeHosts(api, query),
     read: async (request) => await readOpenCodeTranscript(api.runtime, request),
-    continueSession: async (request) =>
-      await continueOpenCodeSession(api, request.hostId, request.threadId),
-    checkUpstreamActivity: checkOpenCodeUpstreamActivity,
-    openTerminal: async (request) =>
-      await openOpenCodeCatalogTerminal({
+    continueSession: async (request) => {
+      assertOpenCodeLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      return await continueOpenCodeSession(api, request.hostId, request.threadId);
+    },
+    checkUpstreamActivity: (probes, policy) =>
+      checkOpenCodeUpstreamActivity(
+        probes.filter(
+          (probe) =>
+            probe.hostId !== LOCAL_HOST_ID ||
+            policy?.allowProcessHomeFallback !== false ||
+            !openCodeUsesProcessHomeFallback(process.env),
+        ),
+      ),
+    openTerminal: async (request) => {
+      assertOpenCodeLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      return await openOpenCodeCatalogTerminal({
         runtime: api.runtime,
         ...request,
         parseNodeSessionPage,
         unwrapNodePayload,
-      }),
+      });
+    },
   });
   for (const command of createOpenCodeSessionNodeHostCommands(api)) {
     api.registerNodeHostCommand(command);

@@ -337,6 +337,60 @@ describe("default role materialization authored writes", () => {
     });
   });
 
+  it("replaces a legacy list when persisting explicit ownership", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-roster-write-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          list: [
+            { id: "ops", default: true, workspace: "/srv/ops" },
+            { id: "research", model: "openai/research" },
+          ],
+        },
+      }),
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    const nextConfig: OpenClawConfig = {
+      ...snapshot.config,
+      agents: { ...snapshot.config.agents, ownership: "explicit" },
+    };
+
+    await io.writeConfigFile(nextConfig, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "ownership"]],
+      explicitSetValueSource: nextConfig,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(persisted.agents).toEqual({
+      ownership: "explicit",
+      defaults: {
+        heartbeat: { agentId: "ops" },
+        systemAgent: { agentId: "ops" },
+        authInheritance: { agentId: "ops" },
+      },
+      entries: {
+        ops: { workspace: "/srv/ops" },
+        research: { model: "openai/research" },
+      },
+    });
+    expect(persisted.agents).not.toHaveProperty("list");
+    const firstPersisted = await fs.readFile(configPath, "utf8");
+    const reread = await io.readConfigFileSnapshot();
+    await io.writeConfigFile(reread.config, { baseSnapshot: reread });
+    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(firstPersisted);
+  });
+
   it("preserves migrated legacy ownership during an unrelated write", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-owner-roundtrip-"));
     roots.push(root);

@@ -7,6 +7,7 @@ export { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 export { agentCommandFromIngress } from "../commands/agent.js";
 export { getRuntimeConfig } from "../config/io.js";
+export { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 export { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 export { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -17,6 +18,7 @@ export {
   registerApnsRegistration,
 } from "../infra/push-apns.js";
 export { enqueueSystemEvent } from "../infra/system-events.js";
+export { withSystemEventOwner } from "../infra/system-event-ownership.js";
 export { deleteMediaBuffer } from "../media/store.js";
 export { normalizeMainKey } from "../routing/session-key.js";
 export { defaultRuntime } from "../runtime.js";

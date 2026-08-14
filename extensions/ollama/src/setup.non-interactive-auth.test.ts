@@ -137,7 +137,8 @@ describe("Ollama non-interactive onboarding", () => {
     expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toContain(
       "http://127.0.0.1:11434/api/pull",
     );
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("keeps an installed suggested local model first in non-interactive setup", async () => {
@@ -162,7 +163,8 @@ describe("Ollama non-interactive onboarding", () => {
     expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toContain(
       "http://127.0.0.1:11434/api/pull",
     );
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("preserves the capabilities of an explicitly selected model beyond the discovery limit", async () => {

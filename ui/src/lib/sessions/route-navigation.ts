@@ -36,6 +36,7 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   mainKey?: never;
   shortIdLength?: number;
   preferenceDerivedFace?: boolean;
+  focusComposer?: boolean;
   navigationKey?: string;
 };
 
@@ -50,6 +51,7 @@ type ExplicitSessionNavigationTargetParams = {
   shortIdLength?: number;
   agentId?: never;
   preferenceDerivedFace?: boolean;
+  focusComposer?: boolean;
   navigationKey?: string;
 };
 
@@ -182,6 +184,9 @@ export function sessionNavigationTarget<TRouteId extends string>(
   const navigationParams = new URLSearchParams(search ?? "");
   if (params.preferenceDerivedFace && !row) {
     navigationParams.set(SESSION_FACE_PREFERENCE_PARAM, "1");
+  }
+  if (params.focusComposer) {
+    navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   const navigationKey = params.navigationKey?.trim() || row?.key;
   if (navigationKey && SESSION_KEY_UUID_SUFFIX_RE.test(navigationKey)) {

@@ -44,8 +44,10 @@ export function renderChatPaneComposerControls(params: {
   agentDefaultModel: string | undefined;
   modelAccess: SessionMethodAccess;
   effortAccess: SessionMethodAccess;
+  onModelSetup: () => void;
 }) {
-  const { state, selectedSession, agentDefaultModel, modelAccess, effortAccess } = params;
+  const { state, selectedSession, agentDefaultModel, modelAccess, effortAccess, onModelSetup } =
+    params;
   return html`
     <div class="chat-composer-model-control">
       ${renderChatModelControls({
@@ -67,6 +69,7 @@ export function renderChatPaneComposerControls(params: {
         sessionsResult: state.sessionsResult,
         stream: state.chatStream,
         onRequestUpdate: () => state.requestUpdate?.(),
+        onModelSetup,
         onFastModeSelect: (next, targetSessionKey) =>
           effortAccess.allowed
             ? switchChatFastMode(state, next, targetSessionKey)

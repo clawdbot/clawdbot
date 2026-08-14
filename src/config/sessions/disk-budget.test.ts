@@ -22,6 +22,7 @@ import {
   pruneUnreferencedSessionArtifacts,
 } from "./disk-budget.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
@@ -829,6 +830,47 @@ describe("enforceSessionDiskBudget", () => {
       expect(result.totalBytesAfter).toBeGreaterThan(result.highWaterBytes);
       expect(store[oldKey]).toBeUndefined();
       await expectPathExists(oldTranscript);
+    });
+  });
+
+  it("stops at the default target when highWaterBytes resolves to zero", async () => {
+    await withTestDir({ prefix: "openclaw-zero-high-water-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const store: Record<string, SessionEntry> = {};
+      for (let index = 1; index <= 4; index += 1) {
+        await fs.writeFile(path.join(dir, `worker-${index}.jsonl`), "x".repeat(64 * 1024));
+        store[`agent:main:subagent:worker-${index}`] = {
+          sessionId: `worker-${index}`,
+          updatedAt: index,
+        };
+      }
+      await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+      const maintenance = resolveMaintenanceConfigFromInput({
+        maxDiskBytes: 200_000,
+        highWaterBytes: 0,
+      });
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: maintenance.maxDiskBytes,
+          highWaterBytes: maintenance.highWaterBytes,
+        },
+        warnOnly: false,
+        commitEvictedIndex: async () => {
+          await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+        },
+      });
+
+      // The resolved high-water mark is this loop's stop condition, so a zero
+      // mark is unreachable while any data remains and every session would be
+      // evicted. The default target stops the sweep with history intact.
+      expect(maintenance.highWaterBytes).toBe(160_000);
+      expectBudgetResult(result);
+      expect(result.totalBytesAfter).toBeLessThanOrEqual(160_000);
+      expect(store).toHaveProperty("agent:main:subagent:worker-4");
+      await expectPathExists(path.join(dir, "worker-4.jsonl"));
     });
   });
 });

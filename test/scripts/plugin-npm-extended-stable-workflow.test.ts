@@ -114,7 +114,7 @@ describe("plugin npm extended-stable workflow", () => {
     expect(preflightCheckout.with).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       path: ".release-tooling",
-      "sparse-checkout": "scripts",
+      "sparse-checkout": "packages/normalization-core\nscripts\n",
     });
     const previewCommand = step(parsed.jobs?.preview_plugin_pack, "Preview publish command").run;
     expect(previewCommand).toContain(".release-tooling/scripts/plugin-npm-publish.sh");

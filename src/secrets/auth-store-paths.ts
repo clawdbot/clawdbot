@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -13,7 +14,12 @@ export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: 
   const paths = new Set<string>();
   // Scope default auth store discovery to the provided stateDir instead of
   // ambient process env, so scans do not include unrelated host-global stores.
-  paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent"));
+  const scopedEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_AGENT_DIR: undefined,
+  };
+  paths.add(path.dirname(resolveSharedAuthStorePath(scopedEnv)));
 
   const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -28,7 +34,7 @@ export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: 
   // Configured agent dirs may live outside stateDir; include them after state-dir discovery.
   for (const agentId of listAgentIds(config)) {
     if (agentId === "main") {
-      paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent"));
+      paths.add(path.dirname(resolveSharedAuthStorePath(scopedEnv)));
       continue;
     }
     const agentDir = resolveAgentDir(config, agentId);

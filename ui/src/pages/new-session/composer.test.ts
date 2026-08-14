@@ -163,6 +163,14 @@ describe("new-session composer start control", () => {
     expect(composer.querySelector("wa-dropdown-item[value='start-terminal']")).toBeNull();
   });
 
+  it("marks the Start button busy while the session is starting", () => {
+    const { composer } = renderComposer({ submitting: true });
+    const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
+
+    expect(start?.getAttribute("aria-busy")).toBe("true");
+    expect(start?.getAttribute("aria-label")).toBe("Starting…");
+  });
+
   it("renders the terminal action as a secondary split-button menu item", () => {
     const onStart = vi.fn();
     const { composer } = renderComposer({

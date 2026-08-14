@@ -7,20 +7,13 @@ import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
-  navigateToControlUiSession,
   waitForConfirmModal,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export {
-  controlUiSessionPath,
-  controlUiSessionUrl,
-  installMockGateway,
-  navigateToControlUiSession,
-  waitForConfirmModal,
-};
+export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForConfirmModal };
 
 export const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";

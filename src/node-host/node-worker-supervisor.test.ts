@@ -19,6 +19,7 @@ import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_CREDENTIAL,
   TEST_WORKER_SOURCE,
+  testNodeWorkerLaunchIdentity,
   testWorkerDescriptor,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
@@ -214,7 +215,7 @@ describe("node worker supervisor", () => {
           case "launch":
             return await supervisor.launch(input);
           case "cancel":
-            return await supervisor.cancel(input.launchId);
+            return await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
           case "close":
             await supervisor.close();
             return new NodeWorkerLaunchStore({ env }).get(input.launchId);
@@ -420,7 +421,7 @@ describe("node worker supervisor", () => {
     expect(await supervisor.launch(input)).toMatchObject({ state: "running" });
 
     if (operation === "cancel") {
-      await supervisor.cancel(input.launchId);
+      await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
     } else {
       await supervisor.close();
     }
@@ -449,7 +450,9 @@ describe("node worker supervisor", () => {
         function (this: NodeWorkerLaunchStore, params) {
           const receipt = Reflect.apply(originalMarkRunning, this, [params]);
           stopping =
-            operation === "cancel" ? supervisor.cancel(input.launchId) : supervisor.close();
+            operation === "cancel"
+              ? supervisor.cancel(testNodeWorkerLaunchIdentity(input))
+              : supervisor.close();
           return receipt;
         },
       );
@@ -462,6 +465,31 @@ describe("node worker supervisor", () => {
       await supervisor.close();
     },
   );
+
+  it("never signals a running worker for a mismatched immutable cancel identity", async () => {
+    const { supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "identity-cancel-launch", "wait");
+    const running = await supervisor.launch(input);
+    const expected = testNodeWorkerLaunchIdentity(input);
+    const mismatches = [
+      { ...expected, launchId: "launch-other" },
+      { ...expected, planHash: "b".repeat(64) },
+      { ...expected, environmentId: "environment-other" },
+      { ...expected, sessionId: "session-other" },
+      { ...expected, ownerEpoch: expected.ownerEpoch + 1 },
+      { ...expected, placementGeneration: expected.placementGeneration + 1 },
+      { ...expected, runId: "run-other" },
+    ];
+
+    for (const mismatch of mismatches) {
+      await expect(supervisor.cancel(mismatch)).resolves.toBeUndefined();
+      expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
+      expect((await supervisor.status(input.launchId))?.state).toBe("running");
+    }
+
+    await expect(supervisor.cancel(expected)).resolves.toMatchObject({ state: "cancelled" });
+    await supervisor.close();
+  });
 
   it.each([
     ["cancel", "cancelled"],
@@ -478,7 +506,7 @@ describe("node worker supervisor", () => {
     expect(inspectNodeWorkerProcessIdentity(grandchild)).toBe("live");
 
     if (operation === "cancel") {
-      await supervisor.cancel(input.launchId);
+      await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
     } else {
       await supervisor.close();
     }
