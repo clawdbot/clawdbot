@@ -308,6 +308,17 @@ describe("plugin npm runtime build planning", () => {
     expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
   });
 
+  it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/llama-cpp",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
+
   it("detects unresolved side-effect host imports in built plugin runtimes", () => {
     const outDir = tempDirs.make("openclaw-plugin-runtime-host-import-");
     writeFileSync(

@@ -1,15 +1,21 @@
-// Delivery queue health tests cover independent inbound and outbound diagnostic reads.
+// Delivery queue health tests cover independent terminal, inbound, and pressure reads.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const countOutbound = vi.fn();
+const summarizeOutbound = vi.fn();
+const maintenanceHealth = vi.fn();
 const countIngressFailed = vi.fn();
 const countIngressPressure = vi.fn();
 
-vi.mock("../../infra/delivery-queue-sqlite.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/delivery-queue-sqlite.js")>();
+vi.mock("../../infra/delivery-queue-failure-summary.js", () => ({
+  summarizeDeliveryFailureQueues: () => summarizeOutbound(),
+}));
+
+vi.mock("../../infra/delivery-queue-failure-maintenance.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../infra/delivery-queue-failure-maintenance.js")>();
   return {
     ...actual,
-    countFailedDeliveryQueueEntries: () => countOutbound(),
+    getDeliveryFailureMaintenanceHealth: () => maintenanceHealth(),
   };
 });
 
@@ -24,7 +30,26 @@ vi.mock("../../channels/message/ingress-queue-health.js", async (importOriginal)
 });
 
 const { buildDeliveryQueueHealthSummary } = await import("./delivery-queue.js");
-const outboundFailed = [{ queueName: "outbound", count: 2, oldestFailedAt: 1_000 }];
+const outboundSummary = [
+  {
+    queueName: "outbound",
+    count: 2,
+    oldestFailedAt: 1_000,
+    full: 2,
+    compacted: 0,
+    safe: 2,
+    ambiguous: 0,
+    ownerManaged: 0,
+    ownerCleanupPending: 0,
+    fenceNone: 2,
+    fencePermanent: 0,
+    fenceProducerBounded: 0,
+    legacyUnknown: 0,
+    payloadBearing: 2,
+    oldestPayloadFailedAt: 1_000,
+  },
+];
+const outboundHealth = outboundSummary;
 const ingressFailed = [
   { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 2_000 },
 ];
@@ -42,26 +67,27 @@ const ingressPressure = [
 
 describe("buildDeliveryQueueHealthSummary", () => {
   beforeEach(() => {
-    countOutbound.mockReset().mockReturnValue([]);
+    summarizeOutbound.mockReset().mockReturnValue([]);
+    maintenanceHealth.mockReset().mockReturnValue({ runAt: 0, errors: 0 });
     countIngressFailed.mockReset().mockReturnValue([]);
     countIngressPressure.mockReset().mockReturnValue([]);
   });
 
   it.each([
     {
-      name: "outbound failures when the ingress dead-letter read fails",
+      name: "terminal failures when the ingress dead-letter read fails",
       arrange: () => {
-        countOutbound.mockReturnValue(outboundFailed);
+        summarizeOutbound.mockReturnValue(outboundSummary);
         countIngressFailed.mockImplementation(() => {
           throw new Error("ingress database unavailable");
         });
       },
-      expected: { failed: outboundFailed },
+      expected: { failed: outboundHealth },
     },
     {
-      name: "ingress failures when the outbound read fails",
+      name: "ingress failures when the terminal summary read fails",
       arrange: () => {
-        countOutbound.mockImplementation(() => {
+        summarizeOutbound.mockImplementation(() => {
           throw new Error("outbound database unavailable");
         });
         countIngressFailed.mockReturnValue(ingressFailed);
@@ -91,6 +117,15 @@ describe("buildDeliveryQueueHealthSummary", () => {
   ])("preserves $name", ({ arrange, expected }) => {
     arrange();
     expect(buildDeliveryQueueHealthSummary()).toEqual(expected);
+  });
+
+  it("surfaces terminal maintenance errors without queue rows", () => {
+    maintenanceHealth.mockReturnValue({ runAt: 3_000, errors: 1 });
+
+    expect(buildDeliveryQueueHealthSummary()).toEqual({
+      failed: [],
+      maintenance: { lastRunAt: 3_000, errors: 1 },
+    });
   });
 
   it("uses cached ingress pressure without rerunning its reader", () => {

@@ -18,6 +18,12 @@ import {
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  classifyLegacySessionTerminalPolicy,
+  compactDeliveryTerminalEntry,
+  FAILED_TERMINAL_RECOVERY_STATE,
+  unknownDeliveryTerminalPolicy,
+} from "./delivery-queue-terminal-policy.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { migrationFileExists, safeReadDir } from "./state-migrations.fs.js";
@@ -952,26 +958,47 @@ function buildLegacyDeliveryQueueRow(params: {
           : enqueuedAt
       : null;
   const meta = legacyQueueMetadata(params.entry);
+  const retainedEntry = { ...params.entry, id: params.id, enqueuedAt, retryCount };
+  const replay =
+    params.status === "failed" && params.queueName === "session"
+      ? classifyLegacySessionTerminalPolicy(retainedEntry, params.id, failedAt)
+      : undefined;
+  const failedEntry =
+    params.status === "failed"
+      ? replay?.classified
+        ? { ...retainedEntry, terminalPolicy: replay.policy }
+        : compactDeliveryTerminalEntry({
+            id: params.id,
+            enqueuedAt,
+            retryCount,
+            terminalPolicy: unknownDeliveryTerminalPolicy(),
+          })
+      : undefined;
+  const compactFailure = failedEntry?.terminalPolicy?.detail === "compacted";
   return {
     queue_name: params.queueName,
     id: params.id,
     status: params.status,
     entry_kind: meta.entryKind,
-    session_key: meta.sessionKey,
-    channel: meta.channel,
-    target: meta.target,
-    account_id: meta.accountId,
+    session_key: compactFailure ? null : meta.sessionKey,
+    channel: compactFailure ? null : meta.channel,
+    target: compactFailure ? null : meta.target,
+    account_id: compactFailure ? null : meta.accountId,
     retry_count: retryCount,
     last_attempt_at:
       typeof params.entry.lastAttemptAt === "number" ? params.entry.lastAttemptAt : null,
-    last_error: typeof params.entry.lastError === "string" ? params.entry.lastError : null,
-    recovery_state:
-      typeof params.entry.recoveryState === "string" ? params.entry.recoveryState : null,
+    last_error:
+      compactFailure || typeof params.entry.lastError !== "string" ? null : params.entry.lastError,
+    recovery_state: compactFailure
+      ? FAILED_TERMINAL_RECOVERY_STATE
+      : typeof params.entry.recoveryState === "string"
+        ? params.entry.recoveryState
+        : null,
     platform_send_started_at:
-      typeof params.entry.platformSendStartedAt === "number"
+      !compactFailure && typeof params.entry.platformSendStartedAt === "number"
         ? params.entry.platformSendStartedAt
         : null,
-    entry_json: JSON.stringify({ ...params.entry, id: params.id, enqueuedAt, retryCount }),
+    entry_json: JSON.stringify(failedEntry ?? retainedEntry),
     enqueued_at: enqueuedAt,
     updated_at: params.now,
     failed_at: failedAt,

@@ -4745,6 +4745,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
     try {
       const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
         await import("../../infra/delivery-queue-sqlite.js");
+      const { unknownDeliveryTerminalPolicy } =
+        await import("../../infra/delivery-queue-terminal-policy.js");
       const cachedPressure = [
         {
           channelId: "slack",
@@ -4763,7 +4765,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
         queueName: "outbound",
         entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
       });
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1", unknownDeliveryTerminalPolicy());
       const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
       const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
         await import("../../channels/message/ingress-retry-policy.js");

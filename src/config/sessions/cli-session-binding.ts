@@ -112,3 +112,11 @@ export function getCliSessionId(
 ): string | undefined {
   return getCliSessionBinding(entry, provider)?.sessionId;
 }
+
+export function clearAllCliSessions(
+  entry: Partial<Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId">>,
+): void {
+  entry.cliSessionBindings = undefined;
+  entry.cliSessionIds = undefined;
+  entry.claudeCliSessionId = undefined;
+}

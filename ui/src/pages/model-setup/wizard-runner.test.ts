@@ -27,6 +27,7 @@ describe("ModelSetupWizardRunner", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => "research",
       onChange: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
@@ -34,6 +35,12 @@ describe("ModelSetupWizardRunner", () => {
     });
 
     await runner.start("openai-oauth");
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "openclaw.setup.auth.start",
+      { sessionId: expect.any(String), agentId: "research", authChoice: "openai-oauth" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(runner.state).toMatchObject({ phase: "step" });
     const answer = runner.answer(undefined, false);
     void runner.answer(undefined, false);
@@ -64,6 +71,7 @@ describe("ModelSetupWizardRunner", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
@@ -95,6 +103,7 @@ describe("ModelSetupWizardRunner", () => {
     });
     const runner = new ModelSetupWizardRunner({
       getClient: () => ({ request }) as unknown as GatewayBrowserClient,
+      getAgentId: () => null,
       onChange: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
@@ -147,6 +156,7 @@ describe("ModelSetupWizardRunner", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
@@ -201,6 +211,7 @@ describe("ModelSetupWizardRunner", () => {
     const seen: string[] = [];
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: (state) => {
         if (state.phase === "step" && state.step.type === "progress") {
           seen.push(state.step.message ?? "");

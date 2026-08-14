@@ -1,4 +1,5 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
+import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -67,6 +68,20 @@ export function resolveResponsesServerCompactionThreshold(params: {
     modelId,
   });
   const extraParams = { ...defaultParams, ...modelParams };
+  if (normalizedProvider === "anthropic") {
+    return resolveAnthropicServerCompactionPlan(
+      {
+        provider,
+        api: configuredModel?.api ?? providerConfig?.api ?? "anthropic-messages",
+        baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.contextWindow ??
+          resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+      },
+      extraParams,
+    ).threshold;
+  }
   const defaultOpenAIBaseUrl =
     normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
   return resolveOpenAIResponsesServerCompactionPlan(

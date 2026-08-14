@@ -132,6 +132,7 @@ describe("method scope resolution", () => {
     ["conversations.send", ["operator.admin"]],
     ["conversations.turn", ["operator.admin"]],
     ["conversations.turn.cancel", ["operator.admin"]],
+    ["delivery.failures.resubmit", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });

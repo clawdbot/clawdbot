@@ -408,6 +408,10 @@ describe("normalizeInitialApplicationLocation", () => {
     };
     const context = {
       gateway,
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
 

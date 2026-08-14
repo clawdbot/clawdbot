@@ -27,6 +27,7 @@ import {
 } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { moveDeliveryQueueEntryToFailed } from "../../infra/delivery-queue-sqlite.js";
+import { unknownDeliveryTerminalPolicy } from "../../infra/delivery-queue-terminal-policy.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { ackDelivery, enqueueDeliveryOnce } from "../../infra/outbound/delivery-queue-storage.js";
 import {
@@ -2142,7 +2143,12 @@ describe("main-session-restart-recovery", () => {
           tmpDir,
         );
         if (ownerStatus === "failed") {
-          moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryId, tmpDir);
+          moveDeliveryQueueEntryToFailed(
+            OUTBOUND_DELIVERY_QUEUE_NAME,
+            deliveryId,
+            unknownDeliveryTerminalPolicy(),
+            tmpDir,
+          );
         } else if (ownerStatus === "completed") {
           await ackDelivery(deliveryId, tmpDir);
         }
