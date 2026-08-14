@@ -37,7 +37,7 @@ import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-rec
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
-import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
+import { resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { createEmbeddedRunFailoverRetryController } from "./run/failover-retry-controller.js";
 import { buildErrorAgentMeta, resolveMaxRunRetryIterations } from "./run/helpers.js";
 import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
@@ -384,22 +384,12 @@ export async function runPreparedEmbeddedLoop(
           },
         });
       } catch (error) {
-        const retryReason = await failoverRetryController.retryThrownHarnessAuthFailure(error);
-        if (!retryReason) {
+        const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
+        if (!retryTrace) {
           throw error;
         }
-        traceAttempts.push({
-          provider,
-          model: modelId,
-          result: "rotate_profile",
-          reason: retryReason,
-          stage: "prompt",
-        });
-        lastRetryFailoverReason = mergeRetryFailoverReason({
-          previous: lastRetryFailoverReason,
-          failoverReason: retryReason,
-          timedOut: false,
-        });
+        traceAttempts.push(retryTrace);
+        lastRetryFailoverReason = retryTrace.reason;
         continue;
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;

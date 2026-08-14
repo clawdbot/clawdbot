@@ -71,7 +71,7 @@ describe("native harness auth failover", () => {
       runEmbeddedAgent({
         ...overflowBaseRunParams,
         provider: "openai",
-        modelId: "gpt-5.6-luna",
+        model: "gpt-5.6-luna",
         authProfileId: failedProfile,
         authProfileIdSource: "auto",
         runId: "run-native-harness-auth-failover",
@@ -95,7 +95,7 @@ describe("native harness auth failover", () => {
       runEmbeddedAgent({
         ...overflowBaseRunParams,
         provider: "openai",
-        modelId: "gpt-5.6-luna",
+        model: "gpt-5.6-luna",
         authProfileId: failedProfile,
         authProfileIdSource: "user",
         runId: "run-native-harness-user-auth-pin",
@@ -117,7 +117,7 @@ describe("native harness auth failover", () => {
       runEmbeddedAgent({
         ...overflowBaseRunParams,
         provider: "openai",
-        modelId: "gpt-5.6-luna",
+        model: "gpt-5.6-luna",
         authProfileId: failedProfile,
         authProfileIdSource: "auto",
         runId: "run-native-harness-auth-exhausted",
@@ -138,7 +138,7 @@ describe("native harness auth failover", () => {
       runEmbeddedAgent({
         ...overflowBaseRunParams,
         provider: "openai",
-        modelId: "gpt-5.6-luna",
+        model: "gpt-5.6-luna",
         runId: "run-native-harness-non-auth-failure",
       }),
     ).rejects.toBe(failure);

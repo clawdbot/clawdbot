@@ -14,6 +14,7 @@ import {
 } from "../../failover-error.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
+import type { TraceAttempt } from "../types.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import {
@@ -27,6 +28,7 @@ import {
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
+type AuthRetryTrace = TraceAttempt & { reason: FailoverReason };
 
 type RateLimitAuthProfileContext = {
   failoverProvider: string;
@@ -182,7 +184,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     maybeMarkAuthProfileFailure,
     resolveAuthProfileFailureReason: resolveProfileFailureReason,
-    retryThrownHarnessAuthFailure: async (error: unknown): Promise<FailoverReason | null> => {
+    recoverThrownHarnessAuthFailure: async (error: unknown): Promise<AuthRetryTrace | null> => {
       // Native harnesses can throw before returning a terminal result. Recover only
       // provider-auth failures here; local harness faults must keep propagating.
       if (!input.harnessOwnsTransport()) {
@@ -206,7 +208,15 @@ export function createEmbeddedRunFailoverRetryController(input: {
       } catch (markError) {
         log.warn(`profile failure mark failed: ${String(markError)}`);
       }
-      return rotated ? failoverReason : null;
+      return rotated
+        ? {
+            provider,
+            model: modelId,
+            result: "rotate_profile",
+            reason: failoverReason,
+            stage: "prompt",
+          }
+        : null;
     },
     maybeBackoffBeforeOverloadFailover: async (reason: FailoverReason | null) => {
       if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
