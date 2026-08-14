@@ -8,6 +8,10 @@ import {
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
+  resolveChannelContextVisibilityMode,
+  shouldIncludeSupplementalContext,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
+import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -217,6 +221,84 @@ export async function resolveMattermostMonitorInboundAccess(params: {
     },
   });
   return ingress;
+}
+
+/**
+ * Whether a post read back from a Mattermost thread may be kept as history.
+ *
+ * Thread recovery reads the whole server-side thread, including senders the
+ * live inbound path would have dropped without recording, so it has to apply
+ * the same boundary the live path applies to a `group_policy_not_allowlisted`
+ * post: a trigger allowlist does not hide history unless context visibility
+ * opts in.
+ *
+ * The decision has to come from the shared resolver rather than from a
+ * re-derived allowlist. The effective policy is more than `groupAllowFrom`: an
+ * empty group list falls back to `allowFrom`, and pairing-store entries and
+ * access groups are part of it too. Reimplementing it here would omit history
+ * from users the real ingress authorizes.
+ *
+ * `mayPair: false` keeps recovery read-only — merely appearing in a recovered
+ * thread must never create a pairing request — and a resolver failure denies,
+ * so a store hiccup can never widen the boundary.
+ */
+export async function shouldRetainMattermostRecoveredSenderHistory(params: {
+  account: ResolvedMattermostAccount;
+  cfg: OpenClawConfig;
+  senderId: string;
+  /**
+   * Resolved lazily: the username is only consulted when the account opts into
+   * dangerous name matching, and the visibility mode often decides first.
+   */
+  resolveSenderName?: () => Promise<string | undefined>;
+  channelId: string;
+  kind: ChatType;
+  groupPolicy: "allowlist" | "open" | "disabled";
+  storeAllowFrom?: Array<string | number> | null;
+  readStoreAllowFrom?: () => Promise<Array<string | number>>;
+  logVerboseMessage?: (message: string) => void;
+}): Promise<boolean> {
+  const visibilityIncludesDeniedSenders = shouldIncludeSupplementalContext({
+    mode: resolveChannelContextVisibilityMode({
+      cfg: params.cfg,
+      channel: "mattermost",
+      accountId: params.account.accountId,
+    }),
+    kind: "history",
+    senderAllowed: false,
+  });
+  if (visibilityIncludesDeniedSenders) {
+    // Nothing is hidden in this mode, so the sender's authorization does not
+    // change the answer and the resolver never has to run.
+    return true;
+  }
+  if (!params.senderId) {
+    return false;
+  }
+  const senderName = (await params.resolveSenderName?.()) ?? params.senderId;
+  try {
+    const access = await resolveMattermostMonitorInboundAccess({
+      account: params.account,
+      cfg: params.cfg,
+      senderId: params.senderId,
+      senderName,
+      channelId: params.channelId,
+      kind: params.kind,
+      groupPolicy: params.groupPolicy,
+      ...(params.storeAllowFrom !== undefined ? { storeAllowFrom: params.storeAllowFrom } : {}),
+      ...(params.readStoreAllowFrom ? { readStoreAllowFrom: params.readStoreAllowFrom } : {}),
+      allowTextCommands: false,
+      hasControlCommand: false,
+      eventKind: "message",
+      mayPair: false,
+    });
+    return access.ingress.decision === "allow";
+  } catch (error) {
+    params.logVerboseMessage?.(
+      `mattermost: thread backfill visibility check failed sender=${params.senderId} (${String(error)})`,
+    );
+    return false;
+  }
 }
 
 function resolveMattermostCommandDenyReason(params: {

@@ -7,7 +7,9 @@ import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   authorizeMattermostCommandInvocation,
   resolveMattermostMonitorInboundAccess,
+  shouldRetainMattermostRecoveredSenderHistory,
 } from "./monitor-auth.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 const accountFixture: ResolvedMattermostAccount = {
   accountId: "default",
@@ -292,5 +294,99 @@ describe("mattermost monitor authz", () => {
 
     expect(access.ingress.decision).toBe("block");
     expect(access.ingress.reasonCode).toBe("event_pairing_not_allowed");
+  });
+});
+
+// Thread recovery (#93204) reads posts the live handler never saw, so its
+// retention decision has to be the effective ingress policy — not a re-derived
+// allowlist, which omits history from senders the real path authorizes.
+describe("mattermost recovered thread history visibility", () => {
+  const allowlistVisibility: OpenClawConfig = {
+    channels: { mattermost: { contextVisibility: "allowlist" } },
+  };
+
+  const retains = (params: {
+    cfg?: OpenClawConfig;
+    config: ResolvedMattermostAccount["config"];
+    senderId: string;
+    kind?: "direct" | "group" | "channel";
+    storeAllowFrom?: Array<string | number>;
+  }) =>
+    shouldRetainMattermostRecoveredSenderHistory({
+      account: { ...accountFixture, config: params.config },
+      cfg: params.cfg ?? allowlistVisibility,
+      senderId: params.senderId,
+      channelId: params.kind === "direct" ? "dm-1" : "chan-1",
+      kind: params.kind ?? "channel",
+      groupPolicy: "allowlist",
+      storeAllowFrom: params.storeAllowFrom ?? [],
+    });
+
+  it("keeps every recovered sender when visibility does not hide history", async () => {
+    // The permissive default asks nothing of the allowlist, so a thread is
+    // recovered whole.
+    await expect(
+      retains({ cfg: {}, config: { groupAllowFrom: ["@group-owner"] }, senderId: "stranger" }),
+    ).resolves.toBe(true);
+  });
+
+  it("falls an empty group allowlist back to allowFrom", async () => {
+    // The regression: an empty `groupAllowFrom` is absent, not a deny-all, so a
+    // sender the live path admits through `allowFrom` keeps their history.
+    await expect(
+      retains({
+        config: { allowFrom: ["@trusted-user"], groupAllowFrom: [] },
+        senderId: "trusted-user",
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("keeps history from senders authorized through an access group", async () => {
+    await expect(
+      retains({
+        cfg: {
+          ...allowlistVisibility,
+          accessGroups: {
+            oncall: {
+              type: "message.senders",
+              members: { mattermost: ["mattermost:trusted-user"] },
+            },
+          },
+        },
+        config: { groupAllowFrom: ["accessGroup:oncall"] },
+        senderId: "trusted-user",
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("keeps direct history from a sender admitted by the pairing store", async () => {
+    await expect(
+      retains({
+        config: { dmPolicy: "pairing" },
+        senderId: "paired-user",
+        kind: "direct",
+        storeAllowFrom: ["user:paired-user"],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("drops history from a sender the effective policy does not authorize", async () => {
+    await expect(
+      retains({
+        config: { allowFrom: ["@trusted-user"], groupAllowFrom: [] },
+        senderId: "stranger",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("does not admit a recovered direct sender through pairing", async () => {
+    // Appearing in a recovered thread must never count as pairing admission.
+    await expect(
+      retains({ config: { dmPolicy: "pairing" }, senderId: "new-user", kind: "direct" }),
+    ).resolves.toBe(false);
+  });
+
+  it("drops history when the sender id is missing", async () => {
+    await expect(retains({ config: { allowFrom: ["*"] }, senderId: "" })).resolves.toBe(false);
   });
 });

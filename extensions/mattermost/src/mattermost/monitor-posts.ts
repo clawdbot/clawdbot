@@ -20,10 +20,9 @@ import type { MattermostPost } from "./client.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
 import {
   formatMattermostDirectMessageDropLog,
-  isMattermostSenderAllowed,
   normalizeMattermostAllowEntry,
-  normalizeMattermostAllowList,
   resolveMattermostMonitorInboundAccess,
+  shouldRetainMattermostRecoveredSenderHistory,
 } from "./monitor-auth.js";
 import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
@@ -49,6 +48,7 @@ import type { MattermostEventPayload } from "./monitor-websocket.js";
 import {
   createChannelHistoryWindow,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  isDangerousNameMatchingEnabled,
   logInboundDrop,
   type HistoryEntry,
 } from "./runtime-api.js";
@@ -71,25 +71,26 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     historyLimit,
     resolveSessionId: createSessionIdResolver(cfg.session?.store),
     // Same boundary the inbound path applies to a denied sender below: a trigger
-    // allowlist does not hide history unless context visibility opts in. Resolved
-    // here because the allowlist and the visibility mode live with the account,
-    // and recovery must not become a second, unpoliced way into the window.
-    shouldRetainSenderHistory: (senderId) =>
-      isMattermostSenderAllowed({
+    // allowlist does not hide history unless context visibility opts in. Routed
+    // through the shared ingress resolver so recovery reads the same effective
+    // policy the live path does, rather than becoming a second, unpoliced way
+    // into the window.
+    shouldRetainSenderHistory: ({ senderId, channelId, kind }) =>
+      shouldRetainMattermostRecoveredSenderHistory({
+        account,
+        cfg,
         senderId,
-        allowFrom: normalizeMattermostAllowList(
-          account.config.groupAllowFrom ?? account.config.allowFrom ?? [],
-        ),
-        allowNameMatching: false,
-      }) ||
-      shouldIncludeSupplementalContext({
-        mode: resolveChannelContextVisibilityMode({
-          cfg,
-          channel: "mattermost",
-          accountId: account.accountId,
-        }),
-        kind: "history",
-        senderAllowed: false,
+        // Name entries are an opt-in, dangerous matching mode, so the directory
+        // lookup only happens where it can change the decision.
+        resolveSenderName: async () =>
+          isDangerousNameMatchingEnabled(account.config)
+            ? normalizeOptionalString((await resolveUserInfo(senderId))?.username)
+            : undefined,
+        channelId,
+        kind,
+        groupPolicy,
+        readStoreAllowFrom: pairing.readAllowFromStore,
+        logVerboseMessage: (message) => monitor.logVerboseMessage(message),
       }),
     logVerboseMessage: (message) => monitor.logVerboseMessage(message),
   });
@@ -411,6 +412,8 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
         threadRootId: effectiveReplyToId,
         currentPostId: post.id,
         agentId: route.agentId,
+        channelId,
+        kind,
       });
     }
 
