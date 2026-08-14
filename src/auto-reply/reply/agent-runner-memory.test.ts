@@ -3676,6 +3676,12 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     };
     const onCompactionNotice = vi.fn();
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "server-endpoint",
+      result: { tokensBefore: 8_614, tokensAfter: 736 },
+    });
 
     await runPreflightCompactionIfNeeded({
       cfg: {
@@ -3705,7 +3711,11 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "end");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(
+      2,
+      "end",
+      "🧹 Server-side compaction complete (8.6k → 736)",
+    );
   });
 
   it("emits an incomplete preflight compaction notice when post-compaction state update throws", async () => {

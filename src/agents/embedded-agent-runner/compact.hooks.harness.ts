@@ -236,6 +236,23 @@ export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown>
 export const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
 export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
+export const requestOpenAIResponsesCompactionMock = vi.fn(async () => ({
+  item: { type: "compaction" as const, id: "cmp_test", encrypted_content: "opaque" },
+  usage: { input_tokens: 1_000, output_tokens: 200 },
+}));
+const readSessionTranscriptWatermarkMock = vi.fn(() => ({
+  generation: "generation-1",
+  maxSeq: 2,
+}));
+export const loadTranscriptEventRowsAfterSeqSyncMock: Mock<
+  (...args: unknown[]) => Array<{ event: unknown; seq: number }>
+> = vi.fn(() => []);
+export const rewriteTranscriptEventRowsExactMock: Mock<
+  (
+    scope?: unknown,
+    params?: { rows: Array<{ event: unknown; expectedEventJson: string; seq: number }> },
+  ) => Promise<{ generation: string } | null>
+> = vi.fn(async () => ({ generation: "generation-2" }));
 function createDefaultCompactionAuthStore(): AuthProfileStore {
   return {
     version: 1,
@@ -514,6 +531,20 @@ export function resetCompactSessionStateMocks(): void {
   registerProviderStreamForModelMock.mockReturnValue(undefined);
   applyExtraParamsToAgentMock.mockReset();
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
+  requestOpenAIResponsesCompactionMock.mockReset();
+  requestOpenAIResponsesCompactionMock.mockResolvedValue({
+    item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+    usage: { input_tokens: 1_000, output_tokens: 200 },
+  });
+  readSessionTranscriptWatermarkMock.mockReset();
+  readSessionTranscriptWatermarkMock.mockReturnValue({
+    generation: "generation-1",
+    maxSeq: 2,
+  });
+  loadTranscriptEventRowsAfterSeqSyncMock.mockReset();
+  loadTranscriptEventRowsAfterSeqSyncMock.mockReturnValue([]);
+  rewriteTranscriptEventRowsExactMock.mockReset();
+  rewriteTranscriptEventRowsExactMock.mockResolvedValue({ generation: "generation-2" });
   ensureAuthProfileStoreMock.mockReset();
   ensureAuthProfileStoreMock.mockImplementation(createDefaultCompactionAuthStore);
   ensureAuthProfileStoreWithoutExternalProfilesMock.mockReset();
@@ -644,6 +675,27 @@ export async function loadCompactHooksHarness(): Promise<{
 }> {
   resetCompactHooksHarnessMocks();
   vi.resetModules();
+
+  vi.doMock("@openclaw/ai/transports", async () => {
+    const actual =
+      await vi.importActual<typeof import("@openclaw/ai/transports")>("@openclaw/ai/transports");
+    return {
+      ...actual,
+      requestOpenAIResponsesCompaction: requestOpenAIResponsesCompactionMock,
+    };
+  });
+
+  vi.doMock("../../config/sessions/session-accessor.js", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../config/sessions/session-accessor.js")
+    >("../../config/sessions/session-accessor.js");
+    return {
+      ...actual,
+      loadTranscriptEventRowsAfterSeqSync: loadTranscriptEventRowsAfterSeqSyncMock,
+      readSessionTranscriptWatermark: readSessionTranscriptWatermarkMock,
+      rewriteTranscriptEventRowsExact: rewriteTranscriptEventRowsExactMock,
+    };
+  });
 
   vi.doMock("../../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: () => hookRunner,

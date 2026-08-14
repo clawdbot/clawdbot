@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
@@ -154,6 +155,69 @@ export function createOpenAIResponsesClient(
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
+}
+
+type OpenAIResponsesCompactEndpointResult = {
+  item: { type: "compaction"; id?: string; encrypted_content: string };
+  usage: Record<string, unknown> & { input_tokens: number; output_tokens: number };
+};
+
+/** POST one normal Responses input to the provider's manual compact endpoint. */
+export async function requestOpenAIResponsesCompaction(
+  model: Model,
+  context: Context,
+  options: OpenAIResponsesOptions,
+): Promise<OpenAIResponsesCompactEndpointResult> {
+  const apiKey = options.apiKey || getEnvApiKey(model.provider) || "";
+  let params = buildOpenAIResponsesParams(model, context, options);
+  const patched = await options.onPayload?.(params, model);
+  if (patched !== undefined) {
+    params = patched as typeof params;
+  }
+  params = sanitizeResponsesImagePayload(params as Record<string, unknown>) as typeof params;
+  const client = createOpenAIResponsesClient(
+    model,
+    context,
+    getAiTransportHost().resolveSecretSentinel(apiKey),
+    options.headers,
+    undefined,
+    options.sessionId,
+  );
+  const response = await client.post<unknown>("/responses/compact", {
+    ...buildOpenAISdkRequestOptions(model, options.signal, {
+      timeoutMs: options.timeoutMs,
+      maxRetries: options.maxRetries,
+    }),
+    body: { model: model.id, input: params.input },
+  });
+  const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
+  const item = output[0];
+  const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
+  if (
+    response == null ||
+    !isRecord(response) ||
+    response.object !== "response.compaction" ||
+    output.length !== 1 ||
+    !isRecord(item) ||
+    item.type !== "compaction" ||
+    typeof item.encrypted_content !== "string" ||
+    item.encrypted_content.length === 0 ||
+    !usage ||
+    typeof usage.input_tokens !== "number" ||
+    typeof usage.output_tokens !== "number"
+  ) {
+    throw new Error(
+      "Responses compact endpoint did not return exactly one compaction item with usage",
+    );
+  }
+  return {
+    item: {
+      type: "compaction",
+      ...(typeof item.id === "string" ? { id: item.id } : {}),
+      encrypted_content: item.encrypted_content,
+    },
+    usage: usage as OpenAIResponsesCompactEndpointResult["usage"],
+  };
 }
 
 type ResponsesPricingOptions = Pick<

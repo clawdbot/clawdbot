@@ -32,6 +32,7 @@ import {
   guardSessionManagerMock,
   hookRunner,
   listRegisteredPluginAgentPromptGuidanceMock,
+  loadTranscriptEventRowsAfterSeqSyncMock,
   loadCompactHooksHarness,
   maybeCompactAgentHarnessSessionMock,
   resolveAgentHarnessPolicyMock,
@@ -47,6 +48,8 @@ import {
   resolveSandboxContextMock,
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
+  requestOpenAIResponsesCompactionMock,
+  rewriteTranscriptEventRowsExactMock,
   rotateTranscriptAfterCompactionMock,
   selectAgentHarnessForPreparedModelProvidersMock,
   selectAgentHarnessMock,
@@ -329,6 +332,111 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       details: { ok: true },
     });
     resetCompactSessionStateMocks();
+  });
+
+  it("captures xAI manual endpoint compaction without rewriting message content", async () => {
+    mockResolvedModel();
+    const assistantEntry = {
+      type: "message" as const,
+      id: "assistant-entry",
+      parentId: "user-entry",
+      timestamp: new Date(2).toISOString(),
+      message: structuredClone(sessionMessages[1]) as Extract<AgentMessage, { role: "assistant" }>,
+    };
+    loadTranscriptEventRowsAfterSeqSyncMock.mockReturnValueOnce([
+      { event: assistantEntry, seq: 2 },
+    ]);
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        provider: "xai",
+        model: "grok-4.5",
+        config: {
+          models: {
+            providers: {
+              xai: {
+                api: "openai-responses",
+                baseUrl: "https://api.x.ai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        trigger: "manual",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+      compactionKind: "server-endpoint",
+      result: { tokensBefore: 1_000, tokensAfter: 200 },
+    });
+    expect(requestOpenAIResponsesCompactionMock).toHaveBeenCalledOnce();
+    expect(sessionManualCompactionMock).not.toHaveBeenCalled();
+    const rewritten = rewriteTranscriptEventRowsExactMock.mock.calls[0]?.[1]?.rows[0]?.event as {
+      message?: { content?: unknown; providerReplay?: { replayIndex?: number } };
+    };
+    expect(rewritten.message?.content).toEqual(assistantEntry.message.content);
+    expect(rewritten.message?.providerReplay?.replayIndex).toBe(
+      assistantEntry.message.content.length,
+    );
+  });
+
+  it("never calls the compact endpoint during overflow recovery", async () => {
+    mockResolvedModel();
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        provider: "xai",
+        model: "grok-4.5",
+        config: {
+          models: {
+            providers: {
+              xai: {
+                api: "openai-responses",
+                baseUrl: "https://api.x.ai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        trigger: "overflow",
+      }),
+    );
+
+    expect(result.compacted).toBe(true);
+    expect(requestOpenAIResponsesCompactionMock).not.toHaveBeenCalled();
+    expect(sessionAutomaticCompactionMock).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to client compaction when the endpoint fails", async () => {
+    mockResolvedModel();
+    requestOpenAIResponsesCompactionMock.mockRejectedValueOnce(new Error("endpoint unavailable"));
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        provider: "xai",
+        model: "grok-4.5",
+        config: {
+          models: {
+            providers: {
+              xai: {
+                api: "openai-responses",
+                baseUrl: "https://api.x.ai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        trigger: "manual",
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(result.compactionKind).toBeUndefined();
+    expect(sessionManualCompactionMock).toHaveBeenCalledOnce();
+    expect(rewriteTranscriptEventRowsExactMock).not.toHaveBeenCalled();
   });
 
   it("fails closed before generic compaction for a model-locked native session", async () => {

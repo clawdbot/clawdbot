@@ -5,8 +5,12 @@ import {
   createAzureOpenAIClient,
   createOpenAIResponsesClient,
   createOpenAIResponsesTransportStreamFn,
+  requestOpenAIResponsesCompaction,
 } from "./openai-responses-client.js";
-import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  captureOpenAIResponsesCompaction,
+} from "./openai-responses-compaction-replay.js";
 import {
   buildResponsesFailedNoDetailsObservation,
   normalizeResponsesFailedEvent,
@@ -37,7 +41,13 @@ import {
   getCompat,
 } from "./openai-transport-params.js";
 
-export { createAzureOpenAIResponsesTransportStreamFn, createOpenAIResponsesTransportStreamFn };
+export {
+  createAzureOpenAIResponsesTransportStreamFn,
+  createOpenAIResponsesTransportStreamFn,
+  buildOpenAIResponsesReasoningReplayMetadata,
+  captureOpenAIResponsesCompaction,
+  requestOpenAIResponsesCompaction,
+};
 
 const responsesTesting = {
   getCompat,

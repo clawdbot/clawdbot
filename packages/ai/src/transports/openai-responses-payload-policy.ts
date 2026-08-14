@@ -312,6 +312,23 @@ export function resolveOpenAIResponsesServerCompactionPlan(
   };
 }
 
+/** Resolve the manual Responses compact-endpoint gate for one route. */
+export function resolveOpenAIResponsesCompactEndpointPlan(
+  model: OpenAIResponsesPayloadModel,
+  extraParams?: Record<string, unknown>,
+): { enabled: boolean } {
+  const provider = normalizeOptionalLowercaseString(model.provider);
+  const api = normalizeOptionalLowercaseString(model.api);
+  const configured = extraParams?.responsesCompactEndpoint;
+  const nativeXai =
+    provider === "xai" &&
+    resolveBundledOpenAIResponsesEndpointClass(model.baseUrl) === "xai-native";
+  return {
+    enabled:
+      isOpenAIResponsesApi(api) && (configured === true || (configured !== false && nativeXai)),
+  };
+}
+
 function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>): void {
   const reasoning = payloadObj.reasoning;
   if (reasoning === "none") {

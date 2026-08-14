@@ -711,6 +711,34 @@ describe("handleCompactCommand", () => {
     expect(result?.reply?.text).toContain("Compaction skipped");
   });
 
+  it("reports server-side compaction with before and after tokens", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "server-endpoint",
+      result: {
+        summary: "Server-side Responses compaction",
+        firstKeptEntryId: "assistant-entry",
+        tokensBefore: 8_614,
+        tokensAfter: 736,
+      },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: { sessionId: "server-session", updatedAt: Date.now() },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Server-side compaction (8614 → 736)");
+    expect(requireIncrementCompactionCountCall().compactionKind).toBe("server-endpoint");
+  });
+
   it.each([
     {
       owner: "Codex",

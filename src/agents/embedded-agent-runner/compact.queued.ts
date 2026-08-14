@@ -839,7 +839,11 @@ async function compactResolvedContextEngine(
         return {
           ok: result.ok,
           compacted: result.compacted,
-          compactionKind: "context-engine",
+          compactionKind:
+            (result.result?.details as { compactionKind?: unknown } | undefined)?.compactionKind ===
+            "server-endpoint"
+              ? "server-endpoint"
+              : "context-engine",
           reason: result.reason,
           result: result.result
             ? {
