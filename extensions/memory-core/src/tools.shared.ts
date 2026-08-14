@@ -11,6 +11,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
+import {
+  configureMemoryCoreDreamingState,
+  type MemoryCoreOpenKeyedStore,
+} from "./dreaming-state.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
@@ -23,6 +27,7 @@ type MemoryToolOptions = {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  openKeyedStore?: MemoryCoreOpenKeyedStore;
 };
 
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
@@ -62,6 +67,7 @@ export async function getMemoryManagerContextWithPurpose(params: {
   agentId: string;
   purpose?: "default" | "status" | "cli";
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  openKeyedStore?: MemoryCoreOpenKeyedStore;
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
@@ -72,6 +78,18 @@ export async function getMemoryManagerContextWithPurpose(params: {
     }
 > {
   const { getMemorySearchManager } = await loadMemoryToolRuntime();
+  // The memory_search tool path reaches getMemorySearchManager() through a
+  // different lazy-module boundary than createMemoryRuntime()
+  // (runtime-provider.ts), so it never inherited that boundary's
+  // configureMemoryCoreDreamingState() call. Without this, every
+  // MemoryManager sync (watch/session-delta/session-startup-catchup) that
+  // needs the dreaming state store throws "dreaming SQLite state store is
+  // not configured", even though the plugin's register() configured it for
+  // the other boundary. Re-asserting here (idempotent, same pattern as
+  // runtime-provider.ts) keeps this boundary self-sufficient too.
+  if (params.openKeyedStore) {
+    configureMemoryCoreDreamingState(params.openKeyedStore);
+  }
   const startedAt = Date.now();
   const { manager, debug, error } = await getMemorySearchManager({
     cfg: params.cfg,

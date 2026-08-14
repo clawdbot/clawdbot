@@ -27,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MemoryCoreOpenKeyedStore } from "./dreaming-state.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
@@ -410,6 +411,7 @@ export function createMemorySearchTool(options: {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  openKeyedStore?: MemoryCoreOpenKeyedStore;
 }) {
   return createMemoryTool({
     options,
@@ -503,6 +505,7 @@ export function createMemorySearchTool(options: {
                           agentId,
                           purpose: memoryManagerPurpose,
                           acquireLocalService: options.acquireLocalService,
+                          openKeyedStore: options.openKeyedStore,
                         }),
                       );
                       return { context };
@@ -615,6 +618,7 @@ export function createMemorySearchTool(options: {
                         agentId,
                         purpose: memoryManagerPurpose,
                         acquireLocalService: options.acquireLocalService,
+                        openKeyedStore: options.openKeyedStore,
                       }),
                     ),
                   );

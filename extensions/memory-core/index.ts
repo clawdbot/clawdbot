@@ -15,7 +15,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { TSchema } from "typebox";
-import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
+import {
+  configureMemoryCoreDreamingState,
+  type MemoryCoreOpenKeyedStore,
+} from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
@@ -36,6 +39,7 @@ type MemoryToolOptions = {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  openKeyedStore?: MemoryCoreOpenKeyedStore;
 };
 
 const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
@@ -236,6 +240,7 @@ function resolveMemoryToolOptions(
     conversationRecall: ctx.conversationRecall,
     activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+    ...(host.openKeyedStore ? { openKeyedStore: host.openKeyedStore } : {}),
   };
 }
 
