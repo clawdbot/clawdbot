@@ -21,10 +21,7 @@ import {
   shouldPreserveNestedTranscriptImageDataUrlFields,
   shouldPreserveTranscriptImagePayload,
 } from "./transcript-redact-images.js";
-import {
-  sanitizeAnthropicCompactionReplayState,
-  sanitizeOpenAICompactionReplayState,
-} from "./transcript-redact-replay.js";
+import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 
 function resolveTranscriptRedactPatterns(patterns?: string[]) {
   return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
@@ -542,14 +539,12 @@ function redactTranscriptStructuredValue(
   }
   for (const [key, item] of Object.entries(source)) {
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
-      const sanitizedReplay =
-        sanitizeOpenAICompactionReplayState(item, currentAssistantRoute, replaySanitizerHelpers) ??
-        sanitizeAnthropicCompactionReplayState(
-          item,
-          currentAssistantRoute,
-          cfg,
-          replaySanitizerHelpers,
-        );
+      const sanitizedReplay = sanitizeCompactionReplayState(
+        item,
+        currentAssistantRoute,
+        cfg,
+        replaySanitizerHelpers,
+      );
       if (sanitizedReplay !== undefined) {
         if (sanitizedReplay !== item) {
           next ??= { ...source };

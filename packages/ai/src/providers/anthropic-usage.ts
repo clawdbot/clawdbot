@@ -211,30 +211,28 @@ export function applyAnthropicMessageDeltaUsage(
   const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
   const cacheReadTokens = readAnthropicUsageTokenCount(usage.cache_read_input_tokens);
   const cacheWriteTokens = readAnthropicUsageTokenCount(usage.cache_creation_input_tokens);
-  if (billedIterations) {
-    target.input = billedIterations.input;
-    target.output = billedIterations.output;
-    target.cacheRead = billedIterations.cacheRead;
-    target.cacheWrite = billedIterations.cacheWrite;
-    target.cacheWrite1h = billedIterations.cacheWrite1h;
-  } else {
-    if (inputTokens !== undefined) {
-      target.input = inputTokens;
-    }
-    if (outputTokens !== undefined) {
-      target.output = outputTokens;
-    }
-    // Match the SDK accumulator: absent or null cache counters preserve prior values.
-    if (cacheReadTokens !== undefined) {
-      target.cacheRead = cacheReadTokens;
-    }
-    if (cacheWriteTokens !== undefined) {
-      target.cacheWrite = cacheWriteTokens;
-    }
-    const { cacheWrite1h } = readAnthropicCacheWriteUsage(usage);
-    if (cacheWrite1h !== undefined) {
-      target.cacheWrite1h = cacheWrite1h;
-    }
+  const resolved: Partial<AnthropicBilledUsage> = billedIterations ?? {
+    input: inputTokens,
+    output: outputTokens,
+    cacheRead: cacheReadTokens,
+    cacheWrite: cacheWriteTokens,
+    cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
+  };
+  if (resolved.input !== undefined) {
+    target.input = resolved.input;
+  }
+  if (resolved.output !== undefined) {
+    target.output = resolved.output;
+  }
+  // Match the SDK accumulator: absent or null cache counters preserve prior values.
+  if (resolved.cacheRead !== undefined) {
+    target.cacheRead = resolved.cacheRead;
+  }
+  if (resolved.cacheWrite !== undefined) {
+    target.cacheWrite = resolved.cacheWrite;
+  }
+  if (resolved.cacheWrite1h !== undefined) {
+    target.cacheWrite1h = resolved.cacheWrite1h;
   }
   target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
   const iterationUsage = readLastAnthropicIterationUsage(usage);

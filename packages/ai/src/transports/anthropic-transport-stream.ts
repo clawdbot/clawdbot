@@ -85,7 +85,7 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   buildAnthropicReplayPlan,
-  captureAnthropicCompaction,
+  createCompactionCapture,
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
   type AnthropicCompactionBlock,
@@ -1214,7 +1214,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
-        const pendingCompactions = new Map<number, { content: string; replayIndex: number }>();
+        const compactionCapture = createCompactionCapture(output, model, transportOptions);
         // Signature deltas are opaque and only complete at content_block_stop.
         // Keep partial bytes out of output so interrupted streams cannot poison replay.
         const pendingThinkingSignatures = new Map<number, string>();
@@ -1367,12 +1367,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const index = typeof event.index === "number" ? event.index : -1;
             if (
               transportOptions.anthropicServerCompaction === true &&
-              contentBlock?.type === "compaction"
+              compactionCapture.begin(index, contentBlock, output.content.length)
             ) {
-              pendingCompactions.set(index, {
-                content: typeof contentBlock.content === "string" ? contentBlock.content : "",
-                replayIndex: output.content.length,
-              });
               continue;
             }
             const fallbackBoundary = refusalBuffer
@@ -1534,12 +1530,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (event.type === "content_block_delta") {
             const delta = event.delta as Record<string, unknown> | undefined;
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
-            const pendingCompaction =
-              eventIndex === undefined ? undefined : pendingCompactions.get(eventIndex);
-            if (pendingCompaction && delta?.type === "compaction_delta") {
-              if (typeof delta.content === "string") {
-                pendingCompaction.content = delta.content;
-              }
+            if (eventIndex !== undefined && compactionCapture.delta(eventIndex, delta)) {
               continue;
             }
             let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
@@ -1656,17 +1647,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           if (event.type === "content_block_stop") {
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
-            const pendingCompaction =
-              eventIndex === undefined ? undefined : pendingCompactions.get(eventIndex);
-            if (eventIndex !== undefined && pendingCompaction) {
-              pendingCompactions.delete(eventIndex);
-              captureAnthropicCompaction(
-                output,
-                pendingCompaction.content,
-                pendingCompaction.replayIndex,
-                model,
-                transportOptions,
-              );
+            if (eventIndex !== undefined && compactionCapture.complete(eventIndex)) {
               continue;
             }
             const pendingSignature =

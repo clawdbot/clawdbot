@@ -22,7 +22,7 @@ import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-opt
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
   buildAnthropicReplayPlan,
-  captureAnthropicCompaction,
+  createCompactionCapture,
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
   type AnthropicCompactionBlock,
@@ -431,7 +431,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       };
       const blocks = output.content as Block[];
       const blockIndexes = new Map<number, number>();
-      const pendingCompactions = new Map<number, { content: string; replayIndex: number }>();
+      const compactionCapture = createCompactionCapture(output, model, requestOptions);
 
       for await (const event of iterateAnthropicEvents(response, refusalBuffer !== undefined)) {
         if (event.type === "message_start") {
@@ -451,12 +451,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
           const rawContentBlock = event.content_block as unknown as Record<string, unknown>;
           if (
             requestOptions?.anthropicServerCompaction === true &&
-            rawContentBlock.type === "compaction"
+            compactionCapture.begin(event.index, rawContentBlock, output.content.length)
           ) {
-            pendingCompactions.set(event.index, {
-              content: typeof rawContentBlock.content === "string" ? rawContentBlock.content : "",
-              replayIndex: output.content.length,
-            });
             continue;
           }
           const fallbackBoundary = refusalBuffer
@@ -571,11 +567,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
           }
         } else if (event.type === "content_block_delta") {
           const rawDelta = event.delta as unknown as Record<string, unknown>;
-          const pendingCompaction = pendingCompactions.get(event.index);
-          if (pendingCompaction && rawDelta.type === "compaction_delta") {
-            if (typeof rawDelta.content === "string") {
-              pendingCompaction.content = rawDelta.content;
-            }
+          if (compactionCapture.delta(event.index, rawDelta)) {
+            continue;
           } else if (event.delta.type === "text_delta") {
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
@@ -622,16 +615,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             }
           }
         } else if (event.type === "content_block_stop") {
-          const pendingCompaction = pendingCompactions.get(event.index);
-          if (pendingCompaction) {
-            pendingCompactions.delete(event.index);
-            captureAnthropicCompaction(
-              output,
-              pendingCompaction.content,
-              pendingCompaction.replayIndex,
-              model,
-              requestOptions,
-            );
+          if (compactionCapture.complete(event.index)) {
             continue;
           }
           const index = blockIndexes.get(event.index);
