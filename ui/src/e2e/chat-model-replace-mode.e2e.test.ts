@@ -43,29 +43,31 @@ suite.define(() => {
       await composer.locator('[data-chat-model-select="true"]').click();
       const hint = composer.locator(".chat-controls__catalog-hint");
       const modelsListRequest = await gateway.waitForRequest("models.list");
+      expect(await gateway.getRequests("models.list")).toEqual([modelsListRequest]);
       expect(modelsListRequest.params).toEqual({ agentId: "main", view: "configured" });
       await expect
         .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
         .toBe("Replace mode filters models according to your model settings. Manage models");
       await expect
-        .poll(() => hint.locator("a").getAttribute("href"))
+        .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
         .toBe("/settings/model-providers");
     });
   });
 
   it("keeps the replace-mode hint after chat metadata refresh", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+        {
+          id: "gpt-5.3-codex-spark",
+          name: "GPT-5.3 Codex Spark",
+          provider: "codex",
+          available: false,
+        },
+      ];
       const gateway = await installMockGateway(page, {
         agentModel: "openai/gpt-5.3-codex-spark",
-        models: [
-          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-          {
-            id: "gpt-5.3-codex-spark",
-            name: "GPT-5.3 Codex Spark",
-            provider: "codex",
-            available: false,
-          },
-        ],
+        models,
         methodResponses: {
           "chat.startup": {
             agentsList: {
@@ -81,15 +83,11 @@ suite.define(() => {
           "chat.metadata": {
             catalogMode: "replace",
             commands: [],
-            models: [
-              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-              {
-                id: "gpt-5.3-codex-spark",
-                name: "GPT-5.3 Codex Spark",
-                provider: "codex",
-                available: false,
-              },
-            ],
+            models,
+          },
+          "models.list": {
+            catalogMode: "replace",
+            models,
           },
           "sessions.list": {
             count: 1,
@@ -141,12 +139,13 @@ suite.define(() => {
       await expect.poll(() => unavailableDefault.getAttribute("disabled")).not.toBeNull();
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
       await composer.locator('[data-chat-model-select="true"]').click();
+      await gateway.waitForRequest("models.list");
       const hint = composer.locator(".chat-controls__catalog-hint");
       await expect
         .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
         .toBe("Replace mode filters models according to your model settings. Manage models");
       await expect
-        .poll(() => hint.locator("a").getAttribute("href"))
+        .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
         .toBe("/settings/model-providers");
     });
   });
