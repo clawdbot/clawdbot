@@ -180,9 +180,10 @@ describe("agentsListCommand", () => {
     const jsonRuntime = createRuntime();
     await agentsListCommand({ json: true }, jsonRuntime);
 
-    expect(jsonRuntime.json[0]).toEqual([
-      expect.objectContaining({ identityName, workspace, model }),
-    ]);
+    // Workspace paths are platform-normalized before JSON, so assert the
+    // non-sanitization invariant on it rather than byte equality.
+    expect(jsonRuntime.json[0]).toEqual([expect.objectContaining({ identityName, model })]);
+    expect((jsonRuntime.json[0] as Array<{ workspace: string }>)[0]?.workspace).toContain(control);
   });
 
   it.skipIf(process.platform !== "win32")(
