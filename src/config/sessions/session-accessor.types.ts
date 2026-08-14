@@ -362,8 +362,6 @@ export type SessionTranscriptWriteTransactionContext = {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-  /** Optional stable boundary used when the parent may still be appending. */
-  forkFrom?: "last-completed";
 };
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
@@ -620,6 +618,8 @@ export type ForkSessionFromParentTranscriptParams = {
   parentSessionKey: string;
   sessionKey: string;
   storePath: string;
+  /** Optional stable boundary used when the parent may still be appending. */
+  forkFrom?: "last-completed";
   /** Stable target identity for lifecycle-owned hidden or resumable sessions. */
   targetSessionId?: string;
   /** Cross-agent forks land the child transcript in the target agent's store. */

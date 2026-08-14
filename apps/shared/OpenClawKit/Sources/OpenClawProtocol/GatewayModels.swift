@@ -8445,6 +8445,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let parentsessionkey: String?
     public let spawndepth: Int?
     public let fork: Bool?
+    public let forkfrom: String?
     public let emitcommandhooks: Bool?
     public let succeedsparent: Bool?
     public let task: String?
@@ -8469,6 +8470,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String? = nil,
         spawndepth: Int? = nil,
         fork: Bool? = nil,
+        forkfrom: String? = nil,
         emitcommandhooks: Bool? = nil,
         succeedsparent: Bool? = nil,
         task: String? = nil,
@@ -8492,6 +8494,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.parentsessionkey = parentsessionkey
         self.spawndepth = spawndepth
         self.fork = fork
+        self.forkfrom = forkfrom
         self.emitcommandhooks = emitcommandhooks
         self.succeedsparent = succeedsparent
         self.task = task
@@ -8517,6 +8520,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case parentsessionkey = "parentSessionKey"
         case spawndepth = "spawnDepth"
         case fork
+        case forkfrom = "forkFrom"
         case emitcommandhooks = "emitCommandHooks"
         case succeedsparent = "succeedsParent"
         case task
