@@ -135,10 +135,14 @@ export async function backupRestoreCommand(
   try {
     await extractBackupArchive(verified.archivePath, targetPath);
   } catch (error) {
+    let cleanupError: unknown;
     try {
       await cleanupFailedRestore(targetPath, target.created);
-    } catch (cleanupError) {
-      // oxlint-disable-next-line preserve-caught-error -- cleanup is the second AggregateError entry; extraction stays the primary cause.
+    } catch (caughtCleanupError) {
+      cleanupError = caughtCleanupError;
+    }
+    if (cleanupError !== undefined) {
+      // Extraction stays the primary cause; cleanup rides along as the second AggregateError entry.
       throw new AggregateError(
         [error, cleanupError],
         `Backup restore failed and the incomplete target could not be cleaned: ${targetPath}. Cleanup error: ${formatErrorMessage(cleanupError)}`,
