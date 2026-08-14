@@ -175,7 +175,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   sessionId?: string;
   storePath: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
   workspaceDir?: string;
   reason:
     | "new"
@@ -236,7 +236,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   const payload = buildSessionEndHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    cfg: params.cfg,
+    agentId: params.agentId,
     reason: params.reason,
     sessionFile: transcript.sessionFile,
     transcriptArchived: transcript.transcriptArchived,
@@ -257,7 +257,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   resumedFrom?: string;
   storePath?: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
 }): void {
   if (!params.sessionId) {
     return;
@@ -285,7 +285,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   const payload = buildSessionStartHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    cfg: params.cfg,
+    agentId: params.agentId,
     resumedFrom: params.resumedFrom,
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
@@ -349,7 +349,7 @@ export async function drainActiveSessionsForShutdown(params: {
         const payload = buildSessionEndHookPayload({
           sessionId: entry.sessionId,
           sessionKey: entry.sessionKey,
-          cfg: entry.cfg,
+          agentId: entry.agentId,
           reason: params.reason,
           sessionFile: transcript.sessionFile,
           transcriptArchived: transcript.transcriptArchived,
@@ -1383,10 +1383,12 @@ export async function performGatewaySessionReset(params: {
         params.reason,
         target.canonicalKey ?? params.key,
         {
+          agentId,
           sessionEntry: entry,
           previousSessionEntry: entry,
           commandSource: params.commandSource,
           cfg,
+          storePath,
           workspaceDir,
         },
       );

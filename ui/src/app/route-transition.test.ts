@@ -5,7 +5,10 @@ function testDocumentWithOutlet(animate = vi.fn()) {
   const outlet = document.createElement("openclaw-router-outlet") as HTMLElement & {
     updateComplete: Promise<void>;
   };
-  outlet.updateComplete = Promise.resolve();
+  Object.defineProperty(outlet, "updateComplete", {
+    configurable: true,
+    value: Promise.resolve(),
+  });
   outlet.animate = animate;
   document.body.append(outlet);
   return {

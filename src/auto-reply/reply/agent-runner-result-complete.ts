@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -136,7 +136,7 @@ export async function completeReplyAgentRun(input: {
     if (sessionKey) {
       readPostCompactionContext(followupRun.run.workspaceDir, {
         cfg,
-        agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        agentId: followupRun.run.agentId,
       })
         .then((contextContent) => {
           if (contextContent) {

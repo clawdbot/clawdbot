@@ -184,17 +184,16 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
-/** Formats dead-lettered delivery queue entries for text health output. */
+/** Formats dead-lettered and pressured delivery queue entries for text health output. */
 export function formatDeliveryQueueHealthLine(
   summary: HealthSummary,
   now = Date.now(),
 ): string | null {
   const failed = summary.deliveryQueues?.failed ?? [];
   const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
-  if (failed.length === 0 && ingressFailed.length === 0) {
-    return null;
-  }
-  const counts = [
+  const ingressPressure = summary.deliveryQueues?.ingressPressure ?? [];
+  const warnings: string[] = [];
+  const deadLetterCounts = [
     ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
     ...ingressFailed.map(
       (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
@@ -205,7 +204,24 @@ export function formatDeliveryQueueHealthLine(
     .filter((value): value is number => typeof value === "number");
   const oldestNote =
     oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
-  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
+  if (deadLetterCounts) {
+    warnings.push(`dead-lettered entries — ${deadLetterCounts}${oldestNote}`);
+  }
+  if (ingressPressure.length > 0) {
+    const pressureCounts = ingressPressure
+      .map(
+        (queue) =>
+          `inbound ${queue.channelId}/${queue.accountId}: ${queue.laneCount} pressured ${
+            queue.laneCount === 1 ? "lane" : "lanes"
+          }, ${queue.pendingCount} pending, ${queue.claimedCount} claimed, ${queue.blockedCount} blocked`,
+      )
+      .join(", ");
+    const oldestPressure = Math.min(...ingressPressure.map((queue) => queue.oldestReceivedAt));
+    warnings.push(
+      `ingress pressure — ${pressureCounts}; oldest ${formatDurationHuman(now - oldestPressure)} ago`,
+    );
+  }
+  return warnings.length > 0 ? `Delivery queue: warning (${warnings.join("; ")})` : null;
 }
 
 /** Formats config hot-reload watcher degradation for text health output. */
@@ -284,9 +300,6 @@ export async function healthCommand(
     }
     throw error;
   }
-  // Gateway reachability defines success; channel issues are reported but not fatal here.
-  const fatal = false;
-
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
   } else {
@@ -545,10 +558,6 @@ export async function healthCommand(
         }
       }
     }
-  }
-
-  if (fatal) {
-    runtime.exit(1);
   }
 }
 

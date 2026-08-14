@@ -57,6 +57,8 @@ export type QueuedSessionDeliveryPayload =
   | ({
       kind: "systemEvent";
       sessionKey: string;
+      /** Preserves ownership when a durable event targets the literal global session. */
+      agentId?: string;
       text: string;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;

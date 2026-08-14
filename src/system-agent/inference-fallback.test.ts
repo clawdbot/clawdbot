@@ -21,7 +21,10 @@ function route(agentId: string, provider: string): SystemAgentConfiguredRoute {
 
 const config: OpenClawConfig = {
   agents: {
-    defaults: { model: { primary: "zeta/model" } },
+    defaults: {
+      model: { primary: "zeta/model" },
+      systemAgent: { agentId: "requester" },
+    },
     list: [
       { id: "requester", default: true, model: "zeta/model" },
       { id: "beta", model: "beta/model" },
@@ -31,7 +34,7 @@ const config: OpenClawConfig = {
 };
 
 describe("system-agent inference fallback", () => {
-  it("tries the default route first, then authenticated providers by provider id", async () => {
+  it("tries the system-agent route first, then authenticated providers by provider id", async () => {
     const attempts: string[] = [];
     const verify = vi.fn(async ({ agentId }: { agentId: string }) => {
       attempts.push(agentId);

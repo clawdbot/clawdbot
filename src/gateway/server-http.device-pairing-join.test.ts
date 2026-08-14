@@ -71,6 +71,36 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 describe("Gateway device join route", () => {
+  it("keeps the code-less /j route claimed by the join handler", async () => {
+    // One miss only: a second recorded failure would trip the suite's
+    // maxAttempts=2 limiter before the next test's successful reset.
+    const response = await fetch(`http://127.0.0.1:${harness.port}/j`);
+    expect(response.status).toBe(404);
+    expect(await readJson(response)).toEqual({ error: "not_found" });
+  });
+
+  it("routes advertised context paths when the shortcode begins with j", async () => {
+    const setup = await mintJoinUrl("/public-gateway");
+    const originalShortcode = shortcodeFromUrl(setup.joinUrl);
+    const jPrefixedShortcode = `j${"a".repeat(21)}`;
+    runOpenClawStateWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">>(db)
+          .updateTable("device_pairing_join_codes")
+          .set({ shortcode: jPrefixedShortcode })
+          .where("shortcode", "=", originalShortcode),
+      );
+    });
+    const joinUrl = new URL(setup.joinUrl);
+    joinUrl.pathname = joinUrl.pathname.replace(originalShortcode, jPrefixedShortcode);
+
+    const response = await fetch(joinUrl);
+
+    expect(response.status).toBe(200);
+    expect(await readJson(response)).toEqual(decodePairingSetupCode(setup.setupCode));
+  });
+
   it("burns once, expires opaquely, and rate-limits misses on the real HTTP server", async () => {
     const expired = await mintJoinUrl();
     const expiredShortcode = shortcodeFromUrl(expired.joinUrl);

@@ -14,6 +14,11 @@ export const TEST_RELAY_KEY = relayTestKey(1);
 export const REPLACEMENT_TEST_RELAY_KEY = relayTestKey(2);
 const PAIRING_CONFIG_KEYS = ["relayUrl", "token", "pairingStatus"];
 const RETIRED_CUSTODY_BLOCKED_KEY = "retiredCopilotCustodyBlockedV1";
+const backgroundCleanups = new Set<() => Promise<void>>();
+
+export async function cleanupBackgroundHarnesses(): Promise<void> {
+  await Promise.all([...backgroundCleanups].map(async (cleanup) => await cleanup()));
+}
 
 export type RetiredStorageFailureStage =
   | "marker_set"
@@ -416,6 +421,14 @@ export async function loadBackground({
   ) {
     throw new Error("expected background worker lifecycle listeners");
   }
+  const lifecycleMessageListener = messageListener;
+  const cleanup = async () => {
+    backgroundCleanups.delete(cleanup);
+    await new Promise<void>((resolve) => {
+      lifecycleMessageListener({ type: "unpair" }, {}, () => resolve());
+    });
+  };
+  backgroundCleanups.add(cleanup);
   return {
     alarmListener,
     clearAlarm,

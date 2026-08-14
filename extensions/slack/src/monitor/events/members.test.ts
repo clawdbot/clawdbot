@@ -10,7 +10,11 @@ let initSlackHarness: typeof import("./system-event-test-harness.js").createSlac
 type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => memberMocks.enqueue(text, { ...options, sessionKey: route.sessionKey }),
 }));
 type MemberHandler = import("./system-event-test-harness.js").SlackSystemEventHandler;
 
@@ -193,12 +197,14 @@ describe("registerSlackMemberEvents", () => {
     const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
     const resolveUserName = vi.fn(harness.ctx.resolveUserName);
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventSessionKey>[0]) =>
-        `session:${input.eventScope?.teamId ?? "workspace"}`,
+      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
+        agentId: "main",
+        sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
+      }),
     );
     harness.ctx.resolveChannelName = resolveChannelName;
     harness.ctx.resolveUserName = resolveUserName;
-    harness.ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;
+    harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
     registerSlackMemberEvents({ ctx: harness.ctx });
     const handler = harness.getHandler("member_joined_channel");
     if (!handler) {

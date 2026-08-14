@@ -7,6 +7,7 @@ import {
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -21,7 +22,16 @@ function createOwner(
   api?: ModelCatalogEntry["api"],
 ): PreparedModelRuntimeSnapshot {
   const model = { id, name: id, provider, ...(api ? { api } : {}) };
-  return {
+  const authStore: AuthProfileStore = {
+    version: 1,
+    profiles: Object.fromEntries(
+      Object.entries(credentials).map(([credentialProvider, credential]) => [
+        `${credentialProvider}:prepared`,
+        { ...credential, provider: credentialProvider },
+      ]),
+    ),
+  };
+  const owner: PreparedModelRuntimeSnapshot = {
     agentId: "main",
     agentDir: `/tmp/${id}/agent`,
     workspaceDir: `/tmp/${id}/workspace`,
@@ -41,6 +51,8 @@ function createOwner(
       modelRegistry: {} as never,
     }),
   };
+  setPreparedModelRuntimeAuthStore(owner, authStore);
+  return owner;
 }
 
 function createHarness(
@@ -478,10 +490,11 @@ describe("gateway chat metadata runtime", () => {
       "openai",
       "openai-chatgpt-responses",
     );
-    const loadFullModelCatalog = vi.fn(async () => ({
+    const fullCatalog = {
       ...owner.modelCatalog,
       providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
-    }));
+    };
+    const loadFullModelCatalog = vi.fn(async () => fullCatalog);
     harness.setOwner({
       ...owner,
       loadFullModelCatalog,

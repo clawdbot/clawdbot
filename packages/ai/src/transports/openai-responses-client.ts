@@ -5,6 +5,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
+import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import {
@@ -31,7 +32,6 @@ import {
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
-  applyServiceTierPricing,
   logResponsesFailedNoDetails,
   ResponsesStreamFailure,
   safeDebugValue,
@@ -45,6 +45,8 @@ import {
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   createResponsesStreamWithEncryptedContentRetry,
+  isInvalidEncryptedContentError,
+  resolveNextResponsesEncryptedContentAttempt,
   resolveAzureOpenAIApiVersion,
 } from "./openai-responses-replay-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
@@ -180,7 +182,10 @@ type ResponsesTransportExecutorOptions = {
   createResponseStream: (
     params: ResponsesStreamParams,
   ) => ReturnType<typeof createResponsesStreamWithEncryptedContentRetry>;
-  pricingOptions?: (options: OpenAIResponsesOptions | undefined) => ResponsesPricingOptions;
+  pricingOptions?: (
+    options: OpenAIResponsesOptions | undefined,
+    model: Model,
+  ) => ResponsesPricingOptions;
 };
 
 function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
@@ -336,7 +341,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         let continuationBaseline: ResponsesContinuationRequest | undefined;
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
-          initialAttemptKind: "initial" | "continuation-rejected" = "initial",
+          initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
         ): Promise<AsyncIterable<unknown>> => {
           const {
             stream: rawResponseStream,
@@ -386,6 +391,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             `[responses] websocket_fallback provider=${model.provider} api=${model.api} ` +
               `model=${model.id} reason=${reason}`,
           );
+        const closeWebSocketForFallback = (reason: string) => {
+          finishWebSocket?.({ keep: false });
+          finishWebSocket = undefined;
+          transport = "sse";
+          logWebSocketFallback(reason);
+        };
         if (websocketMode) {
           try {
             const websocket = createOpenAIResponsesWebSocketStream({
@@ -421,15 +432,29 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                   }
                 } catch (error) {
                   if (error instanceof OpenAIResponsesWebSocketSafeRetryError) {
-                    finishWebSocket?.({ keep: false });
-                    finishWebSocket = undefined;
-                    transport = "sse";
-                    logWebSocketFallback(
+                    // Explicit server rejection proves no output was accepted. Resume at the next
+                    // semantic attempt instead of treating this like an ambiguous disconnect.
+                    const encryptedContentRejected = isInvalidEncryptedContentError(error);
+                    const recovery = encryptedContentRejected
+                      ? await resolveNextResponsesEncryptedContentAttempt(
+                          {
+                            kind: "initial",
+                            // WebSocket sanitization removes `stream`; SSE must restore it.
+                            request: { ...websocket.request, stream: true } as typeof params,
+                          },
+                          error,
+                          { buildFullHistoryRequest: () => buildRequest("full-history") },
+                        )
+                      : undefined;
+                    if (encryptedContentRejected && !recovery) {
+                      throw error;
+                    }
+                    closeWebSocketForFallback(
                       `safe_server_error code=${error.code} status=${safeDebugValue(error.status)} param=${safeDebugValue(error.param)}`,
                     );
                     yield* await createSseStream(
-                      await buildRequest("full-history"),
-                      "continuation-rejected",
+                      recovery?.request ?? (await buildRequest("full-history")),
+                      recovery?.kind ?? "continuation-rejected",
                     );
                     return;
                   }
@@ -446,9 +471,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               },
             };
           } catch {
-            finishWebSocket?.({ keep: false });
-            finishWebSocket = undefined;
-            logWebSocketFallback("setup_failure");
+            closeWebSocketForFallback("setup_failure");
             responseStream = await createSseStream();
           }
         } else {
@@ -456,7 +479,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         }
         try {
           const terminal = await processResponsesStream(responseStream, output, stream, model, {
-            ...config.pricingOptions?.(responsesOptions),
+            ...config.pricingOptions?.(responsesOptions, model),
             firstEventTimeoutMs:
               getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
             abortFirstEventStream: firstEvent.abort,
@@ -515,7 +538,13 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
     createClient: createOpenAIResponsesClient,
     buildRequest: buildOpenAIResponsesParams,
     createResponseStream: createResponsesStreamWithEncryptedContentRetry,
-    pricingOptions: (options) => ({ serviceTier: options?.serviceTier, applyServiceTierPricing }),
+    pricingOptions: (options, model) => ({
+      serviceTier: options?.serviceTier,
+      // One canonical service-tier pricing table; a transport-local copy drifted
+      // from provider pricing (gpt-5.5 priority 2.5x) and understated costs.
+      applyServiceTierPricing: (usage, serviceTier) =>
+        applyResponsesServiceTierPricing(usage, serviceTier, model),
+    }),
   });
 }
 

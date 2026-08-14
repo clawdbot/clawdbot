@@ -353,6 +353,15 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
   });
 }
 
+function createChangedExtensionConfigShardsForPaths(changedPaths: string[], cwd: string) {
+  const relevantPaths = changedPaths.filter(
+    (changedPath) =>
+      changedPath.startsWith("extensions/") &&
+      (existsSync(path.join(cwd, changedPath)) || !isTestFileTarget(changedPath)),
+  );
+  return createChangedExtensionConfigShards(resolveChangedExtensionRoots(relevantPaths));
+}
+
 /**
  * The fail-safe cause leaves the non-extension diff's extension impact unbounded,
  * so whole extension configs are required; precise targets would under-cover.
@@ -362,19 +371,7 @@ export function createChangedExtensionFallbackShards(
   options: CwdOptions = {},
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
-  const extensionPaths = changedPaths.filter((changedPath) =>
-    changedPath.startsWith("extensions/"),
-  );
-  if (extensionPaths.length === 0) {
-    return [];
-  }
-  const relevantPaths = extensionPaths.filter(
-    (changedPath) => existsSync(path.join(cwd, changedPath)) || !isTestFileTarget(changedPath),
-  );
-  if (relevantPaths.length === 0) {
-    return [];
-  }
-  return createChangedExtensionConfigShards(resolveChangedExtensionRoots(relevantPaths));
+  return createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
 }
 
 /**
@@ -404,9 +401,13 @@ export function createChangedNodeTestShards(
   }
 
   const policyTargetsByPath = new Map(
-    livePaths.map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])]),
+    livePaths
+      .filter((changedPath) => !changedPath.startsWith("extensions/"))
+      .map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])]),
   );
-  const regularLivePaths = livePaths.filter((changedPath) => !isPolicyTestOwnedPath(changedPath));
+  const regularLivePaths = livePaths.filter(
+    (changedPath) => !changedPath.startsWith("extensions/") && !isPolicyTestOwnedPath(changedPath),
+  );
 
   // Workspace package consumers often use package specifiers, which the
   // relative import graph cannot connect back to the changed package source.
@@ -436,6 +437,7 @@ export function createChangedNodeTestShards(
   // Boundary-config targets run as regular nondist targets: the boundary
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
+    ...createChangedExtensionConfigShardsForPaths(livePaths, cwd),
     ...createChangedTargetShards(targets, {
       checkName: "checks-node-changed",
       shardName: "changed",
