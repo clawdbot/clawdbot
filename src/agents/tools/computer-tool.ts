@@ -137,7 +137,7 @@ function isScrollDirection(value: string): value is (typeof SCROLL_DIRECTIONS)[n
   return SCROLL_DIRECTIONS.some((direction) => direction === value);
 }
 
-export function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
+function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
   return Type.Object({
     action: stringEnum(actions),
     ...gatewayCallOptionSchemaProperties(),
@@ -523,10 +523,26 @@ function parseComputerActPayload(value: unknown): ComputerActResult {
   }
 }
 
+// Model-visible ceiling for semantic elements per result. The wire schema
+// admits far more for node-side fidelity; projecting them all would blow the
+// model context budget, so the tool truncates and says so.
+const MODEL_OBSERVATION_MAX_ELEMENTS = 200;
+
+type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> & {
+  truncatedElements?: number;
+};
+
 function computerActResultText(action: ComputerUseV2ActionName, result: ComputerActResult): string {
-  const observation = result.observation
+  let observation: ModelObservationProjection | undefined = result.observation
     ? { ...result.observation, ...(result.observation.base64 ? { base64: "[image]" } : {}) }
     : undefined;
+  if (observation?.elements && observation.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS) {
+    observation = {
+      ...observation,
+      elements: observation.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS),
+      truncatedElements: observation.elements.length - MODEL_OBSERVATION_MAX_ELEMENTS,
+    };
+  }
   return JSON.stringify({ action, ...result, ...(observation ? { observation } : {}) });
 }
 

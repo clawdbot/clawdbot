@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS,
-  COMPUTER_ACT_RESULT_MAX_ELEMENTS,
   COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseComputerActResult,
@@ -9,8 +7,22 @@ import {
   parseScreenSnapshotResult,
   registerComputerUseProvider,
   type ComputerUseProvider,
+  ComputerActResultSchema,
 } from "./computer-use-contract.js";
-import type { OpenClawPluginNodeHostCommand, OpenClawPluginNodeInvokePolicy } from "./types.js";
+import type { OpenClawPluginNodeHostCommand } from "./types.js";
+
+type SchemaNode = { [key: string]: SchemaNode } & { maxItems?: number; maxProperties?: number };
+const resultSchema = ComputerActResultSchema as unknown as SchemaNode;
+const resultElementCap = () => {
+  const cap = resultSchema.properties?.observation?.properties?.elements?.maxItems;
+  if (typeof cap !== "number") throw new Error("elements maxItems missing from result schema");
+  return cap;
+};
+const resultDetailKeyCap = () => {
+  const cap = resultSchema.properties?.details?.maxProperties;
+  if (typeof cap !== "number") throw new Error("details maxProperties missing from result schema");
+  return cap;
+};
 
 describe("Computer Use wire contract", () => {
   it("validates the canonical computer.act payload", () => {
@@ -102,7 +114,7 @@ describe("Computer Use wire contract", () => {
         ok: true,
         observation: {
           kind: "window",
-          elements: Array.from({ length: COMPUTER_ACT_RESULT_MAX_ELEMENTS + 1 }, () => element),
+          elements: Array.from({ length: resultElementCap() + 1 }, () => element),
         },
       }),
     ).toThrow("COMPUTER_CONTRACT_MISMATCH");
@@ -110,10 +122,7 @@ describe("Computer Use wire contract", () => {
       parseComputerActResult({
         ok: true,
         details: Object.fromEntries(
-          Array.from({ length: COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS + 1 }, (_, index) => [
-            `key-${index}`,
-            index,
-          ]),
+          Array.from({ length: resultDetailKeyCap() + 1 }, (_, index) => [`key-${index}`, index]),
         ),
       }),
     ).toThrow("COMPUTER_CONTRACT_MISMATCH");
@@ -148,7 +157,6 @@ describe("Computer Use wire contract", () => {
 describe("Computer Use provider registration", () => {
   it("registers one command pair and dispatches both through one execution", async () => {
     const commands: OpenClawPluginNodeHostCommand[] = [];
-    const policies: OpenClawPluginNodeInvokePolicy[] = [];
     const snapshot = vi.fn(async () => "snapshot");
     const act = vi.fn(async () => "act");
     const close = vi.fn(async () => {});
@@ -172,10 +180,7 @@ describe("Computer Use provider registration", () => {
     };
 
     registerComputerUseProvider(
-      {
-        registerNodeHostCommand: (command) => commands.push(command),
-        registerNodeInvokePolicy: (policy) => policies.push(policy),
-      },
+      { registerNodeHostCommand: (command) => commands.push(command) },
       provider,
     );
 
@@ -183,8 +188,6 @@ describe("Computer Use provider registration", () => {
       { command: "screen.snapshot", cap: "screen", dangerous: false },
       { command: "computer.act", cap: "computer", dangerous: true },
     ]);
-    expect(policies).toHaveLength(1);
-    expect(policies[0]).toMatchObject({ commands: ["computer.act"], dangerous: true });
 
     const signal = new AbortController().signal;
     const context = { sendNodeEvent: vi.fn(), sessionKey: "session-1", signal };

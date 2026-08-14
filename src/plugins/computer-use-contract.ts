@@ -1,7 +1,7 @@
 import { type Static, type TSchema, Type } from "typebox";
 import { Compile } from "typebox/compile";
-import type { OpenClawPluginApi } from "./plugin-api.types.js";
 import type {
+  OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeHostCommandAvailabilityContext,
   OpenClawPluginNodeHostCommandContext,
 } from "./types.node-host.js";
@@ -217,10 +217,10 @@ export const ComputerActParamsSchema = Type.Union([
   }),
 ]);
 
-/** Hard ceiling for semantic elements in one Computer Use result. */
-export const COMPUTER_ACT_RESULT_MAX_ELEMENTS = 2_000;
-/** Hard ceiling for provider-specific keys retained in one result. */
-export const COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS = 64;
+// Hard result ceilings live inline on the schema (elements maxItems, details
+// maxProperties); tests read them from the schema so there is one source of truth.
+const COMPUTER_ACT_RESULT_MAX_ELEMENTS = 2_000;
+const COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS = 64;
 
 const ComputerBoundsSchema = Type.Object(
   {
@@ -349,7 +349,6 @@ export const ScreenSnapshotResultSchema = Type.Object({
   capturedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
-export type ComputerActV1Params = Static<typeof ComputerActV1ParamsSchema>;
 export type ComputerActParams = Static<typeof ComputerActParamsSchema>;
 export type ComputerActResult = Static<typeof ComputerActResultSchema>;
 export type ComputerUseCapabilityDescriptor = Static<typeof ComputerUseCapabilityDescriptorSchema>;
@@ -454,10 +453,12 @@ export type ComputerUseProvider = {
   openExecution(context: { sessionKey?: string }): Promise<ComputerUseExecution>;
 };
 
-type ComputerUseRegistrationApi = Pick<
-  OpenClawPluginApi,
-  "registerNodeHostCommand" | "registerNodeInvokePolicy"
->;
+// Structural registration surface built from leaf node-host types only: importing
+// the full plugin API type here creates an import cycle through the gateway
+// server-method types that consume this contract.
+type ComputerUseRegistrationApi = {
+  registerNodeHostCommand(command: OpenClawPluginNodeHostCommand): void;
+};
 
 /** Register the canonical node-host command pair for one node-local provider. */
 export function registerComputerUseProvider(
@@ -514,11 +515,7 @@ export function registerComputerUseProvider(
     handle: async (paramsJSON, _io, context) =>
       await (await getExecution(context)).act(paramsJSON, context?.signal),
   });
-  // Preserve the existing dangerous-command policy: allowlisting happens
-  // first, then this final Gateway guard forwards the armed invocation.
-  api.registerNodeInvokePolicy({
-    commands: ["computer.act"],
-    dangerous: true,
-    handle: async (context) => await context.invokeNode(),
-  });
+  // The provider plugin must also register its dangerous `computer.act` invoke
+  // policy with the full plugin API. Forgetting it fails closed: the Gateway
+  // rejects dangerous plugin commands that lack a registered policy.
 }
