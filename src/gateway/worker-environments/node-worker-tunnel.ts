@@ -10,6 +10,10 @@ import {
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../../worker/node-workspace-protocol.js";
+import {
+  NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+  NodeWorkerWorkspaceTransferError,
+} from "../../worker/node-workspace-transfer-protocol.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -288,13 +292,17 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
       if (!result.ok) {
         const code = result.error?.code ?? "UNAVAILABLE";
+        if (code === NODE_WORKSPACE_TRANSFER_ERROR_CODE) {
+          throw new NodeWorkerWorkspaceTransferError(
+            result.error?.message ?? "workspace-transfer-failed: transfer did not complete",
+          );
+        }
         if (command.transportRetry === "idempotent" && RETRYABLE_TRANSPORT_CODES.has(code)) {
           await sleepWithAbort(Math.min(RETRY_DELAY_MS, remainingMs), signal);
           continue;
         }
         throw new Error(
-          result.error?.message &&
-            (code === "INVALID_REQUEST" || result.error.message.startsWith("workspace-transfer-"))
+          result.error?.message && code === "INVALID_REQUEST"
             ? `node workspace command failed (${code}): ${result.error.message}`
             : `node workspace command failed (${code})`,
         );

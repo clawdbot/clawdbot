@@ -15,6 +15,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
+import {
+  NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+  NodeWorkerWorkspaceTransferError,
+} from "../../worker/node-workspace-transfer-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
@@ -220,6 +224,55 @@ describe("node worker tunnel manager", () => {
       }),
     );
     expect(outputs).toEqual([]);
+  });
+
+  it("preserves a typed workspace transfer cause from the node", async () => {
+    const record = environment();
+    const localPath = tempDirs.make("node-worker-transfer-error-");
+    const rawManifest = serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [],
+    });
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const nodeTransport = transport();
+    nodeTransport.invoke = vi.fn(async () => ({
+      ok: false,
+      error: {
+        code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+        message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+      },
+    }));
+    const transfer = {
+      prepareSync: vi.fn(async () => ({
+        snapshot: {
+          manifest: { version: 1 as const, baseCommit: null, entries: [] },
+          manifestRef,
+          rawManifest,
+          root: localPath,
+        },
+        token: "download-token",
+      })),
+      close: vi.fn(async () => {}),
+      revoke: vi.fn(),
+    } as unknown as NodeWorkspaceTransferService;
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: () => nodeTransport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    });
+    const handle = await manager.start(startRequest());
+
+    await expect(
+      handle.syncWorkspace({ localPath, sessionId: "session-1", generation: 1 }),
+    ).rejects.toMatchObject({
+      name: NodeWorkerWorkspaceTransferError.name,
+      code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+      message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+    });
   });
 
   it("cancels a replacement start before it can install a late handle", async () => {
