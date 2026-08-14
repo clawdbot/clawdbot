@@ -11,6 +11,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/frame-guards.js";
 import {
   type HelloOk,
   GATEWAY_SERVER_CAPS,
@@ -21,6 +22,7 @@ import {
   type CommandsListResult,
   type EnvironmentsListResult,
   type SessionsListParams,
+  type SessionsResolveParams,
   type SessionsPatchResult,
   type SessionsPatchParams,
   type TaskSuggestionsAcceptResult,
@@ -64,6 +66,8 @@ type GatewayConnectionOptions = {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  allowConfiguredAuthForExactTarget?: boolean;
+  suppressEnvAuthFallback?: boolean;
 };
 
 type GatewayEvent = TuiEvent;
@@ -150,6 +154,18 @@ function isLegacySucceedsParentError(err: unknown): boolean {
 type GatewaySessionList = TuiSessionList;
 type GatewayAgentsList = TuiAgentsList;
 type GatewayModelChoice = TuiModelChoice;
+type HandoffSessionResolveParams = Required<
+  Pick<SessionsResolveParams, "key" | "agentId" | "includeGlobal" | "allowMissing">
+>;
+type HandoffSessionResolveResult =
+  | { ok: true; key: string; agentId: string }
+  | { ok: true; missing: true }
+  | {
+      ok: true;
+      ambiguous: true;
+      candidates: Array<{ key: string; agentId: string; displayName?: string }>;
+    }
+  | { ok: false; error: ErrorShape };
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
@@ -363,6 +379,10 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<GatewaySessionList>("sessions.list", opts ?? {});
   }
 
+  async resolveSession(opts: HandoffSessionResolveParams): Promise<HandoffSessionResolveResult> {
+    return await this.client.request<HandoffSessionResolveResult>("sessions.resolve", opts);
+  }
+
   async listAgents() {
     return await this.client.request<GatewayAgentsList>("agents.list", {});
   }
@@ -543,9 +563,15 @@ async function resolveGatewayConnection(
   const hasExplicitGatewayTarget = Boolean(
     urlOverride.url || env.OPENCLAW_GATEWAY_PORT?.trim() || isRemoteMode,
   );
-  const activeLocalGatewayPort = hasExplicitGatewayTarget
-    ? undefined
-    : await readActiveGatewayLockPort();
+  const resumeMayMatchLocalTarget =
+    opts.allowConfiguredAuthForExactTarget === true &&
+    urlOverride.source === "cli" &&
+    !isRemoteMode &&
+    !env.OPENCLAW_GATEWAY_PORT?.trim();
+  const activeLocalGatewayPort =
+    !hasExplicitGatewayTarget || resumeMayMatchLocalTarget
+      ? await readActiveGatewayLockPort()
+      : undefined;
   if (
     !urlOverride.source &&
     gatewayAuthMode !== "none" &&
@@ -564,25 +590,23 @@ async function resolveGatewayConnection(
     explicitAuth,
     env,
     authPolicy: "interactive",
+    allowConfiguredAuthForExactTarget: opts.allowConfiguredAuthForExactTarget,
+    suppressEnvAuthFallback: opts.suppressEnvAuthFallback,
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
     explicitTlsFingerprint: opts.tlsFingerprint,
     allowStoredOriginAuth: hasStoredOriginDeviceAuth,
     overrideAuthErrorHint:
       "Fix: pass --token or --password once to request pairing, approve it in that gateway's Control UI (Settings -> Devices), then retry with the same credential so OpenClaw can store the device token.",
     buildConnectionDetails: buildGatewayConnectionDetails,
-    resolveTlsFingerprint: async ({ urlSource, explicitTlsFingerprint }) =>
-      explicitTlsFingerprint ??
-      (urlSource === "config gateway.remote.url"
-        ? normalizeOptionalString(config.gateway?.remote?.tlsFingerprint)
-        : undefined),
   });
   const hasStoredOriginAuth = Boolean(
     bootstrap.deviceAuthScope && hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope),
   );
-  if (
-    bootstrap.authFailureReason &&
-    (bootstrap.authFailureReason !== "Missing gateway auth credentials." || !hasStoredOriginAuth)
-  ) {
+  const missingSharedAuth =
+    bootstrap.authFailureReason === "Missing gateway auth credentials." ||
+    bootstrap.authFailureReason === "Missing gateway auth token." ||
+    bootstrap.authFailureReason === "Missing gateway auth password.";
+  if (bootstrap.authFailureReason && (!missingSharedAuth || !hasStoredOriginAuth)) {
     throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
   return {

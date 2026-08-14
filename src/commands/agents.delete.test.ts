@@ -231,7 +231,9 @@ describe("agents delete command", () => {
 
       expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
       expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(runtime.error).toHaveBeenCalledWith('"main" cannot be deleted.');
+      expect(runtime.error).toHaveBeenCalledWith(
+        'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
+      );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expectSessionStore(cfg, sessions, "main");
     });

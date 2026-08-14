@@ -362,6 +362,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       return typeof record?.model === "string" && record.model.trim().length > 0;
     case "gateway":
       return action == null || !GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "portal":
+      return action !== "list";
     case "nodes":
       return action == null || !NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {
@@ -413,6 +415,8 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
       return action === "status";
     case "gateway":
       return action != null && GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "portal":
+      return action === "list";
     case "nodes":
       return action != null && NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {

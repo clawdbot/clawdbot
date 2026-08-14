@@ -19,6 +19,7 @@ import {
   validateTerminalResizeParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
@@ -481,6 +482,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       const catalog = p.catalog;
       resolveCatalogPlan = async () =>
         await openTerminal.call(provider, {
+          allowProcessHomeFallback: allowsProcessHomeSessionScan(),
           hostId: catalog.hostId,
           threadId: catalog.threadId,
         });

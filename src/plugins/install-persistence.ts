@@ -579,28 +579,20 @@ export async function persistPluginInstall(params: {
 
   let next = reconciledConfig;
   const enabledPluginIds: string[] = [];
-  const preserveExistingPolicy = previousInstall !== undefined;
   for (const pluginId of ownedPluginIds) {
     const configEnablement = enablementByPluginId.get(pluginId) ?? { mode: "ready" as const };
     const explicitlyDisabled = reconciledConfig.plugins?.entries?.[pluginId]?.enabled === false;
-    const existingAllow = reconciledConfig.plugins?.allow ?? [];
-    const blockedByExistingPolicy =
-      preserveExistingPolicy &&
-      ((reconciledConfig.plugins?.deny ?? []).includes(pluginId) ||
-        (existingAllow.length > 0 && !existingAllow.includes(pluginId)));
     if (configEnablement.mode === "missing") {
       next = prepareConfigForDisabledInstall(next, pluginId);
     }
     if (params.enable === false) {
       continue;
     }
-    if (!preserveExistingPolicy) {
-      next = removeInstalledPluginFromDenylist(
-        addInstalledPluginToAllowlist(next, pluginId),
-        pluginId,
-      );
-    }
-    if (configEnablement.mode !== "ready" || explicitlyDisabled || blockedByExistingPolicy) {
+    next = removeInstalledPluginFromDenylist(
+      addInstalledPluginToAllowlist(next, pluginId),
+      pluginId,
+    );
+    if (configEnablement.mode !== "ready" || explicitlyDisabled) {
       continue;
     }
     const enabled = enablePluginInConfig(next, pluginId, { updateChannelConfig: false });

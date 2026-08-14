@@ -11,8 +11,8 @@ import { resolveSessionStorePathCore } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
-  listSqliteSessionGenerationIdsForCanonicalRepair as listSessionGenerationIdsForCanonicalRepair,
   listSqliteSessionEntriesForCanonicalRepair as listSessionEntriesForCanonicalRepair,
+  listSqliteSessionGenerationIdsForCanonicalRepair as listSessionGenerationIdsForCanonicalRepair,
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepair as rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch as rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
 } from "./session-accessor.sqlite-canonical-repair.js";

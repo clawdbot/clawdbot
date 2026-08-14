@@ -28,6 +28,30 @@ describe("readDraftNodes", () => {
       },
     ]);
   });
+
+  it("keeps execution capability independent from connectivity", () => {
+    expect(
+      readDraftNodes([
+        {
+          nodeId: "offline",
+          connected: false,
+          commands: ["system.run", "fs.listDir"],
+        },
+      ]),
+    ).toEqual([
+      {
+        nodeId: "offline",
+        displayName: "offline",
+        platform: undefined,
+        deviceFamily: undefined,
+        modelIdentifier: undefined,
+        remoteIp: undefined,
+        connected: false,
+        canExec: true,
+        canBrowse: false,
+      },
+    ]);
+  });
 });
 describe("readDraftCloudProfiles", () => {
   it("keeps closed profile summaries in stable order", () => {
@@ -71,6 +95,47 @@ describe("readDraftEnvironments", () => {
       { id: "gateway", type: "local" },
       { id: "node:macbook", type: "node" },
       { id: "worker:aws", type: "worker" },
+    ]);
+  });
+
+  it("preserves valid environment facts and safely drops malformed optional shapes", () => {
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:macbook",
+          type: "node",
+          platform: " darwin ",
+          sessionHost: false,
+          lastConnectedAtMs: 1_000.9,
+          lastDisconnectedAtMs: 2_000,
+          lastSeenAtMs: 1_500,
+          lastSeenReason: " silent_push ",
+          trust: "persistent",
+          capabilities: [" camera.snap ", 42, "custom.unknown", "system.run", null],
+        },
+        {
+          id: "node:malformed",
+          type: "node",
+          platform: { name: "linux" },
+          sessionHost: "yes",
+          trust: "temporary",
+          capabilities: "camera",
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "node:macbook",
+        type: "node",
+        platform: "darwin",
+        sessionHost: false,
+        lastConnectedAtMs: 1_000,
+        lastDisconnectedAtMs: 2_000,
+        lastSeenAtMs: 1_500,
+        lastSeenReason: "silent_push",
+        trust: "persistent",
+        capabilities: ["camera.snap", "custom.unknown", "system.run"],
+      },
+      { id: "node:malformed", type: "node" },
     ]);
   });
 });

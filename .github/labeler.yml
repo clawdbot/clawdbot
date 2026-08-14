@@ -670,10 +670,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/vercel-ai-gateway/**"
-"extensions: video-generation-core":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/video-generation-core/**"
 "extensions: volcengine":
   - changed-files:
       - any-glob-to-any-file:

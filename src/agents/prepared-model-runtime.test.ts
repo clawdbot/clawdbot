@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
+import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
@@ -48,6 +49,24 @@ describe("prepared model runtime snapshots", () => {
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
     mocks.configuredAgentIds = ["default"];
     const stagedConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+    const selectedPluginRegistry = createEmptyPluginRegistry();
+    selectedPluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
+      (params as { selections?: unknown }).selections
+        ? selectedPluginRegistry
+        : createEmptyPluginRegistry(),
+    );
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
     markPreparedModelRuntimeSnapshotsStale("test isolated probe replacement", {
       waitForReplacement: true,
@@ -58,6 +77,7 @@ describe("prepared model runtime snapshots", () => {
       agentDir: "/tmp/setup-probe-agent",
       inheritedAuthDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
     });
     await Promise.resolve();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
@@ -71,8 +91,34 @@ describe("prepared model runtime snapshots", () => {
       config: stagedConfig,
       agentDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
+      pluginRegistry: expect.any(Object),
     });
+    expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
+      "codex",
+    ]);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
+      }),
+    );
     lease.release();
+  });
+
+  it("loads provider runtime for an isolated native-harness probe", () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
+
+    expect(
+      prepareWorkspacePluginRegistries({
+        config: {},
+        agentDir: "/tmp/native-provider-probe",
+        readOnly: true,
+        loadRuntimePlugins: true,
+      }).runtimePluginRegistry,
+    ).toBe(pluginRegistry);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({ selections: undefined }),
+    );
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {

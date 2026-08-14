@@ -7,6 +7,7 @@ import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
+  countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -172,6 +173,9 @@ export function buildGatewaySessionRow(params: {
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
   const liveSubagentRunActive = isSubagentRunLive(subagentRun);
+  const hasActiveSubagentRun =
+    liveSubagentRunActive ||
+    (rowContext?.subagentRuns.countActiveDescendantRuns(key) ?? countActiveDescendantRuns(key)) > 0;
   const persistedSessionStatus = entry?.status;
   const persistedSessionEndedAt = entry?.endedAt;
   const persistedSessionStartedAt = entry?.startedAt;
@@ -230,8 +234,6 @@ export function buildGatewaySessionRow(params: {
     subagentRun?.model,
     { allowPluginNormalization: !lightweight },
   );
-  const runtimeModelPresent =
-    Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
@@ -259,23 +261,6 @@ export function buildGatewaySessionRow(params: {
           agentId: sessionAgentId,
         })
       : null;
-  const preferLiveSubagentModelIdentity =
-    Boolean(subagentRun?.model?.trim()) && subagentStatus === "running";
-  const shouldUseTranscriptModelIdentity =
-    runtimeModelPresent &&
-    !preferLiveSubagentModelIdentity &&
-    (needsTranscriptTotalTokens || needsTranscriptContextTokens);
-  const resolvedModelIdentity = {
-    provider: resolvedModel.provider,
-    model: resolvedModel.model ?? DEFAULT_MODEL,
-  };
-  const modelIdentity = shouldUseTranscriptModelIdentity
-    ? {
-        provider: transcriptUsage?.modelProvider ?? resolvedModelIdentity.provider,
-        model: transcriptUsage?.model ?? resolvedModelIdentity.model,
-      }
-    : resolvedModelIdentity;
-  const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
     freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
@@ -310,15 +295,15 @@ export function buildGatewaySessionRow(params: {
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
     resolveLatestCompactionCheckpoint(compactionCheckpoints),
   );
-  const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
-  const selectedOrRuntimeModel = selectedModel?.model ?? model;
+  const selectedModelProvider = selectedModel.provider;
+  const selectedModelId = selectedModel.model;
   const rowModelIdentity = lightweight
-    ? { provider: selectedOrRuntimeModelProvider, model: selectedOrRuntimeModel }
+    ? { provider: selectedModelProvider, model: selectedModelId }
     : resolveSessionDisplayModelIdentityRefCached({
         cfg,
         agentId: sessionAgentId,
-        provider: selectedOrRuntimeModelProvider,
-        model: selectedOrRuntimeModel,
+        provider: selectedModelProvider,
+        model: selectedModelId,
         rowContext: params.rowContext,
       });
   const rowModelProvider = rowModelIdentity.provider;
@@ -378,6 +363,10 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  // Event/list rows must not rediscover plugin-backed configured catalog metadata.
+  // Lightweight projections may use an already-active provider policy, but must
+  // not fall through to public artifacts that reload the manifest registry.
+  const thinkingModelCatalog = params.modelCatalog ?? (lightweight ? [] : undefined);
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
@@ -385,13 +374,14 @@ export function buildGatewaySessionRow(params: {
     model: thinkingModel,
     sessionKey: acpSessionKey,
     entry,
-    modelCatalog: params.modelCatalog,
+    modelCatalog: thinkingModelCatalog,
     rowContext,
+    providerPolicySource: lightweight ? "active" : undefined,
   });
   const fastModeState = resolveFastModeState({
     cfg,
-    provider: selectedOrRuntimeModelProvider ?? DEFAULT_PROVIDER,
-    model: selectedOrRuntimeModel ?? DEFAULT_MODEL,
+    provider: selectedModelProvider,
+    model: selectedModelId,
     agentId: sessionAgentId,
     sessionEntry:
       entry?.fastMode !== undefined
@@ -491,7 +481,7 @@ export function buildGatewaySessionRow(params: {
     lastRunError: entry?.lastRunError,
     hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
-    hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
+    hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,

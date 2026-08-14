@@ -35,7 +35,7 @@ export const slackChannelConfigUiHints = {
       "preview.commandText":
         'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
       "progress.nativeTaskCards":
-        'Opt in to Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Default: false.',
+        'Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Set false to fall back to the Block Kit progress card. Default: true.',
     },
     progress: { labels: "openclaw" },
   }),

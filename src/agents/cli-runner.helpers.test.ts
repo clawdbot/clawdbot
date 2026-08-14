@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { buildInboundMediaNoteProjection } from "../auto-reply/media-note.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -104,6 +105,55 @@ describe("prepareCliPromptImagePayload prompt references", () => {
       ).resolves.toEqual(image);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates structured media from the active agent workspace without widening sibling access", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-agent-image-"));
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
+    const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
+    await fs.writeFile(imagePath, image);
+    await fs.writeFile(siblingImagePath, image);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const config = {
+      agents: {
+        entries: {
+          arthur: { default: true, workspace: workspaceDir },
+          merlin: { workspace: siblingWorkspaceDir },
+        },
+      },
+    };
+
+    try {
+      const localRoots = getAgentScopedMediaLocalRoots(config, "arthur");
+      const prepared = await prepareCliPromptImagePayload({
+        backend: { command: "claude", input: "stdin" },
+        prompt: "describe the attachment",
+        workspaceDir,
+        localRoots,
+        media: [{ path: imagePath, contentType: "image/png" }],
+      });
+
+      expect(prepared.imagePaths).toHaveLength(1);
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(image);
+      await expect(
+        prepareCliPromptImagePayload({
+          backend: { command: "claude", input: "stdin" },
+          prompt: "describe the attachment",
+          workspaceDir,
+          localRoots,
+          media: [{ path: siblingImagePath, contentType: "image/png" }],
+        }),
+      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 

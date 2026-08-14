@@ -33,7 +33,6 @@ jobs:
           save-actions-cache: "true"
           save-node-compile-cache: "true"
           save-vitest-fs-cache: "true"
-          sticky-disk: "false"
           use-actions-cache: "true"
           vitest-fs-cache: "true"
 

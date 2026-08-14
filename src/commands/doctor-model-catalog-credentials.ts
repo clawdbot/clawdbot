@@ -6,9 +6,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import { mergeAuthProfileStores } from "../agents/auth-profiles/persisted.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
@@ -230,7 +230,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   const warnings: string[] = [];
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
-  const mainAgentDir = resolveSharedMainAuthAgentDir(env);
+  const mainAgentDir = path.dirname(resolveSharedAuthStorePath(env));
   const discoveredAgentDirs = listAgentModelsJsonPaths(params.cfg, stateDir, env).map(
     (modelsPath) => path.dirname(modelsPath),
   );

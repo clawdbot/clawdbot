@@ -6,7 +6,6 @@ import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
-  resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,6 +15,7 @@ import type {
   SourceDeliveryOutcome,
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { parseThreadSessionSuffix } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -74,7 +74,7 @@ export function resolveCronAwarenessMainSessionKey(params: {
   agentId: string;
 }): string {
   return params.cfg.session?.scope === "global"
-    ? resolveMainSessionKey(params.cfg)
+    ? "global"
     : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
 }
 
@@ -178,20 +178,26 @@ export async function queueCronAwarenessSystemEvent(params: {
       agentId: params.agentId,
     });
     if (params.queueMainSession) {
-      enqueueSystemEvent(params.text, {
-        sessionKey: mainSessionKey,
-        contextKey: params.deliveryIdempotencyKey,
-      });
+      enqueueSystemEvent(
+        params.text,
+        withSystemEventOwner(
+          { sessionKey: mainSessionKey, contextKey: params.deliveryIdempotencyKey },
+          params.agentId,
+        ),
+      );
     }
     const targetSessionKey = params.targetSessionKey;
     const shouldQueueTargetSession =
       targetSessionKey &&
       (!isSameSessionKey(targetSessionKey, mainSessionKey) || !params.queueMainSession);
     if (shouldQueueTargetSession) {
-      enqueueSystemEvent(params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text), {
-        sessionKey: targetSessionKey,
-        contextKey: params.deliveryIdempotencyKey,
-      });
+      enqueueSystemEvent(
+        params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text),
+        withSystemEventOwner(
+          { sessionKey: targetSessionKey, contextKey: params.deliveryIdempotencyKey },
+          params.agentId,
+        ),
+      );
     }
   } catch (err) {
     await logCronDeliveryWarn(

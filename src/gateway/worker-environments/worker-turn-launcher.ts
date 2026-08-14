@@ -179,17 +179,19 @@ async function executeWorkerTurn(params: {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
   const environment = params.environments.get(placement.environmentId);
+  const bootstrapReceipt = environment?.bootstrapReceipt;
   if (
     !environment ||
     environment.state !== "attached" ||
     environment.ownerEpoch !== placement.activeOwnerEpoch ||
-    environment.bootstrapReceipt?.bundleHash !== placement.workerBundleHash ||
+    !bootstrapReceipt ||
+    bootstrapReceipt.bundleHash !== placement.workerBundleHash ||
     environment.attachedSessionIds.length !== 1 ||
     environment.attachedSessionIds[0] !== placement.sessionId
   ) {
     throw new Error("Active worker placement does not match its attached environment");
   }
-  if (!supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)) {
+  if (!supportsWorkerExecutionContextLaunch(bootstrapReceipt)) {
     throw new Error(
       "Active worker bundle lacks the current execution-context capability; reprovision the worker before launch",
     );
@@ -319,6 +321,8 @@ async function executeWorkerTurn(params: {
     turn,
     turnClaim: params.turnClaim,
   });
+  // Project the wire handshake; the receipt also carries storage-only provenance.
+  const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
   const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
     runtimeIdentity,
     messages: initialMessages,
@@ -332,7 +336,7 @@ async function executeWorkerTurn(params: {
           sessionId: placement.sessionId,
           ownerEpoch: placement.activeOwnerEpoch,
           rpcSetVersion: credential.rpcSetVersion,
-          handshake: environment.bootstrapReceipt,
+          handshake: { bundleHash, openclawVersion, protocolFeatures },
         },
         assignment: {
           agentId: placement.agentId,

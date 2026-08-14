@@ -35,7 +35,7 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
-import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   preflightGatewaySessionCompaction,
@@ -218,14 +218,14 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               sessionId,
             ) ??
               false) ||
-            hasVisibleActiveSessionRun({
+            resolveVisibleActiveSessionRunState({
               context,
               requestedKey: key,
               canonicalKey: target.canonicalKey,
               sessionId,
               agentId: requestedAgentId,
               defaultAgentId: compatibilityDefaultAgentId,
-            });
+            }).active;
           // Accepted work can live only in its command lane; waiting behind it
           // while holding the lifecycle fence would deadlock or drop that turn.
           blockedByQueuedWork =

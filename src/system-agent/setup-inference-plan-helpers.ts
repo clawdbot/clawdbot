@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
@@ -77,51 +78,9 @@ export function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConf
   };
 }
 
-export type RunResult = {
-  payloads?: Array<{ text?: string; isError?: boolean }>;
-  meta?: {
-    executionTrace?: { winnerProvider?: string; winnerModel?: string };
-    finalAssistantVisibleText?: string;
-    finalAssistantRawText?: string;
-    livenessState?: string;
-    error?: { kind?: string; message?: string };
-  };
-};
-
-export function extractRunText(result: RunResult): string | undefined {
-  return (
-    result.meta?.finalAssistantVisibleText ??
-    result.meta?.finalAssistantRawText ??
-    result.payloads
-      ?.map((payload) => payload.text?.trim())
-      .filter(Boolean)
-      .join("\n")
-  );
-}
-
-export function extractRunTerminalError(result: RunResult): string | undefined {
-  const errorPayload = result.payloads?.find((payload) => payload.isError === true)?.text?.trim();
-  const hasMetaError = result.meta?.error !== undefined;
-  const metaError = result.meta?.error?.message?.trim();
-  const livenessState = result.meta?.livenessState?.trim().toLowerCase();
-  if (
-    !errorPayload &&
-    !hasMetaError &&
-    livenessState !== "blocked" &&
-    livenessState !== "abandoned"
-  ) {
-    return undefined;
-  }
-  return (
-    metaError ||
-    errorPayload ||
-    (livenessState ? `Inference ended in the ${livenessState} state.` : "Inference failed.")
-  );
-}
-
 export async function extractRunWinnerError(
   plan: SetupInferenceTestPlan,
-  result: RunResult,
+  result: AgentRunResultView,
 ): Promise<string | undefined> {
   const winnerProvider = result.meta?.executionTrace?.winnerProvider?.trim();
   const winnerModel = result.meta?.executionTrace?.winnerModel?.trim();

@@ -337,9 +337,10 @@ retain raw stable channel IDs and `channel:<id>` compatibility. The channel
 prefixes `slack:`, `group:`, and `mpim:` fail startup.
 
 Enterprise user policy entries in `allowFrom`, `reactionAllowlist`, and
-per-channel `users` must use `team:<team-id>:user:<user-id>` or `"*"`. A
-workspace-scoped sender never matches a bare user ID. Workspace installations
-retain raw stable user IDs, `slack:<user-id>`, and `user:<user-id>` compatibility.
+per-channel `users` accept raw stable Slack user IDs, `slack:<user-id>`,
+`user:<user-id>`, `team:<team-id>:user:<user-id>`, or `"*"`. Unqualified
+entries compare only the user ID and can match an org-wide user in any
+workspace. Qualified entries compare both the workspace and user ID.
 Enterprise `toolsBySender` keys accept raw stable user IDs, `id:<user-id>`,
 `channel:slack:<user-id>`, or `"*"`. Names, slugs, display names, and email
 addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
@@ -359,9 +360,9 @@ rejected before authorization or system-event handling.
 Enterprise DMs support the same `disabled`, `open`, `allowlist`, and `pairing`
 policies as workspace installs. Pairing approvals are stored as
 `team:<team-id>:user:<user-id>` and are applied only to events from that
-workspace. Explicit account `allowFrom` entries use the same qualified form and
-apply only to that workspace; channel and sender policy continues to apply to
-channel messages.
+workspace. Explicit account `allowFrom` entries can omit the workspace for an
+org-wide user ID or include it to limit access to one workspace; channel and
+sender policy continues to apply to channel messages.
 
 ## Install
 
@@ -572,7 +573,7 @@ openclaw config patch --file ./slack.socket.patch.json5 --dry-run
 openclaw config patch --file ./slack.socket.patch.json5
 ```
 
-        Env fallback (default account only):
+        Default-account credential fallback after `channels.slack` is configured:
 
 ```bash
 SLACK_APP_TOKEN=slack-app-token-example
@@ -1314,7 +1315,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid org installs require `team:<team-id>:channel:<channel-id>` so policies cannot cross workspace boundaries.
 
-    Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
+    Without a `channels.slack` block, the Gateway does not auto-start Slack from `SLACK_*` environment variables. Once the block exists, those variables remain default-account credential fallbacks. Passing `--ambient-channels` opts into env-only auto-configuration; that path uses `groupPolicy="allowlist"` and logs a warning, even if `channels.defaults.groupPolicy` is set.
 
     Name/ID resolution:
 
@@ -1518,9 +1519,11 @@ Hide raw command/exec text while keeping compact progress lines:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-The default session card shows the current title, optional narration, plan checklist, recent activity, tool/file totals, and elapsed time. Completion changes the header to success or error while preserving the last plan and activity. When `gateway.publicOrigin` is configured, terminal cards include an **Open in OpenClaw** button linked to that session. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
+In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
 
-Slack native progress task cards remain a separate opt-in path. Set `channels.slack.streaming.progress.nativeTaskCards` to `true` with `channels.slack.streaming.mode="progress"` to use Slack's native plan/task stream instead of the Block Kit session card. This setting is unchanged.
+Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, recent activity, tool/file totals, and elapsed time, and finalizes to success or error.
+
+Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
 
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.

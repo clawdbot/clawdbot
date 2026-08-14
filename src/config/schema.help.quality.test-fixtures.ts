@@ -130,6 +130,8 @@ export const TARGET_KEYS = [
   "nodeHost.agentRuns",
   "nodeHost.agentRuns.claude",
   "nodeHost.agentRuns.claude.enabled",
+  "nodeHost.workerRuns",
+  "nodeHost.workerRuns.enabled",
   "nodeHost.browserProxy",
   "nodeHost.browserProxy.enabled",
   "nodeHost.browserProxy.allowProfiles",

@@ -11,7 +11,6 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import {
   listAgentEntries,
   listAgentIds,
-  resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
@@ -283,22 +282,18 @@ function normalizeFallbackList(values: readonly string[]): string[] {
 function resolveGatewayAgentModel(
   cfg: OpenClawConfig,
   agentId: string,
-): GatewayAgentRow["model"] | undefined {
+  resolvedModel: ReturnType<typeof resolveDefaultModelForAgent>,
+): NonNullable<GatewayAgentRow["model"]> {
   // Agent rows expose model identity to clients; credential-profile binding stays in
   // canonical config and is consumed only by execution-time model selection.
-  const primary = splitTrailingAuthProfile(
-    resolveAgentEffectiveModelPrimary(cfg, agentId) ?? "",
-  ).model;
+  const primary = `${resolvedModel.provider}/${resolvedModel.model}`;
   const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = normalizeFallbackList(
     (fallbackOverride ?? defaultFallbacks).map((value) => splitTrailingAuthProfile(value).model),
   );
-  if (!primary && fallbacks.length === 0) {
-    return undefined;
-  }
   return {
-    ...(primary ? { primary } : {}),
+    primary,
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
   };
 }
@@ -344,8 +339,8 @@ export function listAgentsForGateway(
   const agents = roster.map((entry) => {
     const { id } = entry;
     const meta = configuredById.get(id);
-    const model = resolveGatewayAgentModel(cfg, id);
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+    const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
     const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
     const agentRuntime = resolveModelAgentRuntimeMetadata({
       cfg,
@@ -382,7 +377,7 @@ export function listAgentsForGateway(
         thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
         thinkingDefault: thinkingProfile.thinkingDefault,
       },
-      model ? { model } : {},
+      { model },
     );
   });
   return {

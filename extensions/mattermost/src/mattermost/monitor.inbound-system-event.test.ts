@@ -1,10 +1,20 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createMessageReceiptFromOutboundResults,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type { MattermostPost } from "./client.js";
@@ -96,6 +106,7 @@ const mockState = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
   getGlobalHookRunner: vi.fn(),
+  ingressQueue: undefined as unknown,
   progressDrafts: [] as Array<{ getSnapshot: () => { lines: readonly unknown[] } }>,
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
@@ -180,27 +191,36 @@ vi.mock("./monitor-ingress.js", async (importOriginal) => {
     ...actual,
     createMattermostIngressMonitor: (
       options: Parameters<typeof actual.createMattermostIngressMonitor>[0],
-    ) => ({
-      receive: async (rawEvent: string) => {
-        const payload = JSON.parse(rawEvent) as MattermostEventPayload;
-        const post =
-          typeof payload.data?.post === "string"
-            ? (JSON.parse(payload.data.post) as MattermostPost)
-            : (payload.data?.post as MattermostPost | undefined);
-        if (payload.event !== "posted" || !post) {
-          return;
-        }
-        await options.dispatch(post, payload, {
-          abortSignal: new AbortController().signal,
-          onAdopted: async () => {},
-          onDeferred: () => {},
-          onAdoptionFinalizing: () => {},
-          onAbandoned: async () => {},
+    ) => {
+      if (mockState.ingressQueue) {
+        return actual.createMattermostIngressMonitor({
+          ...options,
+          queue: mockState.ingressQueue as NonNullable<typeof options.queue>,
+          pollIntervalMs: 60_000,
         });
-      },
-      stop: async () => {},
-      waitForIdle: async () => {},
-    }),
+      }
+      return {
+        receive: async (rawEvent: string) => {
+          const payload = JSON.parse(rawEvent) as MattermostEventPayload;
+          const post =
+            typeof payload.data?.post === "string"
+              ? (JSON.parse(payload.data.post) as MattermostPost)
+              : (payload.data?.post as MattermostPost | undefined);
+          if (payload.event !== "posted" || !post) {
+            return;
+          }
+          await options.dispatch(post, payload, {
+            abortSignal: new AbortController().signal,
+            onAdopted: async () => {},
+            onDeferred: () => {},
+            onAdoptionFinalizing: () => {},
+            onAbandoned: async () => {},
+          });
+        },
+        stop: async () => {},
+        waitForIdle: async () => {},
+      };
+    },
   };
 });
 
@@ -534,6 +554,7 @@ describe("mattermost inbound user posts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.abortController = undefined;
+    mockState.ingressQueue = undefined;
     mockState.progressDrafts.length = 0;
     mockState.getGlobalHookRunner.mockReturnValue(null);
     mockState.runtimeCore = createRuntimeCore(testConfig);
@@ -566,6 +587,146 @@ describe("mattermost inbound user posts", () => {
     mockState.dispatchInboundMessage.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
+  });
+
+  it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 0, 2);
+    vi.setSystemTime(now);
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mattermost-abandon-"));
+    const stateDir = await fs.realpath(created);
+    type Payload = { version: 1; receivedAt: number; rawEvent: string };
+    const queue = createChannelIngressQueueForTests<Payload>({
+      channelId: "mattermost",
+      accountId: "default",
+      stateDir,
+    });
+    mockState.ingressQueue = queue;
+    mockState.runtimeCore = createRuntimeCore(testConfig, undefined, {
+      inboundDebounceMs: 0,
+      createInboundDebouncer,
+    });
+    mockState.dispatchInboundMessage.mockRejectedValue(
+      new Error("Mattermost dispatch failed before adoption"),
+    );
+
+    const activeProviders: Array<{ stop: () => Promise<void> }> = [];
+    const startProvider = async () => {
+      const socket = new FakeWebSocket();
+      const abortController = new AbortController();
+      const monitor = monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: abortController.signal,
+        webSocketFactory: () => socket,
+      });
+      for (let tick = 0; tick < 20 && socket.openListenerCount === 0; tick += 1) {
+        await Promise.resolve();
+      }
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+      socket.emitOpen();
+      let stopped = false;
+      const provider = {
+        socket,
+        stop: async () => {
+          if (stopped) {
+            return;
+          }
+          stopped = true;
+          abortController.abort();
+          socket.emitClose(1000);
+          await monitor;
+        },
+      };
+      activeProviders.push(provider);
+      return provider;
+    };
+    const send = async (provider: Awaited<ReturnType<typeof startProvider>>) => {
+      await emitMattermostChannelPost(provider.socket, {
+        id: "post-abandon-retry",
+        message: "retry me",
+      });
+    };
+    const pendingAttempt = async (attempts: number) => {
+      let observed: Awaited<ReturnType<typeof queue.listPending>>[number] | undefined;
+      await vi.waitFor(async () => {
+        const pending = await queue.listPending({ limit: "all" });
+        expect(pending).toEqual([
+          expect.objectContaining({
+            id: "post-abandon-retry",
+            attempts,
+            lastAttemptAt: expect.any(Number),
+            lastError: "turn-abandoned",
+          }),
+        ]);
+        observed = pending[0];
+      });
+      const lastAttemptAt = observed?.lastAttemptAt;
+      if (lastAttemptAt === undefined) {
+        throw new Error(`Missing Mattermost retry timestamp for attempt ${attempts}`);
+      }
+      return { ...observed, lastAttemptAt };
+    };
+
+    try {
+      const first = await startProvider();
+      await send(first);
+      const firstAttempt = await pendingAttempt(1);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+      await first.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
+      const blocked = await startProvider();
+      await send(blocked);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+      await blocked.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
+      const second = await startProvider();
+      await send(second);
+      const secondAttempt = await pendingAttempt(2);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(2);
+      await second.stop();
+
+      for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim("post-abandon-retry", { ownerId: `seed-${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected Mattermost seed claim ${attempt}`);
+        }
+        await queue.release(claim, {
+          lastError: "turn-abandoned",
+          releasedAt: secondAttempt.lastAttemptAt,
+        });
+      }
+
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
+      const threshold = await startProvider();
+      await send(threshold);
+      const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(3);
+      await threshold.stop();
+
+      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
+      const beyond = await startProvider();
+      await send(beyond);
+      const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(4);
+      await beyond.stop();
+
+      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
+      const blockedRestart = await startProvider();
+      await send(blockedRestart);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(4);
+      await blockedRestart.stop();
+    } finally {
+      await Promise.allSettled(activeProviders.map(async (provider) => await provider.stop()));
+      mockState.ingressQueue = undefined;
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
   });
 
   it("publishes recovering while API authentication retries, including 401", async () => {
@@ -1879,7 +2040,10 @@ describe("mattermost inbound user posts", () => {
           chatmode: "onmessage",
           dmPolicy: "open",
           groupPolicy: "open",
-          streaming: { mode: "block", preview: { toolProgress: true } },
+          streaming: {
+            mode: "block",
+            preview: { toolProgress: true, commandText: "raw" },
+          },
         },
       },
     };

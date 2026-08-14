@@ -15,74 +15,19 @@ import {
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
   renderPluginSdkApiBaseline,
-  renderPluginSdkApiBaselineModules,
-  writeRenderedPluginSdkApiBaselineArtifacts,
-  type PluginSdkApiModule,
-  type PluginSdkApiBaselineRender,
+  type PluginSdkApiBaseline,
 } from "./api-baseline.js";
+import {
+  diffPluginSdkApi,
+  formatPluginSdkApiDiffReport,
+  hasPluginSdkApiChanges,
+  parsePluginSdkApiDiffSurface,
+  pluginSdkApiAcknowledgement,
+  readPluginSdkApiEntrypoints,
+  type PluginSdkApiDiff,
+} from "./api-diff.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const SERIALIZATION_MODULES = ["fixture-a", "fixture-b"].map(
-  (entrypoint, index): PluginSdkApiModule => ({
-    category: null,
-    entrypoint,
-    exports: [
-      {
-        closureHash: String(index).repeat(64),
-        declaration: `export type Fixture${index} = string;`,
-        exportName: `Fixture${index}`,
-        kind: "type",
-        source: { path: `src/plugin-sdk/${entrypoint}.ts` },
-      },
-    ],
-    importSpecifier: `openclaw/plugin-sdk/${entrypoint}`,
-    source: { path: `src/plugin-sdk/${entrypoint}.ts` },
-  }),
-);
-const rendered = renderPluginSdkApiBaselineModules(SERIALIZATION_MODULES);
-
-function contractContents(result: PluginSdkApiBaselineRender): Record<string, string> {
-  return Object.fromEntries(result.contractFiles.map((file) => [file.fileName, file.content]));
-}
-
-function writeContractFiles(directory: string, result: PluginSdkApiBaselineRender): void {
-  fs.mkdirSync(directory, { recursive: true });
-  for (const file of result.contractFiles) {
-    fs.writeFileSync(path.join(directory, file.fileName), file.content);
-  }
-}
-
-function git(repoRoot: string, args: string[]): string {
-  const result = spawnSync("git", args, {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_EMAIL: "plugin-sdk-test@openclaw.invalid",
-      GIT_AUTHOR_NAME: "Plugin SDK Test",
-      GIT_COMMITTER_EMAIL: "plugin-sdk-test@openclaw.invalid",
-      GIT_COMMITTER_NAME: "Plugin SDK Test",
-    },
-  });
-  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  return result.stdout.trim();
-}
-
-function stablePatchId(repoRoot: string, revision: string): string {
-  const patch = spawnSync("git", ["show", "--pretty=format:", revision], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  });
-  expect(patch.status, patch.stderr).toBe(0);
-  const result = spawnSync("git", ["patch-id", "--stable"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    input: patch.stdout,
-  });
-  expect(result.status, result.stderr).toBe(0);
-  return result.stdout.split(" ")[0] ?? "";
-}
 
 async function renderSourceFixture(
   files: Readonly<Record<string, string>>,
@@ -107,6 +52,19 @@ async function renderSourceFixture(
     fs.writeFileSync(filePath, content);
   }
   return renderPluginSdkApiBaseline({ repoRoot, entrypoints });
+}
+
+function writePluginSdkInventory(repoRoot: string, entrypoints: readonly string[]): void {
+  const inventoryDir = path.join(repoRoot, "scripts", "lib");
+  fs.mkdirSync(inventoryDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(inventoryDir, "plugin-sdk-entrypoints.json"),
+    `${JSON.stringify(entrypoints)}\n`,
+  );
+  fs.writeFileSync(
+    path.join(inventoryDir, "plugin-sdk-private-local-only-subpaths.json"),
+    '["private-fixture"]\n',
+  );
 }
 
 async function renderPrivateDeclarationFixture(params?: {
@@ -170,6 +128,34 @@ async function renderPrivateDeclarationFixture(params?: {
     path.join(externalDir, "index.d.ts"),
     "export type FixtureExternal = { externalOnly: string };\n",
   );
+  return renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
+}
+
+async function renderDependencyDeclarationFixture(dependencyDeclaration: string) {
+  const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-dependency-");
+  const sourceDir = path.join(repoRoot, "src", "plugin-sdk");
+  const dependencyDir = path.join(repoRoot, "node_modules", "fixture-dependency");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.mkdirSync(dependencyDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, "tsconfig.json"),
+    `${JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        target: "ESNext",
+      },
+    })}\n`,
+  );
+  fs.writeFileSync(
+    path.join(sourceDir, "fixture.ts"),
+    'import { fixtureValue } from "fixture-dependency";\nexport const publicValue = fixtureValue;\n',
+  );
+  fs.writeFileSync(
+    path.join(dependencyDir, "package.json"),
+    '{"name":"fixture-dependency","type":"module","types":"index.d.ts"}\n',
+  );
+  fs.writeFileSync(path.join(dependencyDir, "index.d.ts"), dependencyDeclaration);
   return renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
 }
 
@@ -290,193 +276,221 @@ describe("Plugin SDK API baseline", () => {
     expect(listPluginSdkApiBaselineEntrypoints()).toEqual(publicPluginSdkEntrypoints);
   });
 
-  it("serializes modules independently of entrypoint discovery order", () => {
-    const reverse = renderPluginSdkApiBaselineModules(rendered.baseline.modules.toReversed());
+  it("reports same-entrypoint closure changes without a committed merge unit", async () => {
+    const render = (optionsExtra: string, resultExtra: string) =>
+      renderSourceFixture({
+        "fixture.ts": [
+          `type SendOptions = { text: string${optionsExtra} };`,
+          `type SendResult = { ok: boolean${resultExtra} };`,
+          "export declare function send(options: SendOptions): SendResult;",
+        ].join("\n"),
+      });
+    const baseline = await render("", "");
+    const optionsChanged = await render("; accountId: string", "");
+    const resultChanged = await render("", "; traceId: string");
+    const combined = await render("; accountId: string", "; traceId: string");
 
-    expect(reverse.json).toBe(rendered.json);
-    expect(reverse.contractFiles).toEqual(rendered.contractFiles);
-  });
+    const conflictDir = tempDirs.make("openclaw-plugin-sdk-api-conflict-");
+    const basePath = path.join(conflictDir, "base.json");
+    const optionsPath = path.join(conflictDir, "options.json");
+    const resultPath = path.join(conflictDir, "result.json");
+    fs.writeFileSync(basePath, '{"contentHash":"base","entrypoint":"fixture"}\n');
+    fs.writeFileSync(optionsPath, '{"contentHash":"options","entrypoint":"fixture"}\n');
+    fs.writeFileSync(resultPath, '{"contentHash":"result","entrypoint":"fixture"}\n');
+    const oldRepresentationMerge = spawnSync(
+      "git",
+      ["merge-file", "-p", optionsPath, basePath, resultPath],
+      { encoding: "utf8" },
+    );
+    expect(oldRepresentationMerge.status).toBe(1);
+    expect(oldRepresentationMerge.stdout).toContain("<<<<<<<");
 
-  it("keeps unrelated module hashes byte-identical when one export changes", () => {
-    const target = rendered.baseline.modules[0];
-    expect(target?.exports.length).toBeGreaterThan(0);
-    const changed = renderPluginSdkApiBaselineModules(
-      rendered.baseline.modules.map((moduleSurface) =>
-        moduleSurface === target
-          ? {
-              ...moduleSurface,
-              exports: moduleSurface.exports.map((exportSurface, index) =>
-                index === 0
-                  ? { ...exportSurface, declaration: `${exportSurface.declaration ?? ""} changed` }
-                  : exportSurface,
-              ),
-            }
-          : moduleSurface,
+    for (const changed of [optionsChanged, resultChanged]) {
+      const diff = diffPluginSdkApi(baseline, changed);
+      expect(diff.exports).toEqual([
+        expect.objectContaining({
+          change: "reachable",
+          entrypoint: "fixture",
+          exportName: "send",
+        }),
+      ]);
+    }
+    const combinedDiff = diffPluginSdkApi(baseline, combined);
+    expect(
+      combinedDiff.exports.flatMap((change) =>
+        change.declarationChanges.map((declaration) => declaration.name),
       ),
-    );
-    const before = contractContents(rendered);
-    const after = contractContents(changed);
-    const changedFileNames = Object.keys(before).filter(
-      (fileName) => before[fileName] !== after[fileName],
-    );
-
-    expect(changedFileNames).toEqual([`${target?.entrypoint}.json`]);
+    ).toEqual(expect.arrayContaining(["SendOptions", "SendResult"]));
+    expect(hasPluginSdkApiChanges(combinedDiff)).toBe(true);
+    expect(pluginSdkApiAcknowledgement(combinedDiff)).toMatch(/^[a-f0-9]{8}$/u);
+    expect(
+      formatPluginSdkApiDiffReport({
+        baseLabel: "base",
+        diff: combinedDiff,
+        headLabel: "head",
+      }),
+    ).toContain("Reachable declarations changed");
   });
 
-  it("writes one file per module and keeps adjacent edits merge- and patch-stable", () => {
-    const modules = rendered.baseline.modules;
-    const left = modules[0];
-    const right = modules[1];
-    expect(left?.exports.length).toBeGreaterThan(0);
-    expect(right?.exports.length).toBeGreaterThan(0);
-    expect(left?.entrypoint).not.toBe(right?.entrypoint);
+  it("reads added and removed entrypoints from each revision's own inventory", async () => {
+    const baseRoot = tempDirs.make("openclaw-plugin-sdk-api-base-");
+    const headRoot = tempDirs.make("openclaw-plugin-sdk-api-head-");
+    writePluginSdkInventory(baseRoot, ["fixture", "private-fixture"]);
+    writePluginSdkInventory(headRoot, ["fixture", "added", "private-fixture"]);
 
-    const editModule = (target: typeof left, suffix: string) =>
-      renderPluginSdkApiBaselineModules(
-        modules.map((moduleSurface) =>
-          moduleSurface === target
-            ? {
-                ...moduleSurface,
-                exports: moduleSurface.exports.map((exportSurface, index) =>
-                  index === 0
-                    ? {
-                        ...exportSurface,
-                        declaration: `${exportSurface.declaration ?? ""} ${suffix}`,
-                      }
-                    : exportSurface,
-                ),
-              }
-            : moduleSurface,
-        ),
+    expect(await readPluginSdkApiEntrypoints(baseRoot)).toEqual(["fixture"]);
+    expect(await readPluginSdkApiEntrypoints(headRoot)).toEqual(["fixture", "added"]);
+
+    const before = await renderSourceFixture({
+      "fixture.ts": "export type Fixture = string;\n",
+    });
+    const renderAdded = (valueType: "number" | "string") =>
+      renderSourceFixture(
+        {
+          "added.ts": [
+            `type AddedShape = { value: ${valueType} };`,
+            "export declare function createAdded(input: AddedShape): AddedShape;",
+          ].join("\n"),
+          "fixture.ts": "export type Fixture = string;\n",
+        },
+        ["fixture", "added"],
       );
-    const ours = editModule(left, "left edit");
-    const theirs = editModule(right, "right edit");
-    const records = rendered.contractFiles.map((file) => JSON.parse(file.content));
-
-    expect(rendered.contractFiles).toHaveLength(modules.length);
-    expect(rendered.contractFiles.map((file) => file.fileName)).toEqual(
-      modules.map((moduleSurface) => `${moduleSurface.entrypoint}.json`),
-    );
-    expect(records.map((record) => record.importSpecifier)).toEqual(
-      modules.map((moduleSurface) => moduleSurface.importSpecifier),
-    );
-    expect(records).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
+    const after = await renderAdded("number");
+    const sameNamesDifferentContents = await renderAdded("string");
+    const addedDiff = diffPluginSdkApi(before, after);
+    const removedDiff = diffPluginSdkApi(after, before);
+    expect(addedDiff.entrypointsAdded).toEqual([
+      {
+        entrypoint: "added",
+        exportNames: ["createAdded"],
+        importSpecifier: "openclaw/plugin-sdk/added",
+      },
+    ]);
+    expect(addedDiff.exports).toEqual([
+      expect.objectContaining({
+        change: "added",
+        declarationChanges: expect.arrayContaining([
+          expect.objectContaining({ after: expect.stringContaining("value: number") }),
+        ]),
+        entrypoint: "added",
+        exportName: "createAdded",
+      }),
+    ]);
+    expect(removedDiff.exports[0]).toMatchObject({
+      change: "removed",
+      declarationChanges: expect.arrayContaining([
+        expect.objectContaining({ before: expect.stringContaining("value: number") }),
       ]),
-    );
-    const contract = rendered.contractFiles.map((file) => file.content).join("");
-    expect(rendered.json).toContain('"source": {');
-    expect(contract).not.toContain('"sourceLine":');
-    expect(contract).not.toContain('"sourcePath":');
-    expect(contract).not.toContain('"closureHash":');
-
-    const mergeDir = tempDirs.make("openclaw-plugin-sdk-api-merge-");
-    const contractDirectory = path.join(mergeDir, "plugin-sdk-api-baseline");
-    git(mergeDir, ["init", "-q", "--initial-branch=main"]);
-    writeContractFiles(contractDirectory, rendered);
-    git(mergeDir, ["add", "."]);
-    git(mergeDir, ["commit", "-qm", "base"]);
-    const baseRevision = git(mergeDir, ["rev-parse", "HEAD"]);
-
-    git(mergeDir, ["switch", "-qc", "feature"]);
-    fs.writeFileSync(
-      path.join(contractDirectory, `${left?.entrypoint}.json`),
-      contractContents(ours)[`${left?.entrypoint}.json`] ?? "",
-    );
-    git(mergeDir, ["add", "."]);
-    git(mergeDir, ["commit", "-qm", "feature"]);
-    const featureRevision = git(mergeDir, ["rev-parse", "HEAD"]);
-    const featurePatchId = stablePatchId(mergeDir, featureRevision);
-
-    git(mergeDir, ["switch", "-qc", "main-update", baseRevision]);
-    fs.writeFileSync(
-      path.join(contractDirectory, `${right?.entrypoint}.json`),
-      contractContents(theirs)[`${right?.entrypoint}.json`] ?? "",
-    );
-    git(mergeDir, ["add", "."]);
-    git(mergeDir, ["commit", "-qm", "main update"]);
-
-    git(mergeDir, ["switch", "-qc", "merge-check", featureRevision]);
-    git(mergeDir, ["merge", "-q", "--no-edit", "main-update"]);
-    git(mergeDir, ["switch", "-qc", "rebase-check", featureRevision]);
-    git(mergeDir, ["rebase", "main-update"]);
-
-    expect(stablePatchId(mergeDir, "HEAD")).toBe(featurePatchId);
-    expect(fs.readFileSync(path.join(contractDirectory, `${left?.entrypoint}.json`), "utf8")).toBe(
-      contractContents(ours)[`${left?.entrypoint}.json`],
-    );
-    expect(fs.readFileSync(path.join(contractDirectory, `${right?.entrypoint}.json`), "utf8")).toBe(
-      contractContents(theirs)[`${right?.entrypoint}.json`],
-    );
+    });
+    expect(addedDiff.digest).not.toBe(diffPluginSdkApi(before, sameNamesDifferentContents).digest);
+    expect(
+      formatPluginSdkApiDiffReport({ baseLabel: "base", diff: addedDiff, headLabel: "head" }),
+    ).toContain("value: number");
   });
 
-  it("renders byte-identical contract files deterministically", async () => {
+  it("classifies exported signature changes separately from reachable-only changes", async () => {
+    const baseline = await renderSourceFixture({
+      "fixture.ts": [
+        "export interface SendOptions { text: string }",
+        "export declare function send(options: SendOptions): void;",
+      ].join("\n"),
+    });
+    const changed = await renderSourceFixture({
+      "fixture.ts": [
+        "export interface SendOptions { text: string; accountId: string }",
+        "export declare function send(options: SendOptions): void;",
+      ].join("\n"),
+    });
+
+    const diff = diffPluginSdkApi(baseline, changed);
+    expect(diff.exports).toEqual([
+      expect.objectContaining({ change: "signature", exportName: "SendOptions" }),
+      expect.objectContaining({ change: "reachable", exportName: "send" }),
+    ]);
+    expect(diff.exports.every((change) => change.declarationChanges.length > 0)).toBe(true);
+  });
+
+  it("validates renderer artifacts at the subprocess boundary", async () => {
+    const baseline = await renderSourceFixture({
+      "fixture.ts": "export type Fixture = { value: string };\n",
+    });
+    const parsed = parsePluginSdkApiDiffSurface(JSON.stringify(baseline));
+
+    expect(hasPluginSdkApiChanges(diffPluginSdkApi(baseline, parsed))).toBe(false);
+    expect(() =>
+      parsePluginSdkApiDiffSurface('{"declarationSections":[],"modules":[{"entrypoint":1}]}'),
+    ).toThrow("invalid module");
+  });
+
+  it("reports public types resolved from each revision's dependency declarations", async () => {
+    const before = await renderDependencyDeclarationFixture(
+      "export declare const fixtureValue: { oldValue: string };\n",
+    );
+    const after = await renderDependencyDeclarationFixture(
+      "export declare const fixtureValue: { newValue: number };\n",
+    );
+    const diff = diffPluginSdkApi(before, after);
+    const report = formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
+
+    expect(diff.exports).toEqual([
+      expect.objectContaining({ change: "signature", exportName: "publicValue" }),
+    ]);
+    expect(report).toContain("oldValue: string");
+    expect(report).toContain("newValue: number");
+    expect(report).toContain(`Acknowledgement digest: \`${pluginSdkApiAcknowledgement(diff)}\``);
+  });
+
+  it("bounds reports by UTF-8 bytes without splitting multibyte text", () => {
+    const diff: PluginSdkApiDiff = {
+      digest: "a".repeat(64),
+      entrypointsAdded: [],
+      entrypointsRemoved: [],
+      exports: [
+        {
+          after: {
+            closureHash: "b".repeat(64),
+            declaration: `type Wide = "${"界".repeat(70_000)}";`,
+            kind: "type",
+          },
+          before: null,
+          change: "added",
+          declarationChanges: [],
+          entrypoint: "fixture",
+          exportName: "Wide",
+          importSpecifier: "openclaw/plugin-sdk/fixture",
+        },
+      ],
+    };
+
+    const report = formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
+    expect(Buffer.byteLength(report, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    expect(report).toContain("summary truncated");
+    expect(report).not.toContain("�");
+  });
+
+  it("renders byte-identical surfaces deterministically", async () => {
     const firstRender = await renderPrivateDeclarationFixture();
     const secondRender = await renderPrivateDeclarationFixture();
-    const fixtureError = firstRender.baseline.modules[0]?.exports.find(
+    const fixtureError = firstRender.modules[0]?.exports.find(
       (exportSurface) => exportSurface.exportName === "FixtureError",
     )?.declaration;
 
-    expect(secondRender.contractFiles).toEqual(firstRender.contractFiles);
+    expect(secondRender).toEqual(firstRender);
     expect(fixtureError).toContain("constructor(status: number);");
     expect(fixtureError).toContain("getStatus(): number;");
     expect(fixtureError).not.toContain("super(");
     expect(fixtureError).not.toContain("return this.status");
   });
 
-  it("checks and repairs modified, missing, and stale contract records", async () => {
-    const outputDir = tempDirs.make("openclaw-plugin-sdk-api-output-");
-    const contractDirectory = path.join(outputDir, "plugin-sdk-api-baseline");
-    const jsonPath = path.join(outputDir, "plugin-sdk-api-baseline.json");
-    const options = {
-      contractDirectory,
-      jsonPath,
-      rendered,
-    } as const;
-    await writeRenderedPluginSdkApiBaselineArtifacts(options);
-    const [modified, missing] = rendered.contractFiles;
-    if (!modified || !missing) {
-      throw new Error("Expected at least two rendered contract files");
-    }
-    fs.writeFileSync(path.join(contractDirectory, modified.fileName), "modified\n");
-    fs.unlinkSync(path.join(contractDirectory, missing.fileName));
-    fs.writeFileSync(path.join(contractDirectory, "stale.json"), "{}\n");
-
-    const drifted = await writeRenderedPluginSdkApiBaselineArtifacts({
-      ...options,
-      check: true,
-    });
-    expect(drifted).toEqual(
-      expect.objectContaining({
-        changed: true,
-        contractDiff: {
-          modified: [modified.fileName],
-          missing: [missing.fileName],
-          stale: ["stale.json"],
-        },
-        wrote: false,
+  it("fails when a declaration dependency cannot be resolved", async () => {
+    await expect(
+      renderSourceFixture({
+        "fixture.ts": [
+          'import type { Missing } from "missing-plugin-sdk-dependency";',
+          "export declare function createFixture(value: Missing): void;",
+        ].join("\n"),
       }),
-    );
-
-    const repaired = await writeRenderedPluginSdkApiBaselineArtifacts(options);
-    expect(repaired.removedStaleCount).toBe(1);
-
-    const current = await writeRenderedPluginSdkApiBaselineArtifacts({
-      ...options,
-      check: true,
-    });
-    expect(current).toEqual(expect.objectContaining({ changed: false, wrote: false }));
-    expect(fs.existsSync(path.join(contractDirectory, "stale.json"))).toBe(false);
-    expect(fs.readFileSync(path.join(contractDirectory, modified.fileName), "utf8")).toBe(
-      modified.content,
-    );
-    expect(fs.readFileSync(path.join(contractDirectory, missing.fileName), "utf8")).toBe(
-      missing.content,
-    );
-    expect(fs.readFileSync(jsonPath, "utf8")).toContain(
-      '"generatedBy": "scripts/generate-plugin-sdk-api-baseline.ts"',
-    );
+    ).rejects.toThrow("missing-plugin-sdk-dependency");
   });
 
   it("keeps hashes stable when reachable declarations move", async () => {
@@ -495,7 +509,7 @@ describe("Plugin SDK API baseline", () => {
       "moved/leaf.ts": "export type Leaf = { value: string };\n",
     });
 
-    expect(moved.contractFiles).toEqual(baseline.contractFiles);
+    expect(moved).toEqual(baseline);
   });
 
   it("includes globals from side-effect imports in closure hashes", async () => {
@@ -515,8 +529,8 @@ describe("Plugin SDK API baseline", () => {
     const baseline = await render(false);
     const changed = await render(true);
 
-    expect(changed.baseline.modules[0]?.exports[0]?.closureHash).not.toBe(
-      baseline.baseline.modules[0]?.exports[0]?.closureHash,
+    expect(changed.modules[0]?.exports[0]?.closureHash).not.toBe(
+      baseline.modules[0]?.exports[0]?.closureHash,
     );
   });
 
@@ -530,7 +544,7 @@ describe("Plugin SDK API baseline", () => {
       "moved/mod.ts": "export const value = 1;\n",
     });
 
-    expect(moved.contractFiles).toEqual(baseline.contractFiles);
+    expect(moved).toEqual(baseline);
   });
 
   it("ignores unreachable transitive declaration changes", async () => {
@@ -549,7 +563,7 @@ describe("Plugin SDK API baseline", () => {
     const baseline = await render();
     const unrelated = await render("export type TelegramProbe = { ignored: boolean };\n");
 
-    expect(unrelated.contractFiles).toEqual(baseline.contractFiles);
+    expect(unrelated).toEqual(baseline);
   });
 
   it("keeps cycle members complete across cached export walks", async () => {
@@ -577,9 +591,9 @@ describe("Plugin SDK API baseline", () => {
       );
     const baseline = await render(false);
     const changed = await render(true);
-    const closureHash = (result: PluginSdkApiBaselineRender) =>
-      result.baseline.modules.find((moduleSurface) => moduleSurface.entrypoint === "cycle-b")
-        ?.exports[0]?.closureHash;
+    const closureHash = (result: PluginSdkApiBaseline) =>
+      result.modules.find((moduleSurface) => moduleSurface.entrypoint === "cycle-b")?.exports[0]
+        ?.closureHash;
 
     expect(closureHash(changed)).not.toBe(closureHash(baseline));
   });
@@ -592,9 +606,9 @@ describe("Plugin SDK API baseline", () => {
       });
     const baseline = await render();
     const unrelated = await render("export type Unrelated = { ignored: boolean };\n");
-    const declaration = baseline.baseline.modules[0]?.exports[0]?.declaration;
+    const declaration = baseline.modules[0]?.exports[0]?.declaration;
 
-    expect(unrelated.contractFiles).toEqual(baseline.contractFiles);
+    expect(unrelated).toEqual(baseline);
     expect(declaration).toContain("function publicFixture(");
     expect(declaration).not.toContain("internalFixture");
   });
@@ -603,7 +617,7 @@ describe("Plugin SDK API baseline", () => {
     const baseline = await renderPrivateDeclarationFixture();
     const optionChanged = await renderPrivateDeclarationFixture({ optionalOption: true });
     const resultChanged = await renderPrivateDeclarationFixture({ optionalResult: true });
-    const declaration = baseline.baseline.modules[0]?.exports[0];
+    const declaration = baseline.modules[0]?.exports[0];
 
     expect(declaration).toEqual(
       expect.objectContaining({
@@ -613,6 +627,18 @@ describe("Plugin SDK API baseline", () => {
       }),
     );
     expect(declaration?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(declaration?.closureSectionIds?.map((id) => baseline.declarationSections[id])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "FixtureOptionLeaf",
+          text: expect.stringContaining("required: string"),
+        }),
+        expect.objectContaining({
+          name: "FixtureResult",
+          text: expect.stringContaining("FixtureResultLeaf"),
+        }),
+      ]),
+    );
     expect(declaration?.declaration).toContain("FixtureOptions");
     expect(declaration?.declaration).toContain("FixtureResult");
     expect(declaration?.declaration).not.toContain("required: string;");
@@ -620,11 +646,8 @@ describe("Plugin SDK API baseline", () => {
     expect(declaration?.declaration).not.toContain("externalOnly: string;");
 
     for (const changed of [optionChanged, resultChanged]) {
-      expect(changed.baseline.modules[0]?.exports[0]?.declaration).toBe(declaration?.declaration);
-      expect(changed.baseline.modules[0]?.exports[0]?.closureHash).not.toBe(
-        declaration?.closureHash,
-      );
-      expect(changed.contractFiles).not.toEqual(baseline.contractFiles);
+      expect(changed.modules[0]?.exports[0]?.declaration).toBe(declaration?.declaration);
+      expect(changed.modules[0]?.exports[0]?.closureHash).not.toBe(declaration?.closureHash);
     }
   });
 });

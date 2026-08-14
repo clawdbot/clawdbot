@@ -387,10 +387,10 @@ struct SettingsSkillsDestination: View {
                 ClawHubSkillRow(
                     skill: skill,
                     installed: skill.version.map {
-                        SkillManagementContract.installed(self.installedSkills, slug: skill.slug, version: $0)
-                    } ?? SkillManagementContract.installed(self.installedSkills, slug: skill.slug),
-                    isBusy: self.reviewingSlug == skill.slug || self.installingSlug.map {
-                        SkillManagementContract.sameClawHubSkill($0, skill.slug)
+                        SkillManagementContract.installed(self.installedSkills, slug: skill.reference, version: $0)
+                    } ?? SkillManagementContract.installed(self.installedSkills, slug: skill.reference),
+                    isBusy: self.reviewingSlug == skill.reference || self.installingSlug.map {
+                        SkillManagementContract.sameClawHubSkill($0, skill.reference)
                     } == true,
                     onReview: { Task { await self.review(skill) } })
             }
@@ -523,7 +523,7 @@ struct SettingsSkillsDestination: View {
         let gatewayID = self.appModel.connectedGatewayID
         let operationID = UUID()
         self.reviewID = operationID
-        self.reviewingSlug = skill.slug
+        self.reviewingSlug = skill.reference
         self.notice = nil
         defer {
             if self.reviewID == operationID {
@@ -535,7 +535,7 @@ struct SettingsSkillsDestination: View {
             let route = try await gatewayRoute()
             let data = try await request(
                 method: "skills.detail",
-                params: ClawHubDetailRequest(slug: skill.slug),
+                params: ClawHubDetailRequest(slug: skill.reference),
                 timeoutSeconds: 20,
                 route: route)
             let detail = try JSONDecoder().decode(ClawHubSkillDetail.self, from: data)
@@ -907,12 +907,12 @@ private struct ClawHubSkillRow: View {
             ProIconBadge(systemName: "shippingbox", color: self.installed ? OpenClawBrand.ok : OpenClawBrand.accent)
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.skill.displayName).font(OpenClawType.subheadSemiBold)
-                Text(self.skill.summary ?? self.skill.slug)
+                Text(self.skill.summary ?? self.skill.reference)
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 6) {
-                    Text(self.skill.slug).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
+                    Text(self.skill.reference).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
                     if let version = self.skill.version {
                         Text(verbatim: version).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
                     }

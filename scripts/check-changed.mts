@@ -100,14 +100,12 @@ const DOCTOR_CONTRACT_OWNER_TEST_PATH_RE =
   /^extensions\/[^/]+\/(?:openclaw\.plugin\.json$|(?!.*\.test\.).*\.(?:c|m)?[jt]s$)/u;
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
-const PLUGIN_SDK_API_BASELINE_PATH_RE =
-  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\/[^/]+\.json$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
   /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const WRAPPER_SHADOWING_PATH_RE =
-  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/(?:export-name-collision-baseline\.json$|ts-guard-utils\.mts$|wrapper-shadowing-baseline\.json$)))/u;
+  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/ts-guard-utils\.mts$))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
@@ -212,10 +210,7 @@ export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
   if (!result || result.paths.length === 0) {
     return false;
   }
-  if (
-    shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
-    shouldRunPluginSdkApiBaselineCheck(result.paths)
-  ) {
+  if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     return true;
   }
   if (result.docsOnly) {
@@ -357,17 +352,6 @@ export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
   return paths.some((changedPath) =>
     SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(normalizeChangedPath(changedPath)),
   );
-}
-
-/** Returns whether changed files can alter the published Plugin SDK API contract. */
-export function shouldRunPluginSdkApiBaselineCheck(paths: string[]) {
-  return paths.some((changedPath) => {
-    const normalizedPath = normalizeChangedPath(changedPath);
-    return (
-      !getChangedPathFacts(normalizedPath).isTestOnly &&
-      PLUGIN_SDK_API_BASELINE_PATH_RE.test(normalizedPath)
-    );
-  });
 }
 
 /** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
@@ -673,9 +657,6 @@ export function createChangedCheckPlan(
   }
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
-  }
-  if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
-    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
   }
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);

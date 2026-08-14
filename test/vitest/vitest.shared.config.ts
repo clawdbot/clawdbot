@@ -224,6 +224,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "readiness.ts"),
       },
       {
+        find: "@openclaw/gateway-client/scope-upgrade",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "scope-upgrade.ts"),
+      },
+      {
         find: "@openclaw/gateway-client/timeouts",
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "timeouts.ts"),
       },
@@ -466,7 +470,9 @@ export const sharedVitestConfig = {
   test: {
     dir: repoRoot,
     testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
-    hookTimeout: isWindows ? 180_000 : 120_000,
+    // 180s on every platform: GitHub-hosted 4-core fallback runners (Blacksmith
+    // outage breaker) push e2e beforeAll hooks past 120s; Windows always needed it.
+    hookTimeout: 180_000,
     unstubEnvs: true,
     unstubGlobals: true,
     isolate: false,

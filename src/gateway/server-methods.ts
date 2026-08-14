@@ -126,6 +126,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
   plugins: () => import("./server-methods/plugins.js").then((module) => module.pluginsHandlers),
   projects: () => import("./server-methods/projects.js").then((module) => module.projectsHandlers),
+  portals: () => import("./server-methods/portals.js").then((module) => module.portalHandlers),
   migrations: () =>
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),

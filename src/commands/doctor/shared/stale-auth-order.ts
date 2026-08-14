@@ -7,11 +7,11 @@ import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "../../../agents/auth-profiles/order.js";
+import { resolveSharedAuthStorePath } from "../../../agents/auth-profiles/path-resolve.js";
 import {
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "../../../agents/auth-profiles/persisted.js";
-import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
@@ -297,7 +297,7 @@ function loadConfiguredAgentAuthStores(
   }
   // Every secondary agent inherits the legacy main store at runtime, even when
   // `agents.list` names a different default agent.
-  const mainAgentDir = path.resolve(resolveSharedMainAuthAgentDir(env));
+  const mainAgentDir = path.dirname(resolveSharedAuthStorePath(env));
   const activeAgentDirs = new Set<string>();
   const expectedAgentIdsByDir = new Map<string, Set<string>>();
   const addExpectedAgentDir = (agentDir: string, agentId: string) => {

@@ -394,6 +394,10 @@ struct RootTabs: View {
                 headerTitle: "Automations",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
+        case .desktop:
+            DesktopHubScreen(
+                headerSidebarAction: self.sidebarHeaderAction,
+                gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .terminal:
             TerminalHubScreen(
                 headerSidebarAction: self.sidebarHeaderAction,

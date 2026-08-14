@@ -567,7 +567,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           <button
             class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide"
             type="button"
-            aria-label=${t("chat.rail.hide")}
+            aria-label=${t("chat.rail.close")}
             @click=${() => this.hide()}
           >
             ${icons.x}
@@ -609,8 +609,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           }
         }}
       >
-        <header class="chat-session-rail__header">
-          <div class="chat-session-rail__header-copy">
+        <header class="rail-header chat-session-rail__header">
+          <div class="rail-header__copy chat-session-rail__header-copy">
             <div class="chat-session-rail__status-row">
               ${digest ? this.renderStatus(digest) : html`<strong>${t("chat.rail.title")}</strong>`}
               ${elapsed
@@ -623,7 +623,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               ? html`<strong class="chat-session-rail__headline">${digest.headline}</strong>`
               : html`<span class="chat-session-rail__subtitle">${t("chat.rail.subtitle")}</span>`}
           </div>
-          <div class="chat-session-rail__actions">
+          <div class="rail-header__actions chat-session-rail__actions">
             <wa-dropdown
               class="chat-session-rail__menu"
               placement="bottom-end"
@@ -635,7 +635,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             >
               <button
                 slot="trigger"
-                class="btn btn--ghost btn--icon chat-icon-btn"
+                class="rail-header__action"
                 type="button"
                 aria-label=${t("chat.rail.moreActions")}
                 aria-haspopup="menu"
@@ -651,15 +651,15 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               </wa-dropdown-item>
             </wa-dropdown>
             <button
-              class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide"
+              class="rail-header__action chat-session-rail__hide"
               type="button"
-              aria-label=${t("chat.rail.hide")}
+              aria-label=${t("chat.rail.close")}
               @click=${() => this.hide()}
             >
               ${icons.x}
             </button>
             <button
-              class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__toggle"
+              class="rail-header__action chat-session-rail__toggle"
               type="button"
               aria-label=${t("chat.rail.collapse")}
               @click=${() => this.collapse()}

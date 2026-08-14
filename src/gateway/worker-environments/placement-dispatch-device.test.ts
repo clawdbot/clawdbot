@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -39,7 +40,12 @@ describe("device worker placement dispatch", () => {
       profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
       leaseId: "device-lease-1",
       sshEndpoint: null,
-      bootstrapReceipt: null,
+      bootstrapReceipt: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.12",
+        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        installKind: "local",
+      },
       sharedHost: true,
       tunnelStatus: "stopped",
     });
@@ -64,9 +70,13 @@ describe("device worker placement dispatch", () => {
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
-      ownerEpoch: harness.ready.ownerEpoch,
+      ownerEpoch: expect.any(Number),
     });
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.attachSession).toHaveBeenCalledWith({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
+    });
     expect(harness.environments.destroy).toHaveBeenCalledWith(harness.ready.environmentId);
     expect(harness.placements.current()).toMatchObject({
       state: "failed",

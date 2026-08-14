@@ -69,6 +69,7 @@ function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider 
 const homes: string[] = [];
 const originalHome = process.env.HOME;
 const originalPath = process.env.PATH;
+const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
   userShellPaths: new Map<string, string>(),
@@ -491,6 +492,11 @@ afterEach(async () => {
   nodeHostMocks.userShellPaths.clear();
   process.env.HOME = originalHome;
   process.env.PATH = originalPath;
+  if (originalClaudeConfigDir === undefined) {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  } else {
+    process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  }
   await Promise.all(homes.splice(0).map((home) => fs.rm(home, { recursive: true, force: true })));
 });
 
@@ -542,6 +548,42 @@ describe("Claude session catalog", () => {
         [adoptedSourceKey("node:node-a", threadId), "agent:main:node"],
       ]),
     );
+  });
+
+  it("lists an explicit CLAUDE_CONFIG_DIR while isolated", async () => {
+    const home = await createHome();
+    const configParent = await createHome();
+    const sessionId = "explicit-config-root";
+    await writeProject({
+      home: configParent,
+      entries: [{ sessionId, summary: "Explicit config session", isSidechain: false }],
+      transcripts: { [sessionId]: [message(sessionId, "user", "explicit root", 1)] },
+    });
+    await writeDesktopMetadata(home, "private", {
+      cliSessionId: sessionId,
+      sessionId: "desktop-private",
+      title: "Private desktop title",
+    });
+    process.env.HOME = home;
+    process.env.CLAUDE_CONFIG_DIR = path.join(configParent, ".claude");
+    const provider = captureCatalogProvider({
+      nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
+    } as unknown as PluginRuntime);
+
+    await expect(
+      provider.list({ allowProcessHomeFallback: false, hostIds: ["gateway:local"] }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        hostId: "gateway:local",
+        sessions: [
+          expect.objectContaining({
+            threadId: sessionId,
+            name: "Explicit config session",
+            source: "claude-cli",
+          }),
+        ],
+      }),
+    ]);
   });
 
   it("preserves date-first parsing for numeric-looking index timestamps", async () => {
@@ -2601,7 +2643,7 @@ describe("Claude session catalog", () => {
     ]);
   });
 
-  it("omits the Gateway's same-install node host from native discovery", async () => {
+  it("keeps remote nodes while isolated state suppresses local HOME discovery", async () => {
     const home = await createHome();
     process.env.HOME = home;
     const invoke = vi.fn(async ({ nodeId }: { nodeId: string }) => ({
@@ -2639,9 +2681,47 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime);
 
-    const hosts = await provider.list({});
+    const hosts = await provider.list({ allowProcessHomeFallback: false });
 
-    expect(hosts.map((host) => host.hostId)).toEqual(["gateway:local", "node:remote-node"]);
+    expect(hosts.map((host) => host.hostId)).toEqual(["node:remote-node"]);
+    await expect(
+      provider.read({
+        allowProcessHomeFallback: false,
+        hostId: "gateway:local",
+        threadId: "private-thread",
+      }),
+    ).rejects.toThrow("local Claude sessions are unavailable in isolated state");
+    await expect(
+      provider.continueSession?.({
+        allowProcessHomeFallback: false,
+        hostId: "gateway:local",
+        threadId: "private-thread",
+      }),
+    ).rejects.toThrow("local Claude sessions are unavailable in isolated state");
+    await expect(
+      provider.openTerminal?.({
+        allowProcessHomeFallback: false,
+        hostId: "gateway:local",
+        threadId: "private-thread",
+      }),
+    ).rejects.toThrow("local Claude sessions are unavailable in isolated state");
+    await expect(
+      provider.startTerminalSession?.({
+        allowProcessHomeFallback: false,
+        agentId: "main",
+        cwd: process.cwd(),
+      }),
+    ).rejects.toThrow("local Claude sessions are unavailable in isolated state");
+    // Node starts are outside the process-HOME guard: they must surface the
+    // truthful capability error, not the isolation rejection.
+    await expect(
+      provider.startTerminalSession?.({
+        allowProcessHomeFallback: false,
+        agentId: "main",
+        cwd: process.cwd(),
+        nodeId: "remote-node",
+      }),
+    ).rejects.toThrow("Paired-node Claude terminal start is unavailable");
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
   });

@@ -209,11 +209,7 @@ describe("sessions_history redaction", () => {
       messages: [],
       bytes: 2,
     });
-    expect(requests.map((request) => request.method)).toEqual([
-      "sessions.resolve",
-      "sessions.list",
-      "chat.history",
-    ]);
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve", "chat.history"]);
   });
 
   it("redacts recalled session text even when log redaction is disabled", async () => {
@@ -515,11 +511,7 @@ describe("sessions_history redaction", () => {
         sessionKey: targetSessionKey,
         messages: [{ role: "assistant", content: "visible" }],
       });
-      expect(requests.map((request) => request.method)).toEqual([
-        "sessions.resolve",
-        "sessions.list",
-        "chat.history",
-      ]);
+      expect(requests.map((request) => request.method)).toEqual(["chat.history"]);
     } finally {
       unregister();
     }
@@ -542,7 +534,7 @@ describe("sessions_history redaction", () => {
         return undefined;
       }
       grantChecks += 1;
-      if (grantChecks === 2) {
+      if (grantChecks === 1) {
         replaceSessionEntrySync(
           { storePath, sessionKey: targetSessionKey },
           { sessionId: "replacement-incarnation", updatedAt: 2 },
@@ -596,7 +588,7 @@ describe("sessions_history redaction", () => {
         return undefined;
       }
       grantChecks += 1;
-      if (grantChecks === 2) {
+      if (grantChecks === 1) {
         replaceSessionEntrySync(
           { storePath, sessionKey: targetSessionKey },
           { sessionId: expectedSessionId, updatedAt: 2, archivedAt: 2 },

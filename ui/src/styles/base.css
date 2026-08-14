@@ -39,6 +39,29 @@
   --input: #1e2028;
   --ring: #ff5c5c;
 
+  /* Shared rail chrome. Light and dark themes inherit their actual colors
+     through --border/--accent while keeping one geometry contract. */
+  --rail-header-height: 48px;
+  --rail-header-padding-start: 12px;
+  --rail-header-padding-end: 8px;
+  --rail-header-action-size: 28px;
+  --rail-header-action-glyph-size: 16px;
+  --rail-header-action-color: var(--muted);
+  --rail-header-action-hover-color: var(--text);
+  --rail-header-action-active-color: var(--accent);
+  --rail-header-action-disabled-opacity: 0.4;
+  --rail-header-action-gap: 2px;
+  --rail-header-copy-gap: 2px;
+  --rail-header-background: var(--bg);
+  --rail-header-eyebrow-size: var(--control-ui-text-xs);
+  --rail-header-eyebrow-letter-spacing: 0.04em;
+  --rail-header-title-size: var(--control-ui-text-sm);
+  --rail-header-title-weight: 600;
+  --rail-divider-color: var(--border);
+  --rail-divider-size: 1px;
+  --rail-divider-active-size: 2px;
+  --rail-resizer-size: 4px;
+
   /*
    * Accent - Punchy signature red
    *
@@ -69,6 +92,25 @@
   --accent-2: #14b8a6;
   --accent-2-muted: rgba(20, 184, 166, 0.7);
   --accent-2-subtle: rgba(20, 184, 166, 0.1);
+
+  /* Theme-invariant presentation colors. */
+  --button-icon-bg: #ffffff;
+  --brand-logo-chip-bg: #ffffff;
+  --qr-bg: #ffffff;
+  --qr-text: #444444;
+  --media-bg: #000000;
+  --media-foreground: #ffffff;
+  --exec-highlight: #f97316;
+  --moon-highlight: #fef3c7;
+  --moon-base: #fbbf24;
+  --workshop-warm: #ff8a5c;
+  --workshop-teal: #14b8a6;
+  --workshop-cyan: #0891b2;
+
+  /* Provider and product brand colors never follow the active UI theme. */
+  --brand-codex: #10a37f;
+  --brand-claude: #d97757;
+  --brand-google: #4285f4;
 
   /*
    * Semantic status
@@ -103,6 +145,10 @@
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
+  --warn-bright: #f59e0b;
+  --warn-strong: #d97706;
+  --danger-solid-hover: #dc2626;
+  --pr-merged: #a78bfa;
   /* Run state needs its own token: --accent is red in every shipped theme and
      sits on top of --danger, so a spinning ring reads as a failed session.
      Graphical indicator, judged against WCAG 1.4.11 (3:1), not the label audit
@@ -116,6 +162,17 @@
 
   /* Grid */
   --grid-line: rgba(255, 255, 255, 0.03);
+
+  /* GitHub syntax palette shared by highlighted code and file previews. */
+  --hljs-keyword: #ff8a80;
+  --hljs-number: #79c0ff;
+  --hljs-string: #a5d6ff;
+  --hljs-title: #d2a8ff;
+  --hljs-type: #ffa657;
+  --hljs-attribute: #7ee787;
+  --hljs-meta: #c9d1d9;
+  --hljs-deletion: #ffa198;
+  --hljs-addition: #7ee787;
 
   /* Theme transition */
   --theme-switch-x: 50%;
@@ -294,6 +351,7 @@
   --danger-subtle: rgba(185, 28, 28, 0.08);
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
+  --pr-merged: #7c3aed;
   /* See the dark-theme note: run state stays off --accent. #0d9488 is 3.6:1 on
      --bg, above the 3:1 WCAG 1.4.11 bar for a non-text indicator. */
   --run: #0d9488;
@@ -303,6 +361,14 @@
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
   --grid-line: rgba(60, 42, 24, 0.05);
+
+  --hljs-keyword: #cf222e;
+  --hljs-number: #0550ae;
+  --hljs-string: #0a3069;
+  --hljs-title: #8250df;
+  --hljs-type: #953800;
+  --hljs-attribute: #116329;
+  --hljs-meta: #57606a;
 
   /* Light shadows - Subtle, warm-tinted */
   --shadow-sm: 0 1px 2px rgba(60, 42, 24, 0.05);
@@ -753,6 +819,7 @@ openclaw-app {
    a page owns; installed/app-like windows are desktop chrome and keep the arrow.
    Controls consume --cursor-action rather than hardcoding a cursor, and real
    hyperlinks keep the UA pointer in every mode. */
+/* stylelint-disable-next-line no-duplicate-selectors -- cursor policy block, see comment above */
 :root {
   --cursor-action: pointer;
 }

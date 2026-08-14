@@ -107,12 +107,19 @@ spec:
             limits:
               memory: 2Gi
               cpu: "1"
+          # Probes assert the JSON probe contract, not just the status code. The
+          # Control UI serves a catch-all 200 for unknown paths, so a status-only
+          # check would pass forever against an image whose probe route does not
+          # exist yet. Failing closed makes that mismatch loud instead of silent.
+          # /startupz (startup admission, ignores channel health) needs an image
+          # built from the release that added it; switch the startup and
+          # readiness probes to it after pinning such an image.
           startupProbe:
             exec:
               command:
                 - node
                 - -e
-                - "require('http').get('http://127.0.0.1:18789/startupz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+                - "require('http').get('http://127.0.0.1:18789/readyz', r => { let b = ''; r.on('data', d => b += d); r.on('end', () => { try { process.exit(r.statusCode < 400 && JSON.parse(b).ready === true ? 0 : 1); } catch { process.exit(1); } }); }).on('error', () => process.exit(1))"
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 30
@@ -121,7 +128,7 @@ spec:
               command:
                 - node
                 - -e
-                - "require('http').get('http://127.0.0.1:18789/healthz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+                - "require('http').get('http://127.0.0.1:18789/healthz', r => { let b = ''; r.on('data', d => b += d); r.on('end', () => { try { process.exit(r.statusCode < 400 && JSON.parse(b).ok === true ? 0 : 1); } catch { process.exit(1); } }); }).on('error', () => process.exit(1))"
             initialDelaySeconds: 60
             periodSeconds: 30
             timeoutSeconds: 10
@@ -130,7 +137,7 @@ spec:
               command:
                 - node
                 - -e
-                - "require('http').get('http://127.0.0.1:18789/startupz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+                - "require('http').get('http://127.0.0.1:18789/readyz', r => { let b = ''; r.on('data', d => b += d); r.on('end', () => { try { process.exit(r.statusCode < 400 && JSON.parse(b).ready === true ? 0 : 1); } catch { process.exit(1); } }); }).on('error', () => process.exit(1))"
             initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5

@@ -25,7 +25,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
-import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
+import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -35,6 +35,7 @@ import { isChatRunWorking } from "./components/chat-composer.ts";
 import "./components/chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
+  HeaderMenuActionKind,
   HeaderMenuQuickAction,
 } from "./components/chat-header-session-menu.ts";
 import {
@@ -51,6 +52,7 @@ import {
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import { renderChatTerminalButton } from "./components/chat-terminal-button.ts";
+import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import {
@@ -175,19 +177,34 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
     });
     const archiveAllowed = Boolean(row && canArchiveSessionRow(row, configuredMainKey));
     const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
-    const actionDisabledReasons = row
+    const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
           session: row,
         })
       : {};
-    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
-    const openDesktopPanel = () =>
+    const continueInTerminalDisabledReason = row
+      ? this.continueInTerminalDisabledReason(row)
+      : undefined;
+    const actionDisabledReasons: Partial<Record<HeaderMenuActionKind, string>> = {
+      ...sessionActionDisabledReasons,
+      ...(continueInTerminalDisabledReason
+        ? { "continue-in-terminal": continueInTerminalDisabledReason }
+        : {}),
+    };
+    const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
+    const desktopPanelAvailable =
+      desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const openDesktopPanel = () => {
+      if (!desktopEnvironmentId) {
+        return;
+      }
       window.dispatchEvent(
         new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
-          detail: { open: true },
+          detail: { open: true, environmentId: desktopEnvironmentId },
         }),
       );
+    };
     const browserPanelAction = sessionWorkspace.onToggleBrowser
       ? html`<openclaw-tooltip .content=${t("browser.toggle")}>
           <button
@@ -318,7 +335,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       reclaimingKey: this.headerPlacementReclaimingKey,
       row,
     });
-    return renderChatPaneHeader({
+    const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
@@ -499,6 +516,13 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       onSplitRight: this.onSplitRight,
       onClosePane: this.onClosePane,
     });
+    const continueCommand = this.currentContinueInTerminalCommand(row);
+    return html`${header}${continueCommand
+      ? renderContinueInTerminalDialog({
+          command: continueCommand,
+          onClose: () => this.closeContinueInTerminalDialog(),
+        })
+      : nothing}`;
   }
 
   // Probe once per session activation; transient failures stay uncached so the

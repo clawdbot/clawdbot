@@ -114,6 +114,23 @@ describe("worker environment protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "unavailable",
+      lastConnectedAtMs: 1_000,
+      lastDisconnectedAtMs: 2_000,
+      lastSeenAtMs: 1_500,
+      lastSeenReason: "silent_push",
+    };
+    expect(Value.Check(EnvironmentSummarySchema, node)).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastDisconnectedAtMs: -1 })).toBe(
+      false,
+    );
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastSeenReason: "" })).toBe(false);
+  });
+
   it("keeps desktop app launch requests, results, and projected ids closed", () => {
     expect(validateWorkerDesktopLaunchParams({ environmentId: "worker:one", app: "browser" })).toBe(
       true,
