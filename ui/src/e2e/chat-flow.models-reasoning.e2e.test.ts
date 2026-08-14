@@ -62,15 +62,17 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      const modelScroller = main.locator(".chat-controls__model-options");
       await page.evaluate(() => {
         document.documentElement.style.overflowY = "auto";
         document.body.style.height = "1800px";
         window.scrollTo(0, 300);
       });
       expect(await page.evaluate(() => window.scrollY)).toBe(300);
+
+      const main = page.getByRole("main");
+      await main.locator('[data-chat-model-select="true"]').click();
+      const modelScroller = main.locator(".chat-controls__model-options");
+      await expect.poll(() => modelScroller.isVisible()).toBe(true);
       await modelScroller.hover();
       const outerScrollBeforeFling = await page.evaluate(() => window.scrollY);
       expect(outerScrollBeforeFling).toBeGreaterThan(0);

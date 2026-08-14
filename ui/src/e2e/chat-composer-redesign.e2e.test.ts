@@ -13,6 +13,83 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
+  it("keeps picker menus in the viewport while preferring the space above", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        models: Array.from({ length: 12 }, (_, index) => ({
+          id: `model-${index + 1}`,
+          name: `Model ${index + 1}`,
+          provider: "openai",
+        })),
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const control = page.locator(".chat-composer-model-control");
+      for (const picker of [
+        {
+          menu: ".chat-controls__model-menu",
+          trigger: '[data-chat-model-select="true"]',
+        },
+        {
+          menu: ".chat-controls__effort-menu",
+          trigger: '[data-chat-thinking-select="true"]',
+        },
+      ]) {
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await control.evaluate((element) => {
+          Object.assign((element as HTMLElement).style, {
+            position: "fixed",
+            right: "80px",
+            top: "640px",
+          });
+        });
+        const trigger = control.locator(picker.trigger);
+        const menu = control.locator(picker.menu);
+        await trigger.click();
+        await expect
+          .poll(async () => {
+            const [menuBox, triggerBox] = await Promise.all([
+              menu.boundingBox(),
+              trigger.boundingBox(),
+            ]);
+            return {
+              aboveTrigger:
+                menuBox !== null &&
+                triggerBox !== null &&
+                menuBox.y + menuBox.height <= triggerBox.y - 5,
+              withinViewport:
+                menuBox !== null && menuBox.y >= 8 && menuBox.y + menuBox.height <= 892,
+            };
+          })
+          .toEqual({ aboveTrigger: true, withinViewport: true });
+
+        await page.setViewportSize({ width: 1280, height: 320 });
+        await control.evaluate((element) => {
+          (element as HTMLElement).style.top = "24px";
+        });
+        await expect
+          .poll(async () => {
+            const [menuBox, triggerBox] = await Promise.all([
+              menu.boundingBox(),
+              trigger.boundingBox(),
+            ]);
+            return {
+              belowTrigger:
+                menuBox !== null &&
+                triggerBox !== null &&
+                menuBox.y >= triggerBox.y + triggerBox.height + 5,
+              withinViewport:
+                menuBox !== null && menuBox.y >= 8 && menuBox.y + menuBox.height <= 312,
+            };
+          })
+          .toEqual({ belowTrigger: true, withinViewport: true });
+        await trigger.click();
+        await expect.poll(() => menu.isVisible()).toBe(false);
+      }
+    });
+  });
+
   it("keeps mobile picker panels above an attachment-expanded composer", async () => {
     await suite.withPage({ viewport: { width: 667, height: 375 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
@@ -53,6 +130,9 @@ suite.define(() => {
         if (!composerBox || !footerBox || !menuBox || !triggerBox) {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
+        expect(menuBox.x).toBeGreaterThanOrEqual(12);
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(655);
+        expect(menuBox.width).toBeGreaterThanOrEqual(642);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
         expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
@@ -224,6 +304,7 @@ suite.define(() => {
       await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
       const speedToggle = composer.locator("[data-chat-speed-toggle]");
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
@@ -544,6 +625,9 @@ suite.define(() => {
       await textarea.fill("");
       await expect.poll(() => camera.count()).toBe(0);
       await model.click();
+      await expect
+        .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
+        .toBe(true);
       const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
