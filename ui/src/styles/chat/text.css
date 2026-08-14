@@ -269,14 +269,19 @@
   }
 }
 
+/* --link, not --accent: user bubbles are filled with --accent-subtle (and peer
+   bubbles with the sender tint), so an accent-colored link sits on its own hue
+   and drops to 4.1:1 on the chocolate palette — 3.95:1 at the worst sender hue —
+   while the body text beside it holds 9:1. Hover shifts color instead of fading
+   opacity, which composited the link toward its background and cost another 1.1. */
 .chat-text :where(a) {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .chat-text :where(a:hover) {
-  opacity: 0.8;
+  color: var(--link-hover);
 }
 
 /* GitHub links carry the brand mark so a bare URL and a "[#3434]" shorthand read
@@ -325,7 +330,7 @@
    purpose: each renderer's own :where(a) and code rules would otherwise win on
    source order, and sidebar-markdown.css is imported after this file. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link {
-  color: var(--accent);
+  color: var(--link);
   /* File links are href-less anchors (driven by data-file-path), so the UA
      link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
@@ -460,7 +465,7 @@
    rather than resetting them here, so no theme override has to be out-specified;
    this rule only has to undo the separate mono-font declarations. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link > code {
-  color: var(--accent);
+  color: var(--link);
   font-family: inherit;
   font-size: inherit;
 }
