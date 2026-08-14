@@ -230,7 +230,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
       continue;
     }
 
@@ -343,7 +343,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
       continue;
     }
 
