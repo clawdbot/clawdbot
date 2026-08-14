@@ -10,6 +10,7 @@ import "../components/openclaw-mascot.ts";
 import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -95,10 +96,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (!context || !normalizedKey) {
       return undefined;
     }
+    // `sessions.list` has no exact-key filter, so scope the search to the key's own agent:
+    // a key that prefixes longer ones would otherwise risk falling outside the page.
+    const agentId = parseAgentSessionKey(normalizedKey)?.agentId;
     const result = await context.sessions.list({
       archivedFilter: "all",
-      limit: 5,
+      limit: 25,
       search: normalizedKey,
+      ...(agentId ? { agentId } : {}),
     });
     return result?.sessions.find((row) => row.key === normalizedKey);
   };
