@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getBoundDeviceBootstrapProfile,
   redeemDeviceBootstrapTokenProfile,
+  restoreGenericDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../infra/device-bootstrap.js";
 import {
@@ -798,6 +799,20 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         return;
       }
       let bootstrapHandoff: SetupHandoff | undefined;
+      let handoffResponseCompleted = false;
+      const restoreUndeliveredGenericHandoff = async () => {
+        if (!bootstrapHandoff || bootstrapHandoff.completion || handoffResponseCompleted) {
+          return;
+        }
+        try {
+          await restoreGenericDeviceBootstrapToken({
+            record: bootstrapHandoff.record,
+            baseDir: options.pairingBaseDir,
+          });
+        } catch (error) {
+          options.onError?.("watch node generic bootstrap restore failed", error);
+        }
+      };
       if (bootstrapToken) {
         const consumed = await consumeSetupHandoff({
           token: bootstrapToken,
@@ -819,6 +834,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         bootstrapHandoff = consumed;
       }
       if (closed || responseLifecycle.isAborted()) {
+        await restoreUndeliveredGenericHandoff();
         return;
       }
 
@@ -881,16 +897,20 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           protocol: PROTOCOL_VERSION,
           pollTimeoutMs: POLL_TIMEOUT_MS,
         });
-        const responseCompleted = await responseLifecycle.completed;
-        if (!responseCompleted) {
+        handoffResponseCompleted = await responseLifecycle.completed;
+        if (!handoffResponseCompleted) {
           if (bootstrapHandoff) {
-            try {
-              broadcastSetupHandoffDeliveryUncertain({
-                handoff: bootstrapHandoff,
-                broadcast: options.broadcast,
-              });
-            } catch (error) {
-              options.onError?.("watch node setup delivery-uncertain broadcast failed", error);
+            if (bootstrapHandoff.completion) {
+              try {
+                broadcastSetupHandoffDeliveryUncertain({
+                  handoff: bootstrapHandoff,
+                  broadcast: options.broadcast,
+                });
+              } catch (error) {
+                options.onError?.("watch node setup delivery-uncertain broadcast failed", error);
+              }
+            } else {
+              await restoreUndeliveredGenericHandoff();
             }
           }
           closeSession(session, "connect response aborted");
@@ -962,6 +982,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         if (session) {
           closeSession(session, "connect failed");
         }
+        await restoreUndeliveredGenericHandoff();
         throw error;
       }
     } finally {

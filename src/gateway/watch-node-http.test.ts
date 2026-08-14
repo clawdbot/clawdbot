@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   issueDeviceBootstrapToken,
   issueDevicePairSetupBootstrapToken,
+  verifyDeviceBootstrapToken,
 } from "../infra/device-bootstrap.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -710,6 +711,16 @@ describe("watch node HTTP transport", () => {
         access: "node",
         deliveryState: "uncertain",
       });
+      await expect(
+        verifyDeviceBootstrapToken({
+          token: abortedBootstrap.token,
+          deviceId: abortedIdentity.deviceId,
+          publicKey: publicKeyRawBase64UrlFromPem(abortedIdentity.publicKeyPem),
+          role: "node",
+          scopes: [],
+          baseDir: abortedBaseDir,
+        }),
+      ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
       const stillLimited = await fetch(`${abortedRuntime.baseUrl}/challenge`);
       expect(stillLimited.status).toBe(429);
       abortedRuntime.runtime.close();
@@ -762,6 +773,42 @@ describe("watch node HTTP transport", () => {
     } finally {
       completedLimiter.dispose();
     }
+  });
+
+  it("restores an uncorrelated bootstrap token when the connect response aborts", async () => {
+    const baseDir = await tempDirs.make("openclaw-watch-node-generic-abort-");
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const runtime = await startRuntime(baseDir, { abortConnectResponse: true });
+
+    await expect(
+      connectWatchNode({
+        baseUrl: runtime.baseUrl,
+        identity,
+        bootstrapToken: issued.token,
+      }),
+    ).rejects.toThrow();
+    await runtime.connectHandled;
+
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(
+      runtime.broadcasts.find((entry) => entry.event.startsWith("device.pair.setup.")),
+    ).toBeUndefined();
+    runtime.runtime.close();
   });
 
   it("persists setup status before handing off the successful connect response", async () => {

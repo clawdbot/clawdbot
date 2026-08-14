@@ -391,6 +391,23 @@ export async function revokeDeviceBootstrapTokensForDevice(params: {
   });
 }
 
+/** Restore an uncorrelated bootstrap bearer when its credential response was not delivered. */
+export async function restoreGenericDeviceBootstrapToken(params: {
+  record: DeviceBootstrapTokenRecord;
+  baseDir?: string;
+}): Promise<boolean> {
+  if (params.record.setupId) {
+    // Correlated setup credentials stay retired: their durable uncertain outcome owns recovery.
+    return false;
+  }
+  return await withLock(async () => {
+    const state = await loadState(params.baseDir);
+    state[params.record.token] = params.record;
+    persistState(state, params.baseDir);
+    return true;
+  });
+}
+
 /** Read the issued profile for a valid token without binding or redeeming it. */
 export async function getDeviceBootstrapTokenProfile(params: {
   token: string;

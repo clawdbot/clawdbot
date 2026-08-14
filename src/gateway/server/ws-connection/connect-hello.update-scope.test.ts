@@ -9,6 +9,7 @@ const {
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
   redeemDeviceBootstrapTokenProfileMock,
+  restoreGenericDeviceBootstrapTokenMock,
   broadcastSetupHandoffCompletionMock,
   broadcastSetupHandoffDeliveryUncertainMock,
   confirmSetupHandoffDeliveryMock,
@@ -24,12 +25,21 @@ const {
     recorded: true,
     fullyRedeemed: true,
   })),
+  restoreGenericDeviceBootstrapTokenMock: vi.fn(async () => true),
   consumeSetupHandoffMock: vi.fn(async () => ({
     record: {
       token: "bootstrap-secret",
       setupId: "setup-failed-send",
       ts: 1,
       issuedAtMs: 1,
+    },
+    completion: {
+      setupId: "setup-failed-send",
+      deviceId: "device-123",
+      access: "node",
+      completedAtMs: 1,
+      deliveryState: "uncertain",
+      retainUntilMs: 2,
     },
   })),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
@@ -74,6 +84,7 @@ const {
 
 vi.mock("../../../infra/device-bootstrap.js", () => ({
   redeemDeviceBootstrapTokenProfile: redeemDeviceBootstrapTokenProfileMock,
+  restoreGenericDeviceBootstrapToken: restoreGenericDeviceBootstrapTokenMock,
 }));
 
 vi.mock("../../device-pair-setup-completion.js", () => ({
@@ -305,6 +316,7 @@ describe("sendGatewayHello update detail scope", () => {
     });
     expect(broadcastSetupHandoffCompletionMock).not.toHaveBeenCalled();
     expect(broadcastSetupHandoffDeliveryUncertainMock).toHaveBeenCalled();
+    expect(restoreGenericDeviceBootstrapTokenMock).not.toHaveBeenCalled();
     expect(context.handler.close).toHaveBeenCalled();
   });
 });

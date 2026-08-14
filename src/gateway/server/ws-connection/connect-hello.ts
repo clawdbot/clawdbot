@@ -4,7 +4,10 @@ import {
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
-import { redeemDeviceBootstrapTokenProfile } from "../../../infra/device-bootstrap.js";
+import {
+  redeemDeviceBootstrapTokenProfile,
+  restoreGenericDeviceBootstrapToken,
+} from "../../../infra/device-bootstrap.js";
 import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
@@ -201,15 +204,25 @@ export async function sendGatewayHello(
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
     if (bootstrapHandoff) {
-      try {
-        broadcastSetupHandoffDeliveryUncertain({
-          handoff: bootstrapHandoff,
-          broadcast: buildRequestContext().broadcast,
-        });
-      } catch (broadcastError) {
-        logGateway.warn(
-          `setup delivery-uncertain broadcast failed device=${device?.id ?? "unknown"}: ${formatForLog(broadcastError)}`,
-        );
+      if (bootstrapHandoff.completion) {
+        try {
+          broadcastSetupHandoffDeliveryUncertain({
+            handoff: bootstrapHandoff,
+            broadcast: buildRequestContext().broadcast,
+          });
+        } catch (broadcastError) {
+          logGateway.warn(
+            `setup delivery-uncertain broadcast failed device=${device?.id ?? "unknown"}: ${formatForLog(broadcastError)}`,
+          );
+        }
+      } else {
+        try {
+          await restoreGenericDeviceBootstrapToken({ record: bootstrapHandoff.record });
+        } catch (restoreError) {
+          logGateway.warn(
+            `generic bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreError)}`,
+          );
+        }
       }
     }
     await releasePendingNodePairingCleanup();
