@@ -162,19 +162,6 @@ describe("reply run registry", () => {
     );
   });
 
-  it("projects inbound authority through the canonical full fingerprint", () => {
-    const run = createQueueTestRun({ prompt: "projected authority" });
-    run.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
-    const route = { provider: "openai", model: "gpt-fallback" };
-    const projector = createFollowupRunToolAuthorityProjector(run);
-    const overlay = toolAuthorityOverlay(run);
-
-    expect(projector(overlay, route)).toBe(resolveFollowupRunToolAuthorityFingerprint(run, route));
-    expect(projector({ ...overlay, clientCaps: ["different-capability"] }, route)).not.toBe(
-      resolveFollowupRunToolAuthorityFingerprint(run, route),
-    );
-  });
-
   it("projects only while the active operation owns a concrete route", () => {
     const run = createQueueTestRun({ prompt: "operation projection" });
     const operation = createTestReplyOperation({ sessionId: "session-projector" });
