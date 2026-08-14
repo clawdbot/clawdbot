@@ -160,19 +160,21 @@ function failAttachment(error: string): never {
 }
 
 function renderStagedAttachmentPathBlock(relDir: string, names: readonly string[]): string {
-  // Reject, do not truncate: a partial path list would send the child back to the directory.
-  const block = `${names.map((name) => path.posix.join(relDir, name)).join("\n")}\n`;
-  if (block.length > SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS) {
-    failAttachment(
-      `attachments_prompt_paths_exceeded (chars=${block.length} maxChars=${SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS})`,
-    );
-  }
   // Filenames are attacker-influenced. Mark the list as untrusted data so
   // instruction-shaped names cannot become extra system-prompt instructions.
-  return wrapUntrustedPromptDataBlock({
+  const rendered = wrapUntrustedPromptDataBlock({
     label: "Staged attachment file paths",
-    text: block,
+    text: names.map((name) => path.posix.join(relDir, name)).join("\n"),
   });
+  // Bound the wrapped prompt bytes, not the raw path list. Escaping and
+  // wrapper text can grow past a raw-length check. Reject, do not truncate:
+  // a partial path list would send the child back to the directory.
+  if (rendered.length > SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS) {
+    failAttachment(
+      `attachments_prompt_paths_exceeded (chars=${rendered.length} maxChars=${SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS})`,
+    );
+  }
+  return rendered;
 }
 
 function validateAttachmentName(name: string, opts?: { promptSafe?: boolean }): void {
@@ -182,10 +184,18 @@ function validateAttachmentName(name: string, opts?: { promptSafe?: boolean }): 
   if (name.includes("/") || name.includes("\\")) {
     failAttachment(`attachments_invalid_name (${name})`);
   }
-  // Prompt-safe Cc/Cf rejection is native-only. ACP forwards {mediaType,data}
-  // and never stages or renders `name`; a format character must not fail ACP.
-  if (opts?.promptSafe && hasPromptUnsafeControlCharacter(name)) {
-    failAttachment(`attachments_invalid_name (${name})`);
+  // Prompt-safe checks are native-only. ACP forwards {mediaType,data} and
+  // never stages or renders `name`; format characters and markup must not fail ACP.
+  if (opts?.promptSafe) {
+    if (hasPromptUnsafeControlCharacter(name)) {
+      failAttachment(`attachments_invalid_name (${name})`);
+    }
+    // wrapUntrustedPromptDataBlock HTML-escapes these, so the prompted path
+    // would not match the staged filename. Reject instead of advertising a
+    // path the media loader cannot open.
+    if (/[<>&]/.test(name)) {
+      failAttachment(`attachments_invalid_name (${name})`);
+    }
   }
   if (name === "." || name === ".." || name === ".manifest.json") {
     failAttachment(`attachments_invalid_name (${name})`);

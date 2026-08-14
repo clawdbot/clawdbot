@@ -156,6 +156,24 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toContain(`maxChars=${SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS}`);
   });
 
+  it("rejects a raw-valid path list whose wrapped prompt exceeds the budget", async () => {
+    // Raw path stays under 4096; wrapper label/tags push the rendered block over.
+    const nearCapName = `${"n".repeat(4000)}.bin`;
+    const result = await spawnWithName(nearCapName);
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_prompt_paths_exceeded/);
+    expect(result.error).toContain(`maxChars=${SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS}`);
+  });
+
+  it.each(["receipt<final>.jpg", "a>b.jpg", "a&b.jpg"])(
+    "native name %s cannot be rendered losslessly and is rejected",
+    async (name) => {
+      const result = await spawnWithName(name);
+      expect(result.status).toBe("error");
+      expect(result.error).toMatch(/attachments_invalid_name/);
+    },
+  );
+
   it("duplicate name returns attachments_duplicate_name", async () => {
     const { spawnSubagentDirect } = subagentSpawnModule;
     const result = await spawnSubagentDirect(
