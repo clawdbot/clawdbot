@@ -70,6 +70,9 @@ const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: str
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
 const MAX_RELATED_PAGES_PER_SECTION = 12;
 const MAX_SHARED_SOURCE_FANOUT = 24;
+// Page summaries are immutable within a scan. Cache derived claim provenance so
+// quadratic related-link traversal does not rebuild the same arrays per pair.
+const pageSourceIdsCache = new WeakMap<WikiPageSummary, string[]>();
 
 type DashboardPageDefinition = {
   id: string;
@@ -1134,10 +1137,16 @@ function resolveClaimEvidenceSourceIds(claim: WikiClaim): string[] {
 }
 
 function resolvePageSourceIds(page: WikiPageSummary): string[] {
-  return uniqueStrings([
+  const cached = pageSourceIdsCache.get(page);
+  if (cached) {
+    return cached;
+  }
+  const sourceIds = uniqueStrings([
     ...page.sourceIds,
     ...page.claims.flatMap((claim) => resolveClaimEvidenceSourceIds(claim)),
   ]);
+  pageSourceIdsCache.set(page, sourceIds);
+  return sourceIds;
 }
 
 function resolveClaimSourceIds(page: WikiPageSummary, claim: WikiClaim): string[] {
