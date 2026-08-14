@@ -25,62 +25,20 @@ function findLiteralOpeningDelimiter(
   return index;
 }
 
-// Quoted prose before the JSON value is not itself JSON, so a delimiter
-// inside a complete quoted span must not be mistaken for the real start. An
-// unterminated quote can't reliably be told apart from real prose, so when
-// one is still open at end-of-input, this retries a literal (quote-blind)
-// scan from each quote-opening checkpoint, most recent first, stopping at
-// the first one that recovers a delimiter. This falls back only as far as
-// necessary instead of resurrecting a delimiter from an earlier span that
-// was already validly paired and skipped.
-function findStart(raw: string, openers: readonly JsonOpeningDelimiter[]): number {
-  let inString = false;
-  let escaped = false;
-  const openQuoteCheckpoints: number[] = [];
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      openQuoteCheckpoints.push(index);
-      continue;
-    }
-    if (isJsonOpeningDelimiter(char, openers)) {
-      return index;
-    }
+function isParseableJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
   }
-  if (!inString) {
-    return raw.length;
-  }
-  for (let i = openQuoteCheckpoints.length - 1; i >= 0; i -= 1) {
-    const checkpoint = openQuoteCheckpoints[i];
-    if (checkpoint === undefined) {
-      continue;
-    }
-    const candidate = findLiteralOpeningDelimiter(raw, checkpoint, openers);
-    if (candidate < raw.length) {
-      return candidate;
-    }
-  }
-  return raw.length;
 }
 
-/** Extracts the first balanced JSON object/array from text. */
-export function extractBalancedJsonPrefix(
+function extractBalancedFrom(
   raw: string,
-  opts: { openers?: readonly JsonOpeningDelimiter[] } = {},
+  start: number,
+  openers: readonly JsonOpeningDelimiter[],
 ): BalancedJsonFragment | null {
-  const openers = opts.openers ?? (["{", "["] as const);
-  const start = findStart(raw, openers);
   const stack: JsonOpeningDelimiter[] = [];
   let inString = false;
   let escaped = false;
@@ -103,6 +61,66 @@ export function extractBalancedJsonPrefix(
       if (stack.length === 0) {
         return { json: raw.slice(start, index + 1), startIndex: start, endIndex: index };
       }
+    }
+  }
+  return null;
+}
+
+/** Extracts the first balanced JSON object/array from text. */
+export function extractBalancedJsonPrefix(
+  raw: string,
+  opts: { openers?: readonly JsonOpeningDelimiter[] } = {},
+): BalancedJsonFragment | null {
+  const openers = opts.openers ?? (["{", "["] as const);
+
+  // Quoted prose before the JSON value is not itself JSON, so a delimiter
+  // inside a complete quoted span must not be mistaken for the real start.
+  let inString = false;
+  let escaped = false;
+  const openQuoteCheckpoints: number[] = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      openQuoteCheckpoints.push(index);
+      continue;
+    }
+    if (isJsonOpeningDelimiter(char, openers)) {
+      return extractBalancedFrom(raw, index, openers);
+    }
+  }
+  if (!inString) {
+    return null;
+  }
+
+  // An unterminated quote can't reliably be told apart from real prose, so
+  // retry a literal (quote-blind) scan from each quote-opening checkpoint,
+  // most recent first. A candidate is only accepted once it parses as real
+  // JSON: that's what tells a genuine value hiding behind a malformed quote
+  // apart from actually digging back into already-closed, valid prose (whose
+  // non-JSON contents will fail to parse and must stay skipped).
+  for (let i = openQuoteCheckpoints.length - 1; i >= 0; i -= 1) {
+    const checkpoint = openQuoteCheckpoints[i];
+    if (checkpoint === undefined) {
+      continue;
+    }
+    const literalStart = findLiteralOpeningDelimiter(raw, checkpoint, openers);
+    if (literalStart >= raw.length) {
+      continue;
+    }
+    const fragment = extractBalancedFrom(raw, literalStart, openers);
+    if (fragment && isParseableJson(fragment.json)) {
+      return fragment;
     }
   }
   return null;

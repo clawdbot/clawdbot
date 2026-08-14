@@ -67,6 +67,18 @@ describe("extractBalancedJsonPrefix", () => {
 
     expect(fragment?.json).toBe('{"ok":true}');
   });
+
+  it("does not fall back into an earlier closed span when the unmatched span has no JSON either", () => {
+    // The trailing unterminated span has no delimiter at all, so the fallback
+    // must not retry the earlier, already-closed "first {not}" span just
+    // because it happens to contain a brace - `{not}` isn't valid JSON and
+    // must stay skipped rather than being returned as a false recovery.
+    const raw = '"first {not}" then "unterminated no JSON';
+
+    const fragment = extractBalancedJsonPrefix(raw);
+
+    expect(fragment).toBeNull();
+  });
 });
 
 describe("extractBalancedJsonFragments", () => {
