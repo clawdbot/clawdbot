@@ -78,3 +78,24 @@ public struct GatewayAuthBinding: Equatable, Sendable {
     public let source: GatewayAuthSource
     public let credentialFingerprint: String?
 }
+
+extension GatewayConnectOptions {
+    /// Additive connect-frame fields, sent only when this node declares them.
+    /// Lives here so `GatewayChannel.sendConnect` stays within its body budget.
+    func applyOptionalConnectParams(to params: inout [String: OpenClawProtocol.AnyCodable]) {
+        if !self.commands.isEmpty {
+            params["commands"] = OpenClawProtocol.AnyCodable(self.commands)
+        }
+        if let computerUse = self.computerUse {
+            params["computerUse"] = computerUse
+        }
+        if let pathEnv = self.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pathEnv.isEmpty
+        {
+            params["pathEnv"] = OpenClawProtocol.AnyCodable(pathEnv)
+        }
+        if !self.permissions.isEmpty {
+            params["permissions"] = OpenClawProtocol.AnyCodable(self.permissions)
+        }
+    }
+}
