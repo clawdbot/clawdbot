@@ -124,7 +124,9 @@ final class ManagedProcess: @unchecked Sendable {
                         try? await Task.sleep(for: .milliseconds(50))
                     }
 
-                    guard !State.hasExited(pid), case let .terminate(gracefully) = wakeReason else {
+                    guard !State.hasExited(pid),
+                          case let .terminate(gracefully: graceful) = wakeReason
+                    else {
                         // The unreaped leader pins the group identity while descendants are killed.
                         await killGroup()
                         return

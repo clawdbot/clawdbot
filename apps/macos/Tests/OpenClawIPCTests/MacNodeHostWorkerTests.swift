@@ -440,9 +440,10 @@ struct MacNodeHostWorkerTests {
             let responses = try await AsyncTimeout.withTimeout(
                 seconds: 5,
                 onTimeout: { WorkerBackpressureTimeout() },
-                operation: { [first, second] in [await first.value, await second.value] })
+                operation: { [first, second] in await [first.value, second.value] })
             await worker.stop()
-            #expect(responses.allSatisfy { $0.ok })
+            let allResponsesSucceeded = responses.allSatisfy(\.ok)
+            #expect(allResponsesSucceeded)
         } catch {
             await worker.stop()
             throw error
