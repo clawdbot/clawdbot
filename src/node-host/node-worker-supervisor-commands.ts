@@ -126,6 +126,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         ? await params.supervisor!.launch(
             parseNodeWorkerLaunchInput(params.paramsJSON),
             resolveWorkerConnectionEndpoint(params),
+            params.signal,
           )
         : params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND
           ? await params.supervisor!.status(parseNodeWorkerLookupInput(params.paramsJSON).launchId)
