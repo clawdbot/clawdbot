@@ -113,6 +113,25 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
   });
 
+  it("reads the configurable idle-flush gap and its aliases", () => {
+    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as OpenClawConfig,
+      rawConfig: {
+        providers: { deepgram: { apiKey: "dg-key", idleFlushMs: "1500" } },
+      },
+    });
+    expect(resolved).toMatchObject({ idleFlushMs: 1500 });
+
+    const aliased = provider.resolveConfig?.({
+      cfg: {} as OpenClawConfig,
+      rawConfig: {
+        providers: { deepgram: { apiKey: "dg-key", idle_flush_ms: "900" } },
+      },
+    });
+    expect(aliased).toMatchObject({ idleFlushMs: 900 });
+  });
+
   it("requires an API key when creating sessions", () => {
     vi.stubEnv("DEEPGRAM_API_KEY", "");
     const provider = buildDeepgramRealtimeTranscriptionProvider();
@@ -383,6 +402,34 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     sendResult(socket!, { text: "continuous speech", isFinal: true, speechFinal: true });
     await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledWith("continuous speech"));
     session.close();
+  });
+
+  it("finalizes a stalled turn via the idle-flush backstop when speech-final never arrives", async () => {
+    const server = await createDeepgramRealtimeServer({
+      onRequest: () => undefined,
+      onConnection: (ws) => {
+        // A provisional word arrives, then Deepgram goes quiet without ever
+        // emitting speech_final -- e.g. background noise keeps its energy-based
+        // endpointing from settling. The host-side backstop must still finalize.
+        sendResult(ws, { text: "hello world" });
+      },
+    });
+    const onTranscript = vi.fn();
+    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+      providerConfig: {
+        apiKey: "dummy",
+        baseUrl: server.baseUrl,
+        endpointingMs: 25,
+        idleFlushMs: 25,
+      },
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledWith("hello world"));
+    session.close();
+
+    expect(onTranscript).toHaveBeenCalledTimes(1);
   });
 
   it("does not merge an interrupted turn into a reconnected provider stream", async () => {
