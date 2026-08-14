@@ -145,6 +145,7 @@ describe("node worker workspace retention", () => {
       seedGeneration(bundleRoot, input, generation);
       await supervisor.launch(input, TEST_WORKER_ENDPOINT);
       await waitForTerminal(supervisor, input.launchId);
+      await vi.waitFor(() => expect(generationNames(bundleRoot, input)).toHaveLength(1));
       observedCounts.push(generationNames(bundleRoot, input).length);
     }
 
