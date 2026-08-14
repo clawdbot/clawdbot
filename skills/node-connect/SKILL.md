@@ -11,16 +11,16 @@ Goal: fix one exact client against one exact Gateway, then prove that client's f
 
 Record the target environment/profile, OpenClaw binary, config/state root, Gateway URL/port, and service before changing anything.
 
-- If the operator names a deployment wrapper or profile, use it for every config, log, service, device, and node command.
-- Never fall back to a bare `openclaw`, a proof environment, or a similarly named deployment after the target is known.
-- If the global executable is stale or broken, invoke the target through its owner instead of switching installations.
-- Verify that status, config, logs, and process identity all describe the same Gateway.
+- Use the named deployment wrapper/profile for every config, log, service, device, and node command.
+- Never drift to a bare `openclaw`, proof environment, or similarly named deployment.
+- If the global executable is stale, invoke the target through its owner.
+- Verify status, config, logs, and process identity describe the same Gateway.
 
 Do not mutate pairing or auth until the target is unambiguous.
 
 ## 2. Classify the client
 
-Classify from the user's words and the Gateway's connection log before choosing commands:
+Classify from the request and Gateway log before choosing commands:
 
 - **Control UI browser:** the user says browser, dashboard, Control UI, or webchat; logs show `client=openclaw-control-ui` or `mode=webchat`.
 - **Native mobile/node:** the official app shows Connect, Scan QR, or setup code; logs/request metadata show a native client or `role=node`.
@@ -35,25 +35,27 @@ Run these through the locked target:
 openclaw gateway status --deep
 openclaw logs --follow --json
 openclaw devices list
+openclaw config get gateway.mode
 openclaw config get gateway.bind
+openclaw config get gateway.remote.url
 openclaw config get gateway.auth.mode
 openclaw config get gateway.auth.allowTailscale
 openclaw config get gateway.tailscale.mode
 ```
 
-Have the client retry once while logs are live. Capture client ID, mode, platform, remote/forwarded address, auth reason or method, device ID, authenticated user, and close code. Correlate those facts to the failing client; a different paired device is not evidence about this one.
+Have the client retry once while logs are live. Correlate its client ID, mode, platform, address, auth result, device ID, user, and close code. Ignore other paired devices.
 
 Interpret the first failed transition:
 
 - No matching Gateway attempt: route, DNS, TLS, origin, or proxy problem.
 - `token_missing`, `password_missing`, mismatch, or Tailscale identity failure: auth failed **before** pairing, so an empty pending list is expected.
 - `pairing required`: route and auth succeeded; approve the exact pending request.
-- Successful connect followed by close `1006`: auth/pairing succeeded; diagnose browser lifecycle, transport, proxy, or reconnect instead of pairing again.
-- `authenticated user connected` / `webchat connected`: identify the auth method and exact client before declaring success.
+- `authenticated user connected` / `webchat connected`: match the exact client; if followed by `1006`, preserve auth/pairing and inspect lifecycle, transport, proxy, or reconnect.
+- `1006` without either application-level connected log does not prove auth/pairing; inspect the earlier handshake transition.
 
 ## 4. Prove the route
 
-Choose one intended topology: same machine, same LAN, same tailnet, or public reverse proxy. Do not mix routes while diagnosing.
+Choose one topology: same machine, LAN, tailnet, or public reverse proxy. Do not mix them.
 
 - Browser Control UI needs HTTPS or localhost for browser device identity. A remote plain-HTTP Tailnet/LAN URL is not a valid substitute.
 - `gateway.tailscale.mode=off` means OpenClaw is not managing Serve/Funnel. It does not prove that Tailscale or an externally managed Serve route is absent.
@@ -64,56 +66,58 @@ tailscale status --json
 tailscale serve status --json
 ```
 
-Match the URL the client opened to the listener/proxy route that reached the locked Gateway.
+Match the client's URL to the listener/proxy route reaching the locked Gateway.
 
 ## 5A. Control UI browser lane
 
 Restore browser auth before looking for a pairing request:
 
-- For token/password auth, enter the credential in Control UI settings. Never paste a permanent secret into chat, logs, or a public URL.
-- On the Gateway host, `openclaw dashboard` is the preferred one-time signed browser handoff. `openclaw dashboard --json` exposes a short-lived `browserUrl`; treat it as a secret and use it only when its host is reachable by the intended browser. Never send a loopback `browserUrl` to a remote phone or rewrite its origin.
-- For an intended Tailscale Serve flow, verify the live Serve route and forwarded Tailscale identity. Enable `gateway.auth.allowTailscale` only when the operator intends that trust boundary. A verified Tailscale Control UI connection with browser device identity can authenticate without a pending pairing request.
+- For token/password auth, enter the credential in Control UI settings. Never put permanent secrets in chat, logs, or URLs.
+- Prefer `openclaw dashboard` on the Gateway host for a one-time signed handoff. Use `--no-open` only when the operator can retrieve that host's clipboard, and keep the host browser/clipboard outside agent tooling. Never capture `dashboard --json`: it can expose the handoff and shared credentials. Never relay, rewrite, or send a loopback handoff URL to a remote phone.
+- For Tailscale Serve, verify the live route and forwarded identity. Enable `gateway.auth.allowTailscale` only for that intended trust boundary. Verified Tailscale Control UI auth with browser device identity can skip pairing.
 
 After auth succeeds:
 
-- Retry and interpret the new state; never infer the pairing outcome from the pre-auth attempt. Token/password auth can reveal `pairing required`, while verified Tailscale identity can skip that round trip.
+- Retry; never infer pairing from the pre-auth attempt. Token/password auth can reveal `pairing required`; verified Tailscale identity can skip it.
 - If logs say `pairing required`, re-list devices and approve the exact request ID.
-- If verified Tailscale identity connects successfully, no pending request and no new paired-device row can be correct.
-- If the browser connects and then repeats `1006`, keep the auth/pairing state and move to reconnect evidence.
+- A successful verified-Tailscale connection may correctly create no pending or paired-device row.
+- After a repeated `1006`, preserve auth/pairing and inspect reconnect evidence.
 
 ## 5B. Native mobile/node lane
 
-Generate the native app's setup payload through the locked target:
+Inspect the native route through the locked target without exposing the setup credential:
 
 ```bash
-openclaw qr --json
+openclaw qr --json | jq '{gatewayUrl, gatewayUrls, auth, access, accessDowngraded, urlSource}'
 ```
 
-Use `gatewayUrl` and `urlSource` to verify the advertised route. If the user cannot scan, copy the short-lived setup code into the official app's manual setup flow. Generate a fresh code after any URL/auth fix or expiry.
+For a CLI controlling a remote Gateway, add `--remote` before `--json`; it selects `gateway.remote.url` and remote credentials. If the redaction filter is unavailable, do not run raw QR JSON in agent-visible output.
+
+Verify `gatewayUrl` and `urlSource`. The setup code is password-equivalent: have the operator copy it from **Control UI → Devices → Pair device**, or run `openclaw qr --setup-code-only` in a terminal outside agent tooling and paste it directly into the official app. Never relay it through agent/chat/tool output. Generate a fresh code after a URL/auth fix or expiry.
 
 If the app reports `pairing required`:
 
 ```bash
 openclaw devices list
-openclaw devices approve --latest   # preview only; copy the requestId
+openclaw devices approve --latest   # preview only; exits without approval
 openclaw devices approve <requestId>
 openclaw nodes status
 ```
 
-Re-list immediately before approval because a retry can supersede the pending request. Never approve by position, age alone, or similarity to another device.
+`--latest` only previews the current request; never treat it as approval. Re-list immediately before the exact-ID command because retries can supersede the request. Never approve by position, age, or similarity.
 
 ## 6. Correlate and finish
 
-Before any approval, match as many authoritative facts as available: request ID, device ID/public key, client ID, mode/role, platform, remote address, authenticated user, and retry time.
+Before approval, match available request, device/public-key, client, mode/role, platform, address, user, and retry-time facts.
 
 Declare success only after a new attempt made after the final change proves all applicable checks:
 
 - the exact client reaches the locked Gateway;
-- auth succeeds with the intended method/user;
-- the browser shows connected and completes its initial Gateway requests, or the native node appears connected in `openclaw nodes status`;
-- any required approval used the exact request ID;
-- no immediate repeated auth, pairing, or reconnect failure follows.
+- intended auth succeeds;
+- the browser completes initial requests, or the native node appears in `openclaw nodes status`;
+- approval used the exact request ID; and
+- no immediate auth, pairing, or reconnect failure follows.
 
-A generated QR/setup code, launched browser, empty pending list, approval response, paired device count, or successful Tailscale ping is evidence for one transition only. None alone proves the client is connected.
+A QR/setup code, launched browser, empty pending list, approval, paired-device count, or Tailscale ping proves only one transition.
 
-Report one concrete diagnosis, the one route/auth lane used, the exact client evidence, and the remaining failure transition if connection is still incomplete.
+Report the diagnosis, chosen route/auth lane, exact-client evidence, and any remaining failed transition.
