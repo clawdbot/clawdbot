@@ -847,7 +847,7 @@ async function compactResolvedContextEngine(
           result: result.result
             ? {
                 ...(serverEndpointCompaction
-                  ? {}
+                  ? { kind: "server-endpoint" as const }
                   : {
                       summary: result.result.summary ?? "",
                       firstKeptEntryId: result.result.firstKeptEntryId ?? "",

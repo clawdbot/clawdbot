@@ -509,7 +509,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     summary: clientResult.summary,
                     firstKeptEntryId: clientResult.firstKeptEntryId,
                   }
-                : {}),
+                : { kind: "server-endpoint" as const }),
               tokensBefore: serverResult
                 ? tokensBefore
                 : (observedTokenCount ?? clientResult!.tokensBefore),

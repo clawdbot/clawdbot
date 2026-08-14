@@ -2713,7 +2713,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.compactionKind).toBe("server-endpoint");
-    expect(result.result).toMatchObject({ tokensAfter: 200 });
+    expect(result.result).toMatchObject({ kind: "server-endpoint", tokensAfter: 200 });
     expect(result.result).not.toHaveProperty("summary");
   });
 

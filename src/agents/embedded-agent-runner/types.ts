@@ -271,6 +271,8 @@ export type EmbeddedAgentCompactResult = {
     rawError?: string;
   };
   result?: {
+    /** Identifies summaryless provider compaction in RPC and UI consumers. */
+    kind?: "server-endpoint";
     /** Server-endpoint compaction has no transcript summary or first-kept entry. */
     summary?: string;
     firstKeptEntryId?: string;
