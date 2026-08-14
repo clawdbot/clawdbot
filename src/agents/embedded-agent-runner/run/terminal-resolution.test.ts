@@ -5,6 +5,7 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { TRUNCATED_REPLY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import {
   copyAttemptDeliveryState,
@@ -574,5 +575,57 @@ describe("terminal resolution", () => {
 
     expect(resolved.action).toBe("complete");
     expect(activateInternalPrompt).not.toHaveBeenCalled();
+  });
+
+  it("delivers partial text with a truncation notice when the output budget ends", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "length",
+      content: [{ type: "text", text: "Here is the first half of the answer" }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: ["Here is the first half of the answer"],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        payloadsWithToolMedia: [{ text: "Here is the first half of the answer" }],
+      }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([
+      { text: "Here is the first half of the answer" },
+      { text: TRUNCATED_REPLY_NOTICE_TEXT },
+    ]);
+    expect(resolved.result.meta.error).toBeUndefined();
+    expect(resolved.result.meta.livenessState).toBe("working");
+  });
+
+  it("still reports an incomplete turn when the output budget ends with no text", async () => {
+    const assistant = emptyAssistant({ stopReason: "length" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({ attempt, attemptAssistant: assistant }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
+    expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
+    expect(resolved.result.meta.livenessState).toBe("abandoned");
   });
 });

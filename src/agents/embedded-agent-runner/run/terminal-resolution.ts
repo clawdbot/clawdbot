@@ -34,6 +34,7 @@ import {
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
   shouldRetryMissingAssistantTurn,
+  TRUNCATED_REPLY_NOTICE_TEXT,
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -584,10 +585,13 @@ function completeEmbeddedRun(
       : (input.attemptAssistant?.stopReason as string | undefined);
   // Existing visible payloads already avoid the silent-park symptom. The diagnostic
   // fills only an otherwise empty yielded turn and must not duplicate visible output.
+  // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)
   const terminalPayloads = input.emptyAssistantReplyIsSilent
     ? [{ text: SILENT_REPLY_TOKEN }]
     : input.payloadsForTerminalPath?.length
-      ? input.payloadsForTerminalPath
+      ? stopReason === "length"
+        ? [...input.payloadsForTerminalPath, { text: TRUNCATED_REPLY_NOTICE_TEXT }]
+        : input.payloadsForTerminalPath
       : input.attempt.yieldDetected && !yieldHasContinuation
         ? [{ text: YIELD_DIAGNOSTIC_TEXT }]
         : input.payloadsForTerminalPath;
