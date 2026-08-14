@@ -301,7 +301,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(compact).toHaveLength(25);
     expect(pullRequestCompact).toHaveLength(31);
     expect(githubCompact).toHaveLength(46);
-    expect(githubPullRequestCompact).toHaveLength(53);
+    expect(githubPullRequestCompact).toHaveLength(54);
     expect(githubPullRequestCompact.length).toBeLessThanOrEqual(64);
     expect(Math.max(...githubCompact.map((shard) => shard.predictedSeconds ?? Infinity))).toBe(209);
     expect(

@@ -2052,7 +2052,13 @@ function splitOversizedGithubCompactGroup(
     return [{ group, seconds }];
   }
 
-  const stripeCount = Math.ceil(seconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS);
+  // Hosted proof showed the old four-way tooling stripe remained imbalanced
+  // after a two-way split (126s versus 246s). Give that measured outlier a
+  // third stripe; the generic ceiling remains sufficient for other groups.
+  const stripeCount =
+    group.shard_name === "core-tooling-3"
+      ? 3
+      : Math.ceil(seconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS);
   const splitSeconds = Math.ceil(seconds / stripeCount);
   return createStripedBatches(includePatterns, stripeCount, stripeFileWeight).map(
     (patterns, index) => ({
