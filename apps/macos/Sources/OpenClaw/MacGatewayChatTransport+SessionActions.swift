@@ -118,6 +118,10 @@ extension MacGatewayChatTransport {
             ifCurrentServerLease: serverLease)
     }
 
+    func forkSession(parentKey: String) async throws -> String {
+        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
+    }
+
     func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
         let target = self.sessionTarget(for: parentKey)
         let request = OpenClawChatGatewayRequests.forkSession(

@@ -460,6 +460,10 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         _ = try await self.requestSessionMutation(request)
     }
 
+    func forkSession(parentKey: String) async throws -> String {
+        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
+    }
+
     func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
         let target = self.sessionTarget(for: parentKey)
         let childAgentID = target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey)

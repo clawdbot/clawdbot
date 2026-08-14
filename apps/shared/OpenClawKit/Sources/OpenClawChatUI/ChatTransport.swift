@@ -744,6 +744,7 @@ public protocol OpenClawChatTransport: Sendable {
         unread: Bool?) async throws
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease?
     func deleteSession(key: String) async throws
+    func forkSession(parentKey: String) async throws -> String
     func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String
     func rewindSession(sessionKey: String, entryId: String) async throws -> OpenClawChatRewindResponse
     func forkSessionAtMessage(
@@ -1091,11 +1092,15 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.delete not supported by this transport"])
     }
 
-    public func forkSession(parentKey _: String, fromLastCompleted _: Bool) async throws -> String {
+    public func forkSession(parentKey _: String) async throws -> String {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.create fork not supported by this transport"])
+    }
+
+    public func forkSession(parentKey: String, fromLastCompleted _: Bool) async throws -> String {
+        try await self.forkSession(parentKey: parentKey)
     }
 
     public func rewindSession(

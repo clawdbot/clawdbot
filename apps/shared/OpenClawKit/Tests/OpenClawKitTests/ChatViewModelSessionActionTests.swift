@@ -25,6 +25,23 @@ private func sessionActionOutboxCommand(
         lastError: nil)
 }
 
+private actor LegacyForkTransportState {
+    var parentKeys: [String] = []
+
+    func record(_ parentKey: String) {
+        self.parentKeys.append(parentKey)
+    }
+}
+
+private final class LegacyForkTransport: @unchecked Sendable, OpenClawChatTransport {
+    let state = LegacyForkTransportState()
+
+    func forkSession(parentKey: String) async throws -> String {
+        await self.state.record(parentKey)
+        return "legacy-child"
+    }
+}
+
 private actor SessionActionTransportState {
     var forkedParentKeys: [String] = []
     var forkedFromLastCompleted: [Bool] = []
@@ -1128,6 +1145,18 @@ struct ChatViewModelSessionActionTests {
         await viewModel.forkSession(key: "main")
 
         #expect(await transport.stableForkFlags() == [true])
+    }
+
+    @Test func `boundary-aware fork remains compatible with legacy transports`() async throws {
+        let legacy = LegacyForkTransport()
+        let transport: any OpenClawChatTransport = legacy
+
+        let childKey = try await transport.forkSession(
+            parentKey: "main",
+            fromLastCompleted: true)
+
+        #expect(childKey == "legacy-child")
+        #expect(await legacy.state.parentKeys == ["main"])
     }
 
     @Test func `fork completion does not override newer navigation`() async {
