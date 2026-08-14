@@ -39,6 +39,23 @@ describe("extractBalancedJsonPrefix", () => {
 
     expect(fragment).toBeNull();
   });
+
+  it("still recovers a later valid object after an unterminated leading quote", () => {
+    // A lone, never-closed quote in arbitrary prose must not be treated as
+    // opening a skippable span: doing so would swallow the rest of the text
+    // (including the real JSON) instead of just the malformed prose.
+    const raw = 'banner "unterminated then {"a":1}';
+
+    const fragment = extractBalancedJsonPrefix(raw);
+
+    expect(fragment?.json).toBe('{"a":1}');
+  });
+
+  it("returns null when an unterminated quote leaves no delimiter behind", () => {
+    const fragment = extractBalancedJsonPrefix('banner "unterminated with no json at all');
+
+    expect(fragment).toBeNull();
+  });
 });
 
 describe("extractBalancedJsonFragments", () => {
