@@ -5207,7 +5207,8 @@ class NodeRuntime private constructor(
   suspend fun forkChatSession(
     parentKey: String,
     ownerAgentId: String? = null,
-  ): String? = chat.forkSession(parentKey, ownerAgentId)
+    fromLastCompleted: Boolean = false,
+  ): String? = chat.forkSession(parentKey, ownerAgentId, fromLastCompleted)
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chatSessionKey.value, entryId)
 

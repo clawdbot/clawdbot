@@ -351,7 +351,10 @@ public struct ChatSessionsSheet: View {
                     }
                 } label: {
                     self.actionLabel(
-                        LocalizedStringKey(String(localized: "Fork")),
+                        LocalizedStringKey(
+                            session.hasActiveRun == true
+                                ? String(localized: "Fork from last completed message")
+                                : String(localized: "Fork")),
                         systemImage: "arrow.triangle.branch")
                 }
                 Button {

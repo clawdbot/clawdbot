@@ -271,7 +271,11 @@ struct ChatSessionSidebar: View {
                     fromLastCompleted: session.hasActiveRun == true)
             }
         } label: {
-            self.actionLabel(String(localized: "Fork"), systemImage: "arrow.triangle.branch")
+            self.actionLabel(
+                session.hasActiveRun == true
+                    ? String(localized: "Fork from last completed message")
+                    : String(localized: "Fork"),
+                systemImage: "arrow.triangle.branch")
         }
         Button {
             self.viewModel.setSessionUnread(key: session.key, unread: session.unread != true)
