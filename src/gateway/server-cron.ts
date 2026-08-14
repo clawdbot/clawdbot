@@ -10,6 +10,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
   tryGetLegacyDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
@@ -372,18 +373,23 @@ export function buildGatewayCronService(params: {
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
 
-  // Explicit agent rosters do not have a legacy default owner. Cron still
-  // needs a concrete owner for jobs and session reaping, so prefer the
-  // configured system agent and fall back to the compatibility session-store
-  // owner used by the rest of the Gateway.
-  const resolveCronDefaultAgentId = (cfg: OpenClawConfig) =>
-    normalizeAgentId(
-      cfg.agents?.defaults?.systemAgent?.agentId?.trim() ??
-        resolveSessionStoreCompatibilityAgentId(cfg),
-    );
-
   const hasConfiguredAgent = (cfg: OpenClawConfig, agentId: string) =>
     Boolean(findAgentEntry(cfg, agentId));
+
+  // Explicit agent rosters do not have a legacy default owner. Cron still
+  // needs a concrete owner when one is configured, so prefer the configured
+  // system agent and fall back only to an active legacy owner. The session
+  // store owner is upgrade metadata and may outlive the active roster.
+  const resolveCronDefaultAgentId = (cfg: OpenClawConfig) => {
+    const systemAgentId = cfg.agents?.defaults?.systemAgent?.agentId?.trim();
+    if (systemAgentId) {
+      const normalizedSystemAgentId = normalizeAgentId(systemAgentId);
+      if (hasConfiguredAgent(cfg, normalizedSystemAgentId)) {
+        return normalizedSystemAgentId;
+      }
+    }
+    return tryResolveLegacyCompatibilityAgentId(cfg);
+  };
 
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = getRuntimeConfig();

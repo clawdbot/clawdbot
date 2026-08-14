@@ -459,6 +459,30 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("does not use a retired session-store owner for an explicit roster", () => {
+    const cfg = {
+      ...createCronConfig("server-cron-retired-session-store-owner"),
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, worker: {} },
+        defaults: { sessionStore: { agentId: "retired-ops" } },
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      expect(state.cron.getDefaultAgentId()).toBeUndefined();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("passes the persisted payload tool cap to trigger evaluation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
