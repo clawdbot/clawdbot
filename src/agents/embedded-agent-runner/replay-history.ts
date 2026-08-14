@@ -45,6 +45,7 @@ import {
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
+import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -69,7 +70,6 @@ import {
   dropThinkingBlocks,
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
-  stripStaleThinkingSignaturesForCompactionReplay,
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";

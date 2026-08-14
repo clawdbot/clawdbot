@@ -470,6 +470,7 @@ describe("refreshChat", () => {
     );
     expect(SLASH_COMMANDS.some((command) => command.name === "startup-gap-command")).toBe(true);
     expect(host.request).toHaveBeenCalledWith("models.list", {
+      agentId: "main",
       view: "configured",
       preparedOnly: true,
     });

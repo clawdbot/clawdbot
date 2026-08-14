@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 import type { NodeWorkerLaunchInput } from "../worker/node-supervisor-protocol.js";
-import { resolveNodeWorkerBuild, type NodeWorkerInstallation } from "./node-worker-build.js";
+import type { NodeWorkerInstallation } from "./node-worker-build.js";
 
 /** Resolves an explicitly selected worker install without crossing local/bundle trust modes. */
 export async function resolveNodeWorkerEntry(params: {
@@ -17,12 +17,7 @@ export async function resolveNodeWorkerEntry(params: {
     if (!installation || installation.build.bundleHash !== params.expectedBundleHash) {
       throw new Error("node worker local install does not match its advertised build");
     }
-    const current = await resolveNodeWorkerBuild({
-      packageRoot: installation.packageRoot,
-      openclawVersion: installation.build.openclawVersion,
-      protocolFeatures: installation.build.protocolFeatures,
-    });
-    if (current.bundleHash !== installation.build.bundleHash) {
+    if (!(await installation.revalidateBuild())) {
       throw new Error("node worker local install changed after its build was advertised");
     }
     const root = fs.realpathSync.native(installation.packageRoot);

@@ -50,6 +50,13 @@ function createMaintenanceTimerDeps() {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
+    runDeliveryFailureSweep: vi.fn(async () => ({
+      scanned: 0,
+      compacted: 0,
+      deleted: 0,
+      legacyUnknown: 0,
+      errors: 0,
+    })),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
@@ -226,15 +233,28 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs queue media cleanup at startup and hourly", async () => {
+  it("finishes the delivery failure sweep before queue media cleanup at startup and hourly", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
+    let finishFirstSweep = () => {};
+    deps.runDeliveryFailureSweep.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirstSweep = () =>
+            resolve({ scanned: 400, compacted: 200, deleted: 100, legacyUnknown: 0, errors: 0 });
+        }),
+    );
     const timers = startGatewayMaintenanceTimers(deps);
 
     await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDeliveryFailureSweep).toHaveBeenCalledTimes(1);
+    expect(deps.runDeliveryQueueMediaGc).not.toHaveBeenCalled();
+    finishFirstSweep();
+    await vi.advanceTimersByTimeAsync(0);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(deps.runDeliveryFailureSweep).toHaveBeenCalledTimes(2);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);

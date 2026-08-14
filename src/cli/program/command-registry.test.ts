@@ -107,6 +107,7 @@ describe("command-registry", () => {
     expect(names).toContain("mcp");
     expect(names).toContain("sessions");
     expect(names).toContain("tasks");
+    expect(names).toContain("delivery");
     expect(names).toContain("agent");
     expect(names).not.toContain("setup");
     expect(names).not.toContain("status");

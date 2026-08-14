@@ -1131,6 +1131,11 @@ describe("plugin sdk alias helpers", () => {
         installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
         packageName: "@openclaw/ollama",
       });
+    const { packageRoot: installedLlamaRoot, pluginEntry: installedLlamaEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/llama-cpp-provider",
+      });
 
     for (const owner of owners.filter(({ resolution }) => resolution === undefined)) {
       const sourceSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
@@ -1172,6 +1177,16 @@ describe("plugin sdk alias helpers", () => {
         ),
       ),
     );
+    const installedLlamaAliases = withCwd(installedLlamaRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          installedLlamaEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
 
     expect(privateQaOtherSubpaths).toEqual(["core"]);
     for (const owner of ownersWithAliases) {
@@ -1182,6 +1197,9 @@ describe("plugin sdk alias helpers", () => {
     expect(otherAliases[ssrfInternalSpecifier]).toBeUndefined();
     expect(privateQaOtherAliases[ssrfInternalSpecifier]).toBeUndefined();
     expect(installedAliases[ssrfInternalSpecifier]).toBeUndefined();
+    expect(fs.realpathSync(installedLlamaAliases[ssrfInternalSpecifier] ?? "")).toBe(
+      fs.realpathSync(distSsrFInternalPath),
+    );
 
     const createJiti = await getCreateJiti();
     const sourceLoaderBaseUrl = pathToFileURL(

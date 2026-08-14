@@ -182,3 +182,62 @@ describe("Responses server compaction host/transport parity", () => {
     expect(hostThreshold).toBe(testCase.expectedThreshold);
   });
 });
+
+describe("Anthropic server compaction host threshold", () => {
+  const modelId = "claude-sonnet-4-6";
+
+  it.each([
+    {
+      name: "keeps Anthropic disabled by default",
+      params: {},
+      contextWindowTokens: 200_000,
+      expected: undefined,
+    },
+    {
+      name: "uses 70 percent of the Anthropic context window",
+      params: { anthropicServerCompaction: true },
+      contextWindowTokens: 200_000,
+      expected: 140_000,
+    },
+    {
+      name: "uses the Anthropic minimum for small windows",
+      params: { anthropicServerCompaction: true },
+      contextWindowTokens: 32_000,
+      expected: 50_000,
+    },
+    {
+      name: "clamps configured Anthropic thresholds",
+      params: { anthropicServerCompaction: true, anthropicCompactThreshold: 42_000 },
+      contextWindowTokens: 200_000,
+      expected: 50_000,
+    },
+    {
+      name: "uses configured Anthropic thresholds",
+      params: { anthropicServerCompaction: true, anthropicCompactThreshold: 80_000 },
+      contextWindowTokens: 200_000,
+      expected: 80_000,
+    },
+  ])("$name", ({ params, contextWindowTokens, expected }) => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com/v1",
+            contextWindow: contextWindowTokens,
+            models: [],
+          },
+        },
+      },
+      agents: { defaults: { params } },
+    };
+
+    expect(
+      resolveResponsesServerCompactionThreshold({
+        cfg,
+        provider: "anthropic",
+        modelId,
+      }),
+    ).toBe(expected);
+  });
+});

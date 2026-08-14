@@ -346,19 +346,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
     }
   }
-  if (
-    isInboundUserMessage &&
-    isPlainTextAnswer &&
-    (await claimPendingAgentQuestionAnswer({
-      sessionKey,
-      text,
-      persist: options.userTurnTranscriptRecorder
-        ? async () => {
-            await options.userTurnTranscriptRecorder?.persistApproved();
-          }
-        : undefined,
-    }))
-  ) {
+  if (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey)) {
     options?.onQueueAccepted?.(true);
     return;
   }
@@ -401,4 +389,24 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     }
     throw error;
   }
+}
+
+export async function claimEmbeddedPendingUserInputAnswer(
+  text: string,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+  sessionKey?: string,
+): Promise<boolean> {
+  if (options?.isInboundUserMessage !== true || options.images?.length) {
+    return false;
+  }
+  const claimed = await claimPendingAgentQuestionAnswer({
+    sessionKey,
+    text,
+    persist: options.userTurnTranscriptRecorder
+      ? async () => {
+          await options.userTurnTranscriptRecorder?.persistApproved();
+        }
+      : undefined,
+  });
+  return claimed;
 }

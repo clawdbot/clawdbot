@@ -250,6 +250,8 @@ const threadBindingSchema = z
     configuredMcpOwnershipVersion: z.literal(1).optional().catch(undefined),
     ringZeroConfigFingerprint: optionalStringSchema,
     ringZeroClientInstanceId: optionalStringSchema,
+    /** Durable fact preventing a later unrestricted turn from widening this thread. */
+    nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,

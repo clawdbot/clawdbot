@@ -10,6 +10,11 @@ import {
 } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
+import {
+  recordDeliveryFailureMaintenanceError,
+  sweepDeliveryFailureMaintenance,
+  type DeliveryFailureMaintenanceResult,
+} from "../infra/delivery-queue-failure-maintenance.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
@@ -91,6 +96,7 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
+  runDeliveryFailureSweep?: () => Promise<DeliveryFailureMaintenanceResult>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
   enableSkillCurator?: boolean;
   runSkillCollectionReconcile?: () => Promise<unknown>;
@@ -169,8 +175,21 @@ export function startGatewayMaintenanceTimers(params: {
   // the general media TTL sweep is disabled.
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
+  const maintainDeliveryFailures =
+    params.runDeliveryFailureSweep ?? (() => sweepDeliveryFailureMaintenance());
   let deliveryQueueMediaGcStartedAtMs = 0;
   const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
+    try {
+      const result = await maintainDeliveryFailures();
+      if (result.errors > 0) {
+        params.logHealth.error(
+          `delivery failure maintenance completed with ${result.errors} row error${result.errors === 1 ? "" : "s"}`,
+        );
+      }
+    } catch (error) {
+      recordDeliveryFailureMaintenanceError();
+      params.logHealth.error(`delivery failure maintenance failed: ${formatError(error)}`);
+    }
     try {
       await runDeliveryQueueMediaGc();
     } catch (error) {

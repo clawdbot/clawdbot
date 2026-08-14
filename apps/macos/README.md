@@ -17,8 +17,11 @@ scripts/restart-mac.sh --background-only # keep services running without automat
 
 `--background-only` suppresses first-run onboarding, update and CLI prompts, and
 the `--chat`/`--dashboard` auto-open helpers. Pairing, control-channel, and Mac
-node services still start. Combine it with `--attach-only` when an external
-process owns the local Gateway.
+node services still start. It also keeps GUI-owned onboarding and saved Gateway
+profile Keychain state cold, so a signer or ACL transition cannot raise a
+SecurityAgent prompt during unattended work. The primary Gateway route still
+comes from the normal environment/config endpoint. Combine it with
+`--attach-only` when an external process owns the local Gateway.
 
 ## App profiles
 

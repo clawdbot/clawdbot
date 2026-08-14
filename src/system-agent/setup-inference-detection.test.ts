@@ -309,4 +309,43 @@ describe("isolated setup inference detection", () => {
     expect(second).toEqual(detected);
     expect(Atomics.load(new Int32Array(started), 0)).toBe(1);
   });
+
+  it("serializes different owners and reruns detection for the second owner", async () => {
+    const { detectSetupInferenceIsolated } = await loadDetectionModule();
+    const started = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const firstDetection = detectedCodex();
+    const secondDetection = {
+      ...emptyDetection(),
+      workspace: "/tmp/research",
+    };
+
+    const first = detectSetupInferenceIsolated({
+      agentId: "main",
+      workerUrl: blockingWorkerUrl,
+      workerData: {
+        blockMs: 100,
+        detection: firstDetection,
+        partialDetection: emptyDetection(),
+        started,
+      },
+      timeoutMs: 5_000,
+      fallbackEnv: {},
+    });
+    const second = detectSetupInferenceIsolated({
+      agentId: "research",
+      workerUrl: blockingWorkerUrl,
+      workerData: {
+        blockMs: 0,
+        detection: secondDetection,
+        partialDetection: emptyDetection(),
+        started,
+      },
+      timeoutMs: 5_000,
+      fallbackEnv: {},
+    });
+
+    await expect(first).resolves.toEqual(firstDetection);
+    await expect(second).resolves.toEqual(secondDetection);
+    expect(Atomics.load(new Int32Array(started), 0)).toBe(2);
+  });
 });

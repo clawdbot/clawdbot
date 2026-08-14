@@ -15,6 +15,25 @@ describe("resolveMemoryHostAgentWorkspaceDir", () => {
       }),
     ).toBe("/home/peter/.openclaw-work/workspace");
   });
+
+  it("keeps the default agent workspace inside an overridden state directory", () => {
+    expect(
+      resolveMemoryHostAgentWorkspaceDir({}, "main", {
+        HOME: "/home/peter",
+        OPENCLAW_STATE_DIR: "/srv/openclaw-scratch",
+      }),
+    ).toBe("/srv/openclaw-scratch/workspace");
+  });
+
+  it("prefers an explicit workspace override to the state directory", () => {
+    expect(
+      resolveMemoryHostAgentWorkspaceDir({}, "main", {
+        HOME: "/home/peter",
+        OPENCLAW_STATE_DIR: "/srv/openclaw-scratch",
+        OPENCLAW_WORKSPACE_DIR: "/srv/openclaw-workspace",
+      }),
+    ).toBe("/srv/openclaw-workspace");
+  });
 });
 
 describe("resolveRememberAcrossConversations", () => {
