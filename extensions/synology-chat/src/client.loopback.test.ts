@@ -4,6 +4,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { synologyChatPlugin } from "./channel.js";
 import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 
+const { hostedCapabilityUrl } = vi.hoisted(() => ({
+  hostedCapabilityUrl:
+    "https://gateway.example.com/webhook/synology?__openclaw_synology_media_token_aaaaaaaaaaaaaaaaaaaaaaaa=secret",
+}));
+vi.mock("./outbound-media.js", () => ({
+  prepareSynologyHostedMedia: vi.fn(async () => ({
+    url: hostedCapabilityUrl,
+    cleanup: vi.fn(async () => undefined),
+  })),
+  resolveSynologyHostedMediaRoute: vi.fn(),
+}));
+
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
 describe("Synology Chat client loopback", () => {
@@ -201,9 +213,9 @@ describe("Synology Chat client loopback", () => {
 
     expect(receivedPayloads).toEqual([
       { text: "native outbound text", user_ids: [42] },
-      { file_url: mediaUrl, user_ids: [42] },
+      { file_url: hostedCapabilityUrl, user_ids: [42] },
       { text: "durable adapter text", user_ids: [42] },
-      { file_url: mediaUrl, user_ids: [42] },
+      { file_url: hostedCapabilityUrl, user_ids: [42] },
     ]);
     expect(durableText).toBeDefined();
     expect(durableMedia).toBeDefined();
@@ -293,37 +305,8 @@ describe("Synology Chat client loopback", () => {
         mediaUrl: "https://example.com/synology-receipt-proof.png",
         to: "42",
       }),
-    ).rejects.toThrow("Failed to send media to Synology Chat");
+    ).rejects.toThrow("rejected the attachment request");
     expect(rejectedRequests).toBe(2);
-  });
-
-  it("rejects private file URLs before contacting the authenticated webhook", async () => {
-    let webhookRequests = 0;
-    const port = await listenLoopback((_req, res) => {
-      webhookRequests += 1;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ success: true }));
-    });
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          enabled: true,
-          token: "synology-loopback-proof",
-          incomingUrl:
-            `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-            "api=SYNO.Chat.External&method=chatbot&version=2&token=synology-loopback-proof",
-        },
-      },
-    };
-
-    await expect(
-      synologyChatPlugin.outbound.sendMedia({
-        cfg,
-        mediaUrl: `http://127.0.0.1:${port}/private-proof.png`,
-        to: "42",
-      }),
-    ).rejects.toThrow("Failed to send media to Synology Chat");
-    expect(webhookRequests).toBe(0);
   });
 
   it("aborts a streamed overflow and returns the stale cached identity", async () => {

@@ -13,7 +13,7 @@ import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { runStatusJsonCommand } from "./status-json-command.ts";
+import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
   loadStatusProviderUsageModule,
@@ -103,12 +103,14 @@ export async function statusCommand(
     json?: boolean;
     deep?: boolean;
     usage?: boolean;
+    agent?: string;
     timeoutMs?: number;
     verbose?: boolean;
     all?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
+  assertStatusUsageAgentScope(opts);
   if (opts.all && !opts.json) {
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
     await statusAllModuleLoader
@@ -179,6 +181,7 @@ export async function statusCommand(
     config: scan.cfg,
     sourceConfig: scan.sourceConfig,
     timeoutMs: opts.timeoutMs,
+    ...(opts.agent ? { agentId: opts.agent } : {}),
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,

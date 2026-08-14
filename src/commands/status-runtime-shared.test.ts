@@ -362,6 +362,45 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("resolves usage auth from an explicitly selected agent", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: {
+          alpha: { agentDir: "/tmp/alpha-agent" },
+          beta: { agentDir: "/tmp/beta-agent" },
+        },
+      },
+    };
+
+    await resolveStatusUsageSummary({
+      timeoutMs: 2345,
+      config,
+      agentId: "beta",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      timeoutMs: 2345,
+      config,
+      agentDir: "/tmp/beta-agent",
+    });
+  });
+
+  it("rejects an unknown explicit usage owner", async () => {
+    await expect(
+      resolveStatusUsageSummary({
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { alpha: {}, beta: {} },
+          },
+        },
+        agentId: "ghost",
+      }),
+    ).rejects.toThrow('Unknown agent id "ghost"');
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
   it("resolves gateway health with the shared probe call shape", async () => {
     await resolveStatusGatewayHealth({
       config: { gateway: {} },
@@ -459,6 +498,25 @@ describe("status-runtime-shared", () => {
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
       plugins: [{ id: "telegram" }],
+    });
+  });
+
+  it("threads the selected agent into usage resolution", async () => {
+    const resolveUsage = vi.fn(async () => ({ updatedAt: 1, providers: [] }));
+
+    await resolveStatusRuntimeSnapshot({
+      config: { gateway: {} },
+      sourceConfig: { gateway: {} },
+      agentId: "beta",
+      usage: true,
+      gatewayReachable: false,
+      resolveUsage,
+    });
+
+    expect(resolveUsage).toHaveBeenCalledWith({
+      config: { gateway: {} },
+      agentId: "beta",
+      timeoutMs: undefined,
     });
   });
 
