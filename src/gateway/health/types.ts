@@ -1,12 +1,14 @@
 // Shared summary types returned by gateway health and rendered by the CLI.
+import type { Snapshot } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+
+type ProtocolHealth = Snapshot["health"];
+type ProtocolPlugin = NonNullable<ProtocolHealth["plugins"]>;
+type UnavailablePlugin = NonNullable<ProtocolPlugin["unavailable"]>[number];
+
 /** Health snapshot for one configured channel account. */
-export type ChannelAccountHealthSummary = {
-  accountId: string;
-  configured?: boolean;
-  linked?: boolean;
+export type ChannelAccountHealthSummary = ChannelAccountSnapshot & {
   authAgeMs?: number | null;
-  probe?: unknown;
-  lastProbeAt?: number | null;
   [key: string]: unknown;
 };
 
@@ -15,98 +17,31 @@ export type ChannelHealthSummary = ChannelAccountHealthSummary & {
   accounts?: Record<string, ChannelAccountHealthSummary>;
 };
 
-/** Agent heartbeat and session-store health metadata. */
-export type AgentHealthSummary = {
-  agentId: string;
-  name?: string;
-  isDefault: boolean;
-  heartbeat: import("../../infra/heartbeat-summary.js").HeartbeatSummary;
-  sessions: HealthSummary["sessions"];
-};
+export type AgentHealthSummary = NonNullable<ProtocolHealth["agents"]>[number];
 
-/** Plugin load error details safe for the health payload. */
-export type PluginHealthErrorSummary = {
-  id: string;
-  origin: string;
-  activated: boolean;
-  activationSource?: string;
-  activationReason?: string;
-  failurePhase?: string;
-  error: string;
-};
+export type PluginHealthErrorSummary = ProtocolPlugin["errors"][number];
 
 /** Plugin registry health summary. */
-export type PluginHealthSummary = {
-  loaded: string[];
-  errors: PluginHealthErrorSummary[];
-  unavailable?: Array<{
-    id: string;
-    state: "configured-unavailable";
-    diagnostic: {
-      kind: "plugin-verification";
-      reason: import("../../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
-      detail: string;
-    };
-  }>;
-};
-
-/** Context engine quarantine entry included in health output. */
-type ContextEngineHealthQuarantineSummary = {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  reason: string;
-  failedAt: number;
-};
-
-/** Context engine health summary. */
-export type ContextEngineHealthSummary = {
-  quarantined: ContextEngineHealthQuarantineSummary[];
-};
-
-/** Dead-lettered delivery queue entries surfaced in health output. */
-export type DeliveryQueueHealthSummary = {
-  failed: Array<{
-    queueName: string;
-    count: number;
-    oldestFailedAt?: number;
-  }>;
-  ingressFailed?: Array<{
-    channelId: string;
-    accountId: string;
-    count: number;
-    oldestFailedAt?: number;
-  }>;
-};
-
-/** Config hot-reload watcher status, present only when a reloader is running. */
-type ConfigReloadHealthSummary = {
-  hotReloadStatus: import("../config-reload-status.types.js").GatewayHotReloadStatus;
+export type PluginHealthSummary = Omit<ProtocolPlugin, "unavailable"> & {
+  unavailable?: Array<
+    Omit<UnavailablePlugin, "diagnostic"> & {
+      diagnostic: Omit<UnavailablePlugin["diagnostic"], "reason"> & {
+        reason: import("../../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      };
+    }
+  >;
 };
 
 /** Full gateway health payload consumed by `openclaw health`. */
-export type HealthSummary = {
+export type HealthSummary = ProtocolHealth & {
   ok: true;
   ts: number;
   durationMs: number;
-  eventLoop?: import("../server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
-  contextEngines?: ContextEngineHealthSummary;
-  deliveryQueues?: DeliveryQueueHealthSummary;
-  configReload?: ConfigReloadHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
   channelLabels: Record<string, string>;
   heartbeatSeconds: number;
-  defaultAgentId?: string;
   agents: AgentHealthSummary[];
-  sessions: {
-    path: string;
-    count: number;
-    recent: Array<{
-      key: string;
-      updatedAt: number | null;
-      age: number | null;
-    }>;
-  };
+  sessions: NonNullable<ProtocolHealth["sessions"]>;
 };

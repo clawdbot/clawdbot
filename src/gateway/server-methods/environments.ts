@@ -88,6 +88,12 @@ function summarizeNodeEnvironment(
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.connected === true && node.sessionHost === true,
+    ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
+    ...(node.lastDisconnectedAtMs !== undefined
+      ? { lastDisconnectedAtMs: node.lastDisconnectedAtMs }
+      : {}),
+    ...(node.lastSeenAtMs !== undefined ? { lastSeenAtMs: node.lastSeenAtMs } : {}),
+    ...(node.lastSeenReason ? { lastSeenReason: node.lastSeenReason } : {}),
     trust: "persistent",
     ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),

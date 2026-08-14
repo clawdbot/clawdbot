@@ -13,7 +13,7 @@ type Step = {
   uses?: string;
   with?: Record<string, string>;
 };
-type Job = { environment?: string; steps?: Step[] };
+type Job = { environment?: string; "runs-on"?: string; steps?: Step[] };
 type Workflow = {
   on?: {
     workflow_dispatch?: {
@@ -27,6 +27,12 @@ type Workflow = {
         };
         plugin_npm_run_id?: { required?: boolean; type?: string };
         release_candidate_branch?: { default?: string; required?: boolean; type?: string };
+        use_github_hosted_runners?: {
+          default?: boolean;
+          description?: string;
+          required?: boolean;
+          type?: string;
+        };
       };
     };
   };
@@ -75,6 +81,19 @@ describe("minimal npm extended-stable workflow", () => {
     ]) {
       expect(raw).not.toContain(forbidden);
     }
+  });
+
+  it("allows an explicit default-off GitHub-hosted preflight runner", () => {
+    const parsed = workflow();
+    expect(parsed.on?.workflow_dispatch?.inputs?.use_github_hosted_runners).toEqual({
+      default: false,
+      description: "Use GitHub-hosted Ubuntu for npm preflight",
+      required: false,
+      type: "boolean",
+    });
+    expect(parsed.jobs?.preflight_openclaw_npm?.["runs-on"]).toBe(
+      "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
+    );
   });
 
   it("binds intentional Plugin SDK release changes to the reported digest", () => {

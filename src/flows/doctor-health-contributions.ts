@@ -64,7 +64,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-auth-oauth-sidecar.js");
   const { maybeMigrateLegacyPluginModelCatalogs } =
     await import("../commands/doctor-plugin-model-catalog.js");
-  const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =
+  const { noteAuthProfileHealth, noteLegacyCodexProviderOverride, noteSharedAuthStoreStatus } =
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await loadNoteModule();
@@ -98,6 +98,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
   });
   noteLegacyCodexProviderOverride(ctx.cfg);
+  noteSharedAuthStoreStatus(ctx.env);
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
   if (ctx.gatewayDetails.remoteFallbackNote) {
     note(ctx.gatewayDetails.remoteFallbackNote, "Gateway");
@@ -437,12 +438,17 @@ async function runDoctorHealthContributionList(
     try {
       if (!runWithPluginMetadataSnapshot) {
         await contribution.run(ctx);
-        continue;
+      } else {
+        const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+        await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
+          contribution.run(ctx),
+        );
       }
-      const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-      await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
-        contribution.run(ctx),
-      );
+      if (ctx.configWriteDeferredByCronOwnership === true) {
+        // Later repairs consume the candidate config. Stop before they persist state under an
+        // ownership topology that the config writer deliberately left non-durable.
+        return;
+      }
     } catch (error) {
       await (contribution.required ? Promise.reject(error as Error) : Promise.resolve());
       const { note } = await loadNoteModule();

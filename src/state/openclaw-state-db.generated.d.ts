@@ -478,6 +478,21 @@ export interface CronJobs {
   wake_mode: string;
 }
 
+export interface CronRunReceipts {
+  agent_id: string;
+  config_revision: string;
+  error_text: string | null;
+  finished_at_ms: number | null;
+  job_id: string;
+  owner_pid: number;
+  owner_start_time: number | null;
+  receipt_id: string;
+  request_run_id: string | null;
+  started_at_ms: number;
+  status: string;
+  store_key: string;
+}
+
 export interface CronStoreEpochs {
   store_epoch: Generated<number>;
   store_key: string;
@@ -1709,6 +1724,7 @@ export interface DB {
   cron_job_runtime_authorities: CronJobRuntimeAuthorities;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
+  cron_run_receipts: CronRunReceipts;
   cron_store_epochs: CronStoreEpochs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;

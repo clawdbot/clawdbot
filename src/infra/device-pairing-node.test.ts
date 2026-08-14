@@ -9,6 +9,7 @@ import {
   finalizeNodePairingCleanupClaim,
   listNodePairing,
   recordPairedNodeConnection,
+  recordPairedNodeDisconnection,
   releaseNodePairingCleanupClaim,
   renamePairedNode,
   requestNodePairing,
@@ -670,6 +671,81 @@ describe("node surface approvals", () => {
         recorded: false,
       });
       expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(3_000);
+    });
+  });
+
+  test("records and clears generation-bound node disconnect history", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const generation = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
+      if (!generation) {
+        throw new Error("expected node pairing generation");
+      }
+
+      await expect(
+        recordPairedNodeConnection("node-1", 1_000, baseDir, generation),
+      ).resolves.toEqual({ recorded: true, firstConnection: true });
+      await expect(
+        recordPairedNodeDisconnection({
+          nodeId: "node-1",
+          connectedAtMs: 1_000,
+          disconnectedAtMs: 1_500,
+          expectedPairingGeneration: generation,
+          baseDir,
+        }),
+      ).resolves.toEqual({ recorded: true });
+      expect(await findPairedNode("node-1", baseDir)).toMatchObject({
+        lastConnectedAtMs: 1_000,
+        lastDisconnectedAtMs: 1_500,
+      });
+
+      await expect(
+        recordPairedNodeConnection("node-1", 2_000, baseDir, generation),
+      ).resolves.toEqual({ recorded: true, firstConnection: false });
+      expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+      await expect(
+        recordPairedNodeDisconnection({
+          nodeId: "node-1",
+          connectedAtMs: 1_000,
+          disconnectedAtMs: 2_500,
+          expectedPairingGeneration: generation,
+          baseDir,
+        }),
+      ).resolves.toEqual({ recorded: false });
+      expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+    });
+  });
+
+  test("rejects disconnect history from a retired pairing generation", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const previousGeneration = resolveNodePairingGeneration(
+        await getPairedDevice("node-1", baseDir),
+      );
+      if (!previousGeneration) {
+        throw new Error("expected initial node pairing generation");
+      }
+      await recordPairedNodeConnection("node-1", 1_000, baseDir, previousGeneration);
+      const pending = await requestNodePairing(
+        { nodeId: "node-1", platform: "darwin", commands: ["system.run", "system.which"] },
+        baseDir,
+      );
+      await approveNodePairing(
+        pending.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      await expect(
+        recordPairedNodeDisconnection({
+          nodeId: "node-1",
+          connectedAtMs: 1_000,
+          disconnectedAtMs: 1_500,
+          expectedPairingGeneration: previousGeneration,
+          baseDir,
+        }),
+      ).resolves.toEqual({ recorded: false });
+      expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
     });
   });
 

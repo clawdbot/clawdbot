@@ -113,7 +113,7 @@ suite.define(() => {
         const showFiles = page.getByRole("button", { name: "Show session files", exact: true });
         await showFiles.waitFor();
         await showFiles.click();
-        const toggle = page.getByRole("button", { name: "Toggle browser panel", exact: true });
+        const toggle = page.locator(".chat-browser-panel-toggle");
         await toggle.waitFor();
         await toggle.click();
 

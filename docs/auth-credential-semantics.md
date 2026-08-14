@@ -49,7 +49,7 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 
 ## Agent copy portability
 
-Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the default/main agent store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`).
+Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.
 
 Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 
@@ -57,7 +57,7 @@ Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 - `oauth` profiles are not portable by default because refresh tokens can be single-use or rotation-sensitive.
 - Provider-owned OAuth flows may opt in with `copyToAgents: true` only when copying refresh material across agents is known safe; the opt-in only applies when the profile carries inline access/refresh material.
 
-Non-portable profiles remain available through read-through inheritance unless the target agent signs in separately and creates its own local profile.
+Non-portable profiles remain available through the shared read-through base unless the target agent signs in separately and creates its own local profile.
 
 ## Config-only auth routes
 
