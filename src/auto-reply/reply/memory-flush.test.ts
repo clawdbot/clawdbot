@@ -3,7 +3,7 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
 import { describe, expect, it } from "vitest";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfigInput } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { modelKey } from "../../shared/model-key.js";
 import { resolveResponsesServerCompactionThreshold } from "./memory-flush.js";
@@ -35,7 +35,7 @@ function buildHostConfig(params: {
   compat?: ModelDefinitionConfig["compat"];
   extraParams?: Record<string, unknown>;
 }): OpenClawConfig {
-  const providerConfig: ModelProviderConfig = {
+  const providerConfig: ModelProviderConfigInput = {
     api: params.api,
     baseUrl: params.baseUrl,
     models: [buildModelConfig({ api: params.api, baseUrl: params.baseUrl, compat: params.compat })],
