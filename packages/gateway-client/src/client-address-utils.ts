@@ -3,19 +3,17 @@ import {
   parseCanonicalIpAddress,
   type ParsedIpAddress,
 } from "@openclaw/net-policy/ip";
-import { isSensitiveUrlQueryParamNameForDiagnostics } from "@openclaw/net-policy/redact-sensitive-url";
-
 // This module feeds gateway error/log formatting, not user-visible URLs, so it
 // takes net-policy's diagnostic superset: over-redacting a log line is safe,
 // under-redacting one leaks a credential.
-export { isSensitiveUrlQueryParamNameForDiagnostics as isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
+import { isSensitiveUrlQueryParamNameForDiagnostics } from "@openclaw/net-policy/redact-sensitive-url";
 
 // `?`/`&` are the query boundaries, but a credential pair also starts a form
 // body, and a rejected HTTP upgrade body is appended to our error text after
 // `: `. Accepting a start-of-text or separator boundary is what keeps that first
 // pair from being the one that survives redaction; the same shape the host
 // logger already uses for form bodies (`src/logging/redact-patterns.ts`).
-const SENSITIVE_KEY_VALUE_PAIR_RE = /(^|[?&\s;,])([^=&\s;,]+)=([^&#\s"'<>)]*)/g;
+const SENSITIVE_KEY_VALUE_PAIR_RE = /(^|[?&\s;,])([^=&\s;,?#]+)=([^&#\s"'<>)]*)/g;
 
 /**
  * Masks the values of credential-named `key=value` pairs anywhere in diagnostic
