@@ -122,6 +122,22 @@ describe("compileMemoryWikiVault", () => {
     });
 
     await fs.writeFile(
+      path.join(rootDir, "sources", "page.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.page", title: "Page Source" },
+        body: "# Page Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "claim.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.claim", title: "Claim Source" },
+        body: "# Claim Source\n\n[Claim Sources](../concepts/claim-sources.md)\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
       path.join(rootDir, "concepts", "claim-sources.md"),
       renderWikiMarkdown({
         frontmatter: {
@@ -159,6 +175,14 @@ describe("compileMemoryWikiVault", () => {
     expect(claims.find((claim) => claim.id === "claim.page-fallback")?.sourceIds).toEqual([
       "source.page",
     ]);
+    const conceptPage = await fs.readFile(
+      path.join(rootDir, "concepts", "claim-sources.md"),
+      "utf8",
+    );
+    expect(conceptPage.match(/\[Claim Source\]\(\.\.\/sources\/claim\.md\)/g)).toHaveLength(1);
+    await expect(fs.readFile(path.join(rootDir, "sources", "claim.md"), "utf8")).resolves.toContain(
+      "[Claim Sources](../concepts/claim-sources.md)",
+    );
   });
 
   it("preserves source page bytes while rebuilding derived artifacts", async () => {

@@ -743,13 +743,13 @@ function sharedSourceFanout(
   page: WikiPageSummary,
   allPages: WikiPageSummary[],
 ): Map<string, number> {
-  const sourceIds = new Set(page.sourceIds);
+  const sourceIds = new Set(resolvePageSourceIds(page));
   const counts = new Map<string, number>();
   for (const candidate of allPages) {
     if (candidate.relativePath === page.relativePath) {
       continue;
     }
-    for (const sourceId of candidate.sourceIds) {
+    for (const sourceId of resolvePageSourceIds(candidate)) {
       if (!sourceIds.has(sourceId)) {
         continue;
       }
@@ -765,6 +765,7 @@ function buildRelatedBlockBody(params: {
   allPages: WikiPageSummary[];
 }): string {
   const candidatePages = params.allPages.filter((candidate) => candidate.kind !== "report");
+  const pageSourceIds = resolvePageSourceIds(params.page);
   const sourceFanout = sharedSourceFanout(params.page, candidatePages);
   const pagesById = new Map(
     candidatePages.flatMap((candidate) =>
@@ -772,7 +773,7 @@ function buildRelatedBlockBody(params: {
     ),
   );
   const sourcePages = uniquePages(
-    params.page.sourceIds.flatMap((sourceId) => {
+    pageSourceIds.flatMap((sourceId) => {
       const page = pagesById.get(sourceId);
       return page ? [page] : [];
     }),
@@ -783,7 +784,10 @@ function buildRelatedBlockBody(params: {
       if (candidate.relativePath === params.page.relativePath) {
         return false;
       }
-      if (candidate.sourceIds.includes(params.page.id ?? "")) {
+      if (sourcePages.some((sourcePage) => sourcePage.relativePath === candidate.relativePath)) {
+        return false;
+      }
+      if (resolvePageSourceIds(candidate).includes(params.page.id ?? "")) {
         return true;
       }
       return candidate.linkTargets.some((target) =>
@@ -806,12 +810,13 @@ function buildRelatedBlockBody(params: {
       if (backlinkPages.some((backlink) => backlink.relativePath === candidate.relativePath)) {
         return false;
       }
-      if (params.page.sourceIds.length === 0 || candidate.sourceIds.length === 0) {
+      const candidateSourceIds = resolvePageSourceIds(candidate);
+      if (pageSourceIds.length === 0 || candidateSourceIds.length === 0) {
         return false;
       }
-      return params.page.sourceIds.some(
+      return pageSourceIds.some(
         (sourceId) =>
-          candidate.sourceIds.includes(sourceId) &&
+          candidateSourceIds.includes(sourceId) &&
           (sourceFanout.get(sourceId) ?? 0) <= MAX_SHARED_SOURCE_FANOUT,
       );
     }),
@@ -1124,10 +1129,19 @@ function sortClaims(page: WikiPageSummary): WikiClaim[] {
   });
 }
 
+function resolveClaimEvidenceSourceIds(claim: WikiClaim): string[] {
+  return uniqueStrings(claim.evidence.flatMap((entry) => entry.sourceId?.trim() || []));
+}
+
+function resolvePageSourceIds(page: WikiPageSummary): string[] {
+  return uniqueStrings([
+    ...page.sourceIds,
+    ...page.claims.flatMap((claim) => resolveClaimEvidenceSourceIds(claim)),
+  ]);
+}
+
 function resolveClaimSourceIds(page: WikiPageSummary, claim: WikiClaim): string[] {
-  const evidenceSourceIds = uniqueStrings(
-    claim.evidence.flatMap((entry) => entry.sourceId?.trim() || []),
-  );
+  const evidenceSourceIds = resolveClaimEvidenceSourceIds(claim);
   return evidenceSourceIds.length > 0 ? evidenceSourceIds : page.sourceIds;
 }
 
