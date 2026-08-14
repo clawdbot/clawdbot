@@ -205,7 +205,7 @@ export function createTelegramInboundBuffers({
               ),
               receivedAtMs: first.receivedAtMs,
               ingressBuffer: "inbound-debounce",
-              inboundDebounceMessages: entries.map((entry) => entry.msg),
+              bufferedMessages: entries.map((entry) => entry.msg),
               ...promptContextBoundaryOptions(
                 latestPromptContextMinTimestampMs(
                   ...entries.map((entry) => entry.promptContextMinTimestampMs),
@@ -287,6 +287,7 @@ export function createTelegramInboundBuffers({
   const flushTextFragments = async (entry: TextFragmentEntry) => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
+      const bufferedMessages = entry.messages.map((bufferedMessage) => bufferedMessage.msg);
       const first = entry.messages[0];
       const last = entry.messages.at(-1);
       if (!first || !last) {
@@ -294,10 +295,7 @@ export function createTelegramInboundBuffers({
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
-      const combinedTextParts = joinTelegramTextParts(
-        entry.messages.map((bufferedMessage) => bufferedMessage.msg),
-        "",
-      );
+      const combinedTextParts = joinTelegramTextParts(bufferedMessages, "");
       const combinedText = combinedTextParts.text;
       if (!combinedText.trim()) {
         releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
@@ -317,11 +315,10 @@ export function createTelegramInboundBuffers({
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           messageIdOverride: String(last.msg.message_id),
-          ambientTranscriptBody: formatTelegramAmbientTranscriptBody(
-            entry.messages.map((bufferedMessage) => bufferedMessage.msg),
-          ),
+          ambientTranscriptBody: formatTelegramAmbientTranscriptBody(bufferedMessages),
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "text-fragment",
+          bufferedMessages,
           ...promptContextBoundaryOptions(
             entry.promptContextMinTimestampMs,
             entry.promptContextAmbientWatermark,
