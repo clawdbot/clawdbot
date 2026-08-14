@@ -143,6 +143,41 @@ describe("status-runtime-shared", () => {
     expect(usageCall.agentDir).toContain("main");
   });
 
+  it("uses the named system agent for agent-scoped usage credentials", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          main: { agentDir: "/tmp/status-main-agent" },
+          ops: { agentDir: "/tmp/status-ops-agent" },
+        },
+      },
+    };
+
+    await resolveStatusUsageSummary({ config });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      timeoutMs: undefined,
+      config,
+      agentDir: "/tmp/status-ops-agent",
+    });
+  });
+
+  it("requires a system owner for usage credentials in an explicit multi-agent roster", async () => {
+    await expect(
+      resolveStatusUsageSummary({
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, ops: {} },
+          },
+        },
+      }),
+    ).rejects.toThrow("Set agents.defaults.systemAgent.agentId");
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
   it("adds Codex synthetic usage for configured OpenAI Codex runtime routes without profiles", async () => {
     mocks.loadProviderUsageSummary
       .mockResolvedValueOnce({

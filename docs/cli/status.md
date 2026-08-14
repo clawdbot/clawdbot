@@ -59,6 +59,9 @@ and `openclaw memory status --deep`.
 ## Usage and quota
 
 - `--usage` prints normalized provider usage windows as `X% left`.
+- In an explicit multi-agent setup, `--usage` reads the auth profiles owned by
+  `agents.defaults.systemAgent.agentId`. Set that owner before using `--usage`;
+  OpenClaw does not guess one agent's credentials from an ambiguous roster.
 - MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota,
   so OpenClaw inverts them before display; count-based fields win when
   present. `model_remains` responses prefer the chat-model entry, derive the
