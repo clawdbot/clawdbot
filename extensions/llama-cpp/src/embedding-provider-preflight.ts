@@ -5,7 +5,7 @@ import type {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { DEFAULT_LLAMA_CPP_MODEL_ID, LLAMA_CPP_PROVIDER_ID } from "./defaults.js";
 
-export const LLAMA_CPP_SETUP_REMEDIATION = [
+const LLAMA_CPP_SETUP_REMEDIATION = [
   "Run `openclaw configure` and choose llama.cpp once.",
   "Retry `openclaw memory status --deep` after setup completes.",
 ] as const;
