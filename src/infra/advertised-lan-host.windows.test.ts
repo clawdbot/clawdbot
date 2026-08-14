@@ -3,12 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveAdvertisedLanHostCore } from "./advertised-lan-host.js";
 import type { NetworkInterfacesSnapshot } from "./network-interfaces.js";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "./windows-powershell-spawn.js";
 
 type ResolveOptions = NonNullable<Parameters<typeof resolveAdvertisedLanHostCore>[0]>;
 type RouteRunner = NonNullable<ResolveOptions["runCommandWithTimeout"]>;
-// This native probe validates PowerShell encoding, not the product's optional route-hint latency budget.
-const POWERSHELL_ENCODING_PROBE_TIMEOUT_MS = 10_000;
-
 function ipv4(address: string) {
   return {
     address,
@@ -50,7 +48,9 @@ describe.runIf(process.platform === "win32")("advertised LAN host PowerShell con
         "-Command",
         `[Console]::OutputEncoding=[Text.Encoding]::GetEncoding(437); ${outputPrefix}[pscustomobject]@{InterfaceAlias='réseau-网卡';RouteMetric=1;InterfaceMetric=1} | ConvertTo-Json -Compress`,
       ],
-      { timeoutMs: POWERSHELL_ENCODING_PROBE_TIMEOUT_MS, maxOutputBytes: 16 * 1024 },
+      // Real spawn: cold PowerShell first-use can exceed the production 3s
+      // fail-open probe budget; only production keeps the short bound.
+      { timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS, maxOutputBytes: 16 * 1024 },
     );
     expect(result).toMatchObject({ code: 0 });
     expect(JSON.parse(result.stdout)).toMatchObject({ InterfaceAlias: "réseau-网卡" });
