@@ -208,6 +208,8 @@ for commands and recovery.
 
 ### Runner backend modes
 
+The `macos-swift` lane runs its first Blacksmith test attempt in parallel. If that attempt fails, its two in-job retries run serially to escape process and timer contention; manual dispatches, hosted fallbacks, and workflow-level reruns remain serial from their first attempt.
+
 The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`:
 
 | Value                 | Light lanes                                                                                    | Heavy lanes                                                            | Rerun behavior                                                                       |
