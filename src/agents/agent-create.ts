@@ -7,7 +7,11 @@ import {
   listAgentEntries,
 } from "../commands/agents.config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
-import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../config/config.js";
+import {
+  ConfigMutationConflictError,
+  transformConfigFileWithRetry,
+  withConfigMutationExclusive,
+} from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,6 +41,7 @@ type CreateAgentResult =
       agentDir: string;
       model?: string;
       bootstrapPending: boolean;
+      configHash?: string;
       bindingResult?: ReturnType<typeof applyAgentBindings>;
     }
   | {
@@ -63,6 +68,8 @@ type CreateAgentParams = {
   bootstrapMain?: boolean;
   /** Replace the load-time compatibility roster when onboarding creates the first real agent. */
   bootstrapFirstAgent?: boolean;
+  /** Config revision that must still own first-agent creation under the write lock. */
+  expectedConfigHash?: string | null;
   workspace?: string;
   model?: string;
   emoji?: unknown;
@@ -202,6 +209,15 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           ? { writeOptions: { allowedAgentRosterRemovals: [RESERVED_BOOTSTRAP_AGENT_ID] } }
           : {}),
         transform: async (currentConfig, context) => {
+          if (
+            Object.hasOwn(params, "expectedConfigHash") &&
+            context.previousHash !== params.expectedConfigHash
+          ) {
+            throw new ConfigMutationConflictError("config changed before first-agent creation", {
+              currentHash: context.previousHash,
+              retryable: false,
+            });
+          }
           const hasAuthoredRoster =
             params.bootstrapFirstAgent === true &&
             hasResolvedRosterBeforeMigrations(context.snapshot);
@@ -369,7 +385,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       ) {
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
-      return committed.result!;
+      const result = committed.result!;
+      return typeof committed.persistedHash === "string"
+        ? { ...result, configHash: committed.persistedHash }
+        : result;
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {

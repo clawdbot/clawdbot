@@ -249,6 +249,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
           config: next,
           agentId: id,
           bootstrapPending: true,
+          createdAgent: true,
           configHash: "agent-create",
         };
       },

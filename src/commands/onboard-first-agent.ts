@@ -21,3 +21,12 @@ export async function promptFirstOnboardingAgent(
         }));
   return { name };
 }
+
+export async function showSessionMigrationWarnings(
+  prompter: WizardPrompter,
+  warnings: readonly string[] | undefined,
+): Promise<void> {
+  if (warnings?.length) {
+    await prompter.note(warnings.join("\n"), "Session history migration");
+  }
+}

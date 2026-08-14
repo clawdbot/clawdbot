@@ -698,6 +698,13 @@ describe("runSetupWizard", () => {
 
   it("prompts for and stages the named first agent on a fresh install", async () => {
     const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
+    ensureOnboardingConfig.mockImplementationOnce(async ({ config }) => ({
+      config,
+      agentId: "robby",
+      bootstrapPending: true,
+      createdAgent: true,
+      sessionMigrationWarnings: ["Run `openclaw doctor --fix` and retry setup."],
+    }));
 
     await runSetupWizard(
       {
@@ -728,6 +735,10 @@ describe("runSetupWizard", () => {
         preserveCandidateRoster: false,
         firstAgent: { name: "robby" },
       }),
+    );
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Run `openclaw doctor --fix` and retry setup.",
+      "Session history migration",
     );
   });
 

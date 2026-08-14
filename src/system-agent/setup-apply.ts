@@ -28,6 +28,7 @@ import {
 } from "./inference-route.js";
 import { requireValidSystemAgentSetupSnapshot } from "./setup-config-snapshot.js";
 import {
+  assertSetupTarget,
   sameSetupConfiguredRoute,
   sameSetupInferenceRoute,
 } from "./setup-inference-route-guard.js";
@@ -312,62 +313,46 @@ export async function applySystemAgentSetup(
   let snapshotConfig = requireValidSystemAgentSetupSnapshot(snapshot);
   const configHashBefore = resolveConfigSnapshotHash(snapshot);
   const startedWithoutAuthoredRoster = !hasResolvedRosterBeforeMigrations(snapshot);
-  let ignoreVerifiedAgentIdentity = false;
+  let verifiedRoute = params.expectedInferenceRoute;
+  let guardedExpectedAgentId = expectedAgentId;
+  let guardedExpectedAgentDir = expectedAgentDir;
+  let sessionMigrationWarnings: string[] = [];
 
   if (hasExpectedConfigHash && resolveConfigSnapshotHash(snapshot) !== expectedConfigHash) {
     throw new Error("OpenClaw config changed while AI access was being tested. Try setup again.");
   }
 
-  const guardModules =
+  let guardModules =
     expectedAgentId || expectedAgentDir || expectedModelRef
       ? await Promise.all([
           import("../agents/agent-scope.js"),
           import("../agents/model-selection.js"),
         ] as const)
       : undefined;
-  const assertExpectedTarget = (
-    config: OpenClawConfig,
-    options: { ignoreAgentIdentity?: boolean } = {},
-  ): void => {
+  const assertExpectedTarget = (config: OpenClawConfig): void => {
     if (!guardModules) {
       return;
     }
-    const [{ resolveAgentDir, resolveDefaultAgentId }, { resolveDefaultModelForAgent }] =
-      guardModules;
-    const currentAgentId = resolveDefaultAgentId(config);
-    if (!options.ignoreAgentIdentity && expectedAgentId && currentAgentId !== expectedAgentId) {
-      throw new Error(
-        "The default agent changed while AI access was being tested. Try setup again.",
-      );
-    }
-    if (
-      !options.ignoreAgentIdentity &&
-      expectedAgentDir &&
-      resolveAgentDir(config, currentAgentId) !== expectedAgentDir
-    ) {
-      throw new Error(
-        "The agent credential location changed while AI access was being tested. Try setup again.",
-      );
-    }
-    if (expectedModelRef) {
-      const current = resolveDefaultModelForAgent({ cfg: config, agentId: currentAgentId });
-      const currentModelRef = `${current.provider}/${current.model}`;
-      if (currentModelRef !== expectedModelRef) {
-        throw new Error(
-          "The default model changed while AI access was being tested. Try setup again.",
-        );
-      }
-    }
+    assertSetupTarget({
+      config,
+      expectedAgentId: guardedExpectedAgentId,
+      expectedAgentDir: guardedExpectedAgentDir,
+      expectedModelRef,
+      resolveAgentDir: guardModules[0].resolveAgentDir,
+      resolveDefaultAgentId: guardModules[0].resolveDefaultAgentId,
+      resolveDefaultModelForAgent: guardModules[1].resolveDefaultModelForAgent,
+    });
   };
   assertExpectedTarget(snapshotConfig.runtimeConfig);
 
   const assertVerifiedRoute = async (
     setupSnapshot: ConfigFileSnapshot,
-    expectedRoute = params.expectedInferenceRoute,
+    expectedRoute = verifiedRoute,
     phase: "before" | "after" = "before",
+    ignoreAgentIdentity = false,
   ) => {
     if (!expectedRoute) {
-      return;
+      return undefined;
     }
     // Setup reads with plugin validation skipped so it can repair broken plugin
     // config. Bind that view to the fully validated path, root hash, includes,
@@ -391,7 +376,7 @@ export async function applySystemAgentSetup(
         : null;
     if (
       !currentRoute ||
-      !sameSetupInferenceRoute(currentRoute, expectedRoute, ignoreVerifiedAgentIdentity)
+      !sameSetupInferenceRoute(currentRoute, expectedRoute, ignoreAgentIdentity)
     ) {
       throw new Error(
         phase === "before"
@@ -399,26 +384,56 @@ export async function applySystemAgentSetup(
           : "The default-agent inference route changed after the config write, so no further setup effects were applied. Retry setup from the current OpenClaw session.",
       );
     }
+    return currentRoute;
   };
   await assertVerifiedRoute(snapshot);
 
   let expectedWriteHash = expectedConfigHash;
   if (startedWithoutAuthoredRoster) {
     const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
-    await commit(
+    const onboardingSourceConfig =
+      snapshot.sourceConfigBeforeMigrations ?? snapshotConfig.sourceConfig;
+    const created = await commit(
       async () =>
         await ensureOnboardingAgent({
-          config: snapshotConfig.sourceConfig,
+          config: onboardingSourceConfig,
           workspace,
-          baseConfig: snapshotConfig.sourceConfig,
+          baseConfig: onboardingSourceConfig,
           firstAgent: params.firstAgent ?? { name: "main" },
+          expectedConfigHash: configHashBefore ?? null,
         }),
     );
+    if (!created.createdAgent || !created.configHash) {
+      throw new Error(
+        "OpenClaw did not create the approved first agent because the roster changed. Retry setup.",
+      );
+    }
     snapshot = await readSetupConfigFileSnapshot();
     snapshotConfig = requireValidSystemAgentSetupSnapshot(snapshot);
-    expectedWriteHash = resolveConfigSnapshotHash(snapshot);
-    ignoreVerifiedAgentIdentity = true;
-    await assertVerifiedRoute(snapshot);
+    if ((resolveConfigSnapshotHash(snapshot) ?? null) !== created.configHash) {
+      throw new Error("OpenClaw config changed after first-agent creation. Retry setup.");
+    }
+    const createdRoster = listAgentEntries(snapshotConfig.sourceConfig);
+    if (
+      createdRoster.length !== 1 ||
+      normalizeAgentId(createdRoster[0]?.id ?? "") !== created.agentId
+    ) {
+      throw new Error("OpenClaw first-agent ownership changed during setup. Retry setup.");
+    }
+    const rebasedRoute = await assertVerifiedRoute(snapshot, verifiedRoute, "before", true);
+    verifiedRoute = rebasedRoute ?? verifiedRoute;
+    guardModules ??= await Promise.all([
+      import("../agents/agent-scope.js"),
+      import("../agents/model-selection.js"),
+    ] as const);
+    guardedExpectedAgentId = created.agentId;
+    guardedExpectedAgentDir = guardModules[0].resolveAgentDir(
+      snapshotConfig.runtimeConfig,
+      created.agentId,
+    );
+    assertExpectedTarget(snapshotConfig.runtimeConfig);
+    expectedWriteHash = created.configHash;
+    sessionMigrationWarnings = created.sessionMigrationWarnings ?? [];
   }
 
   const prompter = createQuickstartNotePrompter(runtime);
@@ -511,15 +526,16 @@ export async function applySystemAgentSetup(
         writeOptions: { auditOrigin: "system-agent", allowConfigSizeDrop: false },
         transform: async (currentConfig, context) => {
           const currentSnapshot = requireValidSystemAgentSetupSnapshot(context.snapshot);
-          if (hasExpectedConfigHash && context.previousHash !== expectedWriteHash) {
+          if (
+            (hasExpectedConfigHash || startedWithoutAuthoredRoster) &&
+            context.previousHash !== expectedWriteHash
+          ) {
             throw new Error(
               "OpenClaw config changed while AI access was being tested. Try setup again.",
             );
           }
           await assertVerifiedRoute(context.snapshot);
-          assertExpectedTarget(currentSnapshot.runtimeConfig, {
-            ignoreAgentIdentity: ignoreVerifiedAgentIdentity,
-          });
+          assertExpectedTarget(currentSnapshot.runtimeConfig);
 
           // Rebuild config and Gateway settings from the same locked snapshot.
           // A retry can preserve unrelated concurrent edits without carrying
@@ -533,18 +549,14 @@ export async function applySystemAgentSetup(
           const finalizedConfig = finalizeConfig
             ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
             : setupCandidate.nextConfig;
-          const expectedSourceRoute = params.expectedInferenceRoute
+          const expectedSourceRoute = verifiedRoute
             ? await projectDefaultInferenceRoute(finalizedConfig)
             : undefined;
           if (
-            params.expectedInferenceRoute &&
-            (!params.expectedInferenceRoute.route ||
+            verifiedRoute &&
+            (!verifiedRoute.route ||
               !expectedSourceRoute?.route ||
-              !sameSetupConfiguredRoute(
-                expectedSourceRoute.route,
-                params.expectedInferenceRoute.route,
-                ignoreVerifiedAgentIdentity,
-              ))
+              !sameSetupConfiguredRoute(expectedSourceRoute.route, verifiedRoute.route, false))
           ) {
             throw new Error(
               "The setup candidate no longer preserves the exact verified inference route, so it was not saved. Retry setup from the current OpenClaw session.",
@@ -580,7 +592,7 @@ export async function applySystemAgentSetup(
   }
   const onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const effectiveWorkspace = onboardingTarget.workspaceDir;
-  if (params.expectedInferenceRoute) {
+  if (verifiedRoute) {
     const afterRead = await readConfigFileSnapshotWithPluginMetadata();
     const afterSnapshot = afterRead.snapshot;
     requireValidSystemAgentSetupSnapshot(afterSnapshot);
@@ -599,13 +611,7 @@ export async function applySystemAgentSetup(
     await assertVerifiedRoute(afterSnapshot, expectedPersistedRoute, "after");
     // Plugin defaults are part of the access-tested runtime route. Reject a
     // metadata change that would make the committed config run differently.
-    if (
-      !sameSetupConfiguredRoute(
-        expectedPersistedRoute.route,
-        params.expectedInferenceRoute.route,
-        ignoreVerifiedAgentIdentity,
-      )
-    ) {
+    if (!sameSetupConfiguredRoute(expectedPersistedRoute.route, verifiedRoute.route, false)) {
       throw new Error(
         "The materialized inference route no longer matches the exact verified route, so no further setup effects were applied. Retry setup from the current OpenClaw session.",
       );
@@ -613,6 +619,7 @@ export async function applySystemAgentSetup(
   }
 
   const lines: string[] = [
+    ...sessionMigrationWarnings,
     `Workspace: ${shortenHomePath(effectiveWorkspace)}`,
     model ? `Default model: ${model}` : undefined,
   ].filter((line): line is string => line !== undefined);

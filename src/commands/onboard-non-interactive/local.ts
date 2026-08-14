@@ -269,6 +269,9 @@ export async function runNonInteractiveLocalSetup(params: {
     baseConfig,
     firstAgent: { name: opts.agentName ?? "main" },
   });
+  for (const warning of created.sessionMigrationWarnings ?? []) {
+    runtime.log(`Warning: ${warning}`);
+  }
   nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
   // First-agent creation is the first permitted config mutation. Preserve its
   // resulting hash so the canonical wizard write still rejects foreign edits.

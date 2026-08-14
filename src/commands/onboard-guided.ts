@@ -17,7 +17,7 @@ import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
-import { promptFirstOnboardingAgent } from "./onboard-first-agent.js";
+import { promptFirstOnboardingAgent, showSessionMigrationWarnings } from "./onboard-first-agent.js";
 import {
   activationLines,
   formatSetupCandidateFailure,
@@ -556,6 +556,7 @@ async function runGuidedOnboardingFlow(
         firstAgent,
       });
       persistedConfig = created.config;
+      await showSessionMigrationWarnings(prompter, created.sessionMigrationWarnings);
     }
   } else {
     // Announced default: apply the same setup plan the conversational "yes"

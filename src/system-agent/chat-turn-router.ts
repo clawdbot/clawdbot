@@ -97,13 +97,16 @@ function preservePendingSetupModel(
   }
   const pendingModel = pending.model?.trim();
   const requestedModel = operation.model?.trim();
+  const withAgentName = {
+    ...operation,
+    ...(operation.agentName ? {} : pending.agentName ? { agentName: pending.agentName } : {}),
+  };
   if (requestedModel && requestedModel !== pendingModel) {
-    return operation;
+    return withAgentName;
   }
   return {
-    ...operation,
+    ...withAgentName,
     ...(requestedModel ? {} : pendingModel ? { model: pendingModel } : {}),
-    ...(operation.agentName ? {} : pending.agentName ? { agentName: pending.agentName } : {}),
   };
 }
 

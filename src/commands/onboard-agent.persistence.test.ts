@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readConfigFileSnapshot,
   replaceConfigFile,
@@ -10,8 +10,11 @@ import {
 import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { appendTranscriptEventInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -164,6 +167,108 @@ describe("onboarding authored config persistence", () => {
               .get() as { status: string },
         ),
       ).toEqual({ status: "completed" });
+    });
+  });
+
+  it("surfaces a locked migration and converges it on the next startup", async () => {
+    await withTempHome(async (rawHome) => {
+      const home = await fs.realpath(rawHome);
+      const stateDir = path.join(home, ".openclaw");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+      resetConfigRuntimeState();
+      await replaceConfigFile({ nextConfig: {}, afterWrite: { mode: "auto" } });
+
+      const legacyKey = "agent:main:main";
+      const canonicalKey = "agent:robby:main";
+      const legacyDatabasePath = path.join(
+        stateDir,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      const entry = { sessionId: "locked-legacy-session", updatedAt: 100 };
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          writeSessionEntry(database, legacyKey, entry, {
+            allowStoredAliases: true,
+            previousEntry: null,
+          });
+          appendTranscriptEventInTransaction(
+            database,
+            {
+              agentId: "main",
+              path: legacyDatabasePath,
+              sessionId: entry.sessionId,
+              sessionKey: legacyKey,
+            },
+            { type: "message", text: "locked history" },
+            { allowStoredAlias: true },
+          );
+        },
+        { agentId: "main", path: legacyDatabasePath },
+      );
+      const sourceDatabase = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: legacyDatabasePath,
+      });
+      sourceDatabase.db.exec("BEGIN IMMEDIATE");
+      let result: Awaited<ReturnType<typeof ensureOnboardingAgent>>;
+      try {
+        result = await ensureOnboardingAgent({
+          config: {},
+          workspace: path.join(stateDir, "workspace"),
+          firstAgent: { name: "robby" },
+        });
+      } finally {
+        sourceDatabase.db.exec("ROLLBACK");
+      }
+
+      expect(result.sessionMigrationWarnings).toEqual([
+        expect.stringMatching(/incomplete.*openclaw doctor --fix/),
+      ]);
+      const readLedgerStatus = () =>
+        withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) =>
+            db
+              .prepare(
+                "SELECT status FROM migration_sources WHERE source_key = 'legacy-main-session-keys'",
+              )
+              .get() as { status: string } | undefined,
+        );
+      expect(readLedgerStatus()).toBeUndefined();
+      const log = { info: vi.fn(), warn: vi.fn() };
+      await runSessionStartupMigration({
+        cfg: result.config,
+        env: process.env,
+        log,
+        deps: {
+          migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
+          prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
+          resolveAllAgentSessionStoreTargetsSync: () => [],
+          sweepOrphanSessionStoreTemps: vi.fn(async () => 0),
+        },
+      });
+      const ownerDatabasePath = path.join(
+        stateDir,
+        "agents",
+        "robby",
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      const readEntry = (databasePath: string, agentId: string, key: string) =>
+        runOpenClawAgentWriteTransaction(
+          (database) => readExactSessionEntryRowForCanonicalRepair(database, key)?.entry,
+          { agentId, path: databasePath },
+        );
+
+      expect(readEntry(ownerDatabasePath, "robby", canonicalKey)).toMatchObject(entry);
+      expect(readEntry(legacyDatabasePath, "main", legacyKey)).toBeUndefined();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining("migrated retired main-agent session keys"),
+      );
+      expect(readLedgerStatus()).toEqual({ status: "completed" });
     });
   });
 });

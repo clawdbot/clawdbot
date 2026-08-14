@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
-import { promptFirstOnboardingAgent } from "../commands/onboard-first-agent.js";
+import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
@@ -70,8 +70,7 @@ async function runSetupWizardOnce(
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
-  let runtime = runtimeInput;
-  runtime ??= defaultRuntime;
+  const runtime = runtimeInput ?? defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   await onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.setup.intro"));
@@ -523,7 +522,7 @@ async function runSetupWizardOnce(
     prompter,
     hasAuthoredRoster,
   });
-  const firstAgent = await promptFirstOnboardingAgent(
+  const firstAgent = await firstAgentOnboarding.promptFirstOnboardingAgent(
     hasAuthoredRoster,
     opts.agentName,
     prompter,
@@ -561,15 +560,16 @@ async function runSetupWizardOnce(
     runtime,
   });
   const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
-  nextConfig = (
-    await ensureOnboardingAgent({
-      config: gateway.nextConfig,
-      workspace: workspaceDir,
-      preserveCandidateRoster: usedImportFlow,
-      baseConfig,
-      ...(firstAgent ? { firstAgent } : {}),
-    })
-  ).config;
+  const onboardingAgent = await ensureOnboardingAgent({
+    config: gateway.nextConfig,
+    workspace: workspaceDir,
+    preserveCandidateRoster: usedImportFlow,
+    baseConfig,
+    ...(firstAgent ? { firstAgent } : {}),
+  });
+  nextConfig = onboardingAgent.config;
+  const migrationWarnings = onboardingAgent.sessionMigrationWarnings;
+  await firstAgentOnboarding.showSessionMigrationWarnings(prompter, migrationWarnings);
 
   let liveModelVerified = false;
   let setupConfigPersisted = false;

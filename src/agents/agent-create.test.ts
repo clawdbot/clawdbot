@@ -97,6 +97,7 @@ describe("createAgent", () => {
       }) => {
         const transformed = (await transform(structuredClone(mocks.config), {
           snapshot: { exists: false },
+          previousHash: null,
         })) as {
           nextConfig: Record<string, unknown>;
           result: unknown;
@@ -184,6 +185,25 @@ describe("createAgent", () => {
     expect(
       (mocks.persisted.agents as { entries?: Record<string, unknown> }).entries,
     ).not.toHaveProperty("main");
+  });
+
+  it("rejects first-agent creation when the approved config hash changed under the lock", async () => {
+    mocks.transformConfigFileWithRetry.mockImplementationOnce(async ({ transform }) =>
+      transform(structuredClone(mocks.config), {
+        snapshot: { exists: true },
+        previousHash: "concurrent",
+      }),
+    );
+
+    await expect(
+      createAgent({
+        entry: { id: "robby", name: "robby", workspace: "/tmp/robby" },
+        bootstrapFirstAgent: true,
+        expectedConfigHash: "approved",
+      }),
+    ).rejects.toThrow("config changed before first-agent creation");
+
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
   it("keeps the first staged roster entry marker-free", async () => {
