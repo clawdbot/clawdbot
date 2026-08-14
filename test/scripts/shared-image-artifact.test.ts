@@ -236,6 +236,10 @@ case "$path" in
     if [[ "$count" -le "\${FAKE_GH_ARTIFACT_HANGS:-0}" ]]; then
       # Simulate a stalled connection: accepts the request but never responds.
       # Absolute path bypasses the fake sleep shim so the request really hangs.
+      if [[ "\${FAKE_GH_ARTIFACT_TERM_RESISTANT:-0}" == "1" ]]; then
+        # Simulate a process that ignores SIGTERM; only KILL escalation stops it.
+        trap '' TERM
+      fi
       /bin/sleep 30
     fi
     if [[ -n "\${FAKE_ARTIFACT_JSON:-}" ]]; then
@@ -392,6 +396,32 @@ describe("shared Docker image artifacts", () => {
           OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "1s",
         },
         timeoutMs: 20_000,
+      });
+      expect(verified.error).toBeUndefined();
+      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+      expect(verified.stderr).toContain("request deadline");
+      expect(verified.stderr).toContain(
+        "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+      expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries a TERM-resistant stalled gh api request after KILL escalation and then succeeds", () => {
+    const fixture = createFixture();
+    try {
+      const verified = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_HANGS: "1",
+          FAKE_GH_ARTIFACT_TERM_RESISTANT: "1",
+          OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "1s",
+          OPENCLAW_GH_API_GET_REQUEST_KILL_GRACE: "1s",
+        },
+        timeoutMs: 30_000,
       });
       expect(verified.error).toBeUndefined();
       expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);

@@ -15,6 +15,9 @@ shared_run_attempt="${OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT:-}"
 # gh api has no built-in request deadline, so a stalled connection would otherwise
 # hang until the job-level timeout kills the whole runner job.
 gh_api_get_request_timeout="${OPENCLAW_GH_API_GET_REQUEST_TIMEOUT:-30s}"
+# TERM alone cannot stop a process that catches or blocks it; escalate to KILL after
+# a finite grace so the request deadline stays hard (mirrors workflow-sanity.yml).
+gh_api_get_request_kill_grace="${OPENCLAW_GH_API_GET_REQUEST_KILL_GRACE:-10s}"
 
 archive_name="shared-images.tar.zst"
 manifest_path=""
@@ -108,7 +111,8 @@ gh_api_get_with_retry() {
     : > "$response_file"
     : > "$error_file"
     local gh_status=0
-    timeout "$gh_api_get_request_timeout" gh api --method GET "$endpoint" \
+    timeout --signal=TERM --kill-after="$gh_api_get_request_kill_grace" \
+      "$gh_api_get_request_timeout" gh api --method GET "$endpoint" \
       > "$response_file" 2> "$error_file" || gh_status=$?
     if [[ "$gh_status" -eq 0 ]]; then
       cat "$response_file"
@@ -116,9 +120,10 @@ gh_api_get_with_retry() {
       return 0
     fi
 
-    if [[ "$gh_status" -eq 124 ]]; then
-      # timeout(1) killed a stalled gh api request; record a transient signature
-      # so the retry classifier below treats the hang like any other network stall.
+    if [[ "$gh_status" -eq 124 || "$gh_status" -eq 137 ]]; then
+      # timeout(1) killed a stalled gh api request (124 on TERM expiry, 137 after
+      # KILL escalation); record a transient signature so the retry classifier
+      # below treats the hang like any other network stall.
       printf 'gh: GitHub API GET exceeded the %s request deadline.\n' \
         "$gh_api_get_request_timeout" >> "$error_file"
     fi
