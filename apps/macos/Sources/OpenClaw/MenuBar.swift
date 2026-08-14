@@ -616,9 +616,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            DashboardManager.shared.preloadIfConfigured()
+        if launchPolicy.allowsAutomaticPresentation {
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                DashboardManager.shared.preloadIfConfigured()
+            }
         }
 
         #if DEBUG
