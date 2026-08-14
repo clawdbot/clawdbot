@@ -239,12 +239,16 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
     );
   }
 
-  const shouldRepair = await params.prompter.confirmAutoFix({
-    message: "Migrate legacy Codex OAuth credentials now?",
-    initialValue: true,
-  });
-  if (!shouldRepair) {
-    return result;
+  // Unreferenced sidecars alone are informational: the store loop below never
+  // touches them, so prompting would confirm a guaranteed no-op on every run.
+  if (stores.length > 0) {
+    const shouldRepair = await params.prompter.confirmAutoFix({
+      message: "Migrate legacy Codex OAuth credentials now?",
+      initialValue: true,
+    });
+    if (!shouldRepair) {
+      return result;
+    }
   }
 
   const migratedSidecarsByRefId = new Map<string, string>();

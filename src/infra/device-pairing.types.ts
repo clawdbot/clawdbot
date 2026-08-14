@@ -85,6 +85,7 @@ export type PairedDeviceNodeSurface = {
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
 };
 
 /**

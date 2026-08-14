@@ -95,7 +95,7 @@ wa-tab.hub-tab:focus-visible::part(base) {
   justify-self: end;
 }
 
-@media (min-width: 769px) and (max-width: 1024px) {
+@media (min-width: 769px) and (max-width: 1100px) {
   .content-header.hub-page-header {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:

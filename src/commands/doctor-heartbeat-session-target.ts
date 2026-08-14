@@ -92,6 +92,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     }
     const deliveryWithoutSession = resolveHeartbeatDeliveryTarget({
       cfg,
+      agentId: resolvedAgentId,
       heartbeat: heartbeatConfig,
     });
     if (deliveryWithoutSession.channel !== "none" && deliveryWithoutSession.to) {

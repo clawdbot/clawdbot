@@ -1496,6 +1496,36 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
+-- One owner-native receipt is also the durable execution fence. Receipts
+-- survive job deletion so operators can distinguish a run from log inference.
+CREATE TABLE IF NOT EXISTS cron_run_receipts (
+  receipt_id TEXT PRIMARY KEY,
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  config_revision TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  request_run_id TEXT,
+  status TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  owner_start_time INTEGER,
+  started_at_ms INTEGER NOT NULL,
+  finished_at_ms INTEGER,
+  error_text TEXT,
+  CHECK (status IN ('running', 'ok', 'error', 'skipped', 'interrupted', 'superseded')),
+  CHECK (
+    (status = 'running' AND finished_at_ms IS NULL)
+    OR
+    (status != 'running' AND finished_at_ms IS NOT NULL)
+  )
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_run_receipts_active_job
+  ON cron_run_receipts(store_key, job_id)
+  WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS idx_cron_run_receipts_job_history
+  ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);
+
 -- Runtime-private authority is independent of job_json so downgraded writers
 -- can rewrite recognized job config without erasing or silently widening it.
 CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
