@@ -214,26 +214,33 @@ export function createMattermostThreadBackfill(
     // server would otherwise expose it after every restart.
     //
     // Authorization is resolved through the caller, which owns the effective
-    // policy, so it can be async. Memoizing per sender keeps a thread full of
-    // one person's posts to a single resolution, and the filter has to run
-    // before the window is sliced so the newest retained posts are the ones
-    // that survive.
+    // policy, so it can be async — and under dangerous name matching it can
+    // reach the Mattermost user API, whose timeout is the client's 30s rather
+    // than the 5s bound on the fetch above. Every distinct sender is therefore
+    // started before anything is awaited: one resolution per sender no matter
+    // how many posts they hold, and a slow directory costs the inbound turn one
+    // lookup rather than one per sender in series.
     const retentionBySender = new Map<string, Promise<boolean>>();
-    const retained: MattermostPost[] = [];
     for (const post of candidates) {
       const senderId = post.user_id ?? "";
-      let retention = retentionBySender.get(senderId);
-      if (!retention) {
-        retention = Promise.resolve(
-          shouldRetainSenderHistory({
-            senderId,
-            channelId: params.channelId,
-            kind: params.kind,
-          }),
+      if (!retentionBySender.has(senderId)) {
+        retentionBySender.set(
+          senderId,
+          Promise.resolve(
+            shouldRetainSenderHistory({
+              senderId,
+              channelId: params.channelId,
+              kind: params.kind,
+            }),
+          ),
         );
-        retentionBySender.set(senderId, retention);
       }
-      if (await retention) {
+    }
+    // The filter has to run before the window is sliced, so the newest retained
+    // posts are the ones that survive.
+    const retained: MattermostPost[] = [];
+    for (const post of candidates) {
+      if (await retentionBySender.get(post.user_id ?? "")) {
         retained.push(post);
       }
     }

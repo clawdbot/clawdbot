@@ -231,6 +231,32 @@ describe("createMattermostThreadBackfill", () => {
     expect(harness.channelHistories.get(HISTORY_KEY)?.map((entry) => entry.sender)).toEqual(["u0"]);
   });
 
+  it("starts every sender resolution before awaiting any of them", async () => {
+    // Resolving a sender can reach the Mattermost user API, whose timeout is
+    // far above the bound on the thread fetch. Awaiting each one in turn would
+    // multiply that cost by the number of senders in the thread.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started: string[] = [];
+    const harness = createHarness({
+      responses: [threadResponse(3)],
+      shouldRetainSenderHistory: async ({ senderId }) => {
+        started.push(senderId);
+        await gate;
+        return true;
+      },
+    });
+
+    const turn = harness.turn();
+    await vi.waitFor(() => expect(started).toEqual(["u0", "u1", "u2"]));
+    release();
+    await turn;
+
+    expect(harness.channelHistories.get(HISTORY_KEY)).toHaveLength(3);
+  });
+
   it("keeps the newest retained posts when the window is smaller than the thread", async () => {
     // Retention has to be applied before the window is sliced, or dropping a
     // denied sender would shrink the recovered window instead of admitting an
