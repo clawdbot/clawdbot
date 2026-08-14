@@ -9,6 +9,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
+import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
@@ -69,13 +70,6 @@ type OpenAIResponsesPayloadCapabilities = {
   usesKnownNativeOpenAIRoute: boolean;
 };
 
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
@@ -184,7 +178,14 @@ function resolveBundledOpenAIResponsesEndpointClass(
   if (hostMatchesSuffix(host, ".githubcopilot.com")) {
     return "github-copilot-native";
   }
-  if (hostMatchesSuffix(host, ".openai.azure.com")) {
+  if (
+    [
+      ".openai.azure.com",
+      ".cognitiveservices.azure.com",
+      ".services.ai.azure.com",
+      ".api.cognitive.microsoft.com",
+    ].some((suffix) => hostMatchesSuffix(host, suffix))
+  ) {
     return "azure-openai";
   }
   if (hostMatchesSuffix(host, "openrouter.ai")) {
