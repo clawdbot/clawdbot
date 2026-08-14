@@ -836,33 +836,42 @@ async function compactResolvedContextEngine(
           normalizeOptionalAgentRuntimeId(preparedHarnessRuntime) === "codex"
             ? "codexNativeCompaction"
             : "nativeHarnessCompaction";
+        const serverEndpointCompaction =
+          (result.result?.details as { compactionKind?: unknown } | undefined)?.compactionKind ===
+            "server-endpoint" && typeof result.result?.tokensAfter === "number";
+        const resultDetails = result.result
+          ? mergeSecondaryNativeHarnessCompactionDetails({
+              details: result.result.details,
+              nativeResult: secondaryNativeHarnessCompaction,
+              detailsKey: secondaryNativeDetailsKey,
+            })
+          : undefined;
         return {
           ok: result.ok,
           compacted: result.compacted,
-          compactionKind:
-            (result.result?.details as { compactionKind?: unknown } | undefined)?.compactionKind ===
-            "server-endpoint"
-              ? "server-endpoint"
-              : "context-engine",
+          compactionKind: serverEndpointCompaction ? "server-endpoint" : "context-engine",
           reason: result.reason,
           result: result.result
-            ? {
-                summary: result.result.summary ?? "",
-                firstKeptEntryId: result.result.firstKeptEntryId ?? "",
-                tokensBefore: result.result.tokensBefore,
-                tokensAfter: result.result.tokensAfter,
-                details: mergeSecondaryNativeHarnessCompactionDetails({
-                  details: result.result.details,
-                  nativeResult: secondaryNativeHarnessCompaction,
-                  detailsKey: secondaryNativeDetailsKey,
-                }),
-                ...(postCompactionSessionId !== params.sessionId
-                  ? { sessionId: postCompactionSessionId }
-                  : {}),
-                ...(postCompactionSessionFile !== params.sessionFile
-                  ? { sessionFile: postCompactionSessionFile }
-                  : {}),
-              }
+            ? serverEndpointCompaction
+              ? {
+                  kind: "server-endpoint",
+                  tokensBefore: result.result.tokensBefore,
+                  tokensAfter: result.result.tokensAfter!,
+                  details: resultDetails,
+                }
+              : {
+                  summary: result.result.summary ?? "",
+                  firstKeptEntryId: result.result.firstKeptEntryId ?? "",
+                  tokensBefore: result.result.tokensBefore,
+                  tokensAfter: result.result.tokensAfter,
+                  details: resultDetails,
+                  ...(postCompactionSessionId !== params.sessionId
+                    ? { sessionId: postCompactionSessionId }
+                    : {}),
+                  ...(postCompactionSessionFile !== params.sessionFile
+                    ? { sessionFile: postCompactionSessionFile }
+                    : {}),
+                }
             : undefined,
         };
       } finally {

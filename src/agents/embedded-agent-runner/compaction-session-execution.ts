@@ -2,19 +2,7 @@
  * Executes compaction while owning the transcript lock, session lifecycle,
  * hooks, checkpoint, and optional successor transcript rotation.
  */
-import {
-  buildOpenAIResponsesReasoningReplayMetadata,
-  captureOpenAIResponsesCompaction,
-  requestOpenAIResponsesCompaction,
-  resolveOpenAIResponsesCompactEndpointPlan,
-} from "@openclaw/ai/transports";
-import type { AssistantMessage, Message } from "@openclaw/llm-core";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import {
-  loadTranscriptEventRowsAfterSeqSync,
-  readSessionTranscriptWatermark,
-  rewriteTranscriptEventRowsExact,
-} from "../../config/sessions/session-accessor.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -68,6 +56,7 @@ import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
+import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
@@ -418,125 +407,44 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             // If token estimation throws on a malformed message, fall back to 0 so
             // the sanity check below becomes a no-op instead of crashing compaction.
           }
-          const endpointPlan = resolveOpenAIResponsesCompactEndpointPlan(
-            effectiveModel,
-            effectiveExtraParams,
-          );
-          let serverTokensAfter: number | undefined;
-          let serverResult: Awaited<ReturnType<typeof session.compact>> | undefined;
-          if (trigger !== "overflow" && endpointPlan.enabled) {
-            try {
-              const responsesMessages = session.messages.filter(
-                (message): message is Message =>
-                  message.role === "user" ||
-                  message.role === "assistant" ||
-                  message.role === "toolResult",
-              );
-              const lastAssistant = responsesMessages.findLast(
-                (message): message is AssistantMessage => message.role === "assistant",
-              );
-              if (!lastAssistant) {
-                throw new Error("Responses compact endpoint requires a persisted assistant owner");
-              }
-              const compacted = await requestOpenAIResponsesCompaction(
-                effectiveModel,
-                { systemPrompt: systemPromptText, messages: responsesMessages },
-                {
-                  ...effectiveExtraParams,
-                  apiKey: transportApiKey,
-                  signal: params.abortSignal,
-                  sessionId: params.sessionId,
-                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-                },
-              );
-              const watermark = readSessionTranscriptWatermark(sessionTarget);
-              const ownerRow = loadTranscriptEventRowsAfterSeqSync(
-                sessionTarget,
-                0,
-                watermark.maxSeq ?? undefined,
-              ).findLast(({ event }) => {
-                const message =
-                  event && typeof event === "object"
-                    ? (event as { message?: { role?: unknown } }).message
-                    : undefined;
-                return message?.role === "assistant";
-              });
-              const ownerEvent = ownerRow?.event as
-                | { id?: unknown; message?: AssistantMessage }
-                | undefined;
-              if (!ownerRow || typeof ownerEvent?.id !== "string" || !ownerEvent.message) {
-                throw new Error("Responses compact endpoint assistant owner was not persisted");
-              }
-              const persistedOwner = structuredClone(ownerEvent.message);
-              captureOpenAIResponsesCompaction(
-                persistedOwner,
-                compacted.item,
-                persistedOwner.content.length,
-                effectiveModel,
-                buildOpenAIResponsesReasoningReplayMetadata(effectiveModel, {
-                  sessionId: params.sessionId,
-                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-                }),
-              );
-              const rewritten = await rewriteTranscriptEventRowsExact(sessionTarget, {
-                allowInitialGenerationMaterialization: watermark.generation === null,
-                expectedGeneration: watermark.generation,
-                rows: [
-                  {
-                    event: Object.assign({}, ownerRow.event as object, { message: persistedOwner }),
-                    expectedEventJson: JSON.stringify(ownerRow.event),
-                    seq: ownerRow.seq,
-                  },
-                ],
-              });
-              if (!rewritten || !persistedOwner.providerReplay) {
-                throw new Error("Responses compact endpoint checkpoint was not persisted");
-              }
-              lastAssistant.providerReplay = persistedOwner.providerReplay;
-              serverTokensAfter = compacted.usage.output_tokens;
-              serverResult = {
-                summary: "Server-side Responses compaction",
-                firstKeptEntryId: ownerEvent.id,
-                tokensBefore: compacted.usage.input_tokens,
-                details: {
-                  compactionKind: "server-endpoint",
-                  droppedMessageCount: compacted.usage.dropped_message_count,
-                },
-              };
-            } catch (err) {
-              log.debug("Responses compact endpoint failed; falling back to client compaction", {
-                errorMessage: formatErrorMessage(err),
-              });
-            }
-          }
-          const serverCompaction = serverResult !== undefined;
+          const serverResult = await attemptServerEndpointCompaction({
+            trigger,
+            model: effectiveModel,
+            context: { systemPrompt: systemPromptText, messages: session.messages },
+            sessionManager,
+            requestOptions: {
+              ...effectiveExtraParams,
+              apiKey: transportApiKey,
+              sessionId: params.sessionId,
+              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+              timeoutMs: compactionTimeoutMs,
+              signal: params.abortSignal,
+            },
+          });
           const activeSession = session;
-          const result =
-            serverResult ??
-            (await compactWithSafetyTimeout(
-              () => {
-                setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-                return resolveEffectiveCompactionMode(params.config) === "default" &&
-                  trigger !== "manual"
-                  ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
-                  : activeSession.compact(params.customInstructions);
-              },
-              compactionTimeoutMs,
-              {
-                abortSignal: params.abortSignal,
-                onCancel: () => {
-                  activeSession.abortCompaction();
+          const clientResult = serverResult
+            ? undefined
+            : await compactWithSafetyTimeout(
+                () => {
+                  setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
+                  return resolveEffectiveCompactionMode(params.config) === "default" &&
+                    trigger !== "manual"
+                    ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
+                    : activeSession.compact(params.customInstructions);
                 },
-              },
-            ));
-          const effectiveFirstKeptEntryId = result.firstKeptEntryId;
-          const postCompactionLeafId =
-            typeof sessionManager.getLeafId === "function"
-              ? (sessionManager.getLeafId() ?? undefined)
-              : undefined;
+                compactionTimeoutMs,
+                {
+                  abortSignal: params.abortSignal,
+                  onCancel: () => {
+                    activeSession.abortCompaction();
+                  },
+                },
+              );
+          const effectiveFirstKeptEntryId = clientResult?.firstKeptEntryId;
+          const tokensBefore = serverResult?.usage.input_tokens ?? clientResult!.tokensBefore;
           // Estimate tokens after compaction by summing token estimates for remaining messages
           const tokensAfter =
-            serverTokensAfter ??
+            serverResult?.usage.output_tokens ??
             estimateTokensAfterCompaction({
               messagesAfter: session.messages,
               observedTokenCount,
@@ -545,32 +453,30 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
-          const activeSessionId = params.sessionId;
           const activeSessionFile = formatSqliteSessionFileMarker({
             ...sessionTarget,
-            sessionId: activeSessionId,
+            sessionId: params.sessionId,
           });
-          const activePostLeafId = postCompactionLeafId;
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
-            sessionId: activeSessionId,
+            sessionId: params.sessionId,
             agentId: sessionAgentId,
             sessionFile: activeSessionFile,
           });
-          if (!serverCompaction) {
+          if (clientResult) {
             checkpointSnapshotRetained = await persistCompactionCheckpoint({
               config: params.config,
               sessionKey: params.sessionKey,
-              sessionId: activeSessionId,
+              sessionId: params.sessionId,
               trigger: params.trigger,
               snapshot: checkpointSnapshot,
-              summary: result.summary,
+              summary: clientResult.summary,
               firstKeptEntryId: effectiveFirstKeptEntryId,
-              tokensBefore: observedTokenCount ?? result.tokensBefore,
+              tokensBefore: observedTokenCount ?? clientResult.tokensBefore,
               tokensAfter,
               sessionFile: activeSessionFile,
-              leafId: activePostLeafId,
+              leafId: sessionManager.getLeafId?.() ?? undefined,
               createdAt: compactStartedAt,
             });
           }
@@ -593,7 +499,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
           await runAfterCompactionHooks({
             hookRunner,
-            sessionId: activeSessionId,
+            sessionId: params.sessionId,
             sessionAgentId,
             hookSessionKey,
             missingSessionKey,
@@ -603,26 +509,32 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             tokensAfter,
             compactedCount,
             sessionFile: activeSessionFile,
-            ...(activeSessionId !== params.sessionId
-              ? { previousSessionId: params.sessionId }
-              : {}),
-            summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
-            tokensBefore: result.tokensBefore,
+            summaryLength: clientResult?.summary.length,
+            tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
             onHookMessages: params.onCompactionHookMessages,
           });
           return {
             ok: true,
             compacted: true,
-            ...(serverCompaction ? { compactionKind: "server-endpoint" as const } : {}),
+            ...(serverResult ? { compactionKind: "server-endpoint" as const } : {}),
             result: {
-              summary: result.summary,
-              firstKeptEntryId: effectiveFirstKeptEntryId,
-              tokensBefore: observedTokenCount ?? result.tokensBefore,
+              ...(clientResult
+                ? {
+                    summary: clientResult.summary,
+                    firstKeptEntryId: clientResult.firstKeptEntryId,
+                  }
+                : { kind: "server-endpoint" as const }),
+              tokensBefore: serverResult
+                ? tokensBefore
+                : (observedTokenCount ?? clientResult!.tokensBefore),
               tokensAfter,
-              details: result.details,
-              sessionId: undefined,
-              sessionFile: undefined,
+              details: serverResult
+                ? {
+                    compactionKind: "server-endpoint" as const,
+                    droppedMessageCount: serverResult.usage.dropped_message_count,
+                  }
+                : clientResult!.details,
             },
           };
         } catch (err) {

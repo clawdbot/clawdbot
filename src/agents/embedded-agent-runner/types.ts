@@ -270,15 +270,26 @@ export type EmbeddedAgentCompactResult = {
     code?: string;
     rawError?: string;
   };
-  result?: {
-    summary: string;
-    firstKeptEntryId: string;
-    tokensBefore: number;
-    tokensAfter?: number;
-    details?: unknown;
-    sessionId?: string;
-    sessionFile?: string;
-  };
+  result?:
+    | {
+        kind: "server-endpoint";
+        summary?: never;
+        firstKeptEntryId?: never;
+        tokensBefore: number;
+        tokensAfter: number;
+        details?: unknown;
+        sessionId?: never;
+        sessionFile?: never;
+      }
+    | {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+        tokensAfter?: number;
+        details?: unknown;
+        sessionId?: string;
+        sessionFile?: string;
+      };
 };
 
 export type EmbeddedFullAccessBlockedReason = "sandbox" | "host-policy" | "channel" | "runtime";

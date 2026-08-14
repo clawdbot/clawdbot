@@ -717,8 +717,7 @@ describe("handleCompactCommand", () => {
       compacted: true,
       compactionKind: "server-endpoint",
       result: {
-        summary: "Server-side Responses compaction",
-        firstKeptEntryId: "assistant-entry",
+        kind: "server-endpoint",
         tokensBefore: 8_614,
         tokensAfter: 736,
       },

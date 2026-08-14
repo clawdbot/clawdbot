@@ -170,10 +170,7 @@ export async function requestOpenAIResponsesCompaction(
 ): Promise<OpenAIResponsesCompactEndpointResult> {
   const apiKey = options.apiKey || getEnvApiKey(model.provider) || "";
   let params = buildOpenAIResponsesParams(model, context, options);
-  const patched = await options.onPayload?.(params, model);
-  if (patched !== undefined) {
-    params = patched as typeof params;
-  }
+  params = ((await options.onPayload?.(params, model)) as typeof params | undefined) ?? params;
   params = sanitizeResponsesImagePayload(params as Record<string, unknown>) as typeof params;
   const client = createOpenAIResponsesClient(
     model,
@@ -194,7 +191,6 @@ export async function requestOpenAIResponsesCompaction(
   const item = output[0];
   const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
   if (
-    response == null ||
     !isRecord(response) ||
     response.object !== "response.compaction" ||
     output.length !== 1 ||
@@ -206,18 +202,9 @@ export async function requestOpenAIResponsesCompaction(
     typeof usage.input_tokens !== "number" ||
     typeof usage.output_tokens !== "number"
   ) {
-    throw new Error(
-      "Responses compact endpoint did not return exactly one compaction item with usage",
-    );
+    throw new Error("Responses compact endpoint did not return exactly one compaction item");
   }
-  return {
-    item: {
-      type: "compaction",
-      ...(typeof item.id === "string" ? { id: item.id } : {}),
-      encrypted_content: item.encrypted_content,
-    },
-    usage: usage as OpenAIResponsesCompactEndpointResult["usage"],
-  };
+  return { item, usage } as OpenAIResponsesCompactEndpointResult;
 }
 
 type ResponsesPricingOptions = Pick<
