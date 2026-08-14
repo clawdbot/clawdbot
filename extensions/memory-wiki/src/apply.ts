@@ -100,7 +100,15 @@ function normalizeMemoryWikiMutationOp(
   if (op === "metadata") {
     return "update_metadata";
   }
-  return op;
+  if (op === "create_synthesis" || op === "update_metadata") {
+    return op;
+  }
+  // Provider tool schemas do not guarantee enum enforcement, so an unknown op
+  // reaches here at runtime. Fail closed: silently treating it as
+  // update_metadata would write to a page the caller never targeted.
+  throw new Error(
+    `wiki mutation op must be one of "create_synthesis", "update_metadata" (aliases: "synthesis", "metadata"); received ${JSON.stringify(op)}.`,
+  );
 }
 
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {

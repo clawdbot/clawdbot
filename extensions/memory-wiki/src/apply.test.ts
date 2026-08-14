@@ -64,6 +64,22 @@ describe("applyMemoryWikiMutation", () => {
     ).toThrow("confidence must be a finite number");
   });
 
+  it("rejects unknown mutation ops instead of treating them as update_metadata", () => {
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "synthesise",
+        lookup: "entity.alpha",
+      } as never),
+    ).toThrow('wiki mutation op must be one of "create_synthesis", "update_metadata"');
+
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "update",
+        lookup: "entity.alpha",
+      } as never),
+    ).toThrow('received "update"');
+  });
+
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
 
