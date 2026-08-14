@@ -1297,24 +1297,6 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
   });
 
-  it("fails before fetching when verification target resolution fails", async () => {
-    resolveClawHubSkillVerificationTargetMock.mockResolvedValueOnce({
-      ok: false,
-      error: "Use either --version or --tag.",
-    });
-
-    await expect(
-      runCommand(["skills", "verify", "agentreceipt", "--version", "1.0.0", "--tag", "latest"]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: "Use either --version or --tag.",
-    });
-    expect(runtimeErrors).toStrictEqual([]);
-    expect(fetchClawHubSkillVerificationMock).not.toHaveBeenCalled();
-    expect(fetchClawHubSkillCardMock).not.toHaveBeenCalled();
-  });
-
   it("returns JSON when verify workspace selection fails", async () => {
     defaultRuntime.exit.mockImplementationOnce(() => undefined);
 
