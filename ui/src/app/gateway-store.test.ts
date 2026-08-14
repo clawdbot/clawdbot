@@ -23,6 +23,10 @@ vi.mock("../build-info.ts", () => ({
     release: false,
     buildId: "test",
   },
+  controlUiBuildDiffersFrom: (identity: { version?: string | null; buildId?: string | null }) =>
+    identity.buildId
+      ? identity.buildId !== "test"
+      : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
 
 const HELLO: GatewayHelloOk = {
@@ -111,6 +115,7 @@ describe("createApplicationGateway connection phase", () => {
       hostname: "127.0.0.1",
       origin: "http://127.0.0.1:18789",
       pathname: "/",
+      href: "http://127.0.0.1:18789/",
     } as Location);
   });
 
@@ -143,6 +148,7 @@ describe("createApplicationGateway connection phase", () => {
 
     expect(current().started).toBe(1);
     expect(current().opts.clientVersion).toBe("2026.7.19");
+    expect(current().opts.clientBuildId).toBe("test");
     expect(gateway.snapshot.phase).toBe("connecting");
 
     current().opts.onHello?.(HELLO);
@@ -153,6 +159,31 @@ describe("createApplicationGateway connection phase", () => {
 
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
     expect(gateway.snapshot.phase).toBe("offline");
+  });
+
+  it("gates same-origin terminal work on exact build identity", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onHello?.({
+      ...HELLO,
+      server: { version: "2026.7.19", buildId: "new-build", connId: "conn-1" },
+    });
+
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+  });
+
+  it("does not compare a separately hosted Control UI with a remote gateway build", () => {
+    const settings = { ...loadSettings(), gatewayUrl: "wss://remote.example/ws" };
+    const { gateway, current } = createStore({ settings });
+    gateway.start();
+
+    current().opts.onHello?.({
+      ...HELLO,
+      server: { version: "2026.7.19", buildId: "remote-build", connId: "conn-1" },
+    });
+
+    expect(gateway.snapshot.phase).toBe("connected");
   });
 
   it.each([

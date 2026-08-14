@@ -275,6 +275,8 @@ describe("Control UI service-worker production update E2E", () => {
     const gateway = await installMockGateway(page, {
       assistantAgentId: "research",
       defaultAgentId: "research",
+      serverBuildId: buildA,
+      serverVersion: "2026.7.10",
       featureMethods: ["terminal.open"],
       methodResponses: {
         "terminal.open": {
@@ -358,6 +360,7 @@ describe("Control UI service-worker production update E2E", () => {
         .toContain("thread-during-worker-refresh");
       await page.waitForTimeout(300);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      await gateway.setServerBuildId(buildB);
       installGate.release();
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);

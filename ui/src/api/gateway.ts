@@ -165,6 +165,7 @@ export type GatewayBrowserClientOptions = {
   password?: string;
   clientName?: GatewayClientName;
   clientVersion?: string;
+  clientBuildId?: string;
   platform?: string;
   mode?: GatewayClientMode;
   instanceId?: string;
@@ -447,6 +448,7 @@ export class GatewayBrowserClient {
     const client: GatewayConnectClientInfo = {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
       version: this.opts.clientVersion ?? "control-ui",
+      buildId: this.opts.clientBuildId,
       platform: this.opts.platform ?? navigator.platform ?? "web",
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,

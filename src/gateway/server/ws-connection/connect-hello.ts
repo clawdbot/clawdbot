@@ -14,7 +14,7 @@ import {
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
-import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import {
   listControlUiPluginTabs,
@@ -106,12 +106,18 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  // A configured UI root can be built independently from the Gateway. Exact
+  // comparison is authoritative only for the package-owned bundled artifact.
+  const serverBuildId = context.configSnapshot.gateway?.controlUi?.root
+    ? null
+    : resolveRuntimeServiceBuildId();
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
     protocol: PROTOCOL_VERSION,
     server: {
       version: resolveRuntimeServiceVersion(process.env),
+      ...(serverBuildId ? { buildId: serverBuildId } : {}),
       connId,
     },
     features: {

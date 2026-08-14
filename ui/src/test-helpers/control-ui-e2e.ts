@@ -263,6 +263,9 @@ export type ControlUiMockGatewayScenario = {
   deferredMethods?: string[];
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
+  /** Exact immutable Control UI artifact served by the mocked Gateway. */
+  serverBuildId?: string;
+  serverVersion?: string;
   /** Simulate the one-time legacy Control UI device-auth pairing transition. */
   deviceAuthMigrationPending?: boolean;
   deviceToken?: string;
@@ -460,6 +463,7 @@ export type MockGatewayControls = {
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
+  setServerBuildId: (buildId: string) => Promise<void>;
   setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
@@ -793,6 +797,8 @@ function normalizeScenario(
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
+    serverBuildId: scenario.serverBuildId?.trim() || "e2e",
+    serverVersion: scenario.serverVersion?.trim() || "2026.7.10",
     deviceAuthMigrationPending: scenario.deviceAuthMigrationPending ?? false,
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
@@ -835,7 +841,8 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
-    serverVersion: "e2e",
+    serverVersion: normalizedScenario.serverVersion,
+    serverBuildId: normalizedScenario.serverBuildId,
     terminalEnabled: normalizedScenario.terminalEnabled,
     cliAgentsEnabled: normalizedScenario.cliAgentsEnabled,
   };
@@ -900,6 +907,7 @@ function installControlUiMockGateway(
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
     setOnline: (online: boolean) => void;
+    setServerBuildId: (buildId: string) => void;
     setOperatorScopes: (scopes: string[]) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     setMethodResponse: (method: string, payload: unknown) => void;
@@ -917,6 +925,13 @@ function installControlUiMockGateway(
   };
 
   const scenario: BrowserScenario = input.scenario;
+  const serverBuildIdStateKey = "openclaw.control-ui-e2e.serverBuildId";
+  let serverBuildId = scenario.serverBuildId;
+  try {
+    serverBuildId = window.sessionStorage.getItem(serverBuildIdStateKey)?.trim() || serverBuildId;
+  } catch {
+    // The scenario value remains authoritative when browser storage is unavailable.
+  }
   (window as unknown as WindowWithGateway)["__OPENCLAW_CONTROL_UI_BASE_PATH__"] = scenario.basePath;
   const protocolVersion = input.protocolVersion;
   const methodResponseOverridesStorageKey = "openclaw.control-ui-e2e.method-responses.v1";
@@ -1579,7 +1594,11 @@ function installControlUiMockGateway(
             ? { deviceAuthMigration: { pending: true as const } }
             : {}),
           protocol: protocolVersion,
-          server: { connId: "control-ui-e2e", version: "e2e" },
+          server: {
+            buildId: serverBuildId,
+            connId: "control-ui-e2e",
+            version: scenario.serverVersion,
+          },
           policy: {
             maxPayload: 1_048_576,
             maxBufferedBytes: 1_048_576,
@@ -2044,6 +2063,14 @@ function installControlUiMockGateway(
       }
       MockWebSocket.latest?.openConnection();
     },
+    setServerBuildId(nextBuildId) {
+      serverBuildId = nextBuildId;
+      try {
+        window.sessionStorage.setItem(serverBuildIdStateKey, nextBuildId);
+      } catch {
+        // The current document still observes the new identity.
+      }
+    },
     setOperatorScopes(scopes) {
       scenario.operatorScopes = [...scopes];
     },
@@ -2321,6 +2348,21 @@ function createMockGatewayControls(
         }
         gateway.setOnline(nextOnline);
       }, online);
+    },
+    async setServerBuildId(buildId) {
+      await page.evaluate((nextBuildId) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setServerBuildId: (buildId: string) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setServerBuildId(nextBuildId);
+      }, buildId);
     },
     async setOperatorScopes(scopes) {
       await page.evaluate((nextScopes) => {
