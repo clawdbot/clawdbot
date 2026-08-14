@@ -354,6 +354,14 @@ describe("AppSidebar session indicators", () => {
           kind: "direct",
           label: "Open PR child",
           updatedAt: 2,
+          hasActiveRun: true,
+          status: "running",
+          unread: true,
+          agentStatus: {
+            note: "Waiting for input",
+            attention: "key",
+            expiresAt: Date.now() + 60_000,
+          },
           worktree: { id: "wt-open", branch: "feature/open", repoRoot: "/repo" },
         },
         {
@@ -419,6 +427,14 @@ describe("AppSidebar session indicators", () => {
     expect(pinnedLead?.innerHTML).toBe(runningLead?.innerHTML);
     expect(pinnedLead?.querySelector("[data-session-pr-state]")).toBeNull();
     expect(pinnedRow?.querySelector(".session-row-state")).toBeNull();
+
+    const attentionLead = sidebar.querySelector(
+      `[data-session-key="${openPullRequestKey}"] .sidebar-session-indicator`,
+    );
+    expect(attentionLead?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    expect(attentionLead?.querySelector(".session-glyph__ring")).not.toBeNull();
+    expect(attentionLead?.querySelector(".session-glyph__badge--unread")).toBeNull();
+    expect(attentionLead?.querySelector('[data-session-pr-state="open"]')).not.toBeNull();
   });
 
   it("prioritizes an active run over unread activity", async () => {

@@ -32,7 +32,9 @@ function renderGlyphBadge(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
 ): SessionGlyphContent {
-  if (session.unread) {
+  // The run ring owns transient activity while active; unread stays stored
+  // and returns as the glyph badge after the run ends.
+  if (session.unread && !session.hasActiveRun) {
     return renderSessionUnreadBadge();
   }
   if (pullRequestState === "none") {
