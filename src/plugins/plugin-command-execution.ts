@@ -19,39 +19,16 @@ import {
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
 import { pluginCommandSupportsChannel } from "./plugin-command-metadata.js";
+import type { PluginCommandDispatchContext } from "./plugin-command-runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
 const MAX_ARGS_LENGTH = 4096;
 
-export type PluginCommandExecutionParams = {
+export type PluginCommandExecutionParams = PluginCommandDispatchContext & {
   command: RegisteredPluginCommand;
   args?: string;
-  senderId?: string;
-  channel: string;
-  channelId?: PluginCommandContext["channelId"];
-  isAuthorizedSender: boolean;
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
-  agentId?: string;
-  sessionKey?: PluginCommandContext["sessionKey"];
-  sessionId?: PluginCommandContext["sessionId"];
-  sessionTarget?: PluginCommandContext["sessionTarget"];
-  sessionFile?: PluginCommandContext["sessionFile"];
-  authProfileId?: string;
-  commandBody: string;
-  config: OpenClawConfig;
-  from?: PluginCommandContext["from"];
-  to?: PluginCommandContext["to"];
-  originatingTo?: string;
-  accountId?: PluginCommandContext["accountId"];
-  messageThreadId?: PluginCommandContext["messageThreadId"];
-  threadParentId?: PluginCommandContext["threadParentId"];
-  diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
-  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
-  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
-  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
 };
 
 function sanitizeArgs(args: string | undefined): string | undefined {
@@ -229,13 +206,16 @@ export async function executeRegisteredPluginCommand(
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
-    runtimeContext: buildRuntimeContext({
-      command,
-      config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      authProfileId: params.authProfileId,
-    }),
+    runtimeContext: {
+      ...buildRuntimeContext({
+        command,
+        config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        authProfileId: params.authProfileId,
+      }),
+      ...params.runtimeContext,
+    },
     ...(trustedReservedOwner && params.diagnosticsUploadApproved !== undefined
       ? { diagnosticsUploadApproved: params.diagnosticsUploadApproved }
       : {}),

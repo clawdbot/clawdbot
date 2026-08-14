@@ -18,6 +18,7 @@ import {
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
 import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
+import { handleCompactCommand } from "./commands-compact.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 /**
@@ -100,6 +101,18 @@ export const handlePluginCommand: CommandHandler = async (
         ? params.ctx.MessageThreadId
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
+    ...(sessionTarget
+      ? {
+          runtimeContext: {
+            // Bound-session gating above makes the canonical command outcome authoritative.
+            compactCurrent: async () =>
+              (await handleCompactCommand(
+                { ...params, command: { ...params.command, commandBodyNormalized: "/compact" } },
+                true,
+              ))!.sessionCompaction!,
+          },
+        }
+      : {}),
   });
   const shouldContinue = result.continueAgent === true;
   const { continueAgent: _continueAgent, ...reply } = result;

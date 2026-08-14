@@ -121,6 +121,34 @@ return {
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
 
+## Plugin command runtime helpers
+
+Plugin command handlers receive request-bound capabilities through
+`ctx.runtimeContext`. When the command is bound to a current session,
+`ctx.runtimeContext.compactCurrent()` runs the same manual compaction
+pipeline as `/compact`, including native agent-harness completion and session
+token accounting:
+
+```typescript
+const compactCurrent = ctx.runtimeContext?.compactCurrent;
+if (!compactCurrent) {
+  return { text: "This command needs a bound session." };
+}
+
+const result = await compactCurrent();
+return {
+  text: result.compacted
+    ? `Compacted to ${result.tokensAfter ?? "an unknown number of"} tokens.`
+    : `Compaction did not complete: ${result.reason ?? "unknown reason"}.`,
+};
+```
+
+The capability is absent when no current session is bound. Do not retain the
+callback beyond the command invocation or reconstruct compaction with session
+store patches and harness calls. The result contains `compacted`, optional
+`reason`, and optional `tokensBefore` and `tokensAfter` snapshots; OpenClaw owns
+all persistence and lifecycle coordination.
+
 ## Runtime namespaces
 
 <AccordionGroup>

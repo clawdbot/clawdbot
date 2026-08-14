@@ -422,13 +422,22 @@ export async function startThreadAction(
   kind: "compact" | "review",
   args: string[],
 ): Promise<string> {
-  const label = kind === "compact" ? "compaction" : "review";
   if (args.length > 0) {
-    return `Usage: /codex ${label === "compaction" ? "compact" : label}`;
+    return `Usage: /codex ${kind}`;
+  }
+  if (kind === "compact") {
+    const compactCurrent = ctx.runtimeContext?.compactCurrent;
+    if (!compactCurrent) {
+      return "Codex compaction is unavailable because this command is not bound to a session.";
+    }
+    const result = await compactCurrent();
+    return result.compacted
+      ? `Compacted Codex session (${result.tokensAfter ?? "unknown"} tokens after).`
+      : `Codex compaction did not complete: ${formatCodexDisplayText(result.reason ?? "no reason returned")}.`;
   }
   const target = await resolveControlTarget(ctx);
   if (!target) {
-    return `Cannot start Codex ${label} because this command did not include a stable binding identity.`;
+    return "Cannot start Codex review because this command did not include a stable binding identity.";
   }
   const binding = await deps.bindingStore.read(target.identity);
   if (!binding?.threadId) {
@@ -441,10 +450,8 @@ export async function startThreadAction(
   });
   await deps.codexControlRequest(
     pluginConfig,
-    kind === "compact" ? CODEX_CONTROL_METHODS.compact : CODEX_CONTROL_METHODS.review,
-    kind === "review"
-      ? { threadId: binding.threadId, target: { type: "uncommittedChanges" } }
-      : { threadId: binding.threadId },
+    CODEX_CONTROL_METHODS.review,
+    { threadId: binding.threadId, target: { type: "uncommittedChanges" } },
     {
       agentDir: target.agentDir,
       authProfileId: connection.clientAuthProfileId,
@@ -452,5 +459,5 @@ export async function startThreadAction(
       ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
     },
   );
-  return `Started Codex ${label} for thread ${formatCodexDisplayText(binding.threadId)}.`;
+  return `Started Codex review for thread ${formatCodexDisplayText(binding.threadId)}.`;
 }

@@ -2733,7 +2733,7 @@ describe("codex command", () => {
     });
   });
 
-  it("starts compaction for the attached Codex thread", async () => {
+  it("compacts the current session through the host runtime", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const identity = {
       kind: "session",
@@ -2756,18 +2756,24 @@ describe("codex command", () => {
     });
     const codexControlRequest = vi.fn(async () => undefined);
     const deps = createDeps({ codexControlRequest });
+    const compactCurrent = vi.fn(async () => ({
+      compacted: true,
+      tokensBefore: 900,
+      tokensAfter: 321,
+    }));
 
     await expect(
-      handleCodexCommand(createContext("compact", sessionFile), { deps }),
+      handleCodexCommand(
+        createContext("compact", sessionFile, {
+          runtimeContext: { compactCurrent },
+        }),
+        { deps },
+      ),
     ).resolves.toEqual({
-      text: "Started Codex compaction for thread thread-123.",
+      text: "Compacted Codex session (321 tokens after).",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.compact,
-      { threadId: "thread-123" },
-      expect.objectContaining({ config: {} }),
-    );
+    expect(compactCurrent).toHaveBeenCalledOnce();
+    expect(codexControlRequest).not.toHaveBeenCalled();
   });
 
   it("starts review with the generated app-server target shape", async () => {
@@ -2802,10 +2808,17 @@ describe("codex command", () => {
     const pluginConfig = { supervision: { enabled: true } };
     const deps = createDeps({ codexControlRequest });
 
-    await handleCodexCommand(createContext("compact"), { deps, pluginConfig });
+    await handleCodexCommand(
+      createContext("compact", undefined, {
+        runtimeContext: {
+          compactCurrent: async () => ({ compacted: true, tokensAfter: 321 }),
+        },
+      }),
+      { deps, pluginConfig },
+    );
     await handleCodexCommand(createContext("review"), { deps, pluginConfig });
 
-    expect(codexControlRequest).toHaveBeenCalledTimes(2);
+    expect(codexControlRequest).toHaveBeenCalledTimes(1);
     for (let callIndex = 0; callIndex < codexControlRequest.mock.calls.length; callIndex += 1) {
       expect(mockArg(codexControlRequest, callIndex, 3)).toMatchObject({
         authProfileId: null,
@@ -2835,15 +2848,18 @@ describe("codex command", () => {
     expect(codexControlRequest).not.toHaveBeenCalled();
   });
 
-  it("escapes started thread-action ids before chat display", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
-      { threadId: "thread-123 <@U123>", cwd: "/repo" },
+  it("escapes compaction failure reasons before chat display", async () => {
+    const result = await handleCodexCommand(
+      createContext("compact", undefined, {
+        runtimeContext: {
+          compactCurrent: async () => ({
+            compacted: false,
+            reason: "thread-123 <@U123>",
+          }),
+        },
+      }),
+      { deps: createDeps() },
     );
-    const result = await handleCodexCommand(createContext("compact", sessionFile), {
-      deps: createDeps(),
-    });
 
     expect(result.text).toContain("thread-123 &lt;\uff20U123&gt;");
     expect(result.text).not.toContain("<@U123>");
@@ -3060,13 +3076,13 @@ describe("codex command", () => {
     expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
 
-  it("explains compaction when no Codex thread is attached", async () => {
+  it("gates compaction when the command has no bound session", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
 
     await expect(
       handleCodexCommand(createContext("compact", sessionFile), { deps: createDeps() }),
     ).resolves.toEqual({
-      text: "No Codex thread is attached to this OpenClaw session yet.",
+      text: "Codex compaction is unavailable because this command is not bound to a session.",
     });
   });
 
@@ -4719,7 +4735,6 @@ describe("codex command", () => {
       ["mcp", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["skills", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["resume thread-123", createDeps({ codexControlRequest: vi.fn(failure) })],
-      ["compact", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["review", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["stop", createDeps({ stopCodexConversationTurn: vi.fn(failure) })],
       ["steer keep going", createDeps({ steerCodexConversationTurn: vi.fn(failure) })],
@@ -4727,6 +4742,14 @@ describe("codex command", () => {
     ] as const) {
       expectSanitizedFailure(await handleCodexCommand(createContext(args, sessionFile), { deps }));
     }
+    expectSanitizedFailure(
+      await handleCodexCommand(
+        createContext("compact", sessionFile, {
+          runtimeContext: { compactCurrent: vi.fn(failure) },
+        }),
+        { deps: createDeps() },
+      ),
+    );
   });
 
   it("records an approved Codex bind intent without starting a thread", async () => {

@@ -1,8 +1,12 @@
 // Tests plugin command dispatch and plugin-scoped command aliases.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerPluginCommandInRegistry } from "../../plugins/command-registration.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
@@ -16,6 +20,14 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { handlePluginCommand } from "./commands-plugin.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
+
+const compactEmbeddedAgentSessionMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./commands-compact.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands-compact.runtime.js")>()),
+  compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
+  isEmbeddedAgentRunAbortableForCompaction: () => false,
+}));
 
 let registry: PluginRegistry;
 
@@ -71,6 +83,7 @@ function buildPluginParams(
 
 describe("handlePluginCommand", () => {
   beforeEach(() => {
+    compactEmbeddedAgentSessionMock.mockReset();
     resetPluginRuntimeStateForTest();
     registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
@@ -96,6 +109,72 @@ describe("handlePluginCommand", () => {
     expect(commandParams.sessionKey).toBe("agent:main:whatsapp:direct:test-user");
     expect(commandParams.sessionId).toBe("session-plugin-command");
     expect(commandParams.commandBody).toBe("/card");
+  });
+
+  it("compacts the bound session through the host runtime and records fresh tokens", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-compact-"));
+    const sessionKey = "agent:main:whatsapp:direct:test-user";
+    const storePath = path.join(tempDir, "sessions.json");
+    const handler = vi.fn(async (ctx: PluginCommandContext) => ({
+      text: JSON.stringify(await ctx.runtimeContext?.compactCurrent?.()),
+    }));
+    expect(
+      registerPluginCommandInRegistry(registry, "test-plugin", {
+        name: "card",
+        description: "Card command",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "native-harness",
+      result: { summary: "", firstKeptEntryId: "", tokensBefore: 900, tokensAfter: 321 },
+    });
+    const params = buildPluginParams("/card", {
+      commands: { text: true },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = {
+      [sessionKey]: { sessionId: "session-plugin-command", updatedAt: Date.now() },
+    };
+    params.provider = "openai";
+    params.model = "gpt-5.4";
+    params.workspaceDir = tempDir;
+    params.contextTokens = 10_000;
+    params.isGroup = false;
+    params.resolveDefaultThinkingLevel = async () => "medium";
+
+    try {
+      const response = await handlePluginCommand(params, true);
+
+      expect(response?.reply?.text).toBe(
+        JSON.stringify({ compacted: true, tokensBefore: 900, tokensAfter: 321 }),
+      );
+      expect(params.sessionStore[sessionKey]).toMatchObject({
+        compactionCount: 1,
+        totalTokens: 321,
+        totalTokensFresh: true,
+      });
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        compactionCount: 1,
+        totalTokens: 321,
+        totalTokensFresh: true,
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits session compaction when no bound session exists", async () => {
+    const handler = registerTestCommand();
+    const params = buildPluginParams("/card", { commands: { text: true } } as OpenClawConfig);
+    params.sessionEntry = undefined;
+
+    await handlePluginCommand(params, true);
+
+    expect(firstCommandContext(handler).runtimeContext?.compactCurrent).toBeUndefined();
   });
 
   it("prefers the target session entry from sessionStore for plugin command metadata", async () => {

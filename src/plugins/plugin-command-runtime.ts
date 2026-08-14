@@ -50,6 +50,7 @@ export type PluginCommandDispatchContext = Readonly<{
   diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
   diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
   diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
+  runtimeContext?: Pick<NonNullable<PluginCommandContext["runtimeContext"]>, "compactCurrent">;
 }>;
 
 /** Opaque capability bound to one selected command in one registry generation. */

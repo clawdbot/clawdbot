@@ -72,21 +72,18 @@ function formatCompactionReason(reason?: string): string | undefined {
   if (!text) {
     return undefined;
   }
-
   const classification = classifyCompactionReason(reason);
-  const lower = normalizeLowercaseStringOrEmpty(reason);
-  switch (classification) {
-    case "no_compactable_entries":
-      return "nothing compactable in this session yet";
-    case "below_threshold":
-      return lower.includes("already under target")
-        ? "context is already under the compaction target"
-        : "context is below the compaction threshold";
-    case "already_compacted":
-      return "session is already compacted";
-    default:
-      return text;
+  if (classification === "no_compactable_entries") {
+    return "nothing compactable in this session yet";
   }
+  if (classification === "already_compacted") {
+    return "session is already compacted";
+  }
+  return classification === "below_threshold"
+    ? normalizeLowercaseStringOrEmpty(reason).includes("already under target")
+      ? "context is already under the compaction target"
+      : "context is below the compaction threshold"
+    : text;
 }
 
 function resolveManualCompactContextTokenBudget(params: {
@@ -217,6 +214,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     if (!drained) {
       return {
         shouldContinue: false,
+        sessionCompaction: {
+          compacted: false,
+          reason: "the previous run is still stopping",
+        },
         reply: {
           text: "⚙️ Compaction unavailable: the previous run is still stopping.",
           isStatusNotice: true,
@@ -362,6 +363,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
   return {
     shouldContinue: false,
+    sessionCompaction: {
+      compacted: didCompact,
+      reason: result.reason,
+      tokensBefore: result.result?.tokensBefore,
+      tokensAfter: tokensAfterCompaction,
+    },
     reply: {
       text: `⚙️ ${line}`,
       isStatusNotice: true,
