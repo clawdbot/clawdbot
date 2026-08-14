@@ -1036,9 +1036,12 @@ struct OnboardingAISetupTests {
         view.aiSetup.startProviderAuth(try #require(view.aiSetup.authOptions.first))
         _ = await waitForAISetupRequests(harness.recorder, count: 5)
         await settleQueuedAISetupTasks()
+        #expect(view.aiSetup.configuredGatewayVerificationFailure == nil)
         #expect(view.aiSetup.detectError != nil)
         #expect(view.aiSetup.ownsInferenceTransition)
 
+        // This is the visible detection-error card's Try again action once
+        // successful sign-in retires the configured-verification card.
         view.aiSetup.retryFromScratch()
         _ = await waitForAISetupRequests(harness.recorder, count: 6)
         for _ in 0..<400 where !view.aiSetup.connected {

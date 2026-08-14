@@ -1451,6 +1451,13 @@ extension OnboardingAISetupModel {
             let preparedModel = preparedModelRef?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             self.providerAuthReconciliationPending = self.providerWizardKind == .auth
+            if self.providerAuthReconciliationPending,
+               self.configuredGatewayVerificationFailure != nil
+            {
+                // Successful reauthentication supersedes the old verification
+                // failure; reconciliation now owns detection and its retries.
+                self.configuredGatewayBlocker = nil
+            }
             self.clearProviderAuth()
             if let preparedProvider,
                let preparedModel,
