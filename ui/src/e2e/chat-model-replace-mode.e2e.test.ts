@@ -43,13 +43,13 @@ suite.define(() => {
       await composer.locator('[data-chat-model-select="true"]').click();
       const hint = composer.locator(".chat-controls__catalog-hint");
       expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { view: "configured" } }),
+        expect.objectContaining({ params: { agentId: "main", view: "configured" } }),
       ]);
       await expect
         .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
         .toBe("Replace mode filters models according to your model settings. Manage models");
       await expect
-        .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
+        .poll(() => hint.locator("a").getAttribute("href"))
         .toBe("/settings/model-providers");
     });
   });
@@ -147,7 +147,7 @@ suite.define(() => {
         .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
         .toBe("Replace mode filters models according to your model settings. Manage models");
       await expect
-        .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
+        .poll(() => hint.locator("a").getAttribute("href"))
         .toBe("/settings/model-providers");
     });
   });
