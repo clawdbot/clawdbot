@@ -307,6 +307,13 @@ struct MacNodeModeCoordinatorTests {
             nextPaused: false,
             previousComputerControlEnabled: true,
             nextComputerControlEnabled: true))
+        #expect(MacNodeModeCoordinator.controlTransitionRequiresRouteInvalidation(
+            previousPaused: false,
+            nextPaused: false,
+            previousComputerControlEnabled: true,
+            nextComputerControlEnabled: true,
+            previousComputerControlProvider: .peekaboo,
+            nextComputerControlProvider: .cua))
     }
 
     @Test func `first endpoint snapshot rejects a stale captured endpoint`() throws {

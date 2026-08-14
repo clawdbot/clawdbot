@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
@@ -146,6 +147,40 @@ struct MacNodeHostWorkerTests {
         #expect(await worker.invokedCommands() == [command])
     }
 
+    @Test(arguments: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue])
+    func `selected CUA provider gives the command pair exclusively to the worker`(command: String) async {
+        let worker = StubMacNodeHostWorker(commands: [command])
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "cua-owned",
+            command: command,
+            paramsJSON: "{}"))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == #"{"owner":"cli"}"#)
+        #expect(await worker.invokedCommands() == [command])
+    }
+
+    @Test func `selected CUA provider never falls back to native snapshot`() async {
+        let worker = StubMacNodeHostWorker(commands: [])
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "cua-unavailable",
+            command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(!response.ok)
+        #expect(response.error?.message == "UNAVAILABLE: selected CUA provider is not ready")
+        #expect(await worker.invokedCommands().isEmpty)
+    }
+
     @Test(arguments: [
         MacNodeCodexThreadCatalogContract.listCommand,
         MacNodeCodexThreadCatalogContract.turnsCommand,
@@ -232,6 +267,30 @@ struct MacNodeHostWorkerTests {
             ["system", "mcp"]) == ["canvas", "screen", "system", "mcp"])
     }
 
+    @Test func `provider selection filters command ownership and publishes only the CUA descriptor`() throws {
+        let descriptor = OpenClawProtocol.AnyCodable([
+            "contractVersion": OpenClawProtocol.AnyCodable(2),
+        ])
+        let manifest = MacNodeHostManifest(
+            version: "test",
+            caps: ["screen", "computer"],
+            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            computerUse: descriptor,
+            pathEnv: "/usr/bin:/bin")
+
+        let peekaboo = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: .peekaboo))
+        #expect(!peekaboo.commands.contains(MacNodeScreenCommand.snapshot.rawValue))
+        #expect(!peekaboo.commands.contains(OpenClawComputerCommand.act.rawValue))
+        #expect(peekaboo.computerUse == nil)
+
+        let cua = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: .cua))
+        #expect(cua.commands == manifest.commands)
+        #expect(MacNodeModeCoordinator.computerUseDescriptor(
+            provider: .cua,
+            commands: cua.commands,
+            workerManifest: cua) == descriptor)
+    }
+
     @Test func `stale route updates cannot replace newer worker authority`() {
         #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 4, currentGeneration: 4))
         #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 5, currentGeneration: 4))
@@ -264,6 +323,25 @@ struct MacNodeHostWorkerTests {
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
         #expect(response.ok)
         #expect(response.payload != nil)
+        await worker.stop()
+    }
+
+    @Test func `worker receives only the app-provided CUA endpoint`() async throws {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = """
+        test "$OPENCLAW_CUA_DRIVER_SOCKET_PATH" = "/private/test/cua.sock" || exit 41
+        test "$OPENCLAW_CUA_DRIVER_BINARY_PATH" = "/Applications/OpenClaw.app/Contents/Resources/cua-driver" || exit 42
+        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        while IFS= read -r line; do :; done
+        """
+
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script],
+            environment: [
+                CuaDriverWorkerEnvironment.socketPath: "/private/test/cua.sock",
+                CuaDriverWorkerEnvironment.binaryPath:
+                    "/Applications/OpenClaw.app/Contents/Resources/cua-driver",
+            ]))
         await worker.stop()
     }
 

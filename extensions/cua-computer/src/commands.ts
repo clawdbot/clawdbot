@@ -30,6 +30,7 @@ import {
   type CuaLastFrame,
   type CuaScreenSize,
 } from "./frame.js";
+import { createCuaMcpDriver } from "./mcp-driver-client.js";
 import { handleV2Act, type CuaComputerActParams } from "./v2-actions.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
@@ -38,6 +39,8 @@ const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 // capture, not the delivered frame. 8K (7680x4320 = ~33.2M) is a valid primary
 // display; budget above it so full-resolution snapshots reach the downscaler.
 const MAX_IMAGE_PIXELS = 40_000_000;
+const CUA_DRIVER_SOCKET_PATH_ENV = "OPENCLAW_CUA_DRIVER_SOCKET_PATH";
+const CUA_DRIVER_BINARY_PATH_ENV = "OPENCLAW_CUA_DRIVER_BINARY_PATH";
 
 const DesktopStateSchema = z.object({
   platform: z.string().min(1),
@@ -75,6 +78,30 @@ type CuaComputerProviderOptions = {
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
 };
+
+function resolveMacOsMcpEndpoint(
+  env: NodeJS.ProcessEnv,
+): { socketPath: string; binaryPath: string } | undefined {
+  const socketPath = env[CUA_DRIVER_SOCKET_PATH_ENV]?.trim();
+  const binaryPath = env[CUA_DRIVER_BINARY_PATH_ENV]?.trim();
+  if (!socketPath || !binaryPath) {
+    return undefined;
+  }
+  if (
+    socketPath.includes("\0") ||
+    binaryPath.includes("\0") ||
+    !path.isAbsolute(socketPath) ||
+    !path.isAbsolute(binaryPath)
+  ) {
+    return undefined;
+  }
+  try {
+    fs.accessSync(binaryPath, fs.constants.X_OK);
+  } catch {
+    return undefined;
+  }
+  return { socketPath, binaryPath };
+}
 
 class PromiseQueue {
   private tail: Promise<void> = Promise.resolve();
@@ -204,7 +231,7 @@ function clickArgs(
   const modifiers = normalizeModifiers(params.modifiers);
   if (modifiers.length > 0) {
     throw new Error(
-      "COMPUTER_UNSUPPORTED_ACTION: modifier-held clicks are unsupported by cua-driver on Linux",
+      "COMPUTER_UNSUPPORTED_ACTION: modifier-held desktop clicks are unsupported by cua-driver",
     );
   }
   return {
@@ -397,6 +424,7 @@ export function createCuaComputerProvider(
 ): ComputerUseProvider {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
+  const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
   let ownedDriver: CuaDriverSession | undefined;
   let stopped = false;
   // The node host owns one trusted SDK session for this command execution.
@@ -405,7 +433,13 @@ export function createCuaComputerProvider(
     if (stopped) {
       throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
     }
-    return options.driver ?? (ownedDriver ??= (options.createDriver ?? createCuaDriver)());
+    return (
+      options.driver ??
+      (ownedDriver ??= (
+        options.createDriver ??
+        (macOsEndpoint ? () => createCuaMcpDriver({ ...macOsEndpoint, env }) : createCuaDriver)
+      )())
+    );
   };
   const disposeOwnedDriver = async () => {
     stopped = true;
@@ -416,8 +450,14 @@ export function createCuaComputerProvider(
   const imageProcessor = options.imageProcessor ?? createImageProcessor(env);
   const interval = options.setInterval ?? setInterval;
   const clear = options.clearInterval ?? clearInterval;
-  const isSupportedPlatform = platform === "linux" || platform === "win32";
-  const isAvailable = () => isSupportedPlatform && driver().isAvailable();
+  const isSupportedPlatform =
+    platform === "linux" || platform === "win32" || macOsEndpoint !== undefined;
+  // The app injects the endpoint only after the host-owned daemon socket is
+  // accepting connections. Node-host manifests are one-shot, so the validated
+  // endpoint pair is the synchronous macOS readiness lease; invocation still
+  // awaits the MCP initialize handshake and fails visibly if it cannot attach.
+  const isAvailable = () =>
+    macOsEndpoint !== undefined || (isSupportedPlatform && driver().isAvailable());
 
   return {
     id: "cua-computer",
@@ -462,7 +502,9 @@ export function createCuaComputerProvider(
           await queue.run(async () => {
             if (!isSupportedPlatform) {
               throw new Error(
-                "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux",
+                platform === "darwin"
+                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_SOCKET_PATH_ENV} and ${CUA_DRIVER_BINARY_PATH_ENV}`
+                  : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
               );
             }
             const params = parseScreenSnapshotParamsJSON(paramsJSON);
@@ -472,14 +514,14 @@ export function createCuaComputerProvider(
             const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
             const desktop = await driver().getDesktopState(signal);
             const geometry = desktopGeometry(desktop);
-            // cua-driver desktop input consumes native get_desktop_state PNG pixels,
-            // and on every supported backend the driver reports screen geometry in
-            // that same physical-pixel space (Windows PMv2, Linux X11/Wayland). If a
-            // capture ever diverges from screen geometry, our screenshot->native
-            // scaling would mis-target input, so refuse rather than click blind.
+            // Windows and Linux report capture and input geometry in the same
+            // physical-pixel space. macOS intentionally reports logical screen
+            // points plus native Retina pixels; its desktop tools consume the
+            // native screenshot coordinates and undo that scale internally.
             if (
-              geometry.screenWidth !== geometry.screenshotWidth ||
-              geometry.screenHeight !== geometry.screenshotHeight
+              platform !== "darwin" &&
+              (geometry.screenWidth !== geometry.screenshotWidth ||
+                geometry.screenHeight !== geometry.screenshotHeight)
             ) {
               throw new Error(
                 "COMPUTER_UNSUPPORTED_DISPLAY: cua-driver reported capture and screen geometry in different pixel spaces",
@@ -514,7 +556,9 @@ export function createCuaComputerProvider(
           await queue.run(async () => {
             if (!isSupportedPlatform) {
               throw new Error(
-                "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux",
+                platform === "darwin"
+                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_SOCKET_PATH_ENV} and ${CUA_DRIVER_BINARY_PATH_ENV}`
+                  : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
               );
             }
             return await handleV2Act(

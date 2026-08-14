@@ -53,7 +53,11 @@ import {
   reconcileChatRunFromSessionRow,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
+import {
+  preserveQueuedUserTurn,
+  retirePersistedSteeredChips,
+  retireSteeredChipsForTerminalRun,
+} from "./steer-lifecycle.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
@@ -197,6 +201,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     // Admit that sequenced row now so the later unsequenced chat.final replay
     // replaces it in place instead of appending below the newer user turn.
     applyLiveSessionMessage(state, payload, event.hasActiveRun ?? undefined);
+    retirePersistedSteeredChips(state);
     void loadChatBranches(state);
   }
   if (matchesChat && event.archived !== null) {

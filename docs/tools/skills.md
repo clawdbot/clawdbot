@@ -357,7 +357,9 @@ metadata:
 ```
 
 <ParamField path="always" type="boolean">
-  When `true`, always include the skill and skip all other gates.
+  When `true`, include the skill whenever its `os` requirement is compatible,
+  bypassing `requires.bins`, `requires.anyBins`, `requires.env`, and
+  `requires.config`.
 </ParamField>
 
 <ParamField path="emoji" type="string">
@@ -369,7 +371,9 @@ metadata:
 </ParamField>
 
 <ParamField path="os" type='("darwin" | "linux" | "win32")[]'>
-  Platform filter. When set, the skill is only eligible on a listed OS.
+  Hard platform filter. When set, the skill is only eligible when the local
+  host or a connected remote runtime matches a listed OS. `always` does not
+  override this filter.
 </ParamField>
 
 <ParamField path="requires.bins" type="string[]">

@@ -100,6 +100,8 @@ export type RunCliAgentParams = {
   executionMode?: CliBackendExecutionMode;
   /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
   isolatedCompletion?: true;
+  /** Internal backend control command: reuse the native session without recording a conversation turn. */
+  controlOperation?: "compact";
   /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */
   persistAssistantTranscript?: boolean;
   /** Session store path used when assistant transcript persistence is enabled. */
