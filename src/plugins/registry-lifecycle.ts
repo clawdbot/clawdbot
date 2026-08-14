@@ -6,7 +6,7 @@ const activatedRegistries = new WeakSet<PluginRegistry>();
 const registryEpochs = new WeakMap<PluginRegistry, object>();
 const recordEpochs = new WeakMap<PluginRegistry, WeakMap<PluginRecord, object>>();
 
-export type PluginRecordLifecycleEpoch = object;
+type PluginRecordLifecycleEpoch = object;
 
 /** Marks a registry retired so late runtime calls can reject stale plugin state. */
 export function markPluginRegistryRetired(registry: PluginRegistry | null | undefined): void {

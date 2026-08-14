@@ -2,7 +2,7 @@ import type { ResolvedChannelMessageIngress } from "./runtime-types.js";
 
 // Private accessor-free snapshots for channel admission handoff scope keys.
 const MAX_CHANNEL_ADMISSION_SCOPE_BYTES = 32_768;
-export const MAX_CHANNEL_ADMISSION_SCOPE_NODES = 256;
+const MAX_CHANNEL_ADMISSION_SCOPE_NODES = 256;
 export const INVALID_SCOPE_VALUE = Symbol("invalid-channel-admission-scope-value");
 
 function snapshotOwnedData(value: unknown, budget = { nodes: 0 }, depth = 0): unknown {
@@ -53,7 +53,7 @@ function snapshotOwnedData(value: unknown, budget = { nodes: 0 }, depth = 0): un
   return Array.isArray(value) ? ["array", entries] : ["record", entries];
 }
 
-export function stableOwnedScopeKey(value: unknown): string | undefined {
+function stableOwnedScopeKey(value: unknown): string | undefined {
   const snapshot = snapshotOwnedData(value);
   if (snapshot === INVALID_SCOPE_VALUE) {
     return undefined;
@@ -66,7 +66,7 @@ export function stableOwnedScopeKey(value: unknown): string | undefined {
   }
 }
 
-export function safeOwnPropertyDescriptor(
+function safeOwnPropertyDescriptor(
   value: object,
   key: PropertyKey,
 ): PropertyDescriptor | undefined {
