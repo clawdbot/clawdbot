@@ -49,7 +49,9 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Security and permissions
 
-- The bridge validates **caller code signatures**; an allowlist of TeamIDs is enforced (Peekaboo host TeamID plus the running app's own TeamID).
+- The bridge validates **caller code signatures**. The production OpenClaw host accepts only the Foundation-signed
+  Peekaboo client (`FWJYW4S8P8`, bundle identifier `boo.peekaboo.peekaboo`); sharing the app's UID or using another
+  client signed by the app's development team is not sufficient.
 - Prefer the signed bridge/app identity over a generic `node` runtime for Accessibility. Granting Accessibility to `node` lets any package launched by that Node executable inherit GUI automation access; see [macOS permissions](/platforms/mac/permissions#accessibility-grants-for-node-and-cli-runtimes).
 - Requests time out after 10 seconds (`requestTimeoutSec: 10`).
 - If required permissions are missing, the bridge returns a clear error message rather than launching System Settings.
