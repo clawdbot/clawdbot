@@ -2383,6 +2383,7 @@ export async function startQaMockOpenAiServer(params?: {
   host?: string;
   port?: number;
   finalOnlyMarkerPauseMs?: number;
+  responsePauseMs?: number;
   modelRefs?: readonly string[];
 }) {
   const host = params?.host ?? "127.0.0.1";
@@ -2760,8 +2761,9 @@ export async function startQaMockOpenAiServer(params?: {
           return;
         }
         const { events } = dispatched;
-        if (dispatched.responsePauseMs !== undefined) {
-          await sleep(dispatched.responsePauseMs);
+        const responsePauseMs = params?.responsePauseMs ?? dispatched.responsePauseMs;
+        if (responsePauseMs !== undefined) {
+          await sleep(responsePauseMs);
         }
         if (body.stream === false) {
           const completion = events.at(-1);

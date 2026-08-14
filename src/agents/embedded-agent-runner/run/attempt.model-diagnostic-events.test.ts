@@ -138,7 +138,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
     const events = await collectModelCallEvents(async () => {
       const returned = wrapped(
-        {} as never,
+        { requestTimeoutMs: 300_000 } as never,
         {} as never,
         {} as never,
       ) as unknown as typeof originalStream;
@@ -162,6 +162,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
     expect(startedEvent.observationUnit).toBe("request");
+    expect(startedEvent.requestTimeoutMs).toBe(300_000);
     expect(events[0]?.trace?.parentSpanId).toBe("00f067aa0ba902b7");
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
@@ -173,6 +174,37 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it("reads the timeout from each exact model request", async () => {
+    let callSequence = 0;
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() =>
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
+      {
+        runId: "run-timeouts",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `call-${++callSequence}`,
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({ requestTimeoutMs: 60_000 } as never, {} as never, {} as never));
+      await drain(wrapped({} as never, {} as never, {} as never));
+      await drain(wrapped({ requestTimeoutMs: 90_000 } as never, {} as never, {} as never));
+    });
+
+    expect(
+      events
+        .filter((event) => event.type === "model.call.started")
+        .map((event) => event.requestTimeoutMs),
+    ).toEqual([60_000, undefined, 90_000]);
   });
 
   it("captures output and completes when callers only await stream.result()", async () => {
