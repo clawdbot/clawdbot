@@ -20,6 +20,13 @@ type SessionSqliteStartupImportRunner = (params: {
   mode: "import";
 }) => Promise<DoctorSessionSqliteReport>;
 
+type SessionSqliteStartupValidationRunner = (params: {
+  allAgents: true;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  mode: "validate";
+}) => Promise<DoctorSessionSqliteReport>;
+
 type SessionSqliteStartupRestoreRunner = (params: {
   manifestPath: string;
   trustedTargets: Array<{ agentId: string; sqlitePath: string; storePath: string }>;
@@ -42,6 +49,105 @@ type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["de
   sessionSqliteDatabaseExists?: SessionSqliteDatabaseExists;
   writeSessionSqliteMigrationFailureReports?: SessionSqliteStartupFailureReportWriter;
 };
+
+export type SessionStartupPreflightFinding = {
+  id: string;
+  code: string;
+  message: string;
+  remediation: readonly string[];
+  agentId?: string;
+};
+
+export type SessionStartupPreflightResult =
+  | { status: "ready" }
+  | { status: "blocked"; findings: readonly SessionStartupPreflightFinding[] }
+  | { status: "indeterminate"; reason: string };
+
+/**
+ * Inspect the same session SQLite prerequisites that can block Gateway startup.
+ * Validation reads legacy stores and SQLite state without importing or repairing them.
+ */
+export async function inspectStartupSessionMigrationPrerequisites(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  deps?: { runDoctorSessionSqlite?: SessionSqliteStartupValidationRunner };
+}): Promise<SessionStartupPreflightResult> {
+  const env = params.env ?? process.env;
+  const runDoctorSessionSqlite =
+    params.deps?.runDoctorSessionSqlite ??
+    (await import("../commands/doctor-session-sqlite.js")).runDoctorSessionSqlite;
+  let report: DoctorSessionSqliteReport;
+  try {
+    report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: params.cfg,
+      env,
+      mode: "validate",
+    });
+  } catch (error) {
+    if (isSqliteCorruptionError(error)) {
+      return {
+        status: "blocked",
+        findings: [
+          {
+            id: "database-open",
+            code: "sqlite-open-failed",
+            message: `An agent session SQLite database could not be opened: ${String(error)}`,
+            remediation: [
+              'Run "openclaw doctor --session-sqlite recover --session-sqlite-all-agents".',
+            ],
+          },
+        ],
+      };
+    }
+    return {
+      status: "indeterminate",
+      reason: `Session SQLite startup prerequisites could not be inspected: ${String(error)}`,
+    };
+  }
+
+  const blockingIssues = report.targets
+    .flatMap((target) =>
+      target.issues
+        .filter((issue) => !isSessionSqliteMigrationWarning(issue))
+        .map((issue) => ({ agentId: target.agentId, issue })),
+    )
+    .toSorted((left, right) => {
+      const agentOrder = left.agentId.localeCompare(right.agentId);
+      if (agentOrder !== 0) {
+        return agentOrder;
+      }
+      const codeOrder = left.issue.code.localeCompare(right.issue.code);
+      if (codeOrder !== 0) {
+        return codeOrder;
+      }
+      const keyOrder = (left.issue.sessionKey ?? "").localeCompare(right.issue.sessionKey ?? "");
+      return keyOrder !== 0 ? keyOrder : left.issue.message.localeCompare(right.issue.message);
+    });
+  if (blockingIssues.length === 0) {
+    return { status: "ready" };
+  }
+
+  const occurrences = new Map<string, number>();
+  return {
+    status: "blocked",
+    findings: blockingIssues.map(({ agentId, issue }) => {
+      const occurrenceKey = `${agentId}/${issue.code}`;
+      const occurrence = (occurrences.get(occurrenceKey) ?? 0) + 1;
+      occurrences.set(occurrenceKey, occurrence);
+      const sessionKey = issue.sessionKey ? `${issue.sessionKey}: ` : "";
+      return {
+        id: `${agentId}/${issue.code}/${occurrence}`,
+        code: issue.code,
+        message: `Session SQLite startup migration for agent ${agentId} is blocked: ${sessionKey}${issue.message}`,
+        remediation: [
+          'Run "openclaw doctor --session-sqlite inspect --session-sqlite-all-agents" for details.',
+        ],
+        agentId,
+      };
+    }),
+  };
+}
 
 /**
  * Run session migrations at gateway startup before runtime session access.

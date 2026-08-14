@@ -1,8 +1,16 @@
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import {
+  inspectStartupSessionMigrationPrerequisites,
+  type SessionStartupPreflightResult,
+} from "../gateway/server-startup-session-migration.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withReadOnlyPathCaseProbe } from "../infra/path-case.js";
+import {
+  resolveSqliteReadOnlyInspectionLocation,
+  withSqliteReadOnlyInspectionSnapshots,
+} from "../infra/sqlite-readonly-inspection.js";
 import {
   collectGatewayStartupPreflight,
   type GatewayStartupPreflightBlocker,
@@ -29,6 +37,9 @@ type GatewayStartupPreflightResult = {
   errors: GatewayStartupPreflightError[];
 };
 
+const CORE_SESSION_PREFLIGHT_PLUGIN_ID = "core";
+const CORE_SESSION_PREFLIGHT_MIGRATION_ID = "session-sqlite";
+
 function createResult(params: {
   checksRun?: number;
   blockers?: GatewayStartupPreflightBlocker[];
@@ -48,13 +59,58 @@ function createResult(params: {
   };
 }
 
+function combineSessionStartupPreflight(
+  pluginResult: {
+    checksRun: number;
+    blockers: GatewayStartupPreflightBlocker[];
+    errors: GatewayStartupPreflightError[];
+  },
+  sessionResult: SessionStartupPreflightResult,
+): {
+  checksRun: number;
+  blockers: GatewayStartupPreflightBlocker[];
+  errors: GatewayStartupPreflightError[];
+} {
+  const inspectionId = `${CORE_SESSION_PREFLIGHT_PLUGIN_ID}/${CORE_SESSION_PREFLIGHT_MIGRATION_ID}`;
+  const blockers = [...pluginResult.blockers];
+  const errors = [...pluginResult.errors];
+  if (sessionResult.status === "blocked") {
+    for (const finding of sessionResult.findings) {
+      blockers.push({
+        id: `${inspectionId}/${finding.id}`,
+        pluginId: CORE_SESSION_PREFLIGHT_PLUGIN_ID,
+        migrationId: CORE_SESSION_PREFLIGHT_MIGRATION_ID,
+        code: finding.code,
+        message: finding.message,
+        remediation: finding.remediation,
+        ...(finding.agentId ? { agentId: finding.agentId } : {}),
+      });
+    }
+  } else if (sessionResult.status === "indeterminate") {
+    errors.push({
+      id: inspectionId,
+      pluginId: CORE_SESSION_PREFLIGHT_PLUGIN_ID,
+      migrationId: CORE_SESSION_PREFLIGHT_MIGRATION_ID,
+      code: "inspection-indeterminate",
+      message: sessionResult.reason,
+    });
+  }
+  return {
+    checksRun: pluginResult.checksRun + 1,
+    blockers: blockers.toSorted((left, right) => left.id.localeCompare(right.id)),
+    errors: errors.toSorted((left, right) => left.id.localeCompare(right.id)),
+  };
+}
+
 async function evaluateGatewayStartupPreflight(): Promise<GatewayStartupPreflightResult> {
   const previousJitiFsCache = process.env.JITI_FS_CACHE;
   process.env.JITI_FS_CACHE = "false";
   try {
     const inspection = await withReadOnlyPathCaseProbe(() =>
       withOpenClawStateDatabaseInspectionSnapshots(() =>
-        evaluateGatewayStartupPreflightWithoutModuleCacheWrites(),
+        withSqliteReadOnlyInspectionSnapshots(() =>
+          evaluateGatewayStartupPreflightWithoutModuleCacheWrites(),
+        ),
       ),
     );
     if (inspection.unresolvedDirectories.length === 0) {
@@ -121,12 +177,18 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
       config: snapshot.config,
       ...(snapshot.sourceConfig ? { activationSourceConfig: snapshot.sourceConfig } : {}),
     });
-    return createResult(
-      await collectGatewayStartupPreflight({
+    const [pluginResult, sessionResult] = await Promise.all([
+      collectGatewayStartupPreflight({
         config: snapshot.config,
         env: process.env,
+        resolveSqliteReadOnlyLocation: resolveSqliteReadOnlyInspectionLocation,
       }),
-    );
+      inspectStartupSessionMigrationPrerequisites({
+        cfg: snapshot.config,
+        env: process.env,
+      }),
+    ]);
+    return createResult(combineSessionStartupPreflight(pluginResult, sessionResult));
   } catch (error) {
     return createResult({
       errors: [

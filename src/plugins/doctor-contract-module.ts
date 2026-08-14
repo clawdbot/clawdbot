@@ -47,6 +47,11 @@ export type PluginStartupPreflightParams = {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
+  /**
+   * Resolve a SQLite source to a private WAL-consistent snapshot for the duration
+   * of this callback. Plugins must not retain the returned path.
+   */
+  resolveSqliteReadOnlyLocation: (pathname: string) => string;
 };
 
 export type PluginDoctorStateMigration = {

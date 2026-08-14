@@ -124,6 +124,7 @@ describe("memory vector index provider doctor diagnostic", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
         stateDir,
         oauthDir: path.join(stateDir, "credentials"),
+        resolveSqliteReadOnlyLocation: (pathname) => pathname,
       }),
     ).resolves.toEqual({
       status: "blocked",
@@ -162,6 +163,7 @@ describe("memory vector index provider doctor diagnostic", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
         stateDir,
         oauthDir: path.join(stateDir, "credentials"),
+        resolveSqliteReadOnlyLocation: (pathname) => pathname,
       }),
     ).resolves.toEqual({ status: "ready" });
     expect(calls).toBe(1);
@@ -187,6 +189,7 @@ describe("memory vector index provider doctor diagnostic", () => {
           env: { OPENCLAW_STATE_DIR: stateDir },
           stateDir,
           oauthDir: path.join(stateDir, "credentials"),
+          resolveSqliteReadOnlyLocation: (pathname) => pathname,
         }),
       ).resolves.toEqual({ status: "ready" });
       expect(calls).toBe(0);
@@ -218,6 +221,7 @@ describe("memory vector index provider doctor diagnostic", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
         stateDir,
         oauthDir: path.join(stateDir, "credentials"),
+        resolveSqliteReadOnlyLocation: (pathname) => pathname,
       }),
     ).resolves.toEqual({ status: "ready" });
     expect(calls).toBe(0);
@@ -237,6 +241,7 @@ describe("memory vector index provider doctor diagnostic", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
       stateDir,
       oauthDir: path.join(stateDir, "credentials"),
+      resolveSqliteReadOnlyLocation: (pathname) => pathname,
     });
 
     expect(result).toEqual({
@@ -259,6 +264,7 @@ describe("memory vector index provider doctor diagnostic", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
         stateDir,
         oauthDir: path.join(stateDir, "credentials"),
+        resolveSqliteReadOnlyLocation: (pathname) => pathname,
       }),
     ).resolves.toEqual({
       status: "indeterminate",

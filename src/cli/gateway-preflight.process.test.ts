@@ -145,7 +145,11 @@ module.exports = { stateMigrations: [migration] };
   );
 }
 
-async function createFixture(params: { config: Record<string, unknown>; vectorModel?: string }) {
+async function createFixture(params: {
+  config: Record<string, unknown>;
+  invalidSessionStore?: boolean;
+  vectorModel?: string;
+}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-preflight-"));
   roots.add(root);
   const stateDir = path.join(root, "state");
@@ -178,6 +182,11 @@ async function createFixture(params: { config: Record<string, unknown>; vectorMo
   };
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  if (params.invalidSessionStore) {
+    const sessionStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(sessionStorePath), { recursive: true });
+    await fs.writeFile(sessionStorePath, "{ invalid json\n");
+  }
   const sharedStatePath = path.join(stateDir, "state", "openclaw.sqlite");
   await fs.mkdir(path.dirname(sharedStatePath), { recursive: true });
   const sharedStateDatabase = new DatabaseSync(sharedStatePath);
@@ -312,6 +321,36 @@ function configuredLlamaCppMemoryConfig() {
 }
 
 describe("gateway preflight CLI process", () => {
+  it("reports a startup-blocking unreadable session store without mutation", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: { mode: "local" },
+        memory: { search: { provider: "none" } },
+      },
+      invalidSessionStore: true,
+    });
+    const before = await snapshotTree(fixture.root);
+
+    const result = await runPreflight(fixture);
+
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      status: "blocked",
+      blockers: [
+        expect.objectContaining({
+          id: "core/session-sqlite/main/store_unreadable/1",
+          pluginId: "core",
+          migrationId: "session-sqlite",
+          code: "store_unreadable",
+          agentId: "main",
+        }),
+      ],
+      errors: [],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+  });
+
   it("reports a stable local llama.cpp blocker without mutating config or state", async () => {
     const fixture = await createFixture({
       config: localMemoryConfig(),

@@ -4,6 +4,9 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   ensureCliPluginRegistryLoaded: vi.fn(),
   collectGatewayStartupPreflight: vi.fn(),
+  inspectStartupSessionMigrationPrerequisites: vi.fn(),
+  resolveSqliteReadOnlyInspectionLocation: vi.fn((pathname: string) => pathname),
+  withSqliteReadOnlyInspectionSnapshots: vi.fn(async (run: () => Promise<unknown>) => await run()),
   withOpenClawStateDatabaseInspectionSnapshots: vi.fn(
     async (run: () => Promise<unknown>) => await run(),
   ),
@@ -20,6 +23,15 @@ vi.mock("../cli/plugin-registry-loader.js", () => ({
 
 vi.mock("../infra/startup-preflight.js", () => ({
   collectGatewayStartupPreflight: mocks.collectGatewayStartupPreflight,
+}));
+
+vi.mock("../infra/sqlite-readonly-inspection.js", () => ({
+  resolveSqliteReadOnlyInspectionLocation: mocks.resolveSqliteReadOnlyInspectionLocation,
+  withSqliteReadOnlyInspectionSnapshots: mocks.withSqliteReadOnlyInspectionSnapshots,
+}));
+
+vi.mock("../gateway/server-startup-session-migration.js", () => ({
+  inspectStartupSessionMigrationPrerequisites: mocks.inspectStartupSessionMigrationPrerequisites,
 }));
 
 vi.mock("../infra/path-case.js", () => ({
@@ -54,6 +66,7 @@ describe("gateway startup preflight command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.unresolvedDirectories = [];
+    mocks.inspectStartupSessionMigrationPrerequisites.mockResolvedValue({ status: "ready" });
     delete process.env.JITI_FS_CACHE;
   });
 
@@ -78,7 +91,7 @@ describe("gateway startup preflight command", () => {
       protocolVersion: 1,
       ok: true,
       status: "ready",
-      checksRun: 1,
+      checksRun: 2,
       blockers: [],
       errors: [],
     });
@@ -93,8 +106,14 @@ describe("gateway startup preflight command", () => {
     expect(mocks.collectGatewayStartupPreflight).toHaveBeenCalledWith({
       config,
       env: process.env,
+      resolveSqliteReadOnlyLocation: mocks.resolveSqliteReadOnlyInspectionLocation,
+    });
+    expect(mocks.inspectStartupSessionMigrationPrerequisites).toHaveBeenCalledWith({
+      cfg: config,
+      env: process.env,
     });
     expect(mocks.withOpenClawStateDatabaseInspectionSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.withSqliteReadOnlyInspectionSnapshots).toHaveBeenCalledTimes(1);
     expect(process.env.JITI_FS_CACHE).toBeUndefined();
   });
 
@@ -140,7 +159,7 @@ describe("gateway startup preflight command", () => {
     expect(result).toMatchObject({
       ok: false,
       status: "indeterminate",
-      checksRun: 1,
+      checksRun: 2,
       blockers: [],
       errors: [
         {
@@ -212,7 +231,7 @@ describe("gateway startup preflight command", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         ok: false,
-        checksRun: 1,
+        checksRun: 2,
         blockers: evaluation.blockers,
         errors: evaluation.errors,
       }),
@@ -220,5 +239,51 @@ describe("gateway startup preflight command", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(exitCode, { resetStream: process.stderr });
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("reports core session SQLite startup blockers", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      config: {},
+      sourceConfig: {},
+    });
+    mocks.collectGatewayStartupPreflight.mockResolvedValue({
+      checksRun: 0,
+      blockers: [],
+      errors: [],
+    });
+    mocks.inspectStartupSessionMigrationPrerequisites.mockResolvedValue({
+      status: "blocked",
+      findings: [
+        {
+          id: "main/store_unreadable/1",
+          code: "store_unreadable",
+          message: "Session store is unreadable.",
+          remediation: ["Run doctor inspect."],
+          agentId: "main",
+        },
+      ],
+    });
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      checksRun: 1,
+      blockers: [
+        {
+          id: "core/session-sqlite/main/store_unreadable/1",
+          pluginId: "core",
+          migrationId: "session-sqlite",
+          code: "store_unreadable",
+          message: "Session store is unreadable.",
+          remediation: ["Run doctor inspect."],
+          agentId: "main",
+        },
+      ],
+      errors: [],
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
   });
 });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveSqliteReadOnlyInspectionLocation } from "../infra/sqlite-readonly-inspection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type {
   OpenClawAgentDatabase,
@@ -70,11 +71,13 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       ? { found: true, value: operation(database) }
       : { found: false, reason: "database-missing" };
   }
+  const inspectionLocation = resolveSqliteReadOnlyInspectionLocation(pathname);
   // Reusing a handle this process already holds is what keeps row loops cheap:
   // opening and closing a connection per call made reads scale with row count.
   // An in-flight transaction is skipped so callers never observe uncommitted
   // rows that a fresh read-only connection could not have seen.
-  const opened = findOpenAgentDatabase({ ...options, agentId });
+  const opened =
+    inspectionLocation === pathname ? findOpenAgentDatabase({ ...options, agentId }) : undefined;
   if (opened && !opened.db.isTransaction) {
     // A newer build can migrate this file while the handle stays open, so the
     // forward-compatibility gate still runs before any reused read.
@@ -91,7 +94,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   if (!fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
   }
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const db = openNodeSqliteDatabase(inspectionLocation, { readOnly: true });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);

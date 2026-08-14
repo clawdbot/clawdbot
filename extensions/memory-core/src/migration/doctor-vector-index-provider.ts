@@ -139,14 +139,17 @@ function listConfiguredAgentIds(config: OpenClawConfig): string[] {
   return ids.size > 0 ? [...ids] : ["main"];
 }
 
-async function inspectExistingVectorModel(databasePath: string): Promise<string | null> {
+async function inspectExistingVectorModel(
+  databasePath: string,
+  resolveSqliteReadOnlyLocation: (pathname: string) => string = (pathname) => pathname,
+): Promise<string | null> {
   if (!fs.existsSync(databasePath)) {
     return null;
   }
   const { openNodeSqliteDatabase } = await import("openclaw/plugin-sdk/sqlite-runtime");
   let db: ReturnType<typeof openNodeSqliteDatabase> | undefined;
   try {
-    db = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    db = openNodeSqliteDatabase(resolveSqliteReadOnlyLocation(databasePath), { readOnly: true });
     const row = db
       .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
       .get(MEMORY_INDEX_META_KEY) as { value?: unknown } | undefined;
@@ -263,7 +266,10 @@ export const vectorIndexProviderDiagnostic: PluginDoctorStateMigration = {
       );
       let model: string | null;
       try {
-        model = await inspectExistingVectorModel(agentDatabasePath);
+        model = await inspectExistingVectorModel(
+          agentDatabasePath,
+          params.resolveSqliteReadOnlyLocation,
+        );
       } catch (error) {
         indeterminate.push(
           `Could not inspect the memory index for agent ${agentId}: ${formatErrorMessage(error)}`,

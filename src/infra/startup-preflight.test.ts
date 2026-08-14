@@ -86,6 +86,7 @@ describe("gateway startup preflight collection", () => {
       collectGatewayStartupPreflight({
         config: {},
         env: { HOME: "/tmp/preflight-home", OPENCLAW_STATE_DIR: "/tmp/preflight-state" },
+        resolveSqliteReadOnlyLocation: (pathname) => pathname,
       }),
     ).resolves.toEqual({
       checksRun: 3,
@@ -138,6 +139,7 @@ describe("gateway startup preflight collection", () => {
     const result = await collectGatewayStartupPreflight({
       config: {},
       env: { HOME: "/tmp/preflight-home", OPENCLAW_STATE_DIR: "/tmp/preflight-state" },
+      resolveSqliteReadOnlyLocation: (pathname) => pathname,
     });
 
     expect(result.checksRun).toBe(2);

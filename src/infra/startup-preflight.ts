@@ -60,6 +60,7 @@ function appendBlockers(params: {
 export async function collectGatewayStartupPreflight(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  resolveSqliteReadOnlyLocation: (pathname: string) => string;
 }): Promise<GatewayStartupPreflightEvaluation> {
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
@@ -84,6 +85,7 @@ export async function collectGatewayStartupPreflight(params: {
         env,
         stateDir,
         oauthDir,
+        resolveSqliteReadOnlyLocation: params.resolveSqliteReadOnlyLocation,
       });
       if (result.status === "ready") {
         continue;
