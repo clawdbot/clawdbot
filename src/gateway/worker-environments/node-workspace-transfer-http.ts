@@ -1,16 +1,24 @@
+import fs from "node:fs";
+import fsp from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { NODE_WORKSPACE_TRANSFER_PATH } from "../../worker/node-workspace-transfer-protocol.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER, type AuthRateLimiter } from "../auth-rate-limit.js";
 import { classifyNodeWorkspaceTransferPath } from "../gateway-http-route-contracts.js";
-import { sendJson } from "../http-common.js";
+import { sendJson, watchClientDisconnect } from "../http-common.js";
 import { withSerializedRateLimitAttempt } from "../rate-limit-attempt-serialization.js";
+import {
+  isNodeWorkspaceTransferLimitError,
+  type NodeWorkspaceTransferService,
+} from "./node-workspace-transfer-service.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MAX_ENVIRONMENT_ID_LENGTH = 256;
 const OPAQUE_NOT_FOUND = { error: "not_found" } as const;
 
-type NodeWorkspaceTransferHttpRoute =
+export type NodeWorkspaceTransferHttpRoute =
   | {
       kind: "manifest" | "pack";
       direction: "download";
@@ -191,4 +199,122 @@ export async function handleNodeWorkspaceTransferHttpRequest(params: {
   }
   await admission.handle();
   return true;
+}
+
+export function createNodeWorkspaceTransferHttpCallback(
+  service: NodeWorkspaceTransferService,
+): NodeWorkspaceTransferHttpCallback {
+  return async ({ req, res, route, bearer }) => {
+    const authorization = service.authorize({ route, token: bearer });
+    if (!authorization) {
+      return { kind: "unauthorized" };
+    }
+    return {
+      kind: "authorized",
+      handle: async () => {
+        const clientAbort = new AbortController();
+        const stopWatchingDisconnect = watchClientDisconnect(req, res, clientAbort);
+        const signal = AbortSignal.any([
+          service.authorizationSignal(authorization),
+          clientAbort.signal,
+          AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+        ]);
+        const abortRequest = () => {
+          if (!req.destroyed) {
+            req.destroy(signal.reason instanceof Error ? signal.reason : undefined);
+          }
+        };
+        signal.addEventListener("abort", abortRequest, { once: true });
+        const stillCurrent = () => !signal.aborted && service.isAuthorizationCurrent(authorization);
+        try {
+          if (route.kind === "manifest" || route.kind === "pack") {
+            const snapshot = service.snapshot(authorization);
+            if (!snapshot || (route.kind === "pack" && !snapshot.packPath)) {
+              sendOpaqueNotFound(res);
+              return;
+            }
+            if (route.kind === "manifest") {
+              const body = Buffer.from(snapshot.rawManifest);
+              if (!stillCurrent()) {
+                return;
+              }
+              res.writeHead(200, {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": String(body.byteLength),
+              });
+              res.end(body);
+              return;
+            }
+            const stats = await fsp.stat(snapshot.packPath!);
+            if (!stillCurrent()) {
+              return;
+            }
+            res.writeHead(200, {
+              "content-type": "application/octet-stream",
+              "content-length": String(stats.size),
+            });
+            await pipeline(fs.createReadStream(snapshot.packPath!), res, { signal });
+            return;
+          }
+          if (route.kind === "blob") {
+            const blob = service.blob(authorization);
+            if (
+              !blob ||
+              !(await service.verifyBlob({
+                path: blob.path,
+                size: blob.size,
+                sha256: blob.sha256,
+              }))
+            ) {
+              sendOpaqueNotFound(res);
+              return;
+            }
+            if (!stillCurrent()) {
+              return;
+            }
+            res.writeHead(200, {
+              "content-type": "application/octet-stream",
+              "content-length": String(blob.size),
+            });
+            await pipeline(fs.createReadStream(blob.path), res, { signal });
+            return;
+          }
+          try {
+            const result = await service.receiveUpload({ authorization, request: req, signal });
+            if (!stillCurrent()) {
+              return;
+            }
+            const body = Buffer.from(JSON.stringify(result));
+            res.writeHead(200, {
+              "content-type": "application/json; charset=utf-8",
+              "content-length": String(body.byteLength),
+            });
+            res.end(body);
+          } catch (error) {
+            if (signal.aborted || res.destroyed) {
+              return;
+            }
+            const limit = isNodeWorkspaceTransferLimitError(error);
+            const body = Buffer.from(
+              JSON.stringify({
+                error: limit ? "workspace_transfer_limit" : "workspace_transfer_invalid",
+              }),
+            );
+            res.writeHead(limit ? 413 : 400, {
+              "content-type": "application/json; charset=utf-8",
+              "content-length": String(body.byteLength),
+            });
+            res.end(body);
+          }
+        } catch (error) {
+          if (!signal.aborted && !res.destroyed) {
+            throw error;
+          }
+        } finally {
+          signal.removeEventListener("abort", abortRequest);
+          stopWatchingDisconnect();
+        }
+      },
+    };
+  };
 }

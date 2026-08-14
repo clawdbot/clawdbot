@@ -1,18 +1,15 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import fsp, { type FileHandle } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
-import os from "node:os";
 import path from "node:path";
-import { pipeline } from "node:stream/promises";
+import { resolveStateDir } from "../../config/paths.js";
 import { isPathInside } from "../../infra/fs-safe.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
-import type { NodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http.js";
+import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http.js";
 import {
-  mintNodeWorkspaceTransferToken,
-  type NodeWorkspaceTransferDirection,
-  verifyNodeWorkspaceTransferToken,
-} from "./node-workspace-transfer-token.js";
+  prepareNodeWorkspaceTransferSnapshot,
+  type NodeWorkspaceTransferSnapshot,
+} from "./node-workspace-transfer-snapshot.js";
+import { mintNodeWorkspaceTransferToken } from "./node-workspace-transfer-token.js";
 import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
 import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
@@ -22,20 +19,11 @@ import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_TOTAL_BYTES,
   parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import {
-  assertWorkspaceMatchesManifest,
-  readActualWorkspaceManifest,
-} from "./workspace-reconcile.js";
+import { assertWorkspaceMatchesManifest } from "./workspace-reconcile.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
-import {
-  createGitTransferList,
-  readWorkspaceTransferPaths,
-  runLocalCommandToFile,
-} from "./workspace-sync-local.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MAX_UPLOAD_BYTES =
@@ -43,9 +31,9 @@ const MAX_UPLOAD_BYTES =
   MAX_RECONCILIATION_TOTAL_BYTES +
   MAX_RECONCILIATION_ENTRIES * 8 +
   8;
+const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
 type TransferCredential = {
-  credentialHash: string;
   ownerEpoch: number;
   expiresAtMs: number;
   sessionId: string | null;
@@ -58,14 +46,6 @@ type TransferEnvironment = {
   state: string;
 };
 
-type NodeWorkspaceTransferSnapshot = {
-  manifest: WorkerWorkspaceManifest;
-  manifestRef: string;
-  rawManifest: string;
-  root: string;
-  packPath?: string;
-};
-
 type NodeWorkspaceTransferUpload = {
   base: WorkerWorkspaceManifest;
   baseManifestRef: string;
@@ -76,6 +56,30 @@ type NodeWorkspaceTransferUpload = {
   stagingRoot: string;
 };
 
+type DownloadCapability = {
+  direction: "download";
+  token: string;
+  environmentId: string;
+  ownerEpoch: number;
+  sessionId: string;
+  generation: number;
+  manifestRef: string;
+  expiresAtMs: number;
+};
+
+type UploadOperation = {
+  direction: "upload";
+  token: string;
+  environmentId: string;
+  ownerEpoch: number;
+  sessionId: string;
+  generation: number;
+  baseManifestRef: string;
+  expiresAtMs: number;
+  state: "ready" | "receiving" | "completed";
+  uploaded?: NodeWorkspaceTransferUpload;
+};
+
 type TransferContext = {
   environmentId: string;
   ownerEpoch: number;
@@ -84,28 +88,50 @@ type TransferContext = {
   localPath: string;
   temporaryRoot: string;
   snapshots: Map<string, NodeWorkspaceTransferSnapshot>;
-  uploadBaseManifestRef?: string;
-  uploaded?: NodeWorkspaceTransferUpload;
+  downloads: Map<string, DownloadCapability>;
+  upload?: UploadOperation;
+  abortController: AbortController;
+  stopWatchingOwnerSignal?: () => void;
   isAuthorized: () => boolean;
+};
+
+type TransferAuthorization = {
+  context: TransferContext;
+  capability: DownloadCapability | UploadOperation;
+  route: NodeWorkspaceTransferHttpRoute;
 };
 
 class NodeWorkspaceTransferLimitError extends Error {
   readonly code = "workspace-transfer-limit";
 }
 
+export function isNodeWorkspaceTransferLimitError(
+  error: unknown,
+): error is NodeWorkspaceTransferLimitError {
+  return error instanceof NodeWorkspaceTransferLimitError;
+}
+
 class RequestByteReader {
   readonly #iterator: AsyncIterator<unknown>;
+  readonly #signal: AbortSignal;
+  readonly #assertCurrent: () => void;
   #pending: Buffer = Buffer.alloc(0);
   #done = false;
   bytesRead = 0;
 
-  constructor(request: IncomingMessage) {
+  constructor(request: IncomingMessage, signal: AbortSignal, assertCurrent: () => void) {
     this.#iterator = request[Symbol.asyncIterator]();
+    this.#signal = signal;
+    this.#assertCurrent = assertCurrent;
   }
 
   async take(maxBytes: number): Promise<Buffer> {
+    this.#assertCurrent();
+    this.#signal.throwIfAborted();
     if (this.#pending.length === 0 && !this.#done) {
       const next = await this.#iterator.next();
+      this.#assertCurrent();
+      this.#signal.throwIfAborted();
       this.#done = Boolean(next.done);
       if (!next.done) {
         this.#pending = Buffer.isBuffer(next.value)
@@ -147,92 +173,6 @@ class RequestByteReader {
   }
 }
 
-async function successfulGit(root: string, args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(["git", "-C", root, ...args], {
-    timeoutMs: TRANSFER_TIMEOUT_MS,
-    maxOutputBytes: 256 * 1024,
-    maxCombinedOutputBytes: 512 * 1024,
-    baseEnv: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error("Worker workspace Git inspection failed");
-  }
-  return result.stdout.trim();
-}
-
-async function prepareSnapshot(params: {
-  localPath: string;
-  temporaryRoot: string;
-  signal?: AbortSignal;
-}): Promise<NodeWorkspaceTransferSnapshot> {
-  const root = await fsp.realpath(params.localPath);
-  const gitAdmin = await fsp.lstat(path.join(root, ".git")).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  });
-  let baseCommit: string | null = null;
-  let includePaths: ReadonlySet<string> | undefined;
-  let packPath: string | undefined;
-  if (gitAdmin) {
-    const gitRoot = await fsp.realpath(await successfulGit(root, ["rev-parse", "--show-toplevel"]));
-    if (gitRoot !== root) {
-      throw new Error("Worker git workspace sync requires the managed worktree root");
-    }
-    baseCommit = await successfulGit(root, ["rev-parse", "--verify", "HEAD"]);
-    if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(baseCommit)) {
-      throw new Error("Worker workspace Git base is not a commit id");
-    }
-    const transferList = await createGitTransferList({
-      gitRoot: root,
-      temporaryDirectory: path.join(params.temporaryRoot, "inventory"),
-      signal: params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-    });
-    const transferable = await readWorkspaceTransferPaths(transferList);
-    const manifestPaths = new Set(transferable);
-    for (const relative of transferable) {
-      const segments = relative.split("/");
-      for (let index = 1; index < segments.length; index += 1) {
-        manifestPaths.add(segments.slice(0, index).join("/"));
-      }
-    }
-    includePaths = manifestPaths;
-    const objectListPath = path.join(params.temporaryRoot, "base-objects");
-    packPath = path.join(params.temporaryRoot, "base.pack");
-    await runLocalCommandToFile({
-      argv: [
-        "git",
-        "-C",
-        root,
-        "rev-list",
-        "--objects",
-        "--no-object-names",
-        `${baseCommit}^{tree}`,
-      ],
-      outputPath: objectListPath,
-      signal: params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-    });
-    await fsp.appendFile(objectListPath, `${baseCommit}\n`);
-    await runLocalCommandToFile({
-      argv: ["git", "-C", root, "pack-objects", "--stdout"],
-      inputPath: objectListPath,
-      outputPath: packPath,
-      signal: params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-    });
-  }
-  const actual = await readActualWorkspaceManifest({ root, baseCommit, includePaths });
-  return {
-    ...actual,
-    rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
-    root,
-    ...(packPath ? { packPath } : {}),
-  };
-}
-
 function contextOwnerValid(
   context: TransferContext,
   environment: TransferEnvironment | undefined,
@@ -240,6 +180,7 @@ function contextOwnerValid(
   nowMs: number,
 ): boolean {
   return Boolean(
+    !context.abortController.signal.aborted &&
     context.isAuthorized() &&
     environment &&
     credential &&
@@ -251,6 +192,18 @@ function contextOwnerValid(
     credential.ownerEpoch === context.ownerEpoch &&
     credential.sessionId === context.sessionId &&
     credential.expiresAtMs > nowMs,
+  );
+}
+
+function capabilityMatchesContext(
+  capability: DownloadCapability | UploadOperation,
+  context: TransferContext,
+): boolean {
+  return (
+    capability.environmentId === context.environmentId &&
+    capability.ownerEpoch === context.ownerEpoch &&
+    capability.sessionId === context.sessionId &&
+    capability.generation === context.generation
   );
 }
 
@@ -266,6 +219,7 @@ async function streamUploadFile(params: {
   reader: RequestByteReader;
   handle: FileHandle;
   entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>;
+  assertCurrent: () => void;
 }): Promise<void> {
   const size = (await params.reader.readExactly(8)).readBigUInt64BE();
   if (size !== BigInt(params.entry.size)) {
@@ -280,6 +234,7 @@ async function streamUploadFile(params: {
     }
     hash.update(chunk);
     await params.handle.write(chunk, 0, chunk.length, offset);
+    params.assertCurrent();
     offset += chunk.length;
   }
   if (hash.digest("hex") !== params.entry.sha256) {
@@ -291,32 +246,107 @@ export function createNodeWorkspaceTransferService(options: {
   getCredential: (environmentId: string) => TransferCredential | undefined;
   getEnvironment: (environmentId: string) => TransferEnvironment | undefined;
   now?: () => number;
+  temporaryRoot?: string;
 }) {
   const contexts = new Map<string, TransferContext>();
   const now = options.now ?? Date.now;
+  const temporaryBaseRoot =
+    options.temporaryRoot ?? path.join(resolveStateDir(), "tmp", "node-workspace-transfer");
+  let temporaryRootReady: Promise<void> | undefined;
+
+  const ensureTemporaryRoot = () => {
+    temporaryRootReady ??= (async () => {
+      // The Gateway state lock proves no previous process still owns this private namespace.
+      await fsp.rm(temporaryBaseRoot, { recursive: true, force: true });
+      await fsp.mkdir(temporaryBaseRoot, { recursive: true, mode: 0o700 });
+    })();
+    return temporaryRootReady;
+  };
+
+  const isCurrentContext = (context: TransferContext): boolean =>
+    contexts.get(context.environmentId) === context &&
+    contextOwnerValid(
+      context,
+      options.getEnvironment(context.environmentId),
+      options.getCredential(context.environmentId),
+      now(),
+    );
 
   const closeContext = async (context: TransferContext) => {
+    if (!context.abortController.signal.aborted) {
+      context.abortController.abort(new Error("Node workspace transfer context closed"));
+    }
+    context.stopWatchingOwnerSignal?.();
     if (contexts.get(context.environmentId) === context) {
       contexts.delete(context.environmentId);
     }
     await fsp.rm(context.temporaryRoot, { recursive: true, force: true });
   };
 
-  const mint = (context: TransferContext, direction: NodeWorkspaceTransferDirection) => {
+  const mintDownload = (context: TransferContext, manifestRef: string): string => {
     const credential = options.getCredential(context.environmentId);
-    const environment = options.getEnvironment(context.environmentId);
     const nowMs = now();
-    if (!contextOwnerValid(context, environment, credential, nowMs)) {
+    if (!isCurrentContext(context) || !credential) {
       throw new Error("Node workspace transfer owner is no longer current");
     }
-    return mintNodeWorkspaceTransferToken({
-      credentialHash: credential!.credentialHash,
-      credentialExpiresAtMs: credential!.expiresAtMs,
+    const expiresAtMs = Math.min(credential.expiresAtMs, nowMs + TRANSFER_TIMEOUT_MS);
+    if (expiresAtMs <= nowMs) {
+      throw new Error("Worker workspace transfer credential is expired");
+    }
+    const token = mintNodeWorkspaceTransferToken();
+    context.downloads.set(token, {
+      direction: "download",
+      token,
       environmentId: context.environmentId,
       ownerEpoch: context.ownerEpoch,
-      direction,
-      nowMs,
-    }).token;
+      sessionId: context.sessionId,
+      generation: context.generation,
+      manifestRef,
+      expiresAtMs,
+    });
+    return token;
+  };
+
+  const authorizationCurrent = (authorization: TransferAuthorization): boolean => {
+    const { capability, context } = authorization;
+    if (
+      !isCurrentContext(context) ||
+      !capabilityMatchesContext(capability, context) ||
+      capability.expiresAtMs <= now()
+    ) {
+      return false;
+    }
+    return capability.direction === "download"
+      ? context.downloads.get(capability.token) === capability
+      : context.upload === capability &&
+          (capability.state === "receiving" || capability.state === "completed");
+  };
+
+  const assertAuthorizationCurrent = (authorization: TransferAuthorization): void => {
+    if (!authorizationCurrent(authorization)) {
+      throw new Error("Workspace transfer authority closed");
+    }
+  };
+
+  const routeMatchesDownload = (
+    context: TransferContext,
+    capability: DownloadCapability,
+    route: NodeWorkspaceTransferHttpRoute,
+  ): boolean => {
+    if (route.direction !== "download" || route.environmentId !== context.environmentId) {
+      return false;
+    }
+    if (route.kind === "manifest" || route.kind === "pack") {
+      return route.manifestRef === capability.manifestRef;
+    }
+    if (route.kind !== "blob") {
+      return false;
+    }
+    return Boolean(
+      context.snapshots
+        .get(capability.manifestRef)
+        ?.manifest.entries.some((entry) => entry.type === "file" && entry.sha256 === route.sha256),
+    );
   };
 
   return {
@@ -333,24 +363,37 @@ export function createNodeWorkspaceTransferService(options: {
       if (previous) {
         await closeContext(previous);
       }
-      const temporaryRoot = await fsp.mkdtemp(
-        path.join(os.tmpdir(), "openclaw-node-workspace-transfer-"),
-      );
+      await ensureTemporaryRoot();
+      const abortController = new AbortController();
       const context: TransferContext = {
         ...params,
         localPath: await fsp.realpath(params.localPath),
-        temporaryRoot,
+        temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
         snapshots: new Map(),
+        downloads: new Map(),
+        abortController,
       };
+      if (params.signal) {
+        const abortFromOwner = () => abortController.abort(params.signal!.reason);
+        params.signal.addEventListener("abort", abortFromOwner, { once: true });
+        context.stopWatchingOwnerSignal = () =>
+          params.signal?.removeEventListener("abort", abortFromOwner);
+        if (params.signal.aborted) {
+          abortFromOwner();
+        }
+      }
       try {
-        const snapshot = await prepareSnapshot({
+        const snapshot = await prepareNodeWorkspaceTransferSnapshot({
           localPath: context.localPath,
-          temporaryRoot,
-          signal: params.signal,
+          temporaryRoot: context.temporaryRoot,
+          signal: AbortSignal.any([
+            context.abortController.signal,
+            AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+          ]),
         });
         context.snapshots.set(snapshot.manifestRef, snapshot);
         contexts.set(context.environmentId, context);
-        return { snapshot, token: mint(context, "download") };
+        return { snapshot, token: mintDownload(context, snapshot.manifestRef) };
       } catch (error) {
         await closeContext(context);
         throw error;
@@ -359,102 +402,172 @@ export function createNodeWorkspaceTransferService(options: {
 
     prepareUpload(environmentId: string, baseManifestRef: string): string {
       const context = contexts.get(environmentId);
-      if (!context || !/^sha256:[a-f0-9]{64}$/u.test(baseManifestRef)) {
+      const credential = options.getCredential(environmentId);
+      const nowMs = now();
+      if (
+        !context ||
+        !MANIFEST_REF_PATTERN.test(baseManifestRef) ||
+        !isCurrentContext(context) ||
+        !credential
+      ) {
         throw new Error("Node workspace transfer context is unavailable");
       }
-      context.uploadBaseManifestRef = baseManifestRef;
-      context.uploaded = undefined;
-      return mint(context, "upload");
+      if (context.upload) {
+        throw new Error("Node workspace transfer upload is already active");
+      }
+      const expiresAtMs = Math.min(credential.expiresAtMs, nowMs + TRANSFER_TIMEOUT_MS);
+      if (expiresAtMs <= nowMs) {
+        throw new Error("Worker workspace transfer credential is expired");
+      }
+      const token = mintNodeWorkspaceTransferToken();
+      context.upload = {
+        direction: "upload",
+        token,
+        environmentId: context.environmentId,
+        ownerEpoch: context.ownerEpoch,
+        sessionId: context.sessionId,
+        generation: context.generation,
+        baseManifestRef,
+        expiresAtMs,
+        state: "ready",
+      };
+      return token;
     },
 
     takeUpload(environmentId: string, baseManifestRef: string): NodeWorkspaceTransferUpload {
       const context = contexts.get(environmentId);
-      const uploaded = context?.uploaded;
+      const operation = context?.upload;
       if (
         !context ||
-        context.uploadBaseManifestRef !== baseManifestRef ||
-        !uploaded ||
-        !contextOwnerValid(
-          context,
-          options.getEnvironment(environmentId),
-          options.getCredential(environmentId),
-          now(),
-        )
+        !operation ||
+        operation.state !== "completed" ||
+        operation.baseManifestRef !== baseManifestRef ||
+        !operation.uploaded ||
+        !isCurrentContext(context)
       ) {
         throw new Error("Node workspace transfer upload did not complete");
       }
-      context.uploaded = undefined;
-      return uploaded;
+      context.upload = undefined;
+      return operation.uploaded;
+    },
+
+    getSnapshot(
+      environmentId: string,
+      manifestRef: string,
+    ): NodeWorkspaceTransferSnapshot | undefined {
+      return contexts.get(environmentId)?.snapshots.get(manifestRef);
     },
 
     publishSnapshot(environmentId: string, snapshot: NodeWorkspaceTransferSnapshot): string {
       const context = contexts.get(environmentId);
-      if (!context) {
+      if (!context || !isCurrentContext(context)) {
         throw new Error("Node workspace transfer context is unavailable");
       }
       context.snapshots.set(snapshot.manifestRef, snapshot);
-      return mint(context, "download");
+      return mintDownload(context, snapshot.manifestRef);
+    },
+
+    revoke(environmentId: string, token: string): void {
+      const context = contexts.get(environmentId);
+      context?.downloads.delete(token);
+      if (context?.upload?.token === token && context.upload.state === "ready") {
+        context.upload = undefined;
+      }
     },
 
     authorize(params: {
-      environmentId: string;
-      direction: NodeWorkspaceTransferDirection;
+      route: NodeWorkspaceTransferHttpRoute;
       token: string;
-    }): boolean {
-      const context = contexts.get(params.environmentId);
-      const credential = options.getCredential(params.environmentId);
-      const environment = options.getEnvironment(params.environmentId);
-      const nowMs = now();
-      return Boolean(
-        context &&
-        contextOwnerValid(context, environment, credential, nowMs) &&
-        verifyNodeWorkspaceTransferToken({
-          token: params.token,
-          credentialHash: credential!.credentialHash,
-          credentialExpiresAtMs: credential!.expiresAtMs,
-          environmentId: params.environmentId,
-          ownerEpoch: context.ownerEpoch,
-          direction: params.direction,
-          nowMs,
-        }),
-      );
-    },
-
-    snapshot(
-      environmentId: string,
-      manifestDigest: string,
-    ): NodeWorkspaceTransferSnapshot | undefined {
-      return contexts.get(environmentId)?.snapshots.get(`sha256:${manifestDigest}`);
-    },
-
-    blob(environmentId: string, sha256: string): { path: string; size: number } | undefined {
-      const context = contexts.get(environmentId);
-      if (!context) {
+    }): TransferAuthorization | undefined {
+      const context = contexts.get(params.route.environmentId);
+      if (!context || !isCurrentContext(context)) {
         return undefined;
       }
-      // Accepted snapshots are inserted last and reflect the current gateway tree.
-      // Prefer them when a digest also appeared at a base path that was later removed.
-      for (const snapshot of [...context.snapshots.values()].toReversed()) {
-        const entry = snapshot.manifest.entries.find(
-          (candidate) => candidate.type === "file" && candidate.sha256 === sha256,
-        );
-        if (entry?.type === "file") {
-          return { path: entryPath(snapshot.root, entry.path), size: entry.size };
+      const download = context.downloads.get(params.token);
+      if (download) {
+        if (
+          download.expiresAtMs <= now() ||
+          !capabilityMatchesContext(download, context) ||
+          !routeMatchesDownload(context, download, params.route)
+        ) {
+          return undefined;
         }
+        return { context, capability: download, route: params.route };
       }
-      return undefined;
+      const upload = context.upload;
+      if (
+        !upload ||
+        upload.token !== params.token ||
+        upload.state !== "ready" ||
+        upload.expiresAtMs <= now() ||
+        !capabilityMatchesContext(upload, context) ||
+        params.route.kind !== "reconcile" ||
+        params.route.environmentId !== context.environmentId ||
+        params.route.baseManifestRef !== upload.baseManifestRef
+      ) {
+        return undefined;
+      }
+      // Claim before body streaming. A retry must mint a fresh operation instead of replaying bytes.
+      upload.state = "receiving";
+      return { context, capability: upload, route: params.route };
+    },
+
+    isAuthorizationCurrent: authorizationCurrent,
+
+    authorizationSignal(authorization: TransferAuthorization): AbortSignal {
+      return authorization.context.abortController.signal;
+    },
+
+    snapshot(authorization: TransferAuthorization): NodeWorkspaceTransferSnapshot | undefined {
+      if (
+        authorization.capability.direction !== "download" ||
+        (authorization.route.kind !== "manifest" && authorization.route.kind !== "pack") ||
+        !authorizationCurrent(authorization)
+      ) {
+        return undefined;
+      }
+      return authorization.context.snapshots.get(authorization.capability.manifestRef);
+    },
+
+    blob(
+      authorization: TransferAuthorization,
+    ): { path: string; size: number; sha256: string } | undefined {
+      if (
+        authorization.capability.direction !== "download" ||
+        authorization.route.kind !== "blob" ||
+        !authorizationCurrent(authorization)
+      ) {
+        return undefined;
+      }
+      const snapshot = authorization.context.snapshots.get(authorization.capability.manifestRef);
+      const sha256 = authorization.route.sha256;
+      const entry = snapshot?.manifest.entries.find(
+        (candidate) => candidate.type === "file" && candidate.sha256 === sha256,
+      );
+      return snapshot && entry?.type === "file"
+        ? { path: entryPath(snapshot.root, entry.path), size: entry.size, sha256: entry.sha256 }
+        : undefined;
     },
 
     async receiveUpload(params: {
-      environmentId: string;
-      baseManifestDigest: string;
+      authorization: TransferAuthorization;
       request: IncomingMessage;
+      signal: AbortSignal;
     }): Promise<{ manifestRef: string }> {
-      const context = contexts.get(params.environmentId);
-      const baseManifestRef = `sha256:${params.baseManifestDigest}`;
-      if (!context || context.uploadBaseManifestRef !== baseManifestRef) {
+      const { authorization } = params;
+      const operation = authorization.capability;
+      if (
+        operation.direction !== "upload" ||
+        authorization.route.kind !== "reconcile" ||
+        operation.state !== "receiving"
+      ) {
         throw new Error("Workspace transfer upload owner is unavailable");
       }
+      const assertCurrent = () => {
+        params.signal.throwIfAborted();
+        assertAuthorizationCurrent(authorization);
+      };
+      assertCurrent();
       const contentLength = Number(params.request.headers["content-length"]);
       if (
         !Number.isSafeInteger(contentLength) ||
@@ -465,7 +578,7 @@ export function createNodeWorkspaceTransferService(options: {
           "Workspace transfer upload exceeds its byte limit",
         );
       }
-      const reader = new RequestByteReader(params.request);
+      const reader = new RequestByteReader(params.request, params.signal, assertCurrent);
       const readManifest = async (expectedRef?: string) => {
         const bytes = (await reader.readExactly(4)).readUInt32BE();
         if (bytes < 2 || bytes > MAX_WORKSPACE_MANIFEST_BYTES) {
@@ -477,11 +590,15 @@ export function createNodeWorkspaceTransferService(options: {
         const ref = expectedRef ?? `sha256:${createHash("sha256").update(raw).digest("hex")}`;
         return { raw, ref, manifest: parseWorkerWorkspaceManifest(raw, ref) };
       };
-      const base = await readManifest(baseManifestRef);
+      const base = await readManifest(operation.baseManifestRef);
+      assertCurrent();
       const current = await readManifest();
+      assertCurrent();
       const transferPaths = workerWorkspaceTransferPaths(current.manifest, base.manifest);
       const transferPathSet = new Set(transferPaths);
-      const stagingRoot = await fsp.mkdtemp(path.join(context.temporaryRoot, "upload-"));
+      const stagingRoot = await fsp.mkdtemp(
+        path.join(authorization.context.temporaryRoot, "upload-"),
+      );
       try {
         const currentByPath = new Map(current.manifest.entries.map((entry) => [entry.path, entry]));
         for (const relative of transferPaths) {
@@ -491,18 +608,22 @@ export function createNodeWorkspaceTransferService(options: {
           }
           const destination = entryPath(stagingRoot, relative);
           await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+          assertCurrent();
           if (entry.type === "symlink") {
             await fsp.symlink(entry.target, destination);
+            assertCurrent();
           } else {
             const handle = await fsp.open(destination, "wx", entry.mode);
             try {
-              await streamUploadFile({ reader, handle, entry });
+              await streamUploadFile({ reader, handle, entry, assertCurrent });
             } finally {
               await handle.close();
             }
+            assertCurrent();
           }
         }
         await reader.assertEnd();
+        assertCurrent();
         if (reader.bytesRead !== contentLength) {
           throw new Error("Workspace transfer upload length is inconsistent");
         }
@@ -511,21 +632,23 @@ export function createNodeWorkspaceTransferService(options: {
           manifest: current.manifest,
           entries: current.manifest.entries.filter((entry) => transferPathSet.has(entry.path)),
         });
-        if (!context.isAuthorized()) {
-          throw new Error("Workspace transfer owner changed during upload");
-        }
-        context.uploaded = {
+        assertCurrent();
+        operation.uploaded = {
           base: base.manifest,
-          baseManifestRef,
+          baseManifestRef: operation.baseManifestRef,
           baseRaw: base.raw,
           current: current.manifest,
           currentManifestRef: current.ref,
           currentRaw: current.raw,
           stagingRoot,
         };
+        operation.state = "completed";
         return { manifestRef: current.ref };
       } catch (error) {
         await fsp.rm(stagingRoot, { recursive: true, force: true });
+        if (authorization.context.upload === operation) {
+          authorization.context.upload = undefined;
+        }
         throw error;
       }
     },
@@ -551,110 +674,9 @@ export function createNodeWorkspaceTransferService(options: {
 
     async closeAll(): Promise<void> {
       await Promise.all([...contexts.values()].map(closeContext));
+      await fsp.rm(temporaryBaseRoot, { recursive: true, force: true });
     },
   };
 }
 
 export type NodeWorkspaceTransferService = ReturnType<typeof createNodeWorkspaceTransferService>;
-
-export function createNodeWorkspaceTransferHttpCallback(
-  service: NodeWorkspaceTransferService,
-): NodeWorkspaceTransferHttpCallback {
-  return async ({ req, res, route, bearer }) => {
-    if (
-      !service.authorize({
-        environmentId: route.environmentId,
-        direction: route.direction,
-        token: bearer,
-      })
-    ) {
-      return { kind: "unauthorized" };
-    }
-    return {
-      kind: "authorized",
-      handle: async () => {
-        if (route.kind === "manifest" || route.kind === "pack") {
-          const snapshot = service.snapshot(
-            route.environmentId,
-            route.manifestRef.slice("sha256:".length),
-          );
-          if (!snapshot || (route.kind === "pack" && !snapshot.packPath)) {
-            res.statusCode = 404;
-            res.end(JSON.stringify({ error: "not_found" }));
-            return;
-          }
-          if (route.kind === "manifest") {
-            const body = Buffer.from(snapshot.rawManifest);
-            res.writeHead(200, {
-              "content-type": "application/json; charset=utf-8",
-              "content-length": String(body.byteLength),
-            });
-            res.end(body);
-            return;
-          }
-          const stats = await fsp.stat(snapshot.packPath!);
-          res.writeHead(200, {
-            "content-type": "application/octet-stream",
-            "content-length": String(stats.size),
-          });
-          await pipeline(fs.createReadStream(snapshot.packPath!), res);
-          return;
-        }
-        if (route.kind === "blob") {
-          const blob = service.blob(route.environmentId, route.sha256);
-          if (
-            !blob ||
-            !(await service.verifyBlob({ path: blob.path, size: blob.size, sha256: route.sha256 }))
-          ) {
-            res.statusCode = 404;
-            res.end(JSON.stringify({ error: "not_found" }));
-            return;
-          }
-          res.writeHead(200, {
-            "content-type": "application/octet-stream",
-            "content-length": String(blob.size),
-          });
-          await pipeline(fs.createReadStream(blob.path), res);
-          return;
-        }
-        if (route.kind !== "reconcile") {
-          throw new Error("Unsupported workspace transfer route");
-        }
-        try {
-          const result = await service.receiveUpload({
-            environmentId: route.environmentId,
-            baseManifestDigest: route.baseManifestRef.slice("sha256:".length),
-            request: req,
-          });
-          if (
-            !service.authorize({
-              environmentId: route.environmentId,
-              direction: route.direction,
-              token: bearer,
-            })
-          ) {
-            throw new Error("Workspace transfer owner changed during upload");
-          }
-          const body = Buffer.from(JSON.stringify(result));
-          res.writeHead(200, {
-            "content-type": "application/json; charset=utf-8",
-            "content-length": String(body.byteLength),
-          });
-          res.end(body);
-        } catch (error) {
-          const limit = error instanceof NodeWorkspaceTransferLimitError;
-          const body = Buffer.from(
-            JSON.stringify({
-              error: limit ? "workspace_transfer_limit" : "workspace_transfer_invalid",
-            }),
-          );
-          res.writeHead(limit ? 413 : 400, {
-            "content-type": "application/json; charset=utf-8",
-            "content-length": String(body.byteLength),
-          });
-          res.end(body);
-        }
-      },
-    };
-  };
-}

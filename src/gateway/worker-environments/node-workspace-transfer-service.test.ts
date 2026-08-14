@@ -8,10 +8,8 @@ import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-s
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { createGatewayHttpServer } from "../server-http.js";
-import {
-  createNodeWorkspaceTransferHttpCallback,
-  createNodeWorkspaceTransferService,
-} from "./node-workspace-transfer-service.js";
+import { createNodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http.js";
+import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
@@ -53,6 +51,7 @@ describe("node workspace transfer service", () => {
       getCredential: () => credential,
       getEnvironment: () => environment,
       now: () => nowMs,
+      temporaryRoot: path.join(root, "gateway-transfer-tmp"),
     });
     const server = createGatewayHttpServer({
       clients: new Set(),
@@ -89,11 +88,12 @@ describe("node workspace transfer service", () => {
       const wrongDirection = await fetch(`${httpOrigin}${manifestPath}`, {
         headers: { authorization: `Bearer ${uploadTokenForGet}` },
       });
-      nowMs += 5 * 60_000;
+      service.revoke("environment-1", uploadTokenForGet);
+      nowMs += 10 * 60_000;
       const expired = await fetch(`${httpOrigin}${manifestPath}`, {
         headers: { authorization: `Bearer ${prepared.token}` },
       });
-      nowMs -= 5 * 60_000;
+      nowMs -= 10 * 60_000;
       for (const response of [crossEnvironment, wrongDirection, expired]) {
         expect(response.status).toBe(404);
         expect(response.headers.get("cache-control")).toBe("no-store");
@@ -131,6 +131,9 @@ describe("node workspace transfer service", () => {
       ).resolves.toBe("nested input\n");
       await fs.writeFile(path.join(downloaded.workspaceDir, "result.txt"), "node result\n");
       const uploadToken = service.prepareUpload("environment-1", prepared.snapshot.manifestRef);
+      expect(() => service.prepareUpload("environment-1", prepared.snapshot.manifestRef)).toThrow(
+        "already active",
+      );
       await runtime.exec(
         {
           gatewayNamespace: "gateway-test",
@@ -147,6 +150,14 @@ describe("node workspace transfer service", () => {
         undefined,
         { url: gatewayUrl },
       );
+      const replay = await fetch(
+        `${httpOrigin}/__openclaw__/worker-transfer/v1/environments/environment-1/reconciliations/${prepared.snapshot.manifestRef.slice(7)}`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${uploadToken}`, "content-length": "0" },
+        },
+      );
+      expect(replay.status).toBe(404);
       const uploaded = service.takeUpload("environment-1", prepared.snapshot.manifestRef);
       expect(uploaded.current.entries).toContainEqual(
         expect.objectContaining({ path: "result.txt", type: "file" }),
@@ -161,5 +172,49 @@ describe("node workspace transfer service", () => {
         server.close(() => resolve());
       });
     }
+  });
+
+  it("closes every admitted request when its exact transfer context retires", async () => {
+    const root = tempDirs.make("node-workspace-transfer-close-");
+    const localPath = path.join(root, "workspace");
+    await fs.mkdir(localPath);
+    const service = createNodeWorkspaceTransferService({
+      getCredential: () => ({
+        ownerEpoch: 1,
+        expiresAtMs: Date.now() + 60_000,
+        sessionId: "session-close",
+      }),
+      getEnvironment: () => ({
+        ownerEpoch: 1,
+        attachedSessionIds: ["session-close"],
+        destroyRequestedAtMs: null,
+        state: "attached",
+      }),
+      temporaryRoot: path.join(root, "transfer-tmp"),
+    });
+    const prepared = await service.prepareSync({
+      environmentId: "environment-close",
+      ownerEpoch: 1,
+      sessionId: "session-close",
+      generation: 7,
+      localPath,
+      isAuthorized: () => true,
+    });
+    const authorization = service.authorize({
+      token: prepared.token,
+      route: {
+        kind: "manifest",
+        direction: "download",
+        environmentId: "environment-close",
+        manifestRef: prepared.snapshot.manifestRef,
+      },
+    });
+    expect(authorization).toBeDefined();
+    const signal = service.authorizationSignal(authorization!);
+
+    await service.close("environment-close");
+
+    expect(signal.aborted).toBe(true);
+    expect(service.isAuthorizationCurrent(authorization!)).toBe(false);
   });
 });

@@ -69,7 +69,9 @@ async function requiresWorkspaceTransfer(root: string): Promise<boolean> {
     }
   }
   try {
-    return /\bfilter\s*=\s*lfs\b/u.test(await fs.readFile(path.join(root, ".gitattributes"), "utf8"));
+    return /\bfilter\s*=\s*lfs\b/u.test(
+      await fs.readFile(path.join(root, ".gitattributes"), "utf8"),
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;

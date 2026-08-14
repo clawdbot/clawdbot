@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
@@ -11,13 +11,11 @@ import {
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
-import {
-  REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
-  REMOTE_WORKSPACE_MANIFEST_JS,
-} from "../gateway/worker-environments/workspace-sync-scripts.js";
+import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import {
   nodeWorkspaceTransferBlobPath,
   nodeWorkspaceTransferManifestPath,
@@ -46,21 +44,48 @@ function transferUrl(gatewayUrl: string, routePath: string): URL {
   return url;
 }
 
-function endAfterTlsPin(request: ClientRequest, expectedRaw?: string): void {
+function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<void> {
   if (!expectedRaw?.trim()) {
-    request.end();
-    return;
+    return Promise.resolve();
   }
-  request.once("socket", (socket) => {
-    const tlsSocket = socket as TLSSocket;
-    tlsSocket.once("secureConnect", () => {
-      const expected = normalizeFingerprint(expectedRaw);
-      const actual = normalizeFingerprint(tlsSocket.getPeerCertificate().fingerprint256 ?? "");
-      if (!expected || !actual || expected !== actual) {
-        request.destroy(new Error("gateway TLS fingerprint mismatch"));
+  const expected = normalizeFingerprint(expectedRaw);
+  if (!expected) {
+    return Promise.reject(new Error("gateway TLS fingerprint is invalid"));
+  }
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let fail: (error: Error) => void = () => {};
+    const finish = (error?: Error) => {
+      if (settled) {
         return;
       }
-      request.end();
+      settled = true;
+      request.off("error", fail);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    fail = (error: Error) => finish(error);
+    request.once("error", fail);
+    request.once("socket", (socket) => {
+      const tlsSocket = socket as TLSSocket;
+      const verify = () => {
+        const actual = normalizeFingerprint(tlsSocket.getPeerCertificate().fingerprint256 ?? "");
+        finish(
+          !actual || expected !== actual
+            ? new Error("gateway TLS fingerprint mismatch")
+            : undefined,
+        );
+      };
+      // Pooled sockets completed their TLS handshake before this request existed.
+      const peerFingerprint = tlsSocket.getPeerCertificate().fingerprint256;
+      if (request.reusedSocket || peerFingerprint) {
+        verify();
+      } else {
+        tlsSocket.once("secureConnect", verify);
+      }
     });
   });
 }
@@ -86,36 +111,16 @@ function openRequest(params: {
     });
     request.once("response", resolve);
     request.once("error", reject);
-    if (params.writeBody) {
-      const write = async () => {
-        if (url.protocol === "https:" && params.tlsFingerprint?.trim()) {
-          const expectedFingerprint = params.tlsFingerprint;
-          await new Promise<void>((ready, failed) => {
-            request.once("socket", (socket) => {
-              const tlsSocket = socket as TLSSocket;
-              tlsSocket.once("secureConnect", () => {
-                const expected = normalizeFingerprint(expectedFingerprint);
-                const actual = normalizeFingerprint(
-                  tlsSocket.getPeerCertificate().fingerprint256 ?? "",
-                );
-                if (!expected || !actual || expected !== actual) {
-                  failed(new Error("gateway TLS fingerprint mismatch"));
-                } else {
-                  ready();
-                }
-              });
-            });
-          });
-        }
-        await params.writeBody!(request);
-        request.end();
-      };
-      void write().catch((error: unknown) =>
-        request.destroy(error instanceof Error ? error : new Error(String(error))),
-      );
-    } else {
-      endAfterTlsPin(request, params.tlsFingerprint);
-    }
+    const send = async () => {
+      if (url.protocol === "https:") {
+        await waitForTlsPin(request, params.tlsFingerprint);
+      }
+      await params.writeBody?.(request);
+      request.end();
+    };
+    void send().catch((error: unknown) =>
+      request.destroy(error instanceof Error ? error : new Error(String(error))),
+    );
   });
 }
 
@@ -206,26 +211,42 @@ function workspacePath(root: string, relative: string): string {
   return candidate;
 }
 
-async function runWorkspaceScript(params: {
+function workspaceCommandEnv(homeDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: homeDir,
+    ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
+    GCM_INTERACTIVE: "Never",
+    GIT_ASKPASS: "",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    SSH_ASKPASS: "",
+  };
+}
+
+async function runWorkspaceCommand(params: {
   workspaceDir: string;
   homeDir: string;
   argv: string[];
-  input: string;
+  input?: string | Uint8Array;
   signal?: AbortSignal;
+  maxOutputBytes?: number;
 }): Promise<string> {
+  const maxOutputBytes = params.maxOutputBytes ?? 128 * 1024;
   const result = await runCommandWithTimeout(params.argv, {
     cwd: params.workspaceDir,
-    baseEnv: { ...process.env, HOME: params.homeDir, GIT_TERMINAL_PROMPT: "0" },
-    input: params.input,
+    baseEnv: workspaceCommandEnv(params.homeDir),
+    ...(params.input === undefined ? {} : { input: params.input }),
     timeoutMs: TRANSFER_TIMEOUT_MS,
     signal: params.signal,
-    maxOutputBytes: 128 * 1024,
-    maxCombinedOutputBytes: 256 * 1024,
+    maxOutputBytes,
+    maxCombinedOutputBytes: maxOutputBytes + 128 * 1024,
   });
   if (result.termination !== "exit" || result.code !== 0) {
     throw new Error(`workspace transfer apply failed: ${(result.stderr || result.stdout).trim()}`);
   }
-  return result.stdout.trim();
+  return result.stdout;
 }
 
 async function captureManifest(params: {
@@ -234,24 +255,167 @@ async function captureManifest(params: {
   baseCommit: string | null;
   signal?: AbortSignal;
 }): Promise<string> {
-  return await runWorkspaceScript({
-    workspaceDir: params.workspaceDir,
-    homeDir: params.manifestHome,
-    argv: [
-      "node",
-      "-e",
-      REMOTE_WORKSPACE_MANIFEST_JS,
-      params.workspaceDir,
-      params.baseCommit ?? "",
-      ...(params.baseCommit ? ["eligible"] : []),
-    ],
-    input: "",
-    signal: params.signal,
+  return (
+    await runWorkspaceCommand({
+      workspaceDir: params.workspaceDir,
+      homeDir: params.manifestHome,
+      argv: [
+        "node",
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        params.workspaceDir,
+        params.baseCommit ?? "",
+        ...(params.baseCommit ? ["eligible"] : []),
+      ],
+      signal: params.signal,
+    })
+  ).trim();
+}
+
+async function initializeGitWorkspace(params: {
+  workspaceDir: string;
+  manifestHome: string;
+  packPath: string;
+  baseCommit: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const objectFormat = params.baseCommit.length === 40 ? "sha1" : "sha256";
+  if (params.baseCommit.length !== 40 && params.baseCommit.length !== 64) {
+    throw new Error("workspace transfer Git base object id is invalid");
+  }
+  const git = async (args: string[], options: { input?: string; maxOutputBytes?: number } = {}) =>
+    await runWorkspaceCommand({
+      workspaceDir: params.workspaceDir,
+      homeDir: params.manifestHome,
+      argv: ["git", "-C", params.workspaceDir, ...args],
+      ...(options.input === undefined ? {} : { input: options.input }),
+      signal: params.signal,
+      ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
+    });
+  await git(["init", "--quiet", `--object-format=${objectFormat}`, "."]);
+  const pack = await fsp.open(params.packPath, "r");
+  try {
+    await runExec("git", ["-C", params.workspaceDir, "index-pack", "--stdin"], {
+      cwd: params.workspaceDir,
+      baseEnv: workspaceCommandEnv(params.manifestHome),
+      stdinFileDescriptor: pack.fd,
+      signal: params.signal,
+      timeoutMs: TRANSFER_TIMEOUT_MS,
+      maxBuffer: 256 * 1024,
+      logOutput: false,
+    });
+  } finally {
+    await pack.close();
+  }
+  await fsp.writeFile(path.join(params.workspaceDir, ".git", "shallow"), `${params.baseCommit}\n`);
+  const actual = (await git(["rev-parse", "--verify", `${params.baseCommit}^{commit}`])).trim();
+  if (actual !== params.baseCommit) {
+    throw new Error("workspace transfer Git base does not match the synced pack");
+  }
+  await git(["update-ref", "refs/heads/openclaw-worker", params.baseCommit]);
+  await git(["symbolic-ref", "HEAD", "refs/heads/openclaw-worker"]);
+  await git(["read-tree", params.baseCommit]);
+  const index = await git(["ls-files", "--stage", "-z"], {
+    maxOutputBytes: MAX_WORKSPACE_MANIFEST_BYTES,
+  });
+  const gitlinks = index
+    .split("\0")
+    .filter(Boolean)
+    .flatMap((record) => {
+      const separator = record.indexOf("\t");
+      return separator >= 0 && record.startsWith("160000 ") ? [record.slice(separator + 1)] : [];
+    });
+  if (gitlinks.length > 0) {
+    await git(["update-index", "--skip-worktree", "-z", "--stdin"], {
+      input: `${gitlinks.join("\0")}\0`,
+    });
+  }
+  await fsp.rm(params.packPath, { force: true });
+}
+
+const workspaceTransferQueues = new Map<string, Promise<void>>();
+
+async function serializeWorkspaceTransfer<T>(
+  workspaceDir: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = path.resolve(workspaceDir);
+  const previous = workspaceTransferQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => current);
+  workspaceTransferQueues.set(key, queued);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (workspaceTransferQueues.get(key) === queued) {
+      workspaceTransferQueues.delete(key);
+    }
+  }
+}
+
+async function removeTransferArtifact(target: string): Promise<void> {
+  await fsp.rm(target, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === "win32" ? 5 : 0,
+    retryDelay: 100,
   });
 }
 
-async function replaceWorkspaceAtomically(workspaceDir: string, staging: string): Promise<void> {
-  const backup = `${workspaceDir}.previous-${process.pid}-${Date.now()}`;
+async function recoverWorkspaceReplacement(workspaceDir: string): Promise<void> {
+  const parent = path.dirname(workspaceDir);
+  const workspaceName = path.basename(workspaceDir);
+  await fsp.mkdir(parent, { recursive: true, mode: 0o700 });
+  const entries = await fsp.readdir(parent, { withFileTypes: true });
+  const stagingPrefix = `.${workspaceName}.workspace-transfer-`;
+  const staging = entries.filter((entry) => entry.name.startsWith(stagingPrefix));
+  const backups = entries.filter((entry) => entry.name.startsWith(`${workspaceName}.previous-`));
+  for (const entry of staging) {
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      await removeTransferArtifact(path.join(parent, entry.name));
+    }
+  }
+  const workspaceExists = await fsp
+    .lstat(workspaceDir)
+    .then((stats) => {
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        throw new Error("workspace transfer target is not an owned directory");
+      }
+      return true;
+    })
+    .catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    });
+  const validBackups: string[] = [];
+  for (const entry of backups) {
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      validBackups.push(path.join(parent, entry.name));
+    }
+  }
+  if (!workspaceExists) {
+    if (validBackups.length > 1) {
+      throw new Error("workspace transfer recovery found multiple prior workspaces");
+    }
+    if (validBackups.length === 1) {
+      await fsp.rename(validBackups[0]!, workspaceDir);
+    }
+    return;
+  }
+  await Promise.all(
+    validBackups.map((backup) => removeTransferArtifact(backup).catch(() => undefined)),
+  );
+}
+
+async function replaceWorkspace(workspaceDir: string, staging: string): Promise<void> {
+  const backup = `${workspaceDir}.previous-${process.pid}-${randomUUID()}`;
   let movedOld = false;
   try {
     await fsp.rename(workspaceDir, backup);
@@ -265,12 +429,21 @@ async function replaceWorkspaceAtomically(workspaceDir: string, staging: string)
     await fsp.rename(staging, workspaceDir);
   } catch (error) {
     if (movedOld) {
-      await fsp.rename(backup, workspaceDir).catch(() => undefined);
+      try {
+        await fsp.rename(backup, workspaceDir);
+      } catch (rollbackError) {
+        const recoveryError = new Error(`workspace transfer rollback failed; recover ${backup}`, {
+          cause: error,
+        });
+        Object.defineProperty(recoveryError, "rollbackError", { value: rollbackError });
+        throw recoveryError;
+      }
     }
     throw error;
   }
   if (movedOld) {
-    await fsp.rm(backup, { recursive: true, force: true });
+    // The second rename is the commit point. Cleanup failure is recovered on the next transfer.
+    await removeTransferArtifact(backup).catch(() => undefined);
   }
 }
 
@@ -299,7 +472,12 @@ async function downloadWorkspace(params: {
   );
   const manifest = parseWorkerWorkspaceManifest(raw.toString("utf8"), params.transfer.manifestRef);
   const parent = path.dirname(params.workspaceDir);
-  const staging = await fsp.mkdtemp(path.join(parent, ".workspace-transfer-"));
+  const workspaceName = path.basename(params.workspaceDir);
+  const stagingWorkspace = await tempWorkspace({
+    rootDir: parent,
+    prefix: `.${workspaceName}.workspace-transfer-`,
+  });
+  const staging = stagingWorkspace.dir;
   try {
     if (manifest.baseCommit) {
       const packPath = path.join(staging, ".openclaw-base.pack");
@@ -317,11 +495,11 @@ async function downloadWorkspace(params: {
         },
         destination: packPath,
       });
-      await runWorkspaceScript({
+      await initializeGitWorkspace({
         workspaceDir: staging,
-        homeDir: params.manifestHome,
-        argv: ["sh", "-s", "--", staging, packPath, manifest.baseCommit, "", ""],
-        input: REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
+        manifestHome: params.manifestHome,
+        packPath,
+        baseCommit: manifest.baseCommit,
         signal: params.signal,
       });
     }
@@ -362,11 +540,10 @@ async function downloadWorkspace(params: {
         `workspace transfer materialized a different manifest (${observed}/${params.transfer.manifestRef})`,
       );
     }
-    await replaceWorkspaceAtomically(params.workspaceDir, staging);
+    await replaceWorkspace(params.workspaceDir, staging);
     return observed;
-  } catch (error) {
-    await fsp.rm(staging, { recursive: true, force: true });
-    throw error;
+  } finally {
+    await stagingWorkspace.cleanup();
   }
 }
 
@@ -482,17 +659,20 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
   signal?: AbortSignal;
 }): Promise<string> {
   try {
-    return params.transfer.direction === "download"
-      ? await downloadWorkspace({
-          ...params,
-          tlsFingerprint: params.gatewayTlsFingerprint,
-          transfer: params.transfer,
-        })
-      : await uploadWorkspace({
-          ...params,
-          tlsFingerprint: params.gatewayTlsFingerprint,
-          transfer: params.transfer,
-        });
+    return await serializeWorkspaceTransfer(params.workspaceDir, async () => {
+      await recoverWorkspaceReplacement(params.workspaceDir);
+      return params.transfer.direction === "download"
+        ? await downloadWorkspace({
+            ...params,
+            tlsFingerprint: params.gatewayTlsFingerprint,
+            transfer: params.transfer,
+          })
+        : await uploadWorkspace({
+            ...params,
+            tlsFingerprint: params.gatewayTlsFingerprint,
+            transfer: params.transfer,
+          });
+    });
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("workspace-transfer-")) {
       throw error;

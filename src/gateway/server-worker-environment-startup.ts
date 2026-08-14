@@ -110,7 +110,8 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { createWorkerTranscriptCommitter },
     { createWorkerTunnelManager },
     { createNodeWorkerTunnelManager },
-    { createNodeWorkspaceTransferService, createNodeWorkspaceTransferHttpCallback },
+    { createNodeWorkspaceTransferService },
+    { createNodeWorkspaceTransferHttpCallback },
     { createWorkerSessionToolExecutor },
     { resolveWorkerProvider },
   ] = await Promise.all([
@@ -121,6 +122,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/tunnel.js"),
     import("./worker-environments/node-worker-tunnel.js"),
     import("./worker-environments/node-workspace-transfer-service.js"),
+    import("./worker-environments/node-workspace-transfer-http.js"),
     import("./worker-environments/worker-session-tool-executor.js"),
     import("../plugins/worker-provider-registry.js"),
   ]);

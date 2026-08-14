@@ -55,6 +55,7 @@ export async function runLocalCommandToFile(params: {
   outputPath: string;
   signal: AbortSignal;
   timeoutMs: number;
+  maxOutputBytes?: number;
 }): Promise<void> {
   await runWorkspaceInventoryCommandToFile(params);
 }

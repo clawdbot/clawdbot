@@ -1,51 +1,20 @@
-import { describe, expect, it } from "vitest";
-import {
-  mintNodeWorkspaceTransferToken,
-  verifyNodeWorkspaceTransferToken,
-} from "./node-workspace-transfer-token.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
+import { mintNodeWorkspaceTransferToken } from "./node-workspace-transfer-token.js";
 
-const NOW = 1_900_000_000_000;
-const EXPIRY = NOW + 10 * 60_000;
-const CREDENTIAL_HASH = "a".repeat(43);
-
-function mint() {
-  return mintNodeWorkspaceTransferToken({
-    credentialHash: CREDENTIAL_HASH,
-    credentialExpiresAtMs: EXPIRY,
-    environmentId: "environment-a",
-    ownerEpoch: 4,
-    direction: "download",
-    nowMs: NOW,
-  });
-}
-
-function verify(token: string, overrides: Record<string, unknown> = {}) {
-  return verifyNodeWorkspaceTransferToken({
-    token,
-    credentialHash: CREDENTIAL_HASH,
-    credentialExpiresAtMs: EXPIRY,
-    environmentId: "environment-a",
-    ownerEpoch: 4,
-    direction: "download",
-    nowMs: NOW,
-    ...overrides,
-  });
-}
+afterEach(resetSecretRedactionRegistryForTest);
 
 describe("node workspace transfer token", () => {
-  it("accepts only the current environment owner and direction", () => {
-    const { token } = mint();
-    expect(verify(token)).toBe(true);
-    expect(verify(token, { environmentId: "environment-b" })).toBe(false);
-    expect(verify(token, { ownerEpoch: 5 })).toBe(false);
-    expect(verify(token, { direction: "upload" })).toBe(false);
-    expect(verify(token, { credentialHash: "b".repeat(43) })).toBe(false);
+  it("mints one high-entropy process-local bearer and registers it for redaction", () => {
+    const token = mintNodeWorkspaceTransferToken(() => "a".repeat(43));
+
+    expect(token).toBe("a".repeat(43));
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(isSecretValueRegisteredForRedaction(token)).toBe(true);
   });
 
-  it("caps validity at the credential expiry and rejects expiry", () => {
-    const { token, expiresAtMs } = mint();
-    expect(expiresAtMs).toBe(NOW + 5 * 60_000);
-    expect(verify(token, { nowMs: expiresAtMs })).toBe(false);
-    expect(verify(token, { credentialExpiresAtMs: expiresAtMs - 1 })).toBe(false);
+  it("rejects malformed generator output", () => {
+    expect(() => mintNodeWorkspaceTransferToken(() => "too-short")).toThrow("invalid bearer");
   });
 });

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fsp from "node:fs/promises";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
@@ -357,6 +358,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         isAuthorized: () => isEnvironmentOwner(entry as NodeTunnelEntry),
         signal: entry.abortController.signal,
       });
+      options.workspaceTransfer.revoke(entry.environmentId, prepared.token);
       if (prepared.snapshot.manifestRef !== restoredWorkspace.manifestRef) {
         throw new Error("Gateway workspace changed before node tunnel recovery");
       }
@@ -385,16 +387,21 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         entry.environmentId,
         request.baseManifestRef,
       );
-      const uploadedResult = await exec({
-        argv: ["openclaw-internal-workspace-transfer"],
-        transfer: {
-          direction: "upload",
-          token: uploadToken,
-          baseManifestRef: request.baseManifestRef,
-        },
-        timeoutMs: 10 * 60_000,
-        transportRetry: "never",
-      });
+      let uploadedResult: Awaited<ReturnType<typeof exec>>;
+      try {
+        uploadedResult = await exec({
+          argv: ["openclaw-internal-workspace-transfer"],
+          transfer: {
+            direction: "upload",
+            token: uploadToken,
+            baseManifestRef: request.baseManifestRef,
+          },
+          timeoutMs: 10 * 60_000,
+          transportRetry: "never",
+        });
+      } finally {
+        options.workspaceTransfer.revoke(entry.environmentId, uploadToken);
+      }
       if (uploadedResult.termination !== "exit" || uploadedResult.code !== 0) {
         throw new Error("Node workspace reconcile upload failed");
       }
@@ -402,96 +409,104 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         entry.environmentId,
         request.baseManifestRef,
       );
-      const changed = uploaded.currentManifestRef !== request.baseManifestRef;
-      let expectedRemoteRef = uploaded.currentManifestRef;
-      const verifyStable = async () => {
-        const observed = await captureManifest(
-          request.remoteWorkspaceDir,
-          uploaded.base.baseCommit,
-        );
-        if (observed !== expectedRemoteRef) {
-          throw new Error("Cloud workspace changed during final reconciliation");
-        }
-      };
-      await verifyStable();
-      const publishAcceptedManifest = async (accepted: {
-        manifestRef: string;
-        manifest: typeof uploaded.current;
-        conflictPaths: string[];
-      }) => {
-        const baseSnapshot = options.workspaceTransfer.snapshot(
-          entry.environmentId,
-          request.baseManifestRef.slice("sha256:".length),
-        );
-        const token = options.workspaceTransfer.publishSnapshot(entry.environmentId, {
-          manifest: accepted.manifest,
-          manifestRef: accepted.manifestRef,
-          rawManifest: serializeWorkerWorkspaceManifest(accepted.manifest),
-          root: await import("node:fs/promises").then((fs) => fs.realpath(request.localPath)),
-          ...(baseSnapshot?.packPath ? { packPath: baseSnapshot.packPath } : {}),
-        });
-        const published = await exec({
-          argv: ["openclaw-internal-workspace-transfer"],
-          transfer: { direction: "download", token, manifestRef: accepted.manifestRef },
-          timeoutMs: 10 * 60_000,
-          transportRetry: "never",
-        });
-        if (
-          published.termination !== "exit" ||
-          published.code !== 0 ||
-          published.stdout.trim() !== accepted.manifestRef
-        ) {
-          throw new Error("Node workspace accepted manifest publication failed");
-        }
-        expectedRemoteRef = accepted.manifestRef;
-      };
-      const preparedStagedResult = request.stagedResult
-        ? await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
-            request,
-            stagingRoot: uploaded.stagingRoot,
-            currentManifestRef: uploaded.currentManifestRef,
-            baseManifestRaw: uploaded.baseRaw,
-            currentManifestRaw: uploaded.currentRaw,
-            publishAcceptedManifest,
-          })
-        : undefined;
-      let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
-      if (!preparedStagedResult) {
-        appliedWorkspaceResult = await applyStagedWorkerWorkspace({
-          root: request.localPath,
-          stagingRoot: uploaded.stagingRoot,
-          baseManifestRef: request.baseManifestRef,
-          currentManifestRef: uploaded.currentManifestRef,
-          base: uploaded.base,
-          current: uploaded.current,
-          journal: request.journal,
-          publishAcceptedManifest,
-        });
-      }
-      return {
-        get manifestRef() {
-          return expectedRemoteRef;
-        },
-        changed,
-        verifyStable,
-        verifyLocalStable: async () =>
-          await (appliedWorkspaceResult?.verifyLocalStable() ??
-            assertWorkspaceResultStable({
-              root: request.localPath,
-              base: uploaded.base,
-              current: uploaded.current,
-            })),
-        getAppliedWorkspaceResult: () => appliedWorkspaceResult,
-        ...(preparedStagedResult
-          ? {
-              ...preparedStagedResult,
-              applyPreparedStagedResult: async () => {
-                await preparedStagedResult.applyPreparedStagedResult();
-                appliedWorkspaceResult = preparedStagedResult.getAppliedWorkspaceResult();
-              },
+      try {
+        const changed = uploaded.currentManifestRef !== request.baseManifestRef;
+        let expectedRemoteRef = uploaded.currentManifestRef;
+        const verifyStable = async () => {
+          const observed = await captureManifest(
+            request.remoteWorkspaceDir,
+            uploaded.base.baseCommit,
+          );
+          if (observed !== expectedRemoteRef) {
+            throw new Error("Cloud workspace changed during final reconciliation");
+          }
+        };
+        await verifyStable();
+        const publishAcceptedManifest = async (accepted: {
+          manifestRef: string;
+          manifest: typeof uploaded.current;
+          conflictPaths: string[];
+        }) => {
+          const baseSnapshot = options.workspaceTransfer.getSnapshot(
+            entry.environmentId,
+            request.baseManifestRef,
+          );
+          const token = options.workspaceTransfer.publishSnapshot(entry.environmentId, {
+            manifest: accepted.manifest,
+            manifestRef: accepted.manifestRef,
+            rawManifest: serializeWorkerWorkspaceManifest(accepted.manifest),
+            root: await fsp.realpath(request.localPath),
+            ...(baseSnapshot?.packPath ? { packPath: baseSnapshot.packPath } : {}),
+          });
+          try {
+            const published = await exec({
+              argv: ["openclaw-internal-workspace-transfer"],
+              transfer: { direction: "download", token, manifestRef: accepted.manifestRef },
+              timeoutMs: 10 * 60_000,
+              transportRetry: "never",
+            });
+            if (
+              published.termination !== "exit" ||
+              published.code !== 0 ||
+              published.stdout.trim() !== accepted.manifestRef
+            ) {
+              throw new Error("Node workspace accepted manifest publication failed");
             }
-          : {}),
-      };
+            expectedRemoteRef = accepted.manifestRef;
+          } finally {
+            options.workspaceTransfer.revoke(entry.environmentId, token);
+          }
+        };
+        const preparedStagedResult = request.stagedResult
+          ? await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+              request,
+              stagingRoot: uploaded.stagingRoot,
+              currentManifestRef: uploaded.currentManifestRef,
+              baseManifestRaw: uploaded.baseRaw,
+              currentManifestRaw: uploaded.currentRaw,
+              publishAcceptedManifest,
+            })
+          : undefined;
+        let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
+        if (!preparedStagedResult) {
+          appliedWorkspaceResult = await applyStagedWorkerWorkspace({
+            root: request.localPath,
+            stagingRoot: uploaded.stagingRoot,
+            baseManifestRef: request.baseManifestRef,
+            currentManifestRef: uploaded.currentManifestRef,
+            base: uploaded.base,
+            current: uploaded.current,
+            journal: request.journal,
+            publishAcceptedManifest,
+          });
+        }
+        return {
+          get manifestRef() {
+            return expectedRemoteRef;
+          },
+          changed,
+          verifyStable,
+          verifyLocalStable: async () =>
+            await (appliedWorkspaceResult?.verifyLocalStable() ??
+              assertWorkspaceResultStable({
+                root: request.localPath,
+                base: uploaded.base,
+                current: uploaded.current,
+              })),
+          getAppliedWorkspaceResult: () => appliedWorkspaceResult,
+          ...(preparedStagedResult
+            ? {
+                ...preparedStagedResult,
+                applyPreparedStagedResult: async () => {
+                  await preparedStagedResult.applyPreparedStagedResult();
+                  appliedWorkspaceResult = preparedStagedResult.getAppliedWorkspaceResult();
+                },
+              }
+            : {}),
+        };
+      } finally {
+        await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
+      }
     };
     const handle: WorkerTunnelHandle = {
       environmentId: entry.environmentId,
@@ -543,32 +558,36 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             isAuthorized: () => isEnvironmentOwner(entry as NodeTunnelEntry),
             signal: entry.abortController.signal,
           });
-          const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
-          if (origin) {
-            return origin;
-          }
-          const transferred = await exec({
-            argv: ["openclaw-internal-workspace-transfer"],
-            transfer: {
-              direction: "download",
-              token: prepared.token,
+          try {
+            const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
+            if (origin) {
+              return origin;
+            }
+            const transferred = await exec({
+              argv: ["openclaw-internal-workspace-transfer"],
+              transfer: {
+                direction: "download",
+                token: prepared.token,
+                manifestRef: prepared.snapshot.manifestRef,
+              },
+              timeoutMs: 10 * 60_000,
+              transportRetry: "never",
+            });
+            if (
+              transferred.termination !== "exit" ||
+              transferred.code !== 0 ||
+              transferred.stdout.trim() !== prepared.snapshot.manifestRef
+            ) {
+              throw new Error("Node workspace transfer failed");
+            }
+            return {
+              mode: prepared.snapshot.manifest.baseCommit ? ("git" as const) : ("plain" as const),
+              remoteWorkspaceDir: transferred.workspaceDir,
               manifestRef: prepared.snapshot.manifestRef,
-            },
-            timeoutMs: 10 * 60_000,
-            transportRetry: "never",
-          });
-          if (
-            transferred.termination !== "exit" ||
-            transferred.code !== 0 ||
-            transferred.stdout.trim() !== prepared.snapshot.manifestRef
-          ) {
-            throw new Error("Node workspace transfer failed");
+            };
+          } finally {
+            options.workspaceTransfer.revoke(entry.environmentId, prepared.token);
           }
-          return {
-            mode: prepared.snapshot.manifest.baseCommit ? ("git" as const) : ("plain" as const),
-            remoteWorkspaceDir: transferred.workspaceDir,
-            manifestRef: prepared.snapshot.manifestRef,
-          };
         } catch (error) {
           workspaceReady = restoredWorkspace !== undefined;
           throw error;

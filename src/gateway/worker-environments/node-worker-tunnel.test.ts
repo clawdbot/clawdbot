@@ -17,7 +17,6 @@ import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
-
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -122,6 +121,7 @@ function startRequest() {
 function workspaceTransfer(): NodeWorkspaceTransferService {
   return {
     close: vi.fn(async () => {}),
+    revoke: vi.fn(),
   } as unknown as NodeWorkspaceTransferService;
 }
 
@@ -171,17 +171,19 @@ describe("node worker tunnel manager", () => {
         };
       },
     );
+    const prepareSync = vi.fn(async () => ({
+      snapshot: {
+        manifest,
+        manifestRef,
+        rawManifest,
+        root: "/gateway/workspace",
+      },
+      token: "restore-token",
+    }));
     const transfer = {
-      prepareSync: vi.fn(async () => ({
-        snapshot: {
-          manifest,
-          manifestRef,
-          rawManifest,
-          root: "/gateway/workspace",
-        },
-        token: "restore-token",
-      })),
+      prepareSync,
       close: vi.fn(async () => {}),
+      revoke: vi.fn(),
     } as unknown as NodeWorkspaceTransferService;
     const manager = createNodeWorkerTunnelManager({
       gatewayDeviceId: "gateway-device-1",
@@ -210,7 +212,7 @@ describe("node worker tunnel manager", () => {
       ownerEpoch: record.ownerEpoch,
       sessionId: "session-1",
     });
-    expect(transfer.prepareSync).toHaveBeenCalledWith(
+    expect(prepareSync).toHaveBeenCalledWith(
       expect.objectContaining({
         environmentId: "environment-1",
         generation: record.ownerEpoch,
@@ -252,6 +254,7 @@ describe("node worker tunnel manager", () => {
       getTransport: transport,
       launchNodeWorker,
       validateWorkerTurn: () => true,
+      workspaceTransfer: workspaceTransfer(),
     });
     const first = await manager.start(startRequest());
     const launched = first.launchTurn({ plan: plan(), placementGeneration: 4, timeoutMs: 5_000 });
@@ -360,6 +363,7 @@ describe("node worker tunnel manager", () => {
         stagingRoot: localPath,
       })),
       close: vi.fn(async () => {}),
+      revoke: vi.fn(),
     } as unknown as NodeWorkspaceTransferService;
     const manager = createNodeWorkerTunnelManager({
       gatewayDeviceId: "gateway-device-1",
