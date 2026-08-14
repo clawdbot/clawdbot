@@ -1,10 +1,7 @@
 // Outbound channel bootstrap lazily loads runtime plugins for selected channels
 // when only setup-shell metadata is active.
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
