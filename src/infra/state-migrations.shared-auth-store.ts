@@ -32,8 +32,6 @@ import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-export type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
-
 const MIGRATION_KIND = "shared-auth-store-state-db";
 const AUTH_JSON_MIGRATION_KIND = "auth-profile-json-to-sqlite-v2";
 const SOURCE_STORE_KEY = "primary";
