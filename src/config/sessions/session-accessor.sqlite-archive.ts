@@ -62,12 +62,14 @@ export type TranscriptArchivePublishPlan = {
   agentId: string;
   archiveDirectory: string;
   databasePath: string;
+  generation: string;
   sessionId: string;
 };
 
 export type TranscriptArchivePublishResult = {
   archivedPath?: string;
   error?: string;
+  generation: string;
   sessionId: string;
 };
 
@@ -78,14 +80,16 @@ export type TranscriptArchivePublishWorkerMessage = {
 
 function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
+  generation?: string;
   reason: SessionArchiveReason;
   sessionId: string;
   nowMs?: number;
 }): string {
   const archiveDirectory = path.resolve(params.archiveDirectory);
+  const generationSuffix = params.generation ? `.${params.generation}` : "";
   const archivePath = path.resolve(
     archiveDirectory,
-    `${params.sessionId}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}`,
+    `${params.sessionId}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
   );
   if (path.dirname(archivePath) !== archiveDirectory) {
     throw new Error(`Cannot archive SQLite transcript outside ${archiveDirectory}`);
@@ -96,6 +100,7 @@ function resolveSqliteTranscriptArchivePath(params: {
 export function encodeMaterializedSessionTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
+  generation: string;
   reason: SessionArchiveReason;
   sessionId: string;
   nowMs?: number;
@@ -104,6 +109,7 @@ export function encodeMaterializedSessionTranscriptArchive(params: {
   const createdAt = params.nowMs ?? Date.now();
   const archivedPath = `${resolveSqliteTranscriptArchivePath({
     archiveDirectory: params.archiveDirectory,
+    generation: params.generation,
     reason: params.reason,
     sessionId: params.sessionId,
     nowMs: createdAt,
@@ -427,13 +433,21 @@ export async function materializeSessionStateDeletePlans(
     if (!result) {
       throw new Error(`SQLite transcript archive worker omitted ${plan.sessionId}`);
     }
-    const archivedTranscript = result.archive
-      ? {
-          sessionId: plan.sessionId,
-          archivedPath: path.join(plan.archiveDirectory, result.archive.archiveName),
-          sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
-        }
-      : null;
+    const generation = plan.snapshot.generation;
+    if (result.archive && !generation) {
+      throw new Error(
+        `Cannot archive SQLite transcript without a generation for ${plan.sessionId}`,
+      );
+    }
+    const archivedTranscript =
+      result.archive && generation
+        ? {
+            generation,
+            sessionId: plan.sessionId,
+            archivedPath: path.join(plan.archiveDirectory, result.archive.archiveName),
+            sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
+          }
+        : null;
     return Object.assign({}, plan, { archive: result.archive, archivedTranscript });
   });
 }

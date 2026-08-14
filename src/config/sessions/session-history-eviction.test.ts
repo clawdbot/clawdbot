@@ -86,6 +86,9 @@ describe("SQLite historical session disk budget", () => {
 
     expect(result?.removedEntries).toBe(1);
     expect(result?.totalBytesAfter).toBeLessThanOrEqual(before.totalBytes - 1);
+    expect(result?.totalBytesAfter).toBe(
+      (await measureSessionPhysicalDiskUsage(storePath)).totalBytes,
+    );
     expect(sessionExists("oldest-history")).toBe(false);
     expect(sessionExists("newer-history")).toBe(true);
     expect(sessionExists("live-history")).toBe(true);

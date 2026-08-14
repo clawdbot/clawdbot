@@ -53,6 +53,7 @@ function parsePublishWorkerPlans(value: unknown): TranscriptArchivePublishPlan[]
       typeof plan.agentId !== "string" ||
       typeof plan.archiveDirectory !== "string" ||
       typeof plan.databasePath !== "string" ||
+      typeof plan.generation !== "string" ||
       typeof plan.sessionId !== "string"
     ) {
       return undefined;
@@ -61,6 +62,7 @@ function parsePublishWorkerPlans(value: unknown): TranscriptArchivePublishPlan[]
       agentId: plan.agentId,
       archiveDirectory: plan.archiveDirectory,
       databasePath: plan.databasePath,
+      generation: plan.generation,
       sessionId: plan.sessionId,
     });
   }
@@ -182,11 +184,16 @@ export function materializeTranscriptArchiveInWorker(
     );
   }
   const { content } = opened.value;
+  const generation = plan.snapshot.generation;
+  if (content.length > 0 && !generation) {
+    throw new Error(`Cannot archive SQLite transcript without a generation for ${plan.sessionId}`);
+  }
   const archive =
-    content.length > 0
+    content.length > 0 && generation
       ? encodeMaterializedSessionTranscriptArchive({
           archiveDirectory: plan.archiveDirectory,
           content,
+          generation,
           reason: plan.reason,
           sessionId: plan.sessionId,
         })
@@ -206,7 +213,8 @@ export function publishTranscriptArchiveInWorker(
           db
             .selectFrom("session_transcript_archives")
             .select(["archive_blob", "archive_name", "archive_sha256"])
-            .where("session_id", "=", plan.sessionId),
+            .where("session_id", "=", plan.sessionId)
+            .where("generation", "=", plan.generation),
         ).rows[0];
       },
       { agentId: plan.agentId, path: plan.databasePath },
@@ -224,11 +232,13 @@ export function publishTranscriptArchiveInWorker(
         bytes: opened.value.archive_blob,
         sha256: opened.value.archive_sha256,
       }),
+      generation: plan.generation,
       sessionId: plan.sessionId,
     };
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : String(error),
+      generation: plan.generation,
       sessionId: plan.sessionId,
     };
   }

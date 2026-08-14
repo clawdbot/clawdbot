@@ -266,10 +266,11 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
       params.database.db,
       db
         .selectFrom("session_transcript_archives")
-        .select(["archive_name", "session_id"])
+        .select(["archive_name", "generation", "session_id"])
         .where("published_at", "is not", null)
         .orderBy("created_at", "asc")
         .orderBy("session_id", "asc")
+        .orderBy("generation", "asc")
         .limit(1),
     ).rows[0];
     if (!row) {
@@ -299,7 +300,8 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
           transactionDb.db,
           transactionKysely
             .deleteFrom("session_transcript_archives")
-            .where("session_id", "=", row.session_id),
+            .where("session_id", "=", row.session_id)
+            .where("generation", "=", row.generation),
         );
       },
       { agentId: params.database.agentId, path: params.database.path },

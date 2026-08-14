@@ -30,10 +30,11 @@ export function persistSessionTranscriptArchive(
   plan: MaterializedSessionStateDeletePlan,
 ): void {
   const archive = plan.archive;
+  const generation = plan.snapshot.generation;
   const sessionKey = plan.snapshot.sessionKey;
-  if (!archive || !sessionKey) {
+  if (!archive || !generation || !sessionKey) {
     throw new Error(
-      `Cannot persist SQLite transcript archive without an owner for ${plan.sessionId}`,
+      `Cannot persist SQLite transcript archive without an owner generation for ${plan.sessionId}`,
     );
   }
   ensureSessionTranscriptArchiveSchema(database.db);
@@ -48,6 +49,7 @@ export function persistSessionTranscriptArchive(
         archive_sha256: archive.sha256,
         created_at: archive.createdAt,
         encoding: archive.encoding,
+        generation,
         last_publish_attempt_at: null,
         last_publish_error: null,
         published_at: null,
@@ -55,7 +57,7 @@ export function persistSessionTranscriptArchive(
         session_id: plan.sessionId,
         session_key: sessionKey,
       })
-      .onConflict((conflict) => conflict.column("session_id").doNothing()),
+      .onConflict((conflict) => conflict.columns(["session_id", "generation"]).doNothing()),
   );
   const persisted = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -70,7 +72,8 @@ export function persistSessionTranscriptArchive(
         "reason",
         "session_key",
       ])
-      .where("session_id", "=", plan.sessionId),
+      .where("session_id", "=", plan.sessionId)
+      .where("generation", "=", generation),
   );
   if (
     !persisted ||
@@ -88,19 +91,42 @@ export function persistSessionTranscriptArchive(
 
 const PENDING_ARCHIVE_PUBLISH_BATCH_SIZE = 4;
 
+// Composite map keys keep repeated physical IDs distinct across transcript rewrites.
+function transcriptArchiveIdentityKey(sessionId: string, generation: string): string {
+  return `${sessionId}\u0000${generation}`;
+}
+
+// Retain one publication plan per immutable archive identity.
+function uniqueTranscriptArchives<T extends { generation: string; sessionId: string }>(
+  archives: readonly T[],
+): T[] {
+  return [
+    ...new Map(
+      archives.map((archive) => [
+        transcriptArchiveIdentityKey(archive.sessionId, archive.generation),
+        archive,
+      ]),
+    ).values(),
+  ];
+}
+
 /** Publishes derived archive files after their canonical rows and deletions commit. */
 export async function publishSessionStateArchives(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   requested: readonly SessionLifecycleArchivedTranscript[],
 ): Promise<SessionLifecycleArchivedTranscript[]> {
-  const requestedIds = [...new Set(requested.map((archive) => archive.sessionId))];
-  const requestedIdSet = new Set(requestedIds);
+  const requestedArchives = uniqueTranscriptArchives(requested);
+  const requestedIdentitySet = new Set(
+    requestedArchives.map((archive) =>
+      transcriptArchiveIdentityKey(archive.sessionId, archive.generation),
+    ),
+  );
   let includeRequested = true;
   while (true) {
     const plans = await runExclusiveSqliteSessionWrite(scope, async () => {
       const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
       const db = getSessionKysely(database.db);
-      if (includeRequested && requestedIds.length > 0) {
+      if (includeRequested && requestedArchives.length > 0) {
         ensureSessionTranscriptArchiveSchema(database.db);
       } else {
         const exists = executeSqliteQueryTakeFirstSync(
@@ -115,23 +141,28 @@ export async function publishSessionStateArchives(
           return [];
         }
       }
-      const pendingIds = executeSqliteQuerySync(
+      const pendingArchives = executeSqliteQuerySync(
         database.db,
         db
           .selectFrom("session_transcript_archives")
-          .select("session_id")
+          .select(["generation", "session_id"])
           .where("published_at", "is", null)
           .orderBy("created_at", "asc")
           .orderBy("session_id", "asc")
+          .orderBy("generation", "asc")
           .limit(PENDING_ARCHIVE_PUBLISH_BATCH_SIZE),
-      ).rows.map((row) => row.session_id);
-      const sessionIds = [...new Set([...(includeRequested ? requestedIds : []), ...pendingIds])];
+      ).rows.map((row) => ({ generation: row.generation, sessionId: row.session_id }));
+      const archives = uniqueTranscriptArchives([
+        ...(includeRequested ? requestedArchives : []),
+        ...pendingArchives,
+      ]);
       const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(scope);
-      return sessionIds.map((sessionId) => ({
+      return archives.map((archive) => ({
         agentId: database.agentId,
         archiveDirectory,
         databasePath: database.path,
-        sessionId,
+        generation: archive.generation,
+        sessionId: archive.sessionId,
       }));
     });
     includeRequested = false;
@@ -156,23 +187,28 @@ export async function publishSessionStateArchives(
                 publish_attempts: eb("publish_attempts", "+", 1),
                 ...(result.archivedPath ? { published_at: now } : {}),
               }))
-              .where("session_id", "=", result.sessionId),
+              .where("session_id", "=", result.sessionId)
+              .where("generation", "=", result.generation),
           );
         }
       }, toDatabaseOptions(scope));
     });
 
-    const planBySessionId = new Map(plans.map((plan) => [plan.sessionId, plan]));
+    const planByIdentity = new Map(
+      plans.map((plan) => [transcriptArchiveIdentityKey(plan.sessionId, plan.generation), plan]),
+    );
     emitArchivedTranscriptUpdates(
       results.flatMap((result) => {
-        if (!result.archivedPath || requestedIdSet.has(result.sessionId)) {
+        const identity = transcriptArchiveIdentityKey(result.sessionId, result.generation);
+        if (!result.archivedPath || requestedIdentitySet.has(identity)) {
           return [];
         }
-        const plan = planBySessionId.get(result.sessionId);
+        const plan = planByIdentity.get(identity);
         return plan
           ? [
               {
                 archivedPath: result.archivedPath,
+                generation: result.generation,
                 sessionId: result.sessionId,
                 sourcePath: path.join(plan.archiveDirectory, `${result.sessionId}.jsonl`),
               },
@@ -224,10 +260,18 @@ export async function prunePublishedSessionArchivesByRetention(params: {
       database.db,
       db
         .selectFrom("session_transcript_archives")
-        .select(["archive_name", "created_at", "published_at", "reason", "session_id"])
+        .select([
+          "archive_name",
+          "created_at",
+          "generation",
+          "published_at",
+          "reason",
+          "session_id",
+        ])
         .where("published_at", "is not", null)
         .orderBy("created_at", "asc")
         .orderBy("session_id", "asc")
+        .orderBy("generation", "asc")
         .limit(ARCHIVE_RETENTION_BATCH_SIZE),
     ).rows;
   });
@@ -258,6 +302,7 @@ export async function prunePublishedSessionArchivesByRetention(params: {
           db
             .deleteFrom("session_transcript_archives")
             .where("session_id", "=", row.session_id)
+            .where("generation", "=", row.generation)
             .where("archive_name", "=", row.archive_name)
             .where("created_at", "=", row.created_at)
             .where("published_at", "=", row.published_at),

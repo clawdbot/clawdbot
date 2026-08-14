@@ -29,6 +29,7 @@ export type SessionLifecycleStoreTarget = {
 
 export type SessionLifecycleArchivedTranscript = {
   /** Canonical SQLite archive identity used for idempotent derived-file publication. */
+  generation: string;
   sessionId: string;
   sourcePath: string;
   archivedPath: string;

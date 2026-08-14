@@ -136,6 +136,55 @@ describe("SQLite transcript archive worker", () => {
     ).toMatchObject({ published_at: expect.any(Number), session_key: sessionKey });
   });
 
+  it("retains distinct transcript generations after a physical session id is restored", async () => {
+    const sessionId = "restored-archive-session";
+    const sessionKey = "agent:main:restored-archive";
+    const scope = { sessionId, sessionKey, storePath };
+    await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await replaceTranscriptEvents(scope, [createTranscriptEvent(sessionId, "first generation")]);
+    const first = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    const firstArchive = first.archivedTranscripts[0];
+    if (!firstArchive) {
+      throw new Error("expected first transcript archive");
+    }
+    fs.rmSync(firstArchive.archivedPath);
+    openLifecycleTestDatabase(storePath)
+      .db.prepare(
+        `UPDATE session_transcript_archives
+            SET published_at = NULL
+          WHERE session_id = ? AND generation = ?`,
+      )
+      .run(sessionId, firstArchive.generation);
+
+    await replaceSessionEntry(scope, { sessionId, updatedAt: 2 });
+    await replaceTranscriptEvents(scope, [createTranscriptEvent(sessionId, "second generation")]);
+    const second = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    expect(second.archivedTranscripts).toHaveLength(1);
+    expect(second.archivedTranscripts[0]?.archivedPath).not.toBe(firstArchive.archivedPath);
+    expect(readArchiveLines(firstArchive.archivedPath)).toEqual([
+      JSON.stringify(createTranscriptEvent(sessionId, "first generation")),
+    ]);
+    expect(readArchiveLines(second.archivedTranscripts[0]?.archivedPath)).toEqual([
+      JSON.stringify(createTranscriptEvent(sessionId, "second generation")),
+    ]);
+    expect(
+      openLifecycleTestDatabase(storePath)
+        .db.prepare(
+          "SELECT generation FROM session_transcript_archives WHERE session_id = ? ORDER BY generation",
+        )
+        .all(sessionId),
+    ).toHaveLength(2);
+  });
+
   it("retries a pending archive export when deletion is already committed", async () => {
     const sessionId = "retry-committed-delete";
     const sessionKey = "agent:main:retry-committed-delete";

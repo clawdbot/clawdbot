@@ -279,6 +279,7 @@ export interface SessionTranscriptArchives {
   archive_sha256: string;
   created_at: number;
   encoding: string;
+  generation: string;
   last_publish_attempt_at: number | null;
   last_publish_error: string | null;
   publish_attempts: Generated<number>;

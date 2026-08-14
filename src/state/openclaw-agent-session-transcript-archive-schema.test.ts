@@ -80,12 +80,13 @@ describe("session transcript archive schema", () => {
       database
         .prepare(
           `INSERT INTO ${SESSION_TRANSCRIPT_ARCHIVES_TABLE} (
-             session_id, session_key, reason, encoding, archive_blob, archive_sha256,
+             session_id, generation, session_key, reason, encoding, archive_blob, archive_sha256,
              archive_name, created_at
-           ) VALUES (?, ?, 'deleted', 'identity', ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, 'deleted', 'identity', ?, ?, ?, ?)`,
         )
         .run(
           "session-1",
+          "generation-1",
           "agent:main:session-1",
           Buffer.from("{}\n"),
           "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
