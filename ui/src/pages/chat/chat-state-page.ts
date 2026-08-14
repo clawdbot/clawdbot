@@ -127,6 +127,7 @@ export function createPageState(
   const appConfig = context.config.current;
   const state = {
     sessions: context.sessions,
+    loadControlModel: context.gateway?.loadControlModel,
     initialUserMessage: context.initialUserMessage,
     settings,
     password: "",

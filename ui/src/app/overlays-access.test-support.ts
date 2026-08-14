@@ -59,6 +59,7 @@ export function createGatewayHarness(
     setSessionKey() {},
     start() {},
     stop() {},
+    dispose() {},
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       snapshotListeners.add(listener);
       return () => snapshotListeners.delete(listener);

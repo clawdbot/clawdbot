@@ -1,4 +1,8 @@
-import { createSessionEventRefreshCoordinator } from "@openclaw/gateway-client/model";
+import type {
+  ControlModelCatalog,
+  ControlModelSessionCatalogSnapshot,
+} from "@openclaw/gateway-client/model/catalog";
+import { createSessionEventRefreshCoordinator } from "@openclaw/gateway-client/model/session-event-refresh";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
@@ -27,6 +31,8 @@ type SessionRosterRefreshHost = {
   observerError: () => string | null;
   decorate: (result: SessionsListResult | null) => SessionsListResult | null;
   onCanonicalList: (result: SessionsListResult | null) => void;
+  controlModel?: ControlModelCatalog;
+  controlModelLoader?: () => Promise<ControlModelCatalog>;
 };
 
 type FilteredSessionList = {
@@ -49,6 +55,36 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let hasForegroundListOptions = false;
   let hasSeededListOptions = false;
   const filteredLists = new Map<string, FilteredSessionList>();
+  let controlModel = host.controlModel;
+  let controlModelUnavailable = false;
+  let controlModelSyncing = false;
+  let stopControlModel: (() => void) | undefined;
+  let controlModelAdapter: Awaited<ReturnType<typeof loadControlModelAdapter>> | null = null;
+  const loadControlModelAdapter = () => import("./session-roster-control-model.ts");
+  const ensureControlModel = async (): Promise<ControlModelCatalog | null> => {
+    if (controlModel) {
+      return controlModel;
+    }
+    if (!host.controlModelLoader) {
+      return null;
+    }
+    const loaded = await host.controlModelLoader();
+    if (controlModel) {
+      return controlModel;
+    }
+    controlModel = loaded;
+    controlModelUnavailable = false;
+    stopControlModel = loaded.subscribe(() => {
+      if (!controlModelAdapter || controlModelSyncing) {
+        return;
+      }
+      const catalog = loaded.getSnapshot().sessionCatalog;
+      if (catalog.status !== "loading") {
+        applyControlModelSnapshot(catalog);
+      }
+    });
+    return loaded;
+  };
 
   const filteredListKey = (scope: SessionListScope): string => {
     const agentId = normalizeAgentId(
@@ -90,6 +126,137 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     filteredLists.set(key, entry);
     return entry;
   };
+
+  const applyControlModelSnapshot = (
+    catalog: ControlModelSessionCatalogSnapshot,
+    options: SessionRefreshOptions = {},
+  ): SessionsListResult | null => {
+    if (catalog.status === "error") {
+      const state = host.readState();
+      host.publish(
+        {
+          ...state,
+          loading: false,
+          error: catalog.error?.message ?? "Catalog refresh failed",
+          deletedSessions: [],
+        },
+        "operation",
+      );
+      return state.result;
+    }
+    if (catalog.status !== "ready") {
+      return host.readState().result;
+    }
+    const currentState = host.readState();
+    const reconciled = controlModelAdapter!.reconcileControlModelSnapshot(
+      catalog,
+      options,
+      currentState,
+      host.snapshot(),
+    );
+    const result = host.decorate(reconciled.result);
+    host.onCanonicalList(result);
+    const error = catalog.error?.message ?? host.observerError();
+    host.publish(
+      {
+        result,
+        agentId: reconciled.agentId,
+        loading: false,
+        error,
+        modelOverrides: currentState.modelOverrides,
+        deletedSessions: [],
+        groups: currentState.groups,
+        sectionOrder: currentState.sectionOrder,
+      },
+      error ? "session-observer" : undefined,
+    );
+    return result;
+  };
+
+  const refreshControlModelCatalog = async (
+    options: SessionRefreshOptions,
+  ): Promise<SessionsListResult | null> => {
+    const scope = host.connection.capture();
+    const model = await ensureControlModel();
+    if (!scope || !model) {
+      return null;
+    }
+    controlModelAdapter ??= await loadControlModelAdapter();
+    const {
+      force = false,
+      backgroundHydrate = false,
+      append: _append,
+      ...requestOptions
+    } = options;
+    requestOptions.includeDerivedTitles ??= true;
+    const durableListOptions: SessionListOptions = { ...requestOptions };
+    delete durableListOptions.offset;
+    if (!backgroundHydrate) {
+      lastListOptions = durableListOptions;
+      hasForegroundListOptions = true;
+    } else if (!hasForegroundListOptions && !hasSeededListOptions) {
+      lastListOptions = durableListOptions;
+      hasSeededListOptions = true;
+    }
+    if (!backgroundHydrate) {
+      const error = host.observerError();
+      host.publish(
+        { ...host.readState(), loading: true, error, deletedSessions: [] },
+        error ? "session-observer" : undefined,
+      );
+    }
+    const query = controlModelAdapter.controlModelQuery(requestOptions);
+    const current = model.getSnapshot().sessionCatalog;
+    if (
+      !force &&
+      current.status === "ready" &&
+      JSON.stringify(current.query) === JSON.stringify(query)
+    ) {
+      return applyControlModelSnapshot(current, options);
+    }
+    controlModelSyncing = true;
+    try {
+      await model.refreshSessions(undefined, query);
+      if (!host.connection.isCurrent(scope)) {
+        return null;
+      }
+      const result = applyControlModelSnapshot(model.getSnapshot().sessionCatalog, options);
+      if (options.append && result && !backgroundHydrate) {
+        lastListOptions = {
+          ...durableListOptions,
+          limit: Math.max(
+            durableListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit,
+            result.sessions.length,
+          ),
+        };
+      }
+      return result;
+    } catch (error) {
+      if (host.connection.isCurrent(scope)) {
+        const state = host.readState();
+        host.publish(
+          { ...state, loading: backgroundHydrate ? state.loading : false, error: String(error) },
+          "operation",
+        );
+      }
+      return null;
+    } finally {
+      controlModelSyncing = false;
+    }
+  };
+
+  const initialControlModel = controlModel;
+  if (initialControlModel) {
+    stopControlModel = initialControlModel.subscribe(() => {
+      if (!controlModelAdapter || controlModelSyncing) {
+        return;
+      }
+      const catalog = initialControlModel.getSnapshot().sessionCatalog;
+      if (catalog.status !== "loading") {
+        applyControlModelSnapshot(catalog);
+      }
+    });
+  }
 
   const refreshFilteredList = (options: SessionRefreshOptions): Promise<void> => {
     const scope = host.connection.capture();
@@ -193,6 +360,20 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   };
 
   const load = async (options: SessionRefreshOptions) => {
+    if (
+      (controlModel || host.controlModelLoader) &&
+      (!options.archivedFilter || options.archivedFilter === "active")
+    ) {
+      try {
+        if (await ensureControlModel()) {
+          await refreshControlModelCatalog(options);
+          return;
+        }
+      } catch (error) {
+        controlModelUnavailable = true;
+        console.error("[sessions] Control Model load failed; using Gateway fallback:", error);
+      }
+    }
     const scope = host.connection.capture();
     if (!scope) {
       return;
@@ -481,6 +662,22 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     },
     lastOptions: () => lastListOptions,
     scheduleEvent(options: { agentId?: string | null; filtered?: boolean } = {}) {
+      const modelAvailable = controlModel || (host.controlModelLoader && !controlModelUnavailable);
+      const primaryUsesControlModel =
+        modelAvailable &&
+        (!lastListOptions.archivedFilter || lastListOptions.archivedFilter === "active");
+      if (primaryUsesControlModel) {
+        if (options.filtered === false) {
+          return;
+        }
+        const agentId = options.agentId ? normalizeAgentId(options.agentId) : null;
+        for (const entry of filteredLists.values()) {
+          if (!agentId || entry.agentId === agentId) {
+            entry.coordinator.schedule();
+          }
+        }
+        return;
+      }
       eventRefreshCoordinator.schedule();
       if (options.filtered === false) {
         return;
@@ -516,6 +713,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       // Flush before disposal so page-exit events start the trailing canonical list.
       flushEventRefresh();
       eventRefreshCoordinator.dispose();
+      stopControlModel?.();
       if (observesPageLifecycle) {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
         globalThis.removeEventListener("pagehide", flushEventRefresh);

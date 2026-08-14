@@ -1,3 +1,7 @@
+import type {
+  ControlModel,
+  ControlModelSessionCatalogSnapshot,
+} from "@openclaw/gateway-client/model";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
@@ -48,6 +52,411 @@ function sessionHarness(request: unknown) {
 }
 
 describe("session list requests", () => {
+  it("uses the Control Model catalog snapshot without issuing a duplicate UI request", async () => {
+    const refreshSessions = vi.fn(async (_options: unknown, query?: Record<string, unknown>) => {
+      catalog = {
+        ...catalog,
+        status: "ready",
+        query: query ?? {},
+        ts: 42,
+        path: "sessions.list",
+        count: 1,
+        sessions: [{ key: "agent:main:needle", kind: "direct" }],
+        totalCount: 1,
+        limitApplied: 5,
+        offset: 20,
+        nextOffset: null,
+        hasMore: false,
+        creators: [{ id: "human" }],
+        defaults: { modelProvider: "test", model: "test", contextTokens: 1 },
+        refreshedAt: 42,
+        error: null,
+      };
+    });
+    let catalog: ControlModelSessionCatalogSnapshot = {
+      status: "idle",
+      query: {},
+      ts: null,
+      path: null,
+      count: 0,
+      sessions: [],
+      totalCount: 0,
+      limitApplied: null,
+      offset: null,
+      nextOffset: null,
+      hasMore: false,
+      creators: [],
+      defaults: null,
+      refreshedAt: null,
+      error: null,
+    };
+    const model = {
+      getSnapshot: () => ({
+        revision: 1,
+        lifecycle: "running",
+        connection: { status: "connected", epoch: 1 },
+        sessionCatalog: catalog,
+      }),
+      subscribe: () => () => undefined,
+      start: vi.fn(),
+      refreshSessions,
+      conversation: vi.fn(),
+      releaseConversation: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as unknown as ControlModel;
+    const request = vi.fn(async () => {
+      throw new Error("the UI must not issue the canonical request");
+    });
+    const snapshot = {
+      client: { request } as unknown as GatewayBrowserClient,
+      phase: "connected" as const,
+      sessionKey: "agent:main:main",
+      assistantAgentId: "main",
+      hello: null,
+    };
+    const sessions = createSessionCapability({
+      snapshot,
+      controlModel: model,
+      loadControlModelCatalog: async () => model,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    const options = { agentId: "main", search: "needle", offset: 20, limit: 5 };
+    await sessions.refresh(options);
+    await sessions.refresh(options);
+    expect(refreshSessions).toHaveBeenCalledOnce();
+    expect(refreshSessions).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        agentId: "main",
+        search: "needle",
+        offset: 20,
+        limit: 5,
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: true,
+      }),
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:needle");
+    expect(sessions.state.result?.defaults.model).toBe("test");
+    expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:needle");
+    sessions.dispose();
+  });
+
+  it("falls back to sessions.list when the Control Model chunk fails to load", async () => {
+    let eventListener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    let modelLoadAttempts = 0;
+    const request = vi.fn(async () => listResult(["agent:main:fallback"]));
+    const snapshot = {
+      client: { request } as unknown as GatewayBrowserClient,
+      phase: "connected" as const,
+      sessionKey: "agent:main:fallback",
+      assistantAgentId: "main",
+      hello: null,
+    };
+    const sessions = createSessionCapability({
+      snapshot,
+      loadControlModelCatalog: async () => {
+        modelLoadAttempts += 1;
+        throw new Error("chunk failed");
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents(listener) {
+        eventListener = listener;
+        return () => undefined;
+      },
+    });
+
+    await sessions.refresh({ agentId: "main" });
+
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:fallback");
+
+    eventListener?.({
+      event: "sessions.changed",
+      payload: { agentId: "main", reason: "update", sessionKey: "agent:main:fallback" },
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(modelLoadAttempts).toBe(2);
+
+    sessions.dispose();
+  });
+
+  it("refreshes the primary archived roster through the Gateway when the model is loaded", async () => {
+    let eventListener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    let archivedRequests = 0;
+    const request = vi.fn(async (_method: string, params?: ListParams) => {
+      if (params?.archived === true) {
+        archivedRequests += 1;
+        return listResult([`agent:main:archived-${archivedRequests}`]);
+      }
+      return listResult(["agent:main:active"]);
+    });
+    const model = {
+      getSnapshot: () => ({
+        revision: 1,
+        lifecycle: "running",
+        connection: { status: "connected", epoch: 1 },
+        sessionCatalog: {
+          status: "ready",
+          query: {},
+          ts: 1,
+          path: "sessions.list",
+          count: 1,
+          sessions: [{ key: "agent:main:active", kind: "direct" }],
+          totalCount: 1,
+          limitApplied: 50,
+          offset: null,
+          nextOffset: null,
+          hasMore: false,
+          creators: [],
+          defaults: null,
+          refreshedAt: 1,
+          error: null,
+        },
+      }),
+      subscribe: () => () => undefined,
+      start: vi.fn(),
+      refreshSessions: vi.fn(async () => undefined),
+      conversation: vi.fn(),
+      releaseConversation: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as unknown as ControlModel;
+    const sessions = createSessionCapability({
+      snapshot: {
+        client: { request } as unknown as GatewayBrowserClient,
+        phase: "connected",
+        sessionKey: "agent:main:main",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      controlModel: model,
+      loadControlModelCatalog: async () => model,
+      subscribe: () => () => undefined,
+      subscribeEvents(listener) {
+        eventListener = listener;
+        return () => undefined;
+      },
+    });
+
+    await sessions.refresh({ agentId: "main", archivedFilter: "archived" });
+    eventListener?.({
+      event: "sessions.changed",
+      payload: { agentId: "main", reason: "update", sessionKey: "agent:main:archived-1" },
+    });
+
+    await vi.waitFor(() => expect(archivedRequests).toBe(2));
+    expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:archived-2");
+    sessions.dispose();
+  });
+
+  it("keeps local create, reconcile, and run-terminal results when the model owns events", async () => {
+    const key = "agent:main:created";
+    let catalog: ControlModelSessionCatalogSnapshot = {
+      status: "idle",
+      query: {},
+      ts: null,
+      path: null,
+      count: 0,
+      sessions: [],
+      totalCount: 0,
+      limitApplied: null,
+      offset: null,
+      nextOffset: null,
+      hasMore: false,
+      creators: [],
+      defaults: null,
+      refreshedAt: null,
+      error: null,
+    };
+    const dispose = vi.fn();
+    const model = {
+      getSnapshot: () => ({
+        revision: 1,
+        lifecycle: "running",
+        connection: { status: "connected", epoch: 1 },
+        sessionCatalog: catalog,
+      }),
+      subscribe: () => () => undefined,
+      start: vi.fn(),
+      refreshSessions: vi.fn(async (_options: unknown, query?: Record<string, unknown>) => {
+        catalog = {
+          ...catalog,
+          status: "ready",
+          query: query ?? {},
+          ts: 1,
+          path: "sessions.list",
+          count: 1,
+          sessions: [
+            {
+              key,
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              activeRunIds: ["run-created"],
+              status: "running",
+              startedAt: 10,
+            },
+          ],
+          totalCount: 1,
+          limitApplied: 50,
+          offset: null,
+          nextOffset: null,
+          hasMore: false,
+          creators: [],
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          refreshedAt: 1,
+          error: null,
+        };
+      }),
+      conversation: vi.fn(),
+      releaseConversation: vi.fn(async () => undefined),
+      dispose,
+    } as unknown as ControlModel;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return { key };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const sessions = createSessionCapability({
+      snapshot: {
+        client: { request } as unknown as GatewayBrowserClient,
+        phase: "connected",
+        sessionKey: "agent:main:main",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      controlModel: model,
+      loadControlModelCatalog: async () => model,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await expect(sessions.createResult({ agentId: "main" })).resolves.toMatchObject({ key });
+    expect(
+      sessions.reconcile({
+        key,
+        kind: "direct",
+        updatedAt: 20,
+        label: "local result",
+        hasActiveRun: true,
+        activeRunIds: ["run-created"],
+        status: "running",
+        startedAt: 10,
+      }),
+    ).toBe(true);
+    expect(sessions.state.result?.sessions[0]).toMatchObject({ label: "local result" });
+    expect(
+      sessions.reconcileRunTerminal({
+        sessionKeys: [key],
+        runId: "run-created",
+        status: "done",
+        endedAt: 20,
+      }),
+    ).toBe(true);
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+      endedAt: 20,
+    });
+
+    sessions.dispose();
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("does not reinsert an active current row into a foreground model-filtered roster", async () => {
+    const currentKey = "agent:main:current";
+    let catalog: ControlModelSessionCatalogSnapshot = {
+      status: "idle",
+      query: {},
+      ts: null,
+      path: null,
+      count: 0,
+      sessions: [],
+      totalCount: 0,
+      limitApplied: null,
+      offset: null,
+      nextOffset: null,
+      hasMore: false,
+      creators: [],
+      defaults: null,
+      refreshedAt: null,
+      error: null,
+    };
+    const model = {
+      getSnapshot: () => ({
+        revision: 1,
+        lifecycle: "running",
+        connection: { status: "connected", epoch: 1 },
+        sessionCatalog: catalog,
+      }),
+      subscribe: () => () => undefined,
+      start: vi.fn(),
+      refreshSessions: vi.fn(async (_options: unknown, query?: Record<string, unknown>) => {
+        const searching = typeof query?.search === "string";
+        catalog = {
+          ...catalog,
+          status: "ready",
+          query: query ?? {},
+          ts: 1,
+          path: "sessions.list",
+          count: 1,
+          sessions: [
+            searching
+              ? { key: "agent:main:matched", kind: "direct", updatedAt: 2 }
+              : { key: currentKey, kind: "direct", updatedAt: 1 },
+          ],
+          totalCount: 1,
+          limitApplied: 50,
+          offset: null,
+          nextOffset: null,
+          hasMore: false,
+          creators: [],
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          refreshedAt: 1,
+          error: null,
+        };
+      }),
+      conversation: vi.fn(),
+      releaseConversation: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as unknown as ControlModel;
+    const sessions = createSessionCapability({
+      snapshot: {
+        client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+        phase: "connected",
+        sessionKey: currentKey,
+        assistantAgentId: "main",
+        hello: null,
+      },
+      controlModel: model,
+      loadControlModelCatalog: async () => model,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await sessions.refresh({ agentId: "main" });
+    await sessions.list({ agentId: "main", search: "matched", force: true } as never);
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([currentKey]);
+
+    await sessions.refresh({ agentId: "main", search: "matched", force: true });
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual(["agent:main:matched"]);
+
+    await sessions.refresh({ agentId: "main", force: true });
+    await sessions.refresh({ agentId: "main", search: "matched", backgroundHydrate: true });
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
+      "agent:main:matched",
+      currentKey,
+    ]);
+    sessions.dispose();
+  });
+
   it("forwards a trimmed parent key when listing child sessions", async () => {
     const request = vi.fn(async (_method: string, _params?: unknown) => listResult());
     const { sessions } = sessionHarness(request);
@@ -131,6 +540,62 @@ describe("session list requests", () => {
     expect(sessions.state.result).toBe(activeResult);
     expect(sessions.canonicalListRevision).toBe(1);
     expect(observeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ loading: true }));
+    unsubscribe();
+    sessions.dispose();
+  });
+
+  it("refreshes subscribed archived lists after a terminal message event", async () => {
+    let eventListener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    let archivedRequests = 0;
+    const request = vi.fn(async (_method: string, params?: ListParams) => {
+      if (params?.archived === true) {
+        archivedRequests += 1;
+        return listResult([`agent:main:archived-${archivedRequests}`]);
+      }
+      return listResult(["agent:main:active"]);
+    });
+    const snapshot = {
+      client: { request } as unknown as GatewayBrowserClient,
+      phase: "connected" as const,
+      sessionKey: "agent:main:active",
+      assistantAgentId: "main",
+      hello: null,
+    };
+    const sessions = createSessionCapability({
+      snapshot,
+      subscribe: () => () => undefined,
+      subscribeEvents(listener) {
+        eventListener = listener;
+        return () => undefined;
+      },
+      loadControlModelCatalog: async () =>
+        ({
+          getSnapshot: () => ({
+            lifecycle: "running",
+            connection: { status: "connected", epoch: 1 },
+            sessionCatalog: { status: "idle" },
+          }),
+          subscribe: () => () => undefined,
+        }) as unknown as ControlModel,
+    });
+    const archivedScope = { agentId: "main", archivedFilter: "archived" as const };
+    const unsubscribe = sessions.subscribeList(archivedScope, () => undefined);
+    await sessions.refreshList(archivedScope);
+
+    eventListener?.({
+      event: "session.message",
+      payload: {
+        agentId: "main",
+        sessionKey: "agent:main:archived-1",
+        hasActiveRun: false,
+        status: "done",
+      },
+    });
+    await vi.waitFor(() => expect(archivedRequests).toBe(2));
+
+    expect(sessions.listSnapshot(archivedScope).result?.sessions[0]?.key).toBe(
+      "agent:main:archived-2",
+    );
     unsubscribe();
     sessions.dispose();
   });

@@ -72,6 +72,7 @@ function messageIds(
   snapshot: ReturnType<ReturnType<typeof createControlModel>["conversation"]>["getSnapshot"],
 ) {
   return snapshot.messages.map((entry) =>
+    // oxlint-disable-next-line no-underscore-dangle -- Canonical Gateway message metadata field.
     String((entry.raw as { __openclaw?: { id?: string } }).__openclaw?.id),
   );
 }
@@ -107,26 +108,42 @@ function createHarness(
       calls.push({ method, params, options: requestOptions });
       const queued = take(method);
       if (queued !== undefined) {
-        if (queued instanceof Error) throw queued;
-        return await queued;
+        if (queued instanceof Error) {
+          throw queued;
+        }
+        return queued;
       }
-      if (method === "sessions.list") return { sessions: [] };
-      if (method === "sessions.messages.subscribe")
+      if (method === "sessions.list") {
+        return { sessions: [] };
+      }
+      if (method === "sessions.messages.subscribe") {
         return {
           key: params.key,
           ...(params.includeApprovals ? { approvalReplay: options.approvalReplay } : {}),
         };
-      if (method === "sessions.messages.unsubscribe") return {};
-      if (method === "question.list") return { questions: options.questions ?? [] };
+      }
+      if (method === "sessions.messages.unsubscribe") {
+        return {};
+      }
+      if (method === "question.list") {
+        return { questions: options.questions ?? [] };
+      }
       if (method === "chat.history") {
         const offset = typeof params.offset === "number" ? params.offset : 0;
-        return await (histories.get(offset)?.shift() ?? defaultHistory);
+        return histories.get(offset)?.shift() ?? defaultHistory;
       }
-      if (method === "chat.send") return { runId: "run-default", status: "accepted" };
-      if (method === "chat.abort")
+      if (method === "chat.send") {
+        return { runId: "run-default", status: "accepted" };
+      }
+      if (method === "chat.abort") {
         return { aborted: true, runIds: typeof params.runId === "string" ? [params.runId] : [] };
-      if (method === "approval.resolve") return { applied: true };
-      if (method === "question.resolve") return { status: "answered" };
+      }
+      if (method === "approval.resolve") {
+        return { applied: true };
+      }
+      if (method === "question.resolve") {
+        return { status: "answered" };
+      }
       return {};
     },
   );
@@ -142,7 +159,9 @@ function createHarness(
     ) => {
       calls.push({ method: "artifact.materialize", params: input, options: requestOptions });
       const queued = take("artifact.materialize");
-      if (queued instanceof Error) throw queued;
+      if (queued instanceof Error) {
+        throw queued;
+      }
       return await queued;
     },
   );
@@ -190,24 +209,34 @@ function createHarness(
     },
     setConnection(next: ControlModelConnectionSnapshot, times = 1) {
       connection = next;
-      for (let index = 0; index < times; index += 1)
-        for (const listener of connectionListeners) listener();
+      for (let index = 0; index < times; index += 1) {
+        for (const listener of connectionListeners) {
+          listener();
+        }
+      }
     },
     pingConnection(times = 1) {
-      for (let index = 0; index < times; index += 1)
-        for (const listener of connectionListeners) listener();
+      for (let index = 0; index < times; index += 1) {
+        for (const listener of connectionListeners) {
+          listener();
+        }
+      }
     },
     emit(
       frame: Omit<ControlModelGatewayEventFrame, "connectionEpoch"> & { connectionEpoch?: number },
     ) {
       const next = { ...frame, connectionEpoch: frame.connectionEpoch ?? connection.epoch };
-      for (const listener of eventListeners) listener(next);
+      for (const listener of eventListeners) {
+        listener(next);
+      }
     },
   };
 }
 
 async function flush() {
-  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 async function activatedConversation(
@@ -226,6 +255,129 @@ async function activatedConversation(
 }
 
 describe("Control Model conversations", () => {
+  it("can defer canonical history to the selected route and retains startup metadata", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    harness.queue("chat.startup", {
+      messages: [message(1)],
+      sessionId: "session-one",
+      sessionInfo: { key: "agent:main:one", kind: "direct" },
+      defaults: { model: "test" },
+      completeSnapshot: true,
+    });
+    const model = createControlModel({
+      gateway: harness.gateway,
+      autoRefreshSessionCatalog: false,
+      autoLoadConversationHistory: false,
+    });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+    await flush();
+    expect(harness.callsFor("sessions.list")).toHaveLength(0);
+    expect(harness.callsFor("chat.history")).toHaveLength(0);
+
+    await conversation.refreshHistory(undefined, "chat.startup");
+    expect(harness.callsFor("chat.startup")).toHaveLength(1);
+    expect(harness.callsFor("chat.history")).toHaveLength(0);
+    expect(conversation.getSnapshot().metadata).toMatchObject({
+      sessionId: "session-one",
+      defaults: { model: "test" },
+    });
+    expect(conversation.getSnapshot().messages).toHaveLength(1);
+  });
+
+  it("bounds malformed startup metadata without retaining raw payloads", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const oversized = "x".repeat(1_000);
+    harness.queue("chat.startup", {
+      messages: [],
+      sessionId: "session-one",
+      defaults: { model: oversized },
+      agentsList: [],
+      metadata: { commands: [] },
+      inFlightRun: { runId: "run-one", events: [{ payload: oversized }] },
+      completeSnapshot: true,
+    });
+    const model = createControlModel({
+      gateway: harness.gateway,
+      autoRefreshSessionCatalog: false,
+      autoLoadConversationHistory: false,
+      bounds: { maxConversationStartupMetadataBytes: 128 },
+    });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+
+    await conversation.refreshHistory(undefined, "chat.startup");
+
+    const snapshot = conversation.getSnapshot();
+    expect(snapshot.metadata?.defaults).toEqual({
+      kind: "truncated",
+      reason: "max-startup-metadata-bytes",
+    });
+    expect(snapshot.metadata?.agentsList).toBeUndefined();
+    expect(snapshot.partialReasons).toEqual(
+      expect.arrayContaining(["startup-metadata-truncated", "startup-metadata-malformed"]),
+    );
+    expect(JSON.stringify(snapshot.metadata)).not.toContain(oversized);
+    expect(
+      new TextEncoder().encode(JSON.stringify(snapshot.metadata)).byteLength,
+    ).toBeLessThanOrEqual(128);
+  });
+
+  it("bounds oversized startup metadata strings", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const oversized = "s".repeat(1_000);
+    harness.queue("chat.startup", {
+      messages: [],
+      sessionId: oversized,
+      completeSnapshot: true,
+    });
+    const model = createControlModel({
+      gateway: harness.gateway,
+      autoRefreshSessionCatalog: false,
+      autoLoadConversationHistory: false,
+      bounds: { maxConversationStartupMetadataBytes: 64 },
+    });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+
+    await conversation.refreshHistory(undefined, "chat.startup");
+
+    const snapshot = conversation.getSnapshot();
+    expect(snapshot.metadata?.sessionId).not.toBe(oversized);
+    expect(snapshot.partialReasons).toEqual(
+      expect.arrayContaining(["startup-metadata-truncated", "startup-metadata-malformed"]),
+    );
+    expect(
+      new TextEncoder().encode(JSON.stringify(snapshot.metadata)).byteLength,
+    ).toBeLessThanOrEqual(64);
+  });
+
+  it("refreshes returned metadata with ordinary history snapshots", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    harness.queue("chat.startup", {
+      messages: [],
+      sessionInfo: { key: "agent:main:one", activeLeafEntryId: "leaf-one" },
+    });
+    harness.queue("chat.history", {
+      messages: [],
+      sessionInfo: { key: "agent:main:one", activeLeafEntryId: "leaf-two" },
+    });
+    const model = createControlModel({
+      gateway: harness.gateway,
+      autoRefreshSessionCatalog: false,
+      autoLoadConversationHistory: false,
+    });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+
+    await conversation.refreshHistory(undefined, "chat.startup");
+    await conversation.refreshHistory();
+
+    expect(conversation.getSnapshot().metadata?.sessionInfo).toMatchObject({
+      activeLeafEntryId: "leaf-two",
+    });
+  });
+
   it("activates exactly once per epoch and retires/release leases safely", async () => {
     const harness = createHarness();
     const model = createControlModel({ gateway: harness.gateway });
@@ -632,11 +784,12 @@ describe("Control Model conversations", () => {
     const { harness, model, conversation } = await activatedConversation(undefined, {
       maxConversationMessages: 3,
     });
-    for (let sequence = 1; sequence <= 10; sequence += 1)
+    for (let sequence = 1; sequence <= 10; sequence += 1) {
       harness.emit({
         event: "session.message",
         payload: { sessionKey: "agent:main:one", message: message(sequence) },
       });
+    }
     expect(messageIds(conversation.getSnapshot())).toEqual([
       "message-8",
       "message-9",
@@ -1467,8 +1620,14 @@ describe("Control Model conversations", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.messages)).toBe(true);
     expect(Object.isFrozen(snapshot.messages[0]?.raw)).toBe(true);
-    expect(Object.isFrozen((snapshot.messages[0]?.raw as { nested?: unknown }).nested)).toBe(true);
+    const firstMessage = snapshot.messages[0];
+    if (!firstMessage) {
+      throw new Error("Expected a projected message");
+    }
+    expect(Object.isFrozen((firstMessage.raw as { nested?: unknown }).nested)).toBe(true);
     expect(later).not.toHaveBeenCalled();
     model.dispose();
   });
 });
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered conversation test suite. */

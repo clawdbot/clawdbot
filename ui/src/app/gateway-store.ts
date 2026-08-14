@@ -1,3 +1,5 @@
+import type { ControlModel } from "@openclaw/gateway-client/model";
+import type { ControlModelCatalog } from "@openclaw/gateway-client/model/catalog";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
@@ -20,6 +22,7 @@ import type {
   ApplicationGatewayConnection,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import type { ControlModelRuntime } from "./control-model-loader.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import { loadSettings, patchSettings, persistSessionToken } from "./settings.ts";
 import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
@@ -31,7 +34,6 @@ type CanvasSurfaceLease = ReturnType<CanvasSurfaceLeaseModule["createCanvasSurfa
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
-
 function notifyGatewayObservers<T>(
   listeners: ReadonlySet<(value: T) => void>,
   value: T,
@@ -106,6 +108,11 @@ export function createApplicationGateway(
   // kicking the operator back to the login gate.
   let everConnected = false;
   let stopped = true;
+  let disposed = false;
+  // The Control Model bridge is loaded only when a catalog or conversation adopter needs it.
+  let connectionEpoch = 0;
+  let controlModelRuntime: ControlModelRuntime | null = null;
+  let controlModelRuntimeLoad: Promise<ControlModelRuntime> | null = null;
   // Snapshot observers can synchronously stop or replace their publishing client.
   const isCurrentClient = (expected: GatewayBrowserClient | null) =>
     !stopped && client === expected;
@@ -136,6 +143,7 @@ export function createApplicationGateway(
       }
     }, OFFLINE_INDICATOR_DELAY_MS);
   };
+  const resetControlModelLineage = () => controlModelRuntime?.resetLineage();
   const setSnapshot = (next: ApplicationGatewaySnapshot) => {
     if (next.phase === "connected") {
       clearOfflineIndicatorTimer();
@@ -144,6 +152,7 @@ export function createApplicationGateway(
       snapshot = next;
       scheduleOfflineIndicator();
     }
+    controlModelRuntime?.notifyConnection();
     notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
   };
   const loadCanvasSurfaceLease = (): Promise<CanvasSurfaceLease> => {
@@ -268,6 +277,9 @@ export function createApplicationGateway(
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
+    if (disposed) {
+      return;
+    }
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
     const nextConnection = {
@@ -319,6 +331,8 @@ export function createApplicationGateway(
     );
     stopCanvasSurfaceLease();
     client?.stop();
+    connectionEpoch += 1;
+    resetControlModelLineage();
 
     const nextClient = createClient({
       url: nextConnection.gatewayUrl,
@@ -399,6 +413,8 @@ export function createApplicationGateway(
           return;
         }
         stopCanvasSurfaceLease();
+        connectionEpoch += 1;
+        resetControlModelLineage();
         setSnapshot({
           ...snapshot,
           client: nextClient,
@@ -435,6 +451,7 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        controlModelRuntime?.queueEvent(event, nextClient);
         try {
           recordGatewayEvent(event);
         } catch (error) {
@@ -466,6 +483,38 @@ export function createApplicationGateway(
     }
   };
 
+  const loadControlModelRuntime = (): Promise<ControlModelRuntime> => {
+    if (disposed) {
+      return Promise.reject(new Error("Gateway is disposed"));
+    }
+    if (controlModelRuntime) {
+      return Promise.resolve(controlModelRuntime);
+    }
+    return (controlModelRuntimeLoad ??= import("./control-model-loader.ts")
+      .then(({ createControlModelRuntime }) => {
+        const runtime = createControlModelRuntime({
+          getGatewaySnapshot: () => snapshot,
+          getConnectionEpoch: () => connectionEpoch,
+          getClient: () => client,
+          isCurrentClient,
+        });
+        if (disposed) {
+          runtime.dispose();
+          throw new Error("Gateway is disposed");
+        }
+        controlModelRuntime = runtime;
+        return runtime;
+      })
+      .catch((error: unknown) => {
+        controlModelRuntimeLoad = null;
+        throw error;
+      }));
+  };
+  const loadControlModelCatalog = (): Promise<ControlModelCatalog> =>
+    loadControlModelRuntime().then((runtime) => runtime.loadCatalog());
+  const loadControlModel = (): Promise<ControlModel> =>
+    loadControlModelRuntime().then((runtime) => runtime.loadModel());
+
   const gateway: ApplicationGateway = {
     get snapshot() {
       return snapshot;
@@ -476,10 +525,12 @@ export function createApplicationGateway(
     get eventLog() {
       return eventLog;
     },
+    loadControlModelCatalog,
+    loadControlModel,
     connect,
     setSessionKey: (sessionKey) => {
       const nextSessionKey = sessionKey.trim();
-      if (!nextSessionKey || nextSessionKey === snapshot.sessionKey) {
+      if (disposed || !nextSessionKey || nextSessionKey === snapshot.sessionKey) {
         return;
       }
       updateSettings({
@@ -495,6 +546,7 @@ export function createApplicationGateway(
       stopCanvasSurfaceLease();
       client?.stop();
       client = null;
+      connectionEpoch += 1;
       everConnected = false;
       setSnapshot({
         ...snapshot,
@@ -508,6 +560,17 @@ export function createApplicationGateway(
         lastError: null,
         lastErrorCode: null,
       });
+    },
+    dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      gateway.stop();
+      controlModelRuntime?.dispose();
+      eventListeners.clear();
+      eventLogListeners.clear();
+      listeners.clear();
     },
     subscribe: (listener) => {
       listeners.add(listener);

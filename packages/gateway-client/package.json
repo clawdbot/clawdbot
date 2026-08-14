@@ -60,6 +60,11 @@
       "import": "./dist/model/index.mjs",
       "default": "./dist/model/index.mjs"
     },
+    "./model/catalog": {
+      "types": "./dist/model/catalog.d.mts",
+      "import": "./dist/model/catalog.mjs",
+      "default": "./dist/model/catalog.mjs"
+    },
     "./model/session-event-refresh": {
       "types": "./dist/model/session-event-refresh.d.mts",
       "import": "./dist/model/session-event-refresh.mjs",
@@ -67,7 +72,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/timeouts.ts src/websocket-data.ts src/model/index.ts src/model/session-event-refresh.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/timeouts.ts src/websocket-data.ts src/model/index.ts src/model/catalog.ts src/model/session-event-refresh.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",

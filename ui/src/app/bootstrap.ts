@@ -580,6 +580,7 @@ export function bootstrapApplication(
       nativeLinkRouting.dispose();
       nativeNotifications?.dispose();
       webPush.dispose();
+      gateway.dispose();
       skillWorkshopRevision.clear();
       initialUserMessage.clear();
       chatAttachmentHandoff.dispose();

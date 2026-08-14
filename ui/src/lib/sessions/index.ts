@@ -141,7 +141,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       mutations.settlePrepared(result);
       canonicalListRevision += 1;
     },
+    controlModelLoader: gateway.loadControlModelCatalog,
   });
+  const controlModelActive = Boolean(gateway.loadControlModelCatalog);
 
   const sessionEventSubscription = createSessionEventSubscriptionOwner({
     isCurrent: (scope) => connection.isCurrent(scope),
@@ -234,6 +236,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions,
   ): boolean => {
+    // Command results and optimistic local actions need an immediate roster
+    // reconciliation even when the Control Model later replaces canonical rows.
     const result = decorateRows(reconcileSessionHistory(state.result, row, defaults, options));
     if (result === state.result) {
       return false;
@@ -293,13 +297,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
     const base = reconcileSessionChanged(
-      state.result,
+      controlModelActive ? null : state.result,
       payload,
       reconcileChangedOptions(payload, options),
     );
     const result = decorateRows(base.result);
-    const reconciled =
-      result === base.result
+    const reconciled = controlModelActive
+      ? { ...base, result: state.result, row: undefined }
+      : result === base.result
         ? base
         : {
             ...base,
@@ -325,6 +330,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {
+    // Terminal command results are local/optimistic reconciliation, not a
+    // duplicate gateway event mutation owned by the Control Model.
     const result = reconcileSessionRunTerminal(state.result, terminal);
     if (result === state.result) {
       return false;
@@ -407,7 +414,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    const reconciled = reconcileSessionChanged(state.result, event.payload, reconcileOptions);
+    const reconciledBase = reconcileSessionChanged(
+      controlModelActive ? null : state.result,
+      event.payload,
+      reconcileOptions,
+    );
+    const reconciled = controlModelActive
+      ? { ...reconciledBase, result: state.result }
+      : reconciledBase;
     const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
     const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
     if (eventReason === "groups") {
@@ -450,7 +464,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
-      filtered: event.event === "sessions.changed",
+      filtered: event.event === "sessions.changed" || runEnded,
     });
   });
 

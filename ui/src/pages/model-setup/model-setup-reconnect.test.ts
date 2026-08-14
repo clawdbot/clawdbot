@@ -59,6 +59,7 @@ function createFixture() {
     setSessionKey: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
+    dispose: vi.fn(),
     subscribe: (listener: (snapshot: ApplicationGateway["snapshot"]) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

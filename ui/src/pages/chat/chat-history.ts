@@ -3,6 +3,11 @@ import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
+import type {
+  ControlModelConversation,
+  ControlModel,
+  ControlModelConversationSnapshot,
+} from "@openclaw/gateway-client/model";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -306,6 +311,12 @@ export type ChatState = {
   canvasPluginSurfaceUrl?: string | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
   sessions?: Partial<SessionCapability>;
+  controlModel?: ControlModel;
+  /** Lazy adopter-facing boundary; the gateway owns the shared instance. */
+  loadControlModel?: () => Promise<ControlModel>;
+  controlModelConversation?: ControlModelConversation;
+  controlModelConversationSessionKey?: string | null;
+  controlModelConversationAgentId?: string | null;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscription?: SessionMessageSubscription | null;
   chatBranches?: SessionBranch[];
@@ -760,7 +771,37 @@ async function retryPendingSessionMessageSubscriptionReleases(
   );
 }
 
+async function ensureControlModel(state: ChatState): Promise<ControlModel | undefined> {
+  if (state.controlModel) {
+    return state.controlModel;
+  }
+  if (!state.loadControlModel) {
+    return undefined;
+  }
+  let model: ControlModel;
+  try {
+    model = await state.loadControlModel();
+  } catch (error) {
+    console.error("[chat] Control Model load failed; using Gateway fallback:", error);
+    return undefined;
+  }
+  if (!state.controlModel) {
+    state.controlModel = model;
+    state.requestUpdate?.();
+  }
+  return state.controlModel;
+}
+
 export function disposeSelectedSessionMessageSubscription(state: ChatState): void {
+  if (state.controlModel && state.controlModelConversationSessionKey) {
+    const model = state.controlModel;
+    const key = state.controlModelConversationSessionKey;
+    const agentId = state.controlModelConversationAgentId;
+    state.controlModelConversation = undefined;
+    state.controlModelConversationSessionKey = null;
+    state.controlModelConversationAgentId = null;
+    void model.releaseConversation(key, agentId ? { agentId } : {}).catch(() => undefined);
+  }
   const requests = getChatHistoryPaneRequests(state);
   requests.subscriptionGeneration += 1;
   const subscriptions = new Set(requests.pendingSubscriptionReleases);
@@ -803,6 +844,12 @@ export async function syncSelectedSessionMessageSubscription(
   opts?: { force?: boolean },
 ) {
   if (!state.client || !state.connected) {
+    return;
+  }
+  if (!state.controlModel && state.loadControlModel) {
+    await ensureControlModel(state);
+  }
+  if (state.controlModel) {
     return;
   }
   const client = state.client;
@@ -1422,12 +1469,289 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
   }
 }
 
+function controlModelRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function controlModelString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function controlModelDefaults(value: unknown): GatewaySessionsDefaults | undefined {
+  const source = controlModelRecord(value);
+  if (!source) {
+    return undefined;
+  }
+  const modelProvider =
+    typeof source.modelProvider === "string" || source.modelProvider === null
+      ? source.modelProvider
+      : null;
+  const model = typeof source.model === "string" || source.model === null ? source.model : null;
+  const contextTokens =
+    typeof source.contextTokens === "number" && Number.isFinite(source.contextTokens)
+      ? source.contextTokens
+      : null;
+  const thinkingLevels = Array.isArray(source.thinkingLevels)
+    ? source.thinkingLevels
+        .map((entry) => controlModelRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => entry !== null)
+        .flatMap((entry) => {
+          const id = controlModelString(entry.id);
+          const label = controlModelString(entry.label);
+          return id && label ? [{ id, label }] : [];
+        })
+    : undefined;
+  const thinkingOptions = Array.isArray(source.thinkingOptions)
+    ? source.thinkingOptions.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+  return {
+    modelProvider,
+    model,
+    contextTokens,
+    ...(controlModelRecord(source.agentRuntime)
+      ? { agentRuntime: source.agentRuntime as GatewaySessionsDefaults["agentRuntime"] }
+      : {}),
+    ...(thinkingLevels ? { thinkingLevels } : {}),
+    ...(thinkingOptions ? { thinkingOptions } : {}),
+    ...(controlModelString(source.thinkingDefault)
+      ? { thinkingDefault: controlModelString(source.thinkingDefault) }
+      : {}),
+  };
+}
+
+function controlModelSessionInfo(value: unknown): GatewaySessionRow | undefined {
+  const source = controlModelRecord(value);
+  if (!source || !controlModelString(source.key) || typeof source.kind !== "string") {
+    return undefined;
+  }
+  return source as GatewaySessionRow;
+}
+
+function controlModelAgentsList(value: unknown): AgentsListResult | undefined {
+  const source = controlModelRecord(value);
+  if (
+    !source ||
+    !controlModelString(source.defaultId) ||
+    !controlModelString(source.mainKey) ||
+    (source.scope !== "global" && source.scope !== "per-sender") ||
+    !Array.isArray(source.agents) ||
+    !source.agents.every((entry) => {
+      const agent = controlModelRecord(entry);
+      return Boolean(agent && controlModelString(agent.id));
+    })
+  ) {
+    return undefined;
+  }
+  return source as AgentsListResult;
+}
+
+function controlModelChatMetadata(value: unknown): ChatMetadataResult | undefined {
+  const source = controlModelRecord(value);
+  if (
+    !source ||
+    !Array.isArray(source.commands) ||
+    !source.commands.every((entry) => controlModelRecord(entry) !== null) ||
+    (source.models !== undefined &&
+      (!Array.isArray(source.models) ||
+        !source.models.every((entry) => controlModelRecord(entry) !== null)))
+  ) {
+    return undefined;
+  }
+  return source as ChatMetadataResult;
+}
+
+function controlModelInFlightRun(value: unknown): ChatHistoryResult["inFlightRun"] | undefined {
+  const source = controlModelRecord(value);
+  const runId = controlModelString(source?.runId);
+  if (!source || !runId) {
+    return undefined;
+  }
+  const events = Array.isArray(source.events)
+    ? source.events
+        .map((entry) => controlModelRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => entry !== null)
+        .flatMap((entry) => {
+          const eventRunId = controlModelString(entry.runId);
+          const stream = controlModelString(entry.stream);
+          const data = controlModelRecord(entry.data);
+          return eventRunId &&
+            stream &&
+            typeof entry.seq === "number" &&
+            Number.isFinite(entry.seq) &&
+            typeof entry.ts === "number" &&
+            Number.isFinite(entry.ts) &&
+            data
+            ? [
+                {
+                  runId: eventRunId,
+                  stream,
+                  seq: entry.seq,
+                  ts: entry.ts,
+                  ...(controlModelString(entry.sessionKey)
+                    ? { sessionKey: controlModelString(entry.sessionKey) }
+                    : {}),
+                  ...(controlModelString(entry.agentId)
+                    ? { agentId: controlModelString(entry.agentId) }
+                    : {}),
+                  data,
+                },
+              ]
+            : [];
+        })
+    : undefined;
+  const plan = controlModelRecord(source.plan);
+  return {
+    runId,
+    ...(typeof source.text === "string" ? { text: source.text } : {}),
+    ...(typeof source.startedAt === "number" && Number.isFinite(source.startedAt)
+      ? { startedAt: source.startedAt }
+      : {}),
+    ...(events ? { events } : {}),
+    ...(plan && Array.isArray(plan.steps)
+      ? {
+          plan: {
+            steps: plan.steps.filter(
+              (step): step is PlanStatus["steps"][number] | string =>
+                typeof step === "string" || controlModelRecord(step) !== null,
+            ),
+            ...(typeof plan.explanation === "string" ? { explanation: plan.explanation } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function controlModelHistoryResult(
+  state: ChatState,
+  snapshot: ControlModelConversationSnapshot,
+): ChatHistoryResult {
+  const metadata = snapshot.metadata;
+  const activeRun = snapshot.activeRun;
+  const activeRunText = activeRun?.message !== undefined ? extractText(activeRun.message) : null;
+  const inFlightRun =
+    controlModelInFlightRun(metadata?.inFlightRun) ??
+    (activeRun
+      ? {
+          runId: activeRun.runId,
+          ...(activeRunText !== null ? { text: activeRunText } : {}),
+        }
+      : undefined);
+  const sessionResult = state.sessions?.state?.result ?? null;
+  const selectedRow = sessionResult?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, state.sessionKey),
+  );
+  return {
+    messages: snapshot.messages.map((message) => message.raw),
+    offset: snapshot.history.window === "older" ? (snapshot.history.nextOffset ?? 0) : 0,
+    ...(snapshot.history.nextOffset !== null ? { nextOffset: snapshot.history.nextOffset } : {}),
+    hasMore: snapshot.history.hasMore,
+    ...(snapshot.history.totalMessages !== null
+      ? { totalMessages: snapshot.history.totalMessages }
+      : {}),
+    completeSnapshot: snapshot.history.completeSnapshot,
+    ...(typeof metadata?.sessionId === "string" ? { sessionId: metadata.sessionId } : {}),
+    ...(typeof metadata?.thinkingLevel === "string"
+      ? { thinkingLevel: metadata.thinkingLevel }
+      : {}),
+    ...(typeof metadata?.verboseLevel === "string" ? { verboseLevel: metadata.verboseLevel } : {}),
+    defaults: controlModelDefaults(metadata?.defaults) ?? sessionResult?.defaults,
+    sessionInfo: controlModelSessionInfo(metadata?.sessionInfo) ?? selectedRow,
+    agentsList: controlModelAgentsList(metadata?.agentsList),
+    metadata: controlModelChatMetadata(metadata?.metadata),
+    ...(inFlightRun ? { inFlightRun } : {}),
+  };
+}
+
+function controlModelConversationForState(state: ChatState): ControlModelConversation | null {
+  const model = state.controlModel;
+  if (!model || !state.sessionKey.trim()) {
+    return null;
+  }
+  const agentId = isUiSelectedGlobalSessionKey(state, state.sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  if (
+    state.controlModelConversation &&
+    state.controlModelConversationSessionKey === state.sessionKey &&
+    (state.controlModelConversationAgentId ?? null) === (agentId ?? null)
+  ) {
+    return state.controlModelConversation;
+  }
+  if (state.controlModelConversation) {
+    const previousKey = state.controlModelConversationSessionKey;
+    if (previousKey) {
+      void model
+        .releaseConversation(
+          previousKey,
+          state.controlModelConversationAgentId
+            ? { agentId: state.controlModelConversationAgentId }
+            : {},
+        )
+        .catch(() => undefined);
+    }
+  }
+  const conversation = model.conversation(state.sessionKey, agentId ? { agentId } : {});
+  state.controlModelConversation = conversation;
+  state.controlModelConversationSessionKey = state.sessionKey;
+  state.controlModelConversationAgentId = agentId ?? null;
+  return conversation;
+}
+
+async function loadControlModelHistory(
+  state: ChatState,
+  opts: LoadChatHistoryOptions,
+): Promise<ChatHistoryResult> {
+  const conversation = controlModelConversationForState(state);
+  if (!conversation) {
+    throw new Error("Control Model conversation is unavailable");
+  }
+  const startup =
+    opts.startup === true && isGatewayMethodAdvertised(state, "chat.startup") !== false;
+  let method: "chat.history" | "chat.startup" = startup ? "chat.startup" : "chat.history";
+  const retryDeadlineMs = Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
+  // loadChatHistory is the explicit authoritative path after sparse legacy
+  // message events. Its own in-flight ownership coalesces concurrent callers.
+  for (;;) {
+    try {
+      await conversation.refreshHistory(undefined, method);
+      break;
+    } catch (error) {
+      if (
+        !state.connected ||
+        state.controlModelConversation !== conversation ||
+        state.sessionKey !== conversation.getSnapshot().sessionKey
+      ) {
+        throw error;
+      }
+      if (method === "chat.startup" && isUnknownGatewayMethodError(error, method)) {
+        method = "chat.history";
+        continue;
+      }
+      if (Date.now() < retryDeadlineMs && isRetryableStartupUnavailable(error, method)) {
+        await sleep(resolveStartupRetryDelayMs(error));
+        continue;
+      }
+      throw error;
+    }
+  }
+  const snapshot = conversation.getSnapshot();
+  if (snapshot.history.status === "error") {
+    throw new Error(snapshot.history.error?.message ?? "Control Model history refresh failed");
+  }
+  return controlModelHistoryResult(state, snapshot);
+}
+
 export async function loadChatHistory(
   state: ChatState,
   opts: LoadChatHistoryOptions = {},
 ): Promise<ChatHistoryResult | undefined> {
   if (!state.client || !state.connected) {
     return undefined;
+  }
+  if (!state.controlModel && state.loadControlModel) {
+    await ensureControlModel(state);
   }
   const sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
@@ -1464,6 +1788,7 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     method,
+    state.controlModel ? () => loadControlModelHistory(state, opts) : undefined,
   ).finally(() => {
     if (requests.inFlightHistory?.promise === promise) {
       requests.inFlightHistory = undefined;
@@ -1485,11 +1810,22 @@ export async function loadOlderChatHistoryPage(
   if (!state.client || !state.connected) {
     return undefined;
   }
+  if (!state.controlModel && state.loadControlModel) {
+    await ensureControlModel(state);
+  }
   const client = state.client;
   const sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
+  if (state.controlModel) {
+    const conversation = controlModelConversationForState(state);
+    if (!conversation) {
+      return undefined;
+    }
+    await conversation.loadMoreHistory();
+    return controlModelHistoryResult(state, conversation.getSnapshot());
+  }
   const ownership = beginChatHistoryRequest(
     state,
     client,
@@ -1543,6 +1879,7 @@ async function loadChatHistoryUncached(
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
+  historyLoader?: () => Promise<ChatHistoryResult>,
 ): Promise<ChatHistoryResult | undefined> {
   const ownership = beginChatHistoryRequest(
     state,
@@ -1577,15 +1914,17 @@ async function loadChatHistoryUncached(
   setChatError(state, null);
   try {
     const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
-    const res = await requestSharedChatHistory(
-      client,
-      requestKey,
-      method,
-      sessionKey,
-      requestAgentId,
-      state as object,
-      () => shouldApplyChatHistoryResult(state, ownership),
-    );
+    const res = historyLoader
+      ? await historyLoader()
+      : await requestSharedChatHistory(
+          client,
+          requestKey,
+          method,
+          sessionKey,
+          requestAgentId,
+          state as object,
+          () => shouldApplyChatHistoryResult(state, ownership),
+        );
     if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,

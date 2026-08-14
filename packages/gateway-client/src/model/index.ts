@@ -2,21 +2,31 @@ export {
   ControlModelDisposedError,
   ControlModelSubscriberLimitError,
   createControlModel,
+  createControlModelConversationModel,
 } from "./model.js";
 export type {
   ControlModel,
   ControlModelBounds,
+  ControlModelConversationModelOptions,
+  ControlModelOptions,
+} from "./model.js";
+export type {
+  ControlModelCatalog,
+  ControlModelCatalogBounds,
+  ControlModelCatalogOptions,
   ControlModelConnectionSnapshot,
   ControlModelConnectionStatus,
   ControlModelError,
   ControlModelGatewayBinding,
-  ControlModelOptions,
+  ControlModelGatewayEventFrame,
   ControlModelRequestOptions,
+  ControlModelSessionCatalogQuery,
   ControlModelSessionCatalogSnapshot,
   ControlModelSnapshot,
   ControlModelSubscriber,
   DeepReadonly,
-} from "./model.js";
+} from "./catalog.js";
+export { createControlModelCatalog } from "./catalog.js";
 export { createSessionEventRefreshCoordinator } from "./session-event-refresh.js";
 export type { SessionEventRefreshCoordinatorOptions } from "./session-event-refresh.js";
 export { ControlModelCommandError, ControlModelConversation } from "./conversation.js";
@@ -25,14 +35,15 @@ export type {
   ControlModelConversationApproval,
   ControlModelConversationBounds,
   ControlModelConversationHistory,
+  ControlModelConversationHistoryMethod,
+  ControlModelConversationMetadata,
   ControlModelConversationMessage,
   ControlModelConversationQuestion,
   ControlModelConversationRun,
   ControlModelConversationSnapshot,
+  ControlModelConversationStatus,
   ControlModelConversationSubscriber,
   ControlModelConversationTool,
-  ControlModelConversationStatus,
-  ControlModelGatewayEventFrame,
   ControlModelMaterializeViewInput,
   ControlModelSendInput,
   ControlModelSendResult,

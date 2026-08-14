@@ -29,7 +29,7 @@ import type {
   ControlModelGatewayBinding,
   ControlModelRequestOptions,
   DeepReadonly,
-} from "./model.js";
+} from "./catalog.js";
 
 export type ControlModelConversationStatus =
   | "idle"
@@ -104,8 +104,8 @@ export type ControlModelConversationTool = Readonly<{
   name: string | null;
   status: ControlModelToolStatus;
   phase: string;
-  input: DeepReadonly<unknown> | null;
-  output: DeepReadonly<unknown> | null;
+  input: unknown;
+  output: unknown;
   truncated: boolean;
   artifactIds: readonly string[];
   progress: Readonly<{ updates: number; bytes: number; truncated: boolean }>;
@@ -127,6 +127,7 @@ export type ControlModelConversationBounds = Readonly<{
   maxQuestions: number;
   maxProgressUpdates: number;
   maxProgressBytes: number;
+  maxMetadataBytes: number;
   maxArtifacts: number;
   maxArtifactBytes: number;
   maxArtifactDepth: number;
@@ -134,6 +135,18 @@ export type ControlModelConversationBounds = Readonly<{
   maxArtifactStringBytes: number;
   maxArtifactViews: number;
 }>;
+export type ControlModelConversationHistoryMethod = "chat.history" | "chat.startup";
+export type ControlModelConversationMetadata = Readonly<{
+  sessionId?: string;
+  thinkingLevel?: string;
+  verboseLevel?: string;
+  defaults?: DeepReadonly<unknown>;
+  sessionInfo?: DeepReadonly<Record<string, unknown>>;
+  agentsList?: DeepReadonly<unknown>;
+  metadata?: DeepReadonly<unknown>;
+  inFlightRun?: DeepReadonly<Record<string, unknown>>;
+}>;
+
 export type ControlModelConversationHistory = Readonly<{
   status: "idle" | "loading" | "ready" | "error";
   hasMore: boolean;
@@ -154,6 +167,7 @@ export type ControlModelConversationSnapshot = Readonly<{
   historyRevision: number;
   connection: ControlModelConnectionSnapshot;
   history: ControlModelConversationHistory;
+  metadata: ControlModelConversationMetadata | null;
   messages: readonly ControlModelConversationMessage[];
   runs: readonly ControlModelConversationRun[];
   activeRun: ControlModelConversationRun | null;
@@ -225,6 +239,7 @@ export type ControlModelConversationHost = Readonly<{
   generateId(prefix: string): string;
   reportSubscriberError(error: unknown): void;
   reportBackgroundError(error: unknown): void;
+  autoLoadHistory?: boolean;
   bounds: ControlModelConversationBounds;
 }>;
 
@@ -246,13 +261,18 @@ function safeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 function stableStringify(value: unknown, seen = new WeakSet<object>()): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? String(value);
-  if (seen.has(value)) return "[cycle]";
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? String(value);
+  }
+  if (seen.has(value)) {
+    return "[cycle]";
+  }
   seen.add(value);
-  if (Array.isArray(value))
+  if (Array.isArray(value)) {
     return `[${value.map((item) => stableStringify(item, seen)).join(",")}]`;
+  }
   return `{${Object.keys(value as Record<string, unknown>)
-    .sort()
+    .toSorted()
     .map(
       (key) =>
         `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key], seen)}`,
@@ -268,22 +288,32 @@ function hash(value: string): string {
   return (result >>> 0).toString(16).padStart(8, "0");
 }
 function cloneAndFreeze<T>(value: T, seen = new WeakMap<object, unknown>()): T {
-  if (value === null || typeof value !== "object") return value;
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
   const existing = seen.get(value);
-  if (existing !== undefined) return existing as T;
+  if (existing !== undefined) {
+    return existing as T;
+  }
   if (Array.isArray(value)) {
     const clone: unknown[] = [];
     seen.set(value, clone);
-    for (const item of value) clone.push(cloneAndFreeze(item, seen));
+    for (const item of value) {
+      clone.push(cloneAndFreeze(item, seen));
+    }
     return Object.freeze(clone) as T;
   }
   const clone: Record<string, unknown> = {};
   seen.set(value, clone);
-  for (const [key, item] of Object.entries(value)) clone[key] = cloneAndFreeze(item, seen);
+  for (const [key, item] of Object.entries(value)) {
+    clone[key] = cloneAndFreeze(item, seen);
+  }
   return Object.freeze(clone) as T;
 }
 function normalizeGatewayError(error: unknown, command: string): ControlModelCommandError {
-  if (error instanceof ControlModelCommandError) return error;
+  if (error instanceof ControlModelCommandError) {
+    return error;
+  }
   const source = record(error);
   const details = record(source?.details);
   const rawCode = text(source?.code) ?? text(source?.gatewayCode) ?? "CONTROL_MODEL_REQUEST_FAILED";
@@ -301,22 +331,31 @@ function normalizeGatewayError(error: unknown, command: string): ControlModelCom
     isAbortException ||
     (error instanceof Error && error.name === "AbortError") ||
     lower === "aborterror"
-  )
+  ) {
     category = "aborted";
-  else if (lower.includes("forbidden") || lower === "unauthorized") category = "forbidden";
-  else if (lower.includes("invalid")) category = "invalid-input";
-  else if (lower.includes("not_found") || lower.includes("not-found")) category = "not-found";
-  else if (lower.includes("timeout") || lower === "deadline_exceeded") category = "timeout";
-  else if (lower.includes("abort") || lower.includes("cancel")) category = "aborted";
-  else if (
+  } else if (lower.includes("forbidden") || lower === "unauthorized") {
+    category = "forbidden";
+  } else if (lower.includes("invalid")) {
+    category = "invalid-input";
+  } else if (lower.includes("not_found") || lower.includes("not-found")) {
+    category = "not-found";
+  } else if (lower.includes("timeout") || lower === "deadline_exceeded") {
+    category = "timeout";
+  } else if (lower.includes("abort") || lower.includes("cancel")) {
+    category = "aborted";
+  } else if (
     lower.includes("conflict") ||
     lower.includes("already_resolved") ||
     lower.includes("stale")
-  )
+  ) {
     category = "conflict";
-  else if (lower.includes("disconnected")) category = "disconnected";
-  else if (lower === "unavailable") category = "retryable";
-  else if (source?.retryable === true) category = "retryable";
+  } else if (lower.includes("disconnected")) {
+    category = "disconnected";
+  } else if (lower === "unavailable") {
+    category = "retryable";
+  } else if (source?.retryable === true) {
+    category = "retryable";
+  }
   const retryAfterMs = safeInteger(source?.retryAfterMs ?? details?.retryAfterMs);
   return new ControlModelCommandError({
     category,
@@ -363,13 +402,17 @@ function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 function truncateStringToSerializedBytes(value: string, maxBytes: number): string {
-  if (maxBytes <= 2) return "";
+  if (maxBytes <= 2) {
+    return "";
+  }
   let result = "";
   let bytes = 2;
   for (const character of value) {
     const encodedCharacter = JSON.stringify(character).slice(1, -1);
     const characterBytes = byteLength(encodedCharacter);
-    if (bytes + characterBytes > maxBytes) break;
+    if (bytes + characterBytes > maxBytes) {
+      break;
+    }
     result += character;
     bytes += characterBytes;
   }
@@ -378,11 +421,14 @@ function truncateStringToSerializedBytes(value: string, maxBytes: number): strin
 function boundedValue(
   value: unknown,
   maxBytes: number,
+  truncationMarker: unknown = TOOL_VALUE_TRUNCATION_MARKER,
 ): { value: unknown; bytes: number; truncated: boolean } {
   const limit = Math.max(0, maxBytes);
   const encoded = stableStringify(value);
   const bytes = byteLength(encoded);
-  if (bytes <= limit) return { value, bytes, truncated: false };
+  if (bytes <= limit) {
+    return { value, bytes, truncated: false };
+  }
   if (typeof value === "string") {
     const truncated = truncateStringToSerializedBytes(value, limit);
     return {
@@ -392,11 +438,94 @@ function boundedValue(
     };
   }
   return {
-    value: TOOL_VALUE_TRUNCATION_MARKER,
-    bytes: Math.min(limit, byteLength(stableStringify(TOOL_VALUE_TRUNCATION_MARKER))),
+    value: truncationMarker,
+    bytes: Math.min(limit, byteLength(stableStringify(truncationMarker))),
     truncated: true,
   };
 }
+const STARTUP_METADATA_TRUNCATION_MARKER = Object.freeze({
+  kind: "truncated",
+  reason: "max-startup-metadata-bytes",
+});
+const STARTUP_METADATA_STRING_KEYS = ["sessionId", "thinkingLevel", "verboseLevel"] as const;
+const STARTUP_METADATA_RECORD_KEYS = [
+  "defaults",
+  "sessionInfo",
+  "agentsList",
+  "metadata",
+  "inFlightRun",
+] as const;
+
+function isFiniteJsonValue(value: unknown, seen = new WeakSet<object>(), depth = 0): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (typeof value !== "object" || depth > 32 || seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.every((entry) => isFiniteJsonValue(entry, seen, depth + 1));
+  }
+  return Object.values(value as Record<string, unknown>).every((entry) =>
+    isFiniteJsonValue(entry, seen, depth + 1),
+  );
+}
+
+function readStartupMetadata(
+  response: Record<string, unknown>,
+  maxBytes: number,
+): { metadata: ControlModelConversationMetadata | null; truncated: boolean; malformed: boolean } {
+  const result: Record<string, unknown> = {};
+  let truncated = false;
+  let malformed = false;
+  for (const key of [...STARTUP_METADATA_STRING_KEYS, ...STARTUP_METADATA_RECORD_KEYS]) {
+    const value = response[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (
+      (STARTUP_METADATA_STRING_KEYS as readonly string[]).includes(key) &&
+      typeof value !== "string"
+    ) {
+      malformed = true;
+      continue;
+    }
+    if (!isFiniteJsonValue(value)) {
+      malformed = true;
+      continue;
+    }
+    const candidate = { ...result, [key]: value };
+    if (byteLength(stableStringify(candidate)) <= maxBytes) {
+      result[key] = value;
+      continue;
+    }
+    truncated = true;
+    malformed = true;
+    if (typeof value === "string") {
+      const emptyCandidate = { ...result, [key]: "" };
+      const overhead = byteLength(stableStringify(emptyCandidate)) - byteLength(JSON.stringify(""));
+      const available = maxBytes - overhead;
+      if (available >= byteLength(JSON.stringify(""))) {
+        result[key] = truncateStringToSerializedBytes(value, available);
+      }
+    } else {
+      const markerCandidate = { ...result, [key]: STARTUP_METADATA_TRUNCATION_MARKER };
+      if (byteLength(stableStringify(markerCandidate)) <= maxBytes) {
+        result[key] = STARTUP_METADATA_TRUNCATION_MARKER;
+      }
+    }
+    break;
+  }
+  if (Object.keys(result).length === 0) {
+    return { metadata: null, truncated, malformed };
+  }
+  return { metadata: cloneAndFreeze(result), truncated, malformed };
+}
+
 function normalizeStatus(value: unknown): string {
   return text(value)?.toLowerCase() ?? "unknown";
 }
@@ -436,6 +565,8 @@ export class ControlModelConversation {
   #status: ControlModelConversationStatus = "idle";
   #historyStatus: ControlModelConversationHistory["status"] = "idle";
   #historyError: ControlModelError | null = null;
+  #historyMetadata: ControlModelConversationMetadata | null = null;
+  #historyMethodRequested: ControlModelConversationHistoryMethod = "chat.history";
   #historyMessages: unknown[] = [];
   #historyNextOffset: number | null = null;
   #historyHasMore = false;
@@ -507,20 +638,23 @@ export class ControlModelConversation {
 
   subscribe(subscriber: ControlModelConversationSubscriber): () => void {
     this.#assertNotDisposed();
-    if (this.#subscribers.size >= this.#host.bounds.maxSubscribers)
+    if (this.#subscribers.size >= this.#host.bounds.maxSubscribers) {
       throw localError(
         "conflict",
         "subscribe",
         "Conversation subscriber limit reached",
         "SUBSCRIBER_LIMIT",
       );
+    }
     this.#subscribers.add(subscriber);
     this.#lastUsed = this.#host.now();
     return () => this.#subscribers.delete(subscriber);
   }
 
   startIfNeeded(): void {
-    if (this.#disposed || !this.#host.isRunning()) return;
+    if (this.#disposed || !this.#host.isRunning()) {
+      return;
+    }
     const connection = this.#host.getConnectionSnapshot();
     this.#connection = connection;
     if (connection.status !== "connected") {
@@ -535,16 +669,22 @@ export class ControlModelConversation {
     connection: ControlModelConnectionSnapshot,
     coordinator: GatewaySessionMessageSubscriptionCoordinator,
   ): void {
-    if (this.#disposed) return;
+    if (this.#disposed) {
+      return;
+    }
     this.#connection = connection;
-    if (this.#activationEpoch === connection.epoch) return;
+    if (this.#activationEpoch === connection.epoch) {
+      return;
+    }
     this.#releaseLeases();
     this.#activationGeneration += 1;
     const generation = this.#activationGeneration;
     this.#activationEpoch = connection.epoch;
-    for (const entry of this.#projection.entries)
-      if (entry.live && entry.message !== null && typeof entry.message === "object")
+    for (const entry of this.#projection.entries) {
+      if (entry.live && entry.message !== null && typeof entry.message === "object") {
         this.#retiredArtifactMessages.add(entry.message);
+      }
+    }
     this.#projection = { ...this.#projection, runs: {} };
     this.#tools.clear();
     this.#liveArtifacts.clear();
@@ -581,7 +721,10 @@ export class ControlModelConversation {
           );
           this.#publish();
         }
-        await Promise.allSettled([this.refreshHistory(), this.#hydrateQuestions(connection.epoch)]);
+        await Promise.allSettled([
+          this.#host.autoLoadHistory === false ? Promise.resolve() : this.refreshHistory(),
+          this.#hydrateQuestions(connection.epoch),
+        ]);
       } catch (error) {
         if (generation === this.#activationGeneration && !this.#disposed) {
           this.#activationEpoch = null;
@@ -591,17 +734,23 @@ export class ControlModelConversation {
           this.#host.reportBackgroundError(error);
         }
       } finally {
-        if (generation === this.#activationGeneration) this.#activation = null;
+        if (generation === this.#activationGeneration) {
+          this.#activation = null;
+        }
       }
     })();
     void this.#activation.catch(() => undefined);
   }
 
   handleEvent(frame: ControlModelGatewayEventFrame): void {
-    if (this.#disposed) return;
+    if (this.#disposed) {
+      return;
+    }
     const connection = this.#host.getConnectionSnapshot();
     this.#connection = connection;
-    if (connection.status !== "connected" || frame.connectionEpoch !== connection.epoch) return;
+    if (connection.status !== "connected" || frame.connectionEpoch !== connection.epoch) {
+      return;
+    }
     const payload = record(frame.payload);
     const hasGap =
       (frame.gap !== undefined && frame.gap !== false) ||
@@ -613,20 +762,24 @@ export class ControlModelConversation {
       this.#scheduleHistoryRefresh();
       void this.#hydrateQuestions(frame.connectionEpoch);
     }
-    if (!payload || !this.#eventMatches(payload, frame.event)) return;
+    if (!payload || !this.#eventMatches(payload, frame.event)) {
+      return;
+    }
     switch (frame.event) {
       case "chat":
         this.#handleChat(payload);
         break;
       case "session.message":
-        if (payload.message !== undefined)
+        if (payload.message !== undefined) {
           this.#applyProjection({
             type: "messagePersisted",
             message: payload.message,
             envelope: payload,
             scope: { sessionKey: this.#sessionKey },
           });
-        else this.#scheduleHistoryRefresh();
+        } else {
+          this.#scheduleHistoryRefresh();
+        }
         break;
       case "sessions.changed":
         if (
@@ -634,8 +787,9 @@ export class ControlModelConversation {
           payload.phase !== "reset" &&
           payload.change !== "reset" &&
           payload.reset !== true
-        )
+        ) {
           break;
+        }
         this.#applyProjection({ type: "sessionReset", scope: { sessionKey: this.#sessionKey } });
         this.#partialReasons.add("session-reset-awaiting-history");
         this.#status = "partial";
@@ -659,7 +813,9 @@ export class ControlModelConversation {
   }
 
   onDisconnected(connection: ControlModelConnectionSnapshot): void {
-    if (this.#disposed) return;
+    if (this.#disposed) {
+      return;
+    }
     this.#connection = connection;
     this.#activationGeneration += 1;
     this.#activationEpoch = null;
@@ -670,8 +826,12 @@ export class ControlModelConversation {
     this.#publish();
   }
 
-  async refreshHistory(options?: ControlModelRequestOptions): Promise<void> {
-    this.#assertCommandReady("chat.history");
+  async refreshHistory(
+    options?: ControlModelRequestOptions,
+    method: ControlModelConversationHistoryMethod = "chat.history",
+  ): Promise<void> {
+    this.#assertCommandReady(method);
+    this.#historyMethodRequested = method;
     this.#historyRequested = true;
     this.#historyOffsetRequested = 0;
     if (options !== undefined || this.#historyOptions === undefined) {
@@ -679,7 +839,9 @@ export class ControlModelConversation {
     }
     if (!this.#historyLoop) {
       const loop = this.#drainHistory().finally(() => {
-        if (this.#historyLoop === loop) this.#historyLoop = null;
+        if (this.#historyLoop === loop) {
+          this.#historyLoop = null;
+        }
       });
       this.#historyLoop = loop;
     }
@@ -688,25 +850,30 @@ export class ControlModelConversation {
 
   async loadMoreHistory(options?: ControlModelRequestOptions): Promise<void> {
     this.#assertCommandReady("chat.history");
-    if (!this.#historyHasMore || this.#historyNextOffset === null)
+    if (!this.#historyHasMore || this.#historyNextOffset === null) {
       throw localError(
         "conflict",
         "chat.history",
         "No older history is available",
         "NO_MORE_HISTORY",
       );
-    if (this.#historyLoop)
+    }
+    if (this.#historyLoop) {
       throw localError(
         "conflict",
         "chat.history",
         "A history operation is already in progress",
         "HISTORY_BUSY",
       );
+    }
     this.#historyRequested = true;
     this.#historyOffsetRequested = this.#historyNextOffset;
     this.#historyOptions = options;
+    this.#historyMethodRequested = "chat.history";
     const loop = this.#drainHistory().finally(() => {
-      if (this.#historyLoop === loop) this.#historyLoop = null;
+      if (this.#historyLoop === loop) {
+        this.#historyLoop = null;
+      }
     });
     this.#historyLoop = loop;
     return loop;
@@ -761,14 +928,15 @@ export class ControlModelConversation {
       });
       return Object.freeze({ runId, status: text(response?.status) ?? "accepted", idempotencyKey });
     } catch (error) {
-      const normalized = this.#asCommandErrorForEpoch(error, "chat.send", epoch);
-      if (normalized.category !== "stale")
+      const commandError = this.#asCommandErrorForEpoch(error, "chat.send", epoch);
+      if (commandError.category !== "stale") {
         this.#applyProjection({
           type: "sendFailed",
           runId: idempotencyKey,
           scope: { sessionKey: this.#sessionKey },
         });
-      throw normalized;
+      }
+      throw commandError;
     } finally {
       this.#activeOperations -= 1;
     }
@@ -780,8 +948,9 @@ export class ControlModelConversation {
   ): Promise<Readonly<Record<string, unknown>>> {
     this.#assertCommandReady("chat.abort");
     const target = text(runId) ?? this.#activeRunId();
-    if (!target)
+    if (!target) {
       throw localError("conflict", "chat.abort", "No active run is available", "NO_ACTIVE_RUN");
+    }
     this.#activeOperations += 1;
     let epoch: number | null = null;
     try {
@@ -799,13 +968,14 @@ export class ControlModelConversation {
       const abortedRunIds = Array.isArray(result?.runIds)
         ? result.runIds.filter((value): value is string => typeof value === "string")
         : [];
-      if (result?.aborted === true || abortedRunIds.includes(target))
+      if (result?.aborted === true || abortedRunIds.includes(target)) {
         this.#applyProjection({
           type: "runTerminal",
           runId: target,
           status: "aborted",
           scope: { sessionKey: this.#sessionKey },
         });
+      }
       return cloneAndFreeze(result ?? { runId: target, status: "aborted" });
     } catch (error) {
       throw this.#asCommandErrorForEpoch(error, "chat.abort", epoch);
@@ -822,42 +992,47 @@ export class ControlModelConversation {
     this.#assertCommandReady("approval.resolve");
     const approvalId = text(id);
     const requestedDecision = text(decision);
-    if (!approvalId || !requestedDecision)
+    if (!approvalId || !requestedDecision) {
       throw localError(
         "invalid-input",
         "approval.resolve",
         "Approval id and decision are required",
         "INVALID_APPROVAL_INPUT",
       );
+    }
     const approval = this.#approvals.get(approvalId);
-    if (!approval)
+    if (!approval) {
       throw localError(
         "not-found",
         "approval.resolve",
         "Approval was not found",
         "APPROVAL_NOT_FOUND",
       );
-    if (normalizeStatus(approval.status) !== "pending")
+    }
+    if (normalizeStatus(approval.status) !== "pending") {
       throw localError(
         "conflict",
         "approval.resolve",
         "Approval is no longer pending",
         "APPROVAL_ALREADY_RESOLVED",
       );
+    }
     const presentation = record(approval.presentation);
     const allowed = Array.isArray(presentation?.allowedDecisions)
       ? presentation.allowedDecisions
       : [];
-    if (!allowed.includes(requestedDecision))
+    if (!allowed.includes(requestedDecision)) {
       throw localError("forbidden", "approval.resolve", "Decision is not allowed", "FORBIDDEN");
+    }
     const kind = text(presentation?.kind);
-    if (!kind)
+    if (!kind) {
       throw localError(
         "malformed",
         "approval.resolve",
         "Approval presentation is malformed",
         "MALFORMED_APPROVAL",
       );
+    }
     this.#activeOperations += 1;
     let epoch: number | null = null;
     try {
@@ -868,13 +1043,15 @@ export class ControlModelConversation {
         options,
       );
       this.#assertEpoch(epoch, "approval.resolve");
-      if (record(result)?.approval) this.#upsertApproval(record(result)?.approval);
-      else
+      if (record(result)?.approval) {
+        this.#upsertApproval(record(result)?.approval);
+      } else {
         this.#upsertApproval({
           ...approval,
           status: requestedDecision === "deny" ? "denied" : "allowed",
           decision: requestedDecision,
         });
+      }
       return cloneAndFreeze(result ?? { applied: true });
     } catch (error) {
       throw this.#asCommandErrorForEpoch(error, "approval.resolve", epoch);
@@ -905,52 +1082,60 @@ export class ControlModelConversation {
     const artifactId = text(input.artifactId);
     const artifactRevision = safeInteger(input.artifactRevision);
     const viewId = text(input.viewId);
-    if (!artifactId || artifactRevision === null || artifactRevision < 0 || !viewId)
+    if (!artifactId || artifactRevision === null || artifactRevision < 0 || !viewId) {
       throw localError(
         "invalid-input",
         "artifact.materialize",
         "Artifact id, revision, and view id are required",
         "INVALID_ARTIFACT_VIEW_INPUT",
       );
+    }
     const artifact = this.#snapshot.artifacts.find((candidate) => candidate.id === artifactId);
-    if (!artifact)
+    if (!artifact) {
       throw localError(
         "not-found",
         "artifact.materialize",
         "UI artifact was not found",
         "ARTIFACT_NOT_FOUND",
       );
-    if (artifact.revision !== artifactRevision)
+    }
+    if (artifact.revision !== artifactRevision) {
       throw localError(
         "stale",
         "artifact.materialize",
         "UI artifact revision is stale",
         "STALE_ARTIFACT_REVISION",
       );
-    if (artifact.state === "failed" || artifact.state === "expired")
+    }
+    if (artifact.state === "failed" || artifact.state === "expired") {
       throw localError(
         "conflict",
         "artifact.materialize",
         "UI artifact is not materializable",
         "ARTIFACT_NOT_MATERIALIZABLE",
       );
+    }
     const view = artifact.views.find((candidate) => candidate.id === viewId);
-    if (!view)
+    if (!view) {
       throw localError(
         "not-found",
         "artifact.materialize",
         "UI artifact view was not found",
         "ARTIFACT_VIEW_NOT_FOUND",
       );
-    if (view.availability === "inline") return view;
+    }
+    if (view.availability === "inline") {
+      return view;
+    }
     const materialize = this.#host.gateway.materializeArtifactView;
-    if (!materialize)
+    if (!materialize) {
       throw localError(
         "unsupported",
         "artifact.materialize",
         "Deferred UI artifact materialization is unsupported",
         "ARTIFACT_MATERIALIZATION_UNSUPPORTED",
       );
+    }
     this.#activeOperations += 1;
     let epoch: number | null = null;
     try {
@@ -969,33 +1154,36 @@ export class ControlModelConversation {
       );
       this.#assertEpoch(epoch, "artifact.materialize");
       const current = this.#snapshot.artifacts.find((candidate) => candidate.id === artifactId);
+      const currentState: unknown = current?.state;
       const currentView = current?.views.find((candidate) => candidate.id === viewId);
       if (
         !current ||
         current.revision !== artifactRevision ||
-        current.state !== artifact.state ||
-        current.state === "failed" ||
-        current.state === "expired" ||
+        currentState !== artifact.state ||
+        currentState === "failed" ||
+        currentState === "expired" ||
         !currentView ||
         currentView.availability !== "deferred" ||
         stableStringify(currentView) !== stableStringify(view)
-      )
+      ) {
         throw localError(
           "stale",
           "artifact.materialize",
           "UI artifact or selected view changed while materializing",
           "STALE_ARTIFACT_VIEW",
         );
+      }
       if (
         text(result?.artifactId) !== artifactId ||
         safeInteger(result?.artifactRevision) !== artifactRevision
-      )
+      ) {
         throw localError(
           "malformed",
           "artifact.materialize",
           "Materialized UI artifact identity does not match the request",
           "MALFORMED_ARTIFACT_MATERIALIZATION",
         );
+      }
       const normalized = normalizeUiArtifact(
         {
           version: 1,
@@ -1014,13 +1202,14 @@ export class ControlModelConversation {
         normalizedView.templateUri !== view.templateUri ||
         normalizedView.dataVersion !== view.dataVersion ||
         normalizedView.availability !== "inline"
-      )
+      ) {
         throw localError(
           "malformed",
           "artifact.materialize",
           "Materialized UI artifact view is malformed or incompatible",
           "MALFORMED_ARTIFACT_MATERIALIZATION",
         );
+      }
       const materializedView = {
         ...normalizedView,
         ...(view.recommended === true ? { recommended: true } : {}),
@@ -1033,7 +1222,9 @@ export class ControlModelConversation {
       this.#publish();
       return cloneAndFreeze(materializedView);
     } catch (error) {
-      if (error instanceof ControlModelCommandError) throw error;
+      if (error instanceof ControlModelCommandError) {
+        throw error;
+      }
       throw this.#asCommandErrorForEpoch(error, "artifact.materialize", epoch);
     } finally {
       this.#activeOperations -= 1;
@@ -1044,7 +1235,9 @@ export class ControlModelConversation {
     await this.#host.onConversationReleased(this);
   }
   dispose(): void {
-    if (this.#disposed) return;
+    if (this.#disposed) {
+      return;
+    }
     this.#disposed = true;
     this.#activationGeneration += 1;
     this.#status = "disposed";
@@ -1064,13 +1257,14 @@ export class ControlModelConversation {
         : (record(input) ?? ({} as Record<string, unknown>));
     const message = text(value.message) ?? text(value.content) ?? "";
     const attachments = Array.isArray(value.attachments) ? value.attachments : undefined;
-    if (!message && (!attachments || attachments.length === 0))
+    if (!message && (!attachments || attachments.length === 0)) {
       throw localError(
         "invalid-input",
         "chat.send",
         "Message or attachment is required",
         "EMPTY_MESSAGE",
       );
+    }
     return { ...value, message, ...(attachments ? { attachments } : {}) };
   }
   #sendOptions(input: Record<string, unknown>): Record<string, unknown> {
@@ -1087,7 +1281,9 @@ export class ControlModelConversation {
       "expectedRunId",
       "suppressCommandInterpretation",
     ]) {
-      if (input[key] !== undefined) result[key] = input[key];
+      if (input[key] !== undefined) {
+        result[key] = input[key];
+      }
     }
     return result;
   }
@@ -1097,26 +1293,37 @@ export class ControlModelConversation {
     while (this.#historyRequested && !this.#disposed) {
       this.#historyRequested = false;
       const options = this.#historyOptions;
+      const method = this.#historyMethodRequested;
       this.#historyOptions = undefined;
       try {
-        await this.#refreshHistoryOnce(this.#historyOffsetRequested, options);
+        await this.#refreshHistoryOnce(this.#historyOffsetRequested, options, method);
       } catch (error) {
         firstError ??= error;
       }
     }
-    if (firstError !== undefined) throw firstError;
+    if (firstError !== undefined) {
+      throw firstError instanceof Error
+        ? firstError
+        : new Error("Control Model history refresh failed", { cause: firstError });
+    }
   }
 
-  async #refreshHistoryOnce(offset: number, options?: ControlModelRequestOptions): Promise<void> {
-    if (this.#disposed) return;
-    const epoch = this.#captureEpoch("chat.history");
+  async #refreshHistoryOnce(
+    offset: number,
+    options?: ControlModelRequestOptions,
+    method: ControlModelConversationHistoryMethod = "chat.history",
+  ): Promise<void> {
+    if (this.#disposed) {
+      return;
+    }
+    const epoch = this.#captureEpoch(method);
     this.#historyStatus = "loading";
     this.#historyError = null;
     this.#status = "loading";
     this.#publish();
     try {
       const response = await this.#host.gateway.request<Record<string, unknown>>(
-        "chat.history",
+        method,
         {
           sessionKey: this.#sessionKey,
           ...(this.#host.agentId ? { agentId: this.#host.agentId } : {}),
@@ -1125,8 +1332,40 @@ export class ControlModelConversation {
         },
         options,
       );
-      this.#assertEpoch(epoch, "chat.history");
+      this.#assertEpoch(epoch, method);
       const page = Array.isArray(response?.messages) ? response.messages : [];
+      {
+        const startupMetadata = readStartupMetadata(response, this.#host.bounds.maxMetadataBytes);
+        if (method === "chat.startup") {
+          this.#historyMetadata = startupMetadata.metadata;
+          if (startupMetadata.truncated) {
+            this.#partialReasons.add("startup-metadata-truncated");
+          } else {
+            this.#partialReasons.delete("startup-metadata-truncated");
+          }
+          if (startupMetadata.malformed) {
+            this.#partialReasons.add("startup-metadata-malformed");
+          } else {
+            this.#partialReasons.delete("startup-metadata-malformed");
+          }
+        } else {
+          const mergedMetadata = startupMetadata.metadata
+            ? readStartupMetadata(
+                { ...this.#historyMetadata, ...startupMetadata.metadata },
+                this.#host.bounds.maxMetadataBytes,
+              )
+            : startupMetadata;
+          if (mergedMetadata.metadata) {
+            this.#historyMetadata = mergedMetadata.metadata;
+          }
+          if (mergedMetadata.truncated) {
+            this.#partialReasons.add("startup-metadata-truncated");
+          }
+          if (mergedMetadata.malformed) {
+            this.#partialReasons.add("startup-metadata-malformed");
+          }
+        }
+      }
       const mergedHistory = this.#mergeHistory(
         offset > 0 ? [...page, ...this.#historyMessages] : page,
       );
@@ -1150,7 +1389,9 @@ export class ControlModelConversation {
         response?.hasMore === true && nextOffset !== null && nextOffset > offset;
       this.#historyNextOffset = this.#historyHasMore ? nextOffset : null;
       const total = safeInteger(response?.totalMessages);
-      if (total !== null && total >= 0) this.#historyTotalMessages = total;
+      if (total !== null && total >= 0) {
+        this.#historyTotalMessages = total;
+      }
       const projectionOverflow = this.#projection.entries.length > maxMessages;
       this.#historyTruncatedBefore =
         this.#historyHasMore || (this.#historyWindow === "newest" && projectionOverflow);
@@ -1176,8 +1417,10 @@ export class ControlModelConversation {
       this.#status = this.#partialReasons.size > 0 ? "partial" : "ready";
       this.#publish();
     } catch (error) {
-      const normalized = this.#asCommandErrorForEpoch(error, "chat.history", epoch);
-      if (normalized.category === "stale") throw normalized;
+      const normalized = this.#asCommandErrorForEpoch(error, method, epoch);
+      if (normalized.category === "stale") {
+        throw normalized;
+      }
       this.#historyStatus = "error";
       this.#historyError = {
         code: normalized.code,
@@ -1195,6 +1438,7 @@ export class ControlModelConversation {
     const merged: unknown[] = [];
     for (const message of messages) {
       const value = record(message);
+      // oxlint-disable-next-line no-underscore-dangle -- Canonical Gateway message metadata field.
       const metadata = record(value?.__openclaw);
       const role = text(value?.role) ?? "unknown";
       const id = text(metadata?.id) ?? text(value?.id);
@@ -1207,7 +1451,9 @@ export class ControlModelConversation {
           : idempotencyKey
             ? `idempotency:${role}:${idempotencyKey}`
             : `content:${hash(stableStringify(message))}`;
-      if (seen.has(key)) continue;
+      if (seen.has(key)) {
+        continue;
+      }
       seen.add(key);
       merged.push(message);
     }
@@ -1215,7 +1461,7 @@ export class ControlModelConversation {
     return sequences.every((sequence) => sequence !== null)
       ? merged
           .map((message, index) => ({ message, sequence: sequences[index] ?? 0 }))
-          .sort((left, right) => left.sequence - right.sequence)
+          .toSorted((left, right) => left.sequence - right.sequence)
           .map(({ message }) => message)
       : merged;
   }
@@ -1223,32 +1469,39 @@ export class ControlModelConversation {
   #captureEpoch(command: string): number {
     this.#assertNotDisposed();
     const connection = this.#host.getConnectionSnapshot();
-    if (connection.status !== "connected") throw connectionError(command, connection);
+    if (connection.status !== "connected") {
+      throw connectionError(command, connection);
+    }
     this.#connection = connection;
     return connection.epoch;
   }
   #assertEpoch(epoch: number, command: string): void {
     const current = this.#host.getConnectionSnapshot();
     this.#connection = current;
-    if (this.#disposed || current.status !== "connected" || current.epoch !== epoch)
+    if (this.#disposed || current.status !== "connected" || current.epoch !== epoch) {
       throw localError(
         "stale",
         command,
         "Gateway response belongs to a retired connection",
         "STALE_EPOCH",
       );
+    }
   }
   #assertCommandReady(command: string): void {
     this.#assertNotDisposed();
     const connection = this.#host.getConnectionSnapshot();
     this.#connection = connection;
-    if (!this.#host.isRunning())
+    if (!this.#host.isRunning()) {
       throw localError("disconnected", command, "Control Model is not running", "NOT_READY");
-    if (connection.status !== "connected") throw connectionError(command, connection);
+    }
+    if (connection.status !== "connected") {
+      throw connectionError(command, connection);
+    }
   }
   #assertNotDisposed(): void {
-    if (this.#disposed)
+    if (this.#disposed) {
       throw localError("disposed", "conversation", "Conversation has been disposed", "DISPOSED");
+    }
   }
   #asCommandErrorForEpoch(
     error: unknown,
@@ -1258,13 +1511,14 @@ export class ControlModelConversation {
     if (epoch !== null) {
       const current = this.#host.getConnectionSnapshot();
       this.#connection = current;
-      if (current.status !== "connected" || current.epoch !== epoch)
+      if (current.status !== "connected" || current.epoch !== epoch) {
         return localError(
           "stale",
           command,
           "Gateway request belongs to a retired connection",
           "STALE_EPOCH",
         );
+      }
     }
     return this.#asCommandError(error, command);
   }
@@ -1281,28 +1535,31 @@ export class ControlModelConversation {
   ): Promise<Readonly<Record<string, unknown>>> {
     this.#assertCommandReady("question.resolve");
     const questionId = text(id);
-    if (!questionId)
+    if (!questionId) {
       throw localError(
         "invalid-input",
         "question.resolve",
         "Question id is required",
         "INVALID_QUESTION_INPUT",
       );
+    }
     const question = this.#questions.get(questionId);
-    if (!question)
+    if (!question) {
       throw localError(
         "not-found",
         "question.resolve",
         "Question was not found",
         "QUESTION_NOT_FOUND",
       );
-    if (normalizeStatus(question.status) !== "pending")
+    }
+    if (normalizeStatus(question.status) !== "pending") {
       throw localError(
         "conflict",
         "question.resolve",
         "Question is no longer pending",
         "QUESTION_ALREADY_RESOLVED",
       );
+    }
     this.#activeOperations += 1;
     let epoch: number | null = null;
     try {
@@ -1324,8 +1581,9 @@ export class ControlModelConversation {
   }
 
   async #hydrateQuestions(epoch: number): Promise<void> {
-    if (this.#disposed || this.#questionHydration)
+    if (this.#disposed || this.#questionHydration) {
       return this.#questionHydration ?? Promise.resolve();
+    }
     const promise = (async () => {
       try {
         const result = await this.#host.gateway.request<Record<string, unknown>>(
@@ -1334,19 +1592,26 @@ export class ControlModelConversation {
           undefined,
         );
         const current = this.#host.getConnectionSnapshot();
-        if (this.#disposed || current.epoch !== epoch || current.status !== "connected") return;
+        if (this.#disposed || current.epoch !== epoch || current.status !== "connected") {
+          return;
+        }
         this.#partialReasons.delete("questions-unavailable");
         const questions = Array.isArray(result?.questions) ? result.questions : [];
         const pendingIds = new Set<string>();
-        for (const question of questions)
+        for (const question of questions) {
           if (this.#eventMatches(record(question) ?? {}, "question.requested")) {
             const id = text(record(question)?.id);
-            if (id) pendingIds.add(id);
+            if (id) {
+              pendingIds.add(id);
+            }
             this.#upsertQuestion(question);
           }
-        for (const [id, question] of this.#questions)
-          if (normalizeStatus(question.status) === "pending" && !pendingIds.has(id))
+        }
+        for (const [id, question] of this.#questions) {
+          if (normalizeStatus(question.status) === "pending" && !pendingIds.has(id)) {
             this.#questions.delete(id);
+          }
+        }
         this.#publish();
       } catch (error) {
         const current = this.#host.getConnectionSnapshot();
@@ -1358,21 +1623,30 @@ export class ControlModelConversation {
       }
     })();
     const tracked = promise.finally(() => {
-      if (this.#questionHydration === tracked) this.#questionHydration = null;
+      if (this.#questionHydration === tracked) {
+        this.#questionHydration = null;
+      }
     });
     this.#questionHydration = tracked;
     return tracked;
   }
   #scheduleHistoryRefresh(): void {
-    if (this.#disposed || this.#connection.status !== "connected") return;
+    if (this.#disposed || this.#connection.status !== "connected") {
+      return;
+    }
     this.#historyRequested = true;
     this.#historyOffsetRequested = 0;
-    if (this.#historyLoop) return;
+    if (this.#historyLoop) {
+      return;
+    }
     queueMicrotask(() => {
-      if (this.#disposed || !this.#historyRequested || this.#historyLoop) return;
-      void this.refreshHistory().catch((error) => {
-        if (!(error instanceof ControlModelCommandError && error.category === "stale"))
+      if (this.#disposed || !this.#historyRequested || this.#historyLoop) {
+        return;
+      }
+      void this.refreshHistory().catch((error: unknown) => {
+        if (!(error instanceof ControlModelCommandError && error.category === "stale")) {
           this.#host.reportBackgroundError(error);
+        }
       });
     });
   }
@@ -1387,7 +1661,9 @@ export class ControlModelConversation {
       record(payload.message),
     ]) {
       const key = text(value?.sessionKey) ?? text(value?.key) ?? text(value?.sourceSessionKey);
-      if (key) return key;
+      if (key) {
+        return key;
+      }
     }
     return null;
   }
@@ -1397,26 +1673,34 @@ export class ControlModelConversation {
       this.#host.agentId &&
       eventAgentId &&
       eventAgentId.toLowerCase() !== this.#host.agentId.toLowerCase()
-    )
+    ) {
       return false;
+    }
     const key = this.#eventSessionKey(payload);
-    if (key) return key === this.#sessionKey;
+    if (key) {
+      return key === this.#sessionKey;
+    }
     const data = record(payload.data);
     const runId = text(payload.runId) ?? text(data?.runId);
-    if (event === "agent") return Boolean(runId && this.#projection.runs[runId]);
+    if (event === "agent") {
+      return Boolean(runId && this.#projection.runs[runId]);
+    }
     if (
       event === "question.resolved" &&
       payload.id !== undefined &&
       this.#questions.has(text(payload.id) ?? "")
-    )
+    ) {
       return true;
+    }
     return Boolean(runId && this.#projection.runs[runId]);
   }
 
   #handleChat(payload: Record<string, unknown>): void {
     const state = text(payload.state);
     const runId = text(payload.runId);
-    if (!runId) return;
+    if (!runId) {
+      return;
+    }
     if (state === "status") {
       this.#applyProjection({ type: "runDelta", runId, scope: { sessionKey: this.#sessionKey } });
       return;
@@ -1426,7 +1710,9 @@ export class ControlModelConversation {
       payload as SessionProjectionGatewayRunEvent,
       { sessionKey: this.#sessionKey },
     );
-    if (!transition) return;
+    if (!transition) {
+      return;
+    }
     this.#projection = transition.projection;
     this.#boundProjectionEntries();
     this.#publish();
@@ -1435,10 +1721,16 @@ export class ControlModelConversation {
   #handleAgent(payload: Record<string, unknown>): void {
     const stream = text(payload.stream);
     const data = record(payload.data) ?? payload;
-    if (stream !== "tool" && stream !== "item" && stream !== "command_output") return;
+    if (stream !== "tool" && stream !== "item" && stream !== "command_output") {
+      return;
+    }
     const runId = text(payload.runId) ?? text(data.runId);
-    if (!runId) return;
-    if (!this.#eventSessionKey(payload) && !this.#projection.runs[runId]) return;
+    if (!runId) {
+      return;
+    }
+    if (!this.#eventSessionKey(payload) && !this.#projection.runs[runId]) {
+      return;
+    }
     const toolCallId =
       text(data.toolCallId) ?? text(data.tool_call_id) ?? text(data.id) ?? "unknown";
     const key = `${runId}:${toolCallId}`;
@@ -1472,39 +1764,42 @@ export class ControlModelConversation {
       statusValue === "canceled" ||
       statusValue === "aborted" ||
       phase === "cancel"
-    )
+    ) {
       next.status = "cancelled";
-    else if (
+    } else if (
       data.isError === true ||
       data.error !== undefined ||
       statusValue === "failed" ||
       statusValue === "blocked" ||
       phase === "error"
-    )
+    ) {
       next.status = "failed";
-    else if (
+    } else if (
       phase === "result" ||
       phase === "end" ||
       statusValue === "completed" ||
       statusValue === "succeeded" ||
       statusValue === "success"
-    )
+    ) {
       next.status = "succeeded";
-    else if (
+    } else if (
       phase === "start" ||
       phase === "input_delta" ||
       phase === "update" ||
       statusValue === "running"
-    )
+    ) {
       next.status = "running";
-    else next.status = "unknown";
+    } else {
+      next.status = "unknown";
+    }
     if (
       (current.status === "succeeded" ||
         current.status === "failed" ||
         current.status === "cancelled") &&
       next.status === "running"
-    )
+    ) {
       next.status = current.status;
+    }
 
     const inputIsDelta = data.input_delta !== undefined;
     const input = data.input_delta ?? data.input ?? data.arguments ?? data.args;
@@ -1548,8 +1843,11 @@ export class ControlModelConversation {
     this.#tools.set(key, next);
     while (this.#tools.size > this.#host.bounds.maxTools) {
       const first = this.#tools.keys().next().value;
-      if (first) this.#tools.delete(first);
-      else break;
+      if (first) {
+        this.#tools.delete(first);
+      } else {
+        break;
+      }
       this.#boundsTruncated.tools = true;
     }
     this.#ingestLiveArtifacts(
@@ -1569,26 +1867,44 @@ export class ControlModelConversation {
 
   #applyApprovalReplay(replay: unknown): void {
     const value = record(replay);
-    if (!value || !Array.isArray(value.approvals)) return;
-    if (value.truncated !== true)
-      for (const [id, approval] of this.#approvals)
-        if (normalizeStatus(approval.status) === "pending") this.#approvals.delete(id);
-    for (const approval of value.approvals) this.#upsertApproval(approval);
-    if (value.truncated === true) this.#partialReasons.add("approval-replay-truncated");
-    else this.#partialReasons.delete("approval-replay-truncated");
+    if (!value || !Array.isArray(value.approvals)) {
+      return;
+    }
+    if (value.truncated !== true) {
+      for (const [id, approval] of this.#approvals) {
+        if (normalizeStatus(approval.status) === "pending") {
+          this.#approvals.delete(id);
+        }
+      }
+    }
+    for (const approval of value.approvals) {
+      this.#upsertApproval(approval);
+    }
+    if (value.truncated === true) {
+      this.#partialReasons.add("approval-replay-truncated");
+    } else {
+      this.#partialReasons.delete("approval-replay-truncated");
+    }
     this.#publish();
   }
   #upsertApproval(value: unknown): void {
     const approval = record(value);
     const id = text(approval?.id);
-    if (!approval || !id) return;
+    if (!approval || !id) {
+      return;
+    }
     const sessionKey = text(approval.sessionKey) ?? text(approval.sourceSessionKey);
-    if (sessionKey && sessionKey !== this.#sessionKey) return;
+    if (sessionKey && sessionKey !== this.#sessionKey) {
+      return;
+    }
     this.#approvals.set(id, { ...approval });
     while (this.#approvals.size > this.#host.bounds.maxApprovals) {
       const first = this.#approvals.keys().next().value;
-      if (first) this.#approvals.delete(first);
-      else break;
+      if (first) {
+        this.#approvals.delete(first);
+      } else {
+        break;
+      }
       this.#boundsTruncated.approvals = true;
     }
     this.#publish();
@@ -1596,23 +1912,32 @@ export class ControlModelConversation {
   #upsertQuestion(value: unknown): void {
     const question = record(value);
     const id = text(question?.id);
-    if (!question || !id) return;
+    if (!question || !id) {
+      return;
+    }
     const sessionKey = text(question.sessionKey);
-    if (sessionKey && sessionKey !== this.#sessionKey) return;
+    if (sessionKey && sessionKey !== this.#sessionKey) {
+      return;
+    }
     this.#questions.set(id, { ...question, sessionKey: this.#sessionKey });
     while (this.#questions.size > this.#host.bounds.maxQuestions) {
       const first = this.#questions.keys().next().value;
-      if (first) this.#questions.delete(first);
-      else break;
+      if (first) {
+        this.#questions.delete(first);
+      } else {
+        break;
+      }
       this.#boundsTruncated.questions = true;
     }
     this.#publish();
   }
   #resolveQuestionEvent(payload: Record<string, unknown>): void {
     const id = text(payload.id) ?? text(record(payload.question)?.id);
-    if (!id) return;
+    if (!id) {
+      return;
+    }
     const existing = this.#questions.get(id);
-    this.#upsertQuestion({ ...(existing ?? {}), ...payload, id, sessionKey: this.#sessionKey });
+    this.#upsertQuestion({ ...existing, ...payload, id, sessionKey: this.#sessionKey });
   }
   #activeRunId(): string | null {
     return (
@@ -1623,19 +1948,23 @@ export class ControlModelConversation {
   #releaseLeases(): void {
     const leases = this.#leases;
     this.#leases = { plain: null, approvals: null };
-    if (leases.approvals)
-      void releaseGatewaySessionMessageSubscription(leases.approvals).catch((error) =>
+    if (leases.approvals) {
+      void releaseGatewaySessionMessageSubscription(leases.approvals).catch((error: unknown) =>
         this.#host.reportBackgroundError(error),
       );
-    if (leases.plain)
-      void releaseGatewaySessionMessageSubscription(leases.plain).catch((error) =>
+    }
+    if (leases.plain) {
+      void releaseGatewaySessionMessageSubscription(leases.plain).catch((error: unknown) =>
         this.#host.reportBackgroundError(error),
       );
+    }
   }
 
   #applyProjection(event: Parameters<typeof reduceSessionProjection>[1]): void {
     const next = reduceSessionProjection(this.#projection, event);
-    if (next === this.#projection) return;
+    if (next === this.#projection) {
+      return;
+    }
     this.#projection = next;
     this.#boundProjectionEntries();
     this.#publish();
@@ -1652,7 +1981,9 @@ export class ControlModelConversation {
       record(payload.message),
     ]) {
       const agentId = text(value?.agentId);
-      if (agentId) return agentId;
+      if (agentId) {
+        return agentId;
+      }
     }
     return null;
   }
@@ -1660,7 +1991,9 @@ export class ControlModelConversation {
   #restoreInFlightRun(value: unknown): void {
     const inFlight = record(value);
     const runId = text(inFlight?.runId);
-    if (!runId) return;
+    if (!runId) {
+      return;
+    }
     this.#projection = reduceSessionProjection(this.#projection, {
       type: "runDelta",
       runId,
@@ -1673,13 +2006,17 @@ export class ControlModelConversation {
     });
     for (const event of Array.isArray(inFlight?.events) ? inFlight.events : []) {
       const payload = record(event);
-      if (payload) this.#handleAgent({ ...payload, sessionKey: this.#sessionKey });
+      if (payload) {
+        this.#handleAgent({ ...payload, sessionKey: this.#sessionKey });
+      }
     }
   }
 
   #boundProjectionEntries(): void {
     const maxMessages = this.#host.bounds.maxMessages;
-    if (this.#projection.entries.length <= maxMessages) return;
+    if (this.#projection.entries.length <= maxMessages) {
+      return;
+    }
     const entries =
       this.#historyWindow === "older"
         ? this.#projection.entries.slice(0, maxMessages)
@@ -1692,8 +2029,11 @@ export class ControlModelConversation {
     this.#boundsTruncated.messages = true;
     this.#partialReasons.add("messages-truncated");
     this.#historyCompleteSnapshot = false;
-    if (this.#historyWindow === "older") this.#historyTruncatedAfter = true;
-    else this.#historyTruncatedBefore = true;
+    if (this.#historyWindow === "older") {
+      this.#historyTruncatedAfter = true;
+    } else {
+      this.#historyTruncatedBefore = true;
+    }
   }
 
   #artifactBounds(): ControlModelArtifactProjectionBounds {
@@ -1708,18 +2048,23 @@ export class ControlModelConversation {
   }
 
   #ingestLiveArtifacts(incoming: readonly UiArtifact[]): void {
-    if (incoming.length === 0) return;
+    if (incoming.length === 0) {
+      return;
+    }
     if (
       new Set([...this.#liveArtifacts.values(), ...incoming].map((artifact) => artifact.id)).size >
       this.#host.bounds.maxArtifacts
-    )
+    ) {
       this.#boundsTruncated.artifacts = true;
+    }
     const retained = reconcileUiArtifacts(
       [...this.#liveArtifacts.values(), ...incoming],
       this.#artifactBounds(),
     );
     this.#liveArtifacts.clear();
-    for (const artifact of retained) this.#liveArtifacts.set(artifact.id, artifact);
+    for (const artifact of retained) {
+      this.#liveArtifacts.set(artifact.id, artifact);
+    }
   }
 
   #projectArtifacts(): UiArtifact[] {
@@ -1732,13 +2077,16 @@ export class ControlModelConversation {
       index -= 1
     ) {
       const entry = this.#projection.entries[index];
-      if (!entry) continue;
+      if (!entry) {
+        continue;
+      }
       if (
         entry.message !== null &&
         typeof entry.message === "object" &&
         this.#retiredArtifactMessages.has(entry.message)
-      )
+      ) {
         continue;
+      }
       historyCandidates.push(
         ...collectMessageUiArtifacts(
           entry.message,
@@ -1756,9 +2104,12 @@ export class ControlModelConversation {
       );
     }
     const candidates = [...this.#liveArtifacts.values(), ...historyCandidates];
-    if (historyCandidates.length > bounds.maxArtifacts) this.#boundsTruncated.artifacts = true;
-    if (new Set(candidates.map((artifact) => artifact.id)).size > bounds.maxArtifacts)
+    if (historyCandidates.length > bounds.maxArtifacts) {
       this.#boundsTruncated.artifacts = true;
+    }
+    if (new Set(candidates.map((artifact) => artifact.id)).size > bounds.maxArtifacts) {
+      this.#boundsTruncated.artifacts = true;
+    }
     const artifacts = applyMaterializedUiArtifactViews(
       reconcileUiArtifacts(candidates, bounds),
       this.#materializedViews,
@@ -1768,8 +2119,11 @@ export class ControlModelConversation {
         artifact.views.map((view) => materializedViewKey(artifact.id, artifact.revision, view.id)),
       ),
     );
-    for (const key of this.#materializedViews.keys())
-      if (!retainedKeys.has(key)) this.#materializedViews.delete(key);
+    for (const key of this.#materializedViews.keys()) {
+      if (!retainedKeys.has(key)) {
+        this.#materializedViews.delete(key);
+      }
+    }
     return artifacts;
   }
 
@@ -1811,7 +2165,10 @@ export class ControlModelConversation {
           ? messages.slice(0, this.#host.bounds.maxMessages)
           : messages.slice(-this.#host.bounds.maxMessages)
         : messages;
-    if (messages.length > this.#host.bounds.maxMessages) this.#boundsTruncated.messages = true;
+    if (messages.length > this.#host.bounds.maxMessages) {
+      this.#boundsTruncated.messages = true;
+    }
+    // oxlint-disable-next-line no-map-spread -- Snapshot entries must not alias mutable projection runs.
     const runs = Object.values(this.#projection.runs).map((run) => ({
       runId: run.runId,
       status: run.status,
@@ -1822,7 +2179,9 @@ export class ControlModelConversation {
     }));
     const visibleRuns =
       runs.length > this.#host.bounds.maxRuns ? runs.slice(-this.#host.bounds.maxRuns) : runs;
-    if (runs.length > this.#host.bounds.maxRuns) this.#boundsTruncated.runs = true;
+    if (runs.length > this.#host.bounds.maxRuns) {
+      this.#boundsTruncated.runs = true;
+    }
     const tools = [...this.#tools.values()].map((tool) => ({
       key: `${tool.runId}:${tool.toolCallId}`,
       runId: tool.runId,
@@ -1867,6 +2226,7 @@ export class ControlModelConversation {
         revision: this.#historyRevision,
         error: this.#historyError,
       },
+      metadata: this.#historyMetadata,
       messages: visibleMessages,
       runs: visibleRuns,
       activeRun,
@@ -1907,17 +2267,26 @@ export class ControlModelConversation {
     this.#scheduleNotification();
   }
   #scheduleNotification(): void {
-    if (this.#notificationScheduled || this.#disposed) return;
+    if (this.#notificationScheduled || this.#disposed) {
+      return;
+    }
     this.#notificationScheduled = true;
     queueMicrotask(() => {
       this.#notificationScheduled = false;
-      if (this.#disposed) return;
+      if (this.#disposed) {
+        return;
+      }
+      // Snapshot listeners so subscription changes cannot alter the current delivery pass.
+      // oxlint-disable-next-line no-useless-spread
       for (const subscriber of [...this.#subscribers]) {
-        if (this.#disposed) break;
+        if (this.#disposed) {
+          break;
+        }
         try {
           const result = subscriber();
-          if (result && typeof result.then === "function")
-            void result.catch((error) => this.#host.reportSubscriberError(error));
+          if (result && typeof result.then === "function") {
+            void result.catch((error: unknown) => this.#host.reportSubscriberError(error));
+          }
         } catch (error) {
           this.#host.reportSubscriberError(error);
         }
@@ -1925,3 +2294,5 @@ export class ControlModelConversation {
     });
   }
 }
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered conversation runtime. */

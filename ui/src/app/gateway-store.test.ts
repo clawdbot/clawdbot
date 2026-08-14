@@ -471,6 +471,89 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("reconnecting");
   });
 
+  it("fences Control Model events from replaced Gateway clients", async () => {
+    const { gateway, current } = createStore();
+    const model = await gateway.loadControlModel!();
+    gateway.start();
+    const stale = current();
+    stale.opts.onHello?.(HELLO);
+    const conversation = model?.conversation("agent:main:one");
+    expect(conversation).toBeDefined();
+
+    gateway.connect();
+    current().opts.onHello?.(HELLO);
+    await vi.waitFor(() => expect(conversation?.getSnapshot().connection.epoch).toBe(2));
+    const revision = conversation?.getSnapshot().revision;
+    stale.opts.onEvent?.(
+      createGatewayEvent(
+        "session.message",
+        {
+          sessionKey: "agent:main:one",
+          message: { role: "user", content: "stale" },
+        },
+        9,
+      ),
+    );
+    await Promise.resolve();
+    expect(conversation?.getSnapshot().revision).toBe(revision);
+  });
+
+  it("queues bounded Control Model delivery outside the receive stack and marks overflow as a gap", async () => {
+    const { gateway, current } = createStore();
+    const model = await gateway.loadControlModel!();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    const conversation = model?.conversation("agent:main:one");
+    const event = createGatewayEvent("session.message", {
+      sessionKey: "agent:main:one",
+      message: { role: "user", content: "queued" },
+    });
+
+    current().opts.onEvent?.(event);
+    expect(conversation?.getSnapshot().messages).toHaveLength(0);
+    await Promise.resolve();
+    expect(conversation?.getSnapshot().messages).toHaveLength(1);
+
+    for (let index = 0; index <= 256; index += 1) {
+      current().opts.onEvent?.(
+        createGatewayEvent(
+          "session.message",
+          {
+            sessionKey: "agent:main:one",
+            message: { role: "user", content: `overflow-${index}` },
+          },
+          index + 2,
+        ),
+      );
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(conversation?.getSnapshot().hasTransportGap).toBe(true);
+    gateway.dispose();
+  });
+
+  it("disposes the Gateway-owned Control Model exactly once", async () => {
+    const { gateway } = createStore();
+    const model = await gateway.loadControlModel!();
+    const dispose = vi.spyOn(model, "dispose");
+
+    gateway.dispose();
+    gateway.dispose();
+
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a Control Model load that resolves after disposal", async () => {
+    const { gateway } = createStore();
+    const loading = gateway.loadControlModel!();
+
+    gateway.dispose();
+
+    await expect(loading).rejects.toThrow("Gateway is disposed");
+    await expect(gateway.loadControlModel!()).rejects.toThrow("Gateway is disposed");
+  });
+
   it("discards the gapped frame after recovery synchronously replaces its client", () => {
     const { gateway, current } = createStore();
     const listener = vi.fn();

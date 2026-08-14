@@ -185,6 +185,13 @@ The binding supplies monotonically increasing connection epochs. A response
 captured under a retired epoch never replaces state from the current
 connection.
 
+For shell-sized adopters, import `@openclaw/gateway-client/model/catalog` and create
+`createControlModelCatalog` first. The full entry point is intentionally a
+separate loading boundary: after a conversation route is active, call
+`createControlModelConversationModel({ catalog, ...options })` from a lazy
+import. This keeps the catalog snapshot owner shared while conversation
+projection and artifact code load only for chat.
+
 The invalidation binding remains responsible for the session-catalog
 subscription and authorized `sessions.changed` invalidations. Conversation
 handles acquire their targeted `sessions.messages.subscribe` leases through the
@@ -193,8 +200,11 @@ provides epoch-stamped frames for conversation projection.
 
 ## Session snapshots
 
-`model.refreshSessions()` requests one bounded `sessions.list` result and
-publishes a deeply frozen snapshot. Live `sessions.changed` events schedule a
+`model.refreshSessions(requestOptions, query)` requests one bounded `sessions.list`
+result and publishes a deeply frozen snapshot. The optional query carries the
+Gateway filters, pagination cursor, and response metadata (`defaults`, creators,
+counts, and next offset), so an adopter does not need a second canonical list
+request or a fixed-limit adapter. Live `sessions.changed` events schedule a
 canonical refresh; they do not mutate rows directly. Control Model exports the
 same bounded refresh coordinator used by Control UI, so both surfaces preserve
 one trailing refresh after an in-flight request succeeds or fails.
@@ -215,7 +225,10 @@ An unsubscribed, operation-idle handle may be evicted and disposed when the
 finite inactive-handle bound is reached; subscribe to pin a handle or call
 `release` explicitly when it is no longer needed. Conversation history is
 reconciled through the canonical Gateway Client session projection, while live
-events are accepted only from the current connection epoch.
+events are accepted only from the current connection epoch. Hosts may defer
+automatic history loading and select `chat.startup` for the first route load;
+startup metadata is retained beside the canonical message snapshot and later
+older pages use `chat.history`.
 `ControlModelCommandError` provides bounded, typed command failures.
 
 ## OC3 UI artifacts
