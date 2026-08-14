@@ -27,12 +27,8 @@ describe("device worker placement dispatch", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("provisions the environment and surfaces the honest transport gate", async () => {
+  it("provisions, syncs, and activates a local-install device environment", async () => {
     const harness = createHarness(placementStore);
-    const transportError = Object.assign(
-      new Error("device-runner-transport-unimplemented: launch is pending"),
-      { code: "device-runner-transport-unimplemented" },
-    );
     vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
       ...harness.ready,
       providerId: "device",
@@ -49,7 +45,6 @@ describe("device worker placement dispatch", () => {
       sharedHost: true,
       tunnelStatus: "stopped",
     });
-    vi.mocked(harness.environments.startTunnel).mockRejectedValue(transportError);
     const request = {
       ...REQUEST,
       profileId: "device:device-1",
@@ -60,8 +55,10 @@ describe("device worker placement dispatch", () => {
       },
     };
 
-    await expect(harness.service.dispatch(request)).rejects.toMatchObject({
-      code: "device-runner-transport-unimplemented",
+    await expect(harness.service.dispatch(request)).resolves.toMatchObject({
+      state: "active",
+      workerBundleHash: "a".repeat(64),
+      remoteWorkspaceDir: "/worker/workspace",
     });
 
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
@@ -77,10 +74,7 @@ describe("device worker placement dispatch", () => {
       ownerEpoch: harness.ready.ownerEpoch,
       sessionId: REQUEST.sessionId,
     });
-    expect(harness.environments.destroy).toHaveBeenCalledWith(harness.ready.environmentId);
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining("device-runner-transport-unimplemented"),
-    });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
   });
 });

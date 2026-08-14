@@ -27,8 +27,9 @@ import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } f
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
-import { resolveNodeWorkerBuild } from "./node-worker-build.js";
+import { resolveNodeWorkerInstallation } from "./node-worker-build.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
   ensureNodeHostPluginRegistry,
   isRegisteredNodeHostCommandDuplex,
@@ -276,10 +277,11 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
-  const workerRuns =
+  const workerInstallation =
     params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true
-      ? await resolveNodeWorkerBuild()
+      ? await resolveNodeWorkerInstallation()
       : undefined;
+  const workerRuns = workerInstallation?.build;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -317,7 +319,12 @@ export async function prepareNodeHostRuntime(params?: {
     initialInventory,
     start({ client, onInventoryChanged, onManifestChanged }) {
       const mcpAbort = new AbortController();
-      const workerSupervisor = createNodeWorkerSupervisor({ env });
+      const workerSupervisor = workerInstallation
+        ? createNodeWorkerSupervisor({ env, localInstallation: workerInstallation })
+        : undefined;
+      const workerWorkspace = workerInstallation
+        ? new NodeWorkerWorkspaceRuntime({ env })
+        : undefined;
       const skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
@@ -435,7 +442,8 @@ export async function prepareNodeHostRuntime(params?: {
               installedAppsSharingEnabled,
               installedAppsPlatform: platform,
               pluginCommandContext,
-              workerSupervisor,
+              ...(workerSupervisor ? { workerSupervisor } : {}),
+              ...(workerWorkspace ? { workerWorkspace } : {}),
             });
           } finally {
             progress?.stop();
@@ -477,7 +485,7 @@ export async function prepareNodeHostRuntime(params?: {
           }
           // Startup observes this signal before either independent owner is joined.
           mcpAbort.abort();
-          const supervisorClose = Promise.resolve().then(() => workerSupervisor.close());
+          const supervisorClose = Promise.resolve().then(() => workerSupervisor?.close());
           const mcpClose = startup.then((resolved) => resolved.close());
           closePromise = Promise.allSettled([supervisorClose, mcpClose]).then((results) => {
             const errors = [

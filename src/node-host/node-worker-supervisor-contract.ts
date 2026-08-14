@@ -4,6 +4,7 @@ import {
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
 } from "../worker/node-supervisor-protocol.js";
+import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 
 export {
@@ -19,7 +20,10 @@ export type {
 } from "../worker/node-supervisor-protocol.js";
 
 export type NodeWorkerSupervisorControl = {
-  launch(input: NodeWorkerLaunchInput): Promise<NodeWorkerLaunchReceipt>;
+  launch(
+    input: NodeWorkerLaunchInput,
+    connectionEndpoint: WorkerConnectionEndpoint,
+  ): Promise<NodeWorkerLaunchReceipt>;
   status(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined>;
   cancel(expected: NodeWorkerSupervisorIdentity): Promise<NodeWorkerLaunchReceipt | undefined>;
 };
