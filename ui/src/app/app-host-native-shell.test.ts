@@ -422,7 +422,9 @@ describe("OpenClaw shell update affordance", () => {
     await card?.updateComplete;
     expect(card?.canUpdate).toBe(true);
     const restoreDialogPolyfill = installDialogPolyfill();
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    const updateButton = card?.querySelector<HTMLButtonElement>(".sidebar-update-card__cta");
+    expect(updateButton?.textContent?.trim()).toBe("Update");
+    updateButton?.click();
     const { modal } = await waitForRenderedModalDialog(document.body);
     [...modal.querySelectorAll("button")]
       .find((button) => button.textContent?.trim() === "Update and restart")
