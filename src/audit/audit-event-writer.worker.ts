@@ -28,7 +28,9 @@ if (!parentPort || !stateDir) {
   throw new Error("audit event writer requires a parent port and state directory");
 }
 const port = parentPort;
-const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+// Preserve inherited env so ownership markers like OPENCLAW_SUPERVISOR_MODE
+// still admit the externally supervised Gateway's own audit worker.
+const database = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 
 function executionIdentityFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);

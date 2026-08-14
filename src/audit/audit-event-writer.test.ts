@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
@@ -754,5 +755,68 @@ describe("audit event worker", () => {
     expect(
       inspectExecutionIdentityRun({ runId: "after-key-loss" }, database).identity,
     ).toMatchObject({ state: "unknown", reasonCode: "run_not_found" });
+  });
+
+  it("admits the audit worker under claimed external ownership and still refuses unmarked writers", async () => {
+    // Claim the documented durable external ownership on a fresh state dir,
+    // exactly like `OPENCLAW_SUPERVISOR_MODE=external openclaw database
+    // ownership claim --manager systemd-openclaw-gateway` does.
+    const externalEnv = {
+      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-audit-writer-ownership-"),
+      OPENCLAW_SUPERVISOR_MODE: "external",
+    };
+    claimOpenClawStateOwnership("systemd-openclaw-gateway", { env: externalEnv });
+    closeOpenClawStateDatabaseForTest();
+
+    // Worker threads snapshot the parent environment at spawn; mark this
+    // process like the externally supervised Gateway systemd unit does.
+    const previousSupervisorMode = process.env.OPENCLAW_SUPERVISOR_MODE;
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    try {
+      const errors: string[] = [];
+      const writer = createAuditEventWriter({
+        stateDir: externalEnv.OPENCLAW_STATE_DIR,
+        onError: (error) => errors.push(error),
+      });
+      await writer.ready;
+      expect(
+        writer.record({ ...input(), sourceId: "run-owned:1:started", runId: "run-owned" }),
+      ).toBe(true);
+      await writer.stop();
+      expect(errors).toEqual([]);
+      expect(listAuditEvents({ database: { env: externalEnv }, limit: 10 }).events).toHaveLength(1);
+    } finally {
+      if (previousSupervisorMode === undefined) {
+        delete process.env.OPENCLAW_SUPERVISOR_MODE;
+      } else {
+        process.env.OPENCLAW_SUPERVISOR_MODE = previousSupervisorMode;
+      }
+    }
+
+    // A worker spawned without the supervisor marker must still be fenced out
+    // of the claimed database: unmarked external writers stay refused.
+    const unmarkedEnv = {
+      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-audit-writer-ownership-unmarked-"),
+      OPENCLAW_SUPERVISOR_MODE: "external",
+    };
+    claimOpenClawStateOwnership("systemd-openclaw-gateway", { env: unmarkedEnv });
+    closeOpenClawStateDatabaseForTest();
+    const unmarkedErrors: string[] = [];
+    const unmarkedWriter = createAuditEventWriter({
+      stateDir: unmarkedEnv.OPENCLAW_STATE_DIR,
+      onError: (error) => unmarkedErrors.push(error),
+    });
+    await unmarkedWriter.ready;
+    expect(
+      unmarkedWriter.record({
+        ...input(),
+        sourceId: "run-unmarked:1:started",
+        runId: "run-unmarked",
+      }),
+    ).toBe(true);
+    await unmarkedWriter.stop();
+    expect(unmarkedErrors.join("\n")).toContain(
+      "is externally supervised by systemd-openclaw-gateway",
+    );
   });
 });
