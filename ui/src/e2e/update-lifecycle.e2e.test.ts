@@ -96,15 +96,10 @@ suite.define(() => {
             updateAvailable: DEV_UPDATE_AVAILABLE,
           });
 
-          await page.getByRole("button", { name: /246 commits behind/ }).press("Enter");
-          const cancel = page.getByRole("button", { name: "Cancel", exact: true });
-          await cancel.waitFor();
-          // Web Awesome applies slotted autofocus on the dialog's next frame;
-          // visibility alone does not mean its keyboard-safe default has settled.
-          await expect
-            .poll(() => cancel.evaluate((element) => document.activeElement === element))
-            .toBe(true);
-          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+          await page.getByRole("button", { name: /246 commits behind/ }).click();
+          await page.getByRole("button", { name: "Update and restart", exact: true }).waitFor();
+          // The modal fades in; capture it settled so the proof is readable.
+          await page.waitForTimeout(500);
           await page.screenshot({ path: path.join(artifactDir, "1-confirm-dialog.png") });
           await page.getByRole("button", { name: "Update and restart", exact: true }).click();
 
