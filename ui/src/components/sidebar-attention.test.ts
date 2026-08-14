@@ -48,11 +48,12 @@ function cronListResponse(
     offset?: number;
     hasMore?: boolean;
     nextOffset?: number | null;
+    snapshotRevision?: string;
   } = {},
 ): CronJobsListResult {
   return {
     jobs,
-    snapshotRevision: "sidebar-issues-fixture",
+    snapshotRevision: options.snapshotRevision ?? "sidebar-issues-fixture",
     total: options.total ?? (options.hasMore ? jobs.length + 1 : jobs.length),
     offset: options.offset ?? 0,
     limit: 50,
@@ -102,13 +103,15 @@ function mountSidebarAttention(options: {
 }) {
   const cronResponses = [...options.cronResponses];
   const authResponses = [...(options.authResponses ?? [authStatus()])];
-  const request = vi.fn((method: string) => {
-    const response = method === "cron.list" ? cronResponses.shift() : authResponses.shift();
-    if (!response) {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return Promise.resolve(response);
-  });
+  const request = vi.fn(
+    (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => {
+      const response = method === "cron.list" ? cronResponses.shift() : authResponses.shift();
+      if (!response) {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return Promise.resolve(response);
+    },
+  );
   const client = { request } as unknown as GatewayBrowserClient;
   let eventListener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
   const gateway = {
@@ -309,6 +312,81 @@ describe("sidebar issues lifecycle", () => {
     expect(element.cronJobs.map((job) => job.id)).toEqual(["first", "second"]);
     expect(detail?.automationAttention).toEqual({ count: 2, severity: "danger" });
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+  });
+
+  it("stops a superseded paginated load before requesting another page", async () => {
+    const staleSecondPage = deferred<CronJobsListResult>();
+    const repeated = (id: string) =>
+      cronJob(id, {
+        lastRunStatus: "error",
+        consecutiveErrors: 2,
+        lastFailureAlertAtMs: NOW,
+      });
+    const { element, emitCron, request } = mountSidebarAttention({
+      cronResponses: [
+        cronListResponse([repeated("stale-first")], {
+          total: 3,
+          hasMore: true,
+          nextOffset: 1,
+        }),
+        staleSecondPage.promise,
+        cronListResponse([repeated("current")]),
+      ],
+    });
+
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2),
+    );
+    const staleSignal = request.mock.calls[1]?.[2]?.signal;
+    expect(staleSignal?.aborted).toBe(false);
+    emitCron();
+    expect(staleSignal?.aborted).toBe(true);
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3),
+    );
+    staleSecondPage.resolve(
+      cronListResponse([repeated("stale-second")], {
+        total: 3,
+        offset: 1,
+        hasMore: true,
+        nextOffset: 2,
+      }),
+    );
+
+    await waitForFast(() => expect(element.cronJobs.map((job) => job.id)).toEqual(["current"]));
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3);
+  });
+
+  it("bounds snapshot recovery during revision churn", async () => {
+    const repeated = (id: string) =>
+      cronJob(id, {
+        lastRunStatus: "error",
+        consecutiveErrors: 2,
+        lastFailureAlertAtMs: NOW,
+      });
+    const page = (id: string, snapshotRevision: string, offset: number) =>
+      cronListResponse([repeated(id)], {
+        snapshotRevision,
+        total: 2,
+        offset,
+        hasMore: offset === 0,
+        nextOffset: offset === 0 ? 1 : null,
+      });
+    const { element, request } = mountSidebarAttention({
+      cronResponses: [
+        page("a-first", "revision-a", 0),
+        page("b-second", "revision-b", 1),
+        page("b-first", "revision-b", 0),
+        page("c-second", "revision-c", 1),
+        page("c-first", "revision-c", 0),
+      ],
+    });
+
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(5),
+    );
+    expect(element.cronJobs).toEqual([]);
+    expect(element.querySelector(".sidebar-issues-button")).toBeNull();
   });
 
   it("uses the same conditions for the Bell count and rendered rows", async () => {

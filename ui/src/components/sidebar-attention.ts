@@ -22,6 +22,9 @@ import {
 
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
+// One page-zero recovery can produce a coherent inventory. A second revision
+// change means active churn, so stop instead of amplifying cron.list traffic.
+const MAX_CRON_SNAPSHOT_RESTARTS = 1;
 
 const SIDEBAR_ISSUES_CHANGE_EVENT = "sidebar-issues-change";
 
@@ -68,9 +71,21 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       }
       const cron = createInitialCronState({ client, connected: true });
       const cronLoad = async () => {
-        await loadCronJobsPage(cron);
-        while (cron.cronJobsHasMore && !cron.cronError) {
-          await loadCronJobsPage(cron, { append: true });
+        await loadCronJobsPage(cron, { signal });
+        let snapshotRevision = cron.cronJobsSnapshotRevision;
+        let snapshotRestarts = 0;
+        while (cron.cronJobsHasMore && !cron.cronError && !signal.aborted) {
+          await loadCronJobsPage(cron, { append: true, signal });
+          if (signal.aborted) {
+            return;
+          }
+          if (cron.cronJobsSnapshotRevision !== snapshotRevision) {
+            snapshotRevision = cron.cronJobsSnapshotRevision;
+            snapshotRestarts += 1;
+            if (snapshotRestarts > MAX_CRON_SNAPSHOT_RESTARTS) {
+              return;
+            }
+          }
         }
         if (!signal.aborted) {
           this.cronJobs = cron.cronJobs;

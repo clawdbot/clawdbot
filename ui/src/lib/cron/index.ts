@@ -598,21 +598,26 @@ function queueCronJobsSnapshotRecovery(state: CronState, tableFilters: boolean) 
   state.cronJobsReloadPendingTableFilters = tableFilters;
 }
 
-async function drainPendingCronJobsReload(state: CronState) {
+async function drainPendingCronJobsReload(state: CronState, signal?: AbortSignal) {
   if (!state.cronJobsReloadPending) {
+    return;
+  }
+  if (signal?.aborted) {
+    state.cronJobsReloadPending = false;
+    state.cronJobsReloadPendingTableFilters = false;
     return;
   }
   const tableFilters = state.cronJobsReloadPendingTableFilters;
   state.cronJobsReloadPending = false;
   state.cronJobsReloadPendingTableFilters = false;
-  await loadCronJobsPage(state, { tableFilters });
+  await loadCronJobsPage(state, { tableFilters, signal });
 }
 
 export async function loadCronJobsPage(
   state: CronState,
-  opts?: { append?: boolean; tableFilters?: boolean },
+  opts?: { append?: boolean; tableFilters?: boolean; signal?: AbortSignal },
 ) {
-  if (!state.client || !state.connected) {
+  if (!state.client || !state.connected || opts?.signal?.aborted) {
     return;
   }
   const append = opts?.append === true;
@@ -634,7 +639,7 @@ export async function loadCronJobsPage(
   state.cronError = null;
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
-    const res = await state.client.request<CronJobsListResult>("cron.list", {
+    const params = {
       ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
       includeDisabled: state.cronJobsEnabledFilter === "all",
       includeDeliveryPreviews: false,
@@ -650,7 +655,12 @@ export async function loadCronJobsPage(
         : {}),
       sortBy: state.cronJobsSortBy,
       sortDir: state.cronJobsSortDir,
-    });
+    };
+    const res = opts?.signal
+      ? await state.client.request<CronJobsListResult>("cron.list", params, {
+          signal: opts.signal,
+        })
+      : await state.client.request<CronJobsListResult>("cron.list", params);
     const page = readCanonicalCronJobsPage(res, state.cronJobsLimit);
     if (
       append &&
@@ -677,14 +687,16 @@ export async function loadCronJobsPage(
       clearCronEditState(state);
     }
   } catch (err) {
-    state.cronError = String(err);
+    if (!opts?.signal?.aborted) {
+      state.cronError = String(err);
+    }
   } finally {
     if (append) {
       state.cronJobsLoadingMore = false;
     } else {
       state.cronLoading = false;
     }
-    await drainPendingCronJobsReload(state);
+    await drainPendingCronJobsReload(state, opts?.signal);
   }
 }
 
