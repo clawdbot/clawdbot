@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -16,10 +14,7 @@ import {
 } from "./worker-environments/device-provider.js";
 
 const DEVICE_ID = "revoked-device";
-
-async function createTempStateDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-startup-"));
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -27,7 +22,7 @@ afterEach(() => {
 
 describe("gateway worker environment startup", () => {
   it("binds device revocation to the persisted profile settings", async () => {
-    const stateDir = await createTempStateDir();
+    const stateDir = tempDirs.make("openclaw-worker-startup-");
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         const startup = await loadGatewayWorkerEnvironmentStartupState();
@@ -89,7 +84,6 @@ describe("gateway worker environment startup", () => {
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 });
