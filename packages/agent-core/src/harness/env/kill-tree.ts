@@ -6,7 +6,7 @@ const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
 const TASKKILL_COMPLETION_TIMEOUT_MS = 3000;
 
-type ProcessSnapshot = { pid: number; startTime: string | undefined };
+export type ProcessSnapshot = { pid: number; startTime: string | undefined };
 
 export type KillProcessTreeOptions = {
   graceMs?: number;
@@ -77,22 +77,23 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
 export function signalProcessTree(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
-  opts?: { detached?: boolean; onComplete?: () => void },
-): void {
+  opts?: { detached?: boolean; onComplete?: () => void; pidsToSignal?: ProcessSnapshot[] },
+): ProcessSnapshot[] | undefined {
   if (!Number.isFinite(pid) || pid <= 0) {
     opts?.onComplete?.();
-    return;
+    return undefined;
   }
 
   if (process.platform === "win32") {
     void signalProcessTreeWindowsAndWait(pid, signal).then(opts?.onComplete);
-    return;
+    return undefined;
   }
 
   const useGroupKill =
     opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
-  signalProcessTreeUnix(pid, signal, useGroupKill);
+  const snapshot = signalProcessTreeUnix(pid, signal, useGroupKill, opts?.pidsToSignal);
   opts?.onComplete?.();
+  return snapshot;
 }
 
 function normalizeGraceMs(value?: number): number {

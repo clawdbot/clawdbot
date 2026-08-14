@@ -6,7 +6,7 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../../plugin-sdk/windows-spawn.js";
-import { signalProcessTree } from "../../kill-tree.js";
+import { signalProcessTree, type ProcessSnapshot } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import {
   addSecretInputStdio,
@@ -428,18 +428,33 @@ export async function createChildAdapter(params: {
     return waitPromise;
   };
 
-  // The actual detachment of the spawned child can differ from `useDetached`:
   // when the detached spawn fails, `spawnWithFallback` retries with the
   // `no-detach` fallback (detached:false). In that case the child shares the
   // gateway's process group regardless of intent, so the kill must avoid
   // group-kill. (#71662 follow-up — caught by Greptile review)
   const childIsDetached = useDetached && !spawned.usedFallback;
+
+  let terminationSnapshot: ProcessSnapshot[] | undefined;
+
   const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
-    signalProcessTree(pid, signal, { detached: childIsDetached });
+    const snapshot = signalProcessTree(pid, signal, {
+      detached: childIsDetached,
+      pidsToSignal: signal === "SIGKILL" ? terminationSnapshot : undefined,
+    });
+    if (signal === "SIGTERM") {
+      terminationSnapshot = snapshot;
+    }
   };
   const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
     new Promise<void>((resolve) => {
-      signalProcessTree(pid, signal, { detached: childIsDetached, onComplete: resolve });
+      const snapshot = signalProcessTree(pid, signal, {
+        detached: childIsDetached,
+        pidsToSignal: signal === "SIGKILL" ? terminationSnapshot : undefined,
+        onComplete: resolve,
+      });
+      if (signal === "SIGTERM") {
+        terminationSnapshot = snapshot;
+      }
     });
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;

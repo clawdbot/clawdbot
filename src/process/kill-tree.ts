@@ -7,4 +7,5 @@ export {
   killProcessTree,
   signalProcessTree,
   type KillProcessTreeOptions,
+  type ProcessSnapshot,
 } from "../../packages/agent-core/src/harness/env/kill-tree.js";

@@ -387,6 +387,26 @@ describe("createChildAdapter", () => {
     expect(killMock).not.toHaveBeenCalled();
   });
 
+  it("retains the termination snapshot across sequential tree kills (#121108)", async () => {
+    const { adapter } = await createAdapterHarness({ pid: 5678 });
+    const snapshot = [{ pid: 5678, startTime: "123" }];
+    signalProcessTreeMock.mockReturnValueOnce(snapshot);
+
+    adapter.kill("SIGTERM");
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(
+      5678,
+      "SIGTERM",
+      expect.objectContaining({ pidsToSignal: undefined }),
+    );
+
+    adapter.kill("SIGKILL");
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(
+      5678,
+      "SIGKILL",
+      expect.objectContaining({ pidsToSignal: snapshot }),
+    );
+  });
+
   it("uses direct child.kill for non-SIGTERM and non-SIGKILL signals", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
 
