@@ -350,11 +350,10 @@ struct MacNodeHostWorkerTests {
             socketPath: "/private/test/cua.sock",
             binaryPath: "/Applications/OpenClaw.app/Contents/Resources/cua-driver")
         let endpointValue = try endpoint.environmentValue()
-        let inheritedKeys = [
-            CuaDriverWorkerEnvironment.endpoint,
-            CuaDriverWorkerEnvironment.familyPrefix + "SOCKET_PATH",
-            CuaDriverWorkerEnvironment.familyPrefix + "BINARY_PATH",
-        ]
+        let inheritedKeys = [CuaDriverWorkerEnvironment.endpoint] +
+            CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.flatMap {
+                [$0 + "SOCKET_PATH", $0 + "BINARY_PATH"]
+            }
         for key in inheritedKeys {
             setenv(key, "inherited", 1)
         }
@@ -366,7 +365,7 @@ struct MacNodeHostWorkerTests {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         test "$OPENCLAW_CUA_DRIVER_ENDPOINT" = "$1" || exit 41
-        test "$(env | grep -c '^OPENCLAW_CUA_DRIVER_')" = 1 || exit 42
+        test "$(env | grep -Ec '^(OPENCLAW_)?CUA_DRIVER_')" = 1 || exit 42
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         while IFS= read -r line; do :; done
         """
@@ -380,11 +379,10 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test func `unbound worker strips every inherited CUA endpoint value`() async throws {
-        let inheritedKeys = [
-            CuaDriverWorkerEnvironment.endpoint,
-            CuaDriverWorkerEnvironment.familyPrefix + "SOCKET_PATH",
-            CuaDriverWorkerEnvironment.familyPrefix + "BINARY_PATH",
-        ]
+        let inheritedKeys = [CuaDriverWorkerEnvironment.endpoint] +
+            CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.flatMap {
+                [$0 + "SOCKET_PATH", $0 + "BINARY_PATH"]
+            }
         for key in inheritedKeys {
             setenv(key, "inherited", 1)
         }
@@ -395,7 +393,7 @@ struct MacNodeHostWorkerTests {
         }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
-        test "$(env | grep -c '^OPENCLAW_CUA_DRIVER_')" = 0 || exit 41
+        test "$(env | grep -Ec '^(OPENCLAW_)?CUA_DRIVER_')" = 0 || exit 41
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         while IFS= read -r line; do :; done
         """

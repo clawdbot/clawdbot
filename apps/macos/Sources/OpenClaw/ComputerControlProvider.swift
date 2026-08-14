@@ -81,7 +81,7 @@ struct CuaDriverWorkerEndpoint: Encodable, Equatable, Sendable {
 
 enum CuaDriverWorkerEnvironment {
     static let endpoint = "OPENCLAW_CUA_DRIVER_ENDPOINT"
-    static let familyPrefix = String(endpoint.dropLast("ENDPOINT".count))
+    static let inheritedFamilyPrefixes = [String(endpoint.dropLast("ENDPOINT".count)), "CUA_DRIVER_"]
 }
 
 enum CuaDriverArtifact {

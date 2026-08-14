@@ -343,7 +343,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             return
         }
         var environment = ProcessInfo.processInfo.environment.filter { key, _ in
-            !key.hasPrefix(CuaDriverWorkerEnvironment.familyPrefix)
+            !CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.contains { key.hasPrefix($0) }
         }
         environment.merge(launch.environment, uniquingKeysWith: { _, explicit in explicit })
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
