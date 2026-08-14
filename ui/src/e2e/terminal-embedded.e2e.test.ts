@@ -13,6 +13,41 @@ const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCR
 const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it("opens a new dock terminal for a selection changed without navigation", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        assistantAgentId: "main",
+        defaultAgentId: "main",
+        featureMethods: ["terminal.open"],
+        methodResponses: {
+          "terminal.open": {
+            agentId: "research",
+            confined: false,
+            cwd: "/workspace/research",
+            sessionId: "terminal-selection-e2e",
+            shell: "/bin/bash",
+          },
+        },
+        terminalEnabled: true,
+      });
+
+      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("connect");
+      await page.evaluate(() => {
+        const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
+          runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
+        };
+        shell.runtime?.context?.agentSelection?.set("research");
+        window.dispatchEvent(
+          new CustomEvent("openclaw:terminal-toggle", { detail: { open: true } }),
+        );
+      });
+
+      const terminalOpen = await gateway.waitForRequest("terminal.open");
+      expect(terminalOpen.params).toMatchObject({ agentId: "research" });
+    });
+  });
+
   it("renders only the terminal with a tab-attached close control while native auth connects", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await page.addInitScript(() => {

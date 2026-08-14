@@ -256,6 +256,36 @@ afterEach(async () => {
 });
 
 describe("secret egress proxy", () => {
+  it("survives a client that resets a refused tunnel instead of crashing the Gateway", async () => {
+    // The proxy runs inside the Gateway process, so an unhandled socket 'error' would take
+    // the whole Gateway down. curl resets the connection after a 407, which is exactly this.
+    const proxyPort = Number(new URL(proxyEnv.HTTPS_PROXY as string).port);
+    const uncaught: Error[] = [];
+    const onUncaught = (error: Error) => uncaught.push(error);
+    process.on("uncaughtException", onUncaught);
+    try {
+      await new Promise<void>((resolve) => {
+        const socket = net.connect(proxyPort, "127.0.0.1", () => {
+          // No Proxy-Authorization: the proxy answers 407, then the peer resets abruptly.
+          socket.write("CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n");
+          setTimeout(() => {
+            socket.resetAndDestroy();
+            setTimeout(resolve, 150);
+          }, 50);
+        });
+        socket.on("error", () => {});
+      });
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
+
+    expect(uncaught).toEqual([]);
+    // The listener must still serve traffic after the reset.
+    const stillAlive = await rawConnect({ auth: basicProxyAuth(registeredPassword(proxyEnv)) });
+    expect(stillAlive.response).toContain("200 Connection Established");
+    stillAlive.socket.destroy();
+  });
+
   it.each([
     { label: "missing", auth: undefined, expectedReason: "missing-proxy-auth" },
     {

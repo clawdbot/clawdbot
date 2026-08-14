@@ -65,6 +65,7 @@ type BackupVerifyResult = {
   runtimeVersion: string;
   assetCount: number;
   entryCount: number;
+  symlinkCount: number;
 };
 
 type ArchiveEntry = {
@@ -311,6 +312,34 @@ function verifyHardlinkTargetsAgainstArchiveRoot(
   }
 }
 
+function verifySymbolicLinkTargetsAgainstArchiveRoot(
+  symbolicLinks: Array<{ entryPath: string; linkpath: string }>,
+  archiveRoot: string,
+): void {
+  const normalizedRoot = normalizeArchiveRoot(archiveRoot);
+  for (const link of symbolicLinks) {
+    if (link.linkpath.startsWith("/") || WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE.test(link.linkpath)) {
+      throw new Error(
+        `Archive symbolic link target must be relative: ${link.entryPath} -> ${link.linkpath}`,
+      );
+    }
+    if (link.linkpath.includes("\\")) {
+      throw new Error(
+        `Archive symbolic link target must use forward slashes: ${link.entryPath} -> ${link.linkpath}`,
+      );
+    }
+    const entryPath = normalizeArchivePath(link.entryPath, "Archive symbolic link path");
+    const targetPath = path.posix.normalize(
+      path.posix.join(path.posix.dirname(entryPath), link.linkpath),
+    );
+    if (!isArchivePathWithin(targetPath, normalizedRoot)) {
+      throw new Error(
+        `Archive symbolic link target is outside the declared archive root: ${link.entryPath} -> ${link.linkpath}`,
+      );
+    }
+  }
+}
+
 function formatResult(result: BackupVerifyResult): string {
   return [
     `Backup archive OK: ${result.archivePath}`,
@@ -319,6 +348,7 @@ function formatResult(result: BackupVerifyResult): string {
     `Runtime version: ${result.runtimeVersion}`,
     `Assets verified: ${result.assetCount}`,
     `Archive entries scanned: ${result.entryCount}`,
+    `Symbolic links checked: ${result.symlinkCount}`,
   ].join("\n");
 }
 
@@ -732,6 +762,14 @@ export async function verifyBackupArchive(archive: string): Promise<BackupVerify
         `Archive hardlink target for ${entry.path}`,
       ),
     }));
+  const symbolicLinks = rawEntries
+    .filter((entry) => entry.type === "SymbolicLink")
+    .map((entry) => {
+      if (!entry.linkpath) {
+        throw new Error(`Archive symbolic link is missing its target: ${entry.path}`);
+      }
+      return { entryPath: entry.path, linkpath: entry.linkpath };
+    });
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
   const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
@@ -761,6 +799,7 @@ export async function verifyBackupArchive(archive: string): Promise<BackupVerify
     manifest.archiveRoot,
     normalizedEntrySet,
   );
+  verifySymbolicLinkTargetsAgainstArchiveRoot(symbolicLinks, manifest.archiveRoot);
   await verifySqliteSnapshots({ archivePath, entries, manifest });
 
   const result: BackupVerifyResult = {
@@ -771,6 +810,7 @@ export async function verifyBackupArchive(archive: string): Promise<BackupVerify
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
+    symlinkCount: symbolicLinks.length,
   };
 
   return result;
