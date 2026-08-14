@@ -1,4 +1,6 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
+import fsp from "node:fs/promises";
+import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -277,8 +279,21 @@ async function acquirePreparedModelRuntimeLease(
     catalogMode?: PreparedModelRuntimeCatalogMode;
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
+  const workspacePluginRootPresent =
+    provenance === "run" && rawInput.workspaceDir
+      ? await fsp
+          .stat(path.join(rawInput.workspaceDir, ".openclaw", "extensions"))
+          .then(() => true)
+          .catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT" || error.code === "ENOTDIR") {
+              return false;
+            }
+            throw error;
+          })
+      : rawInput.workspacePluginRootPresent;
   let input = normalizePreparedModelRuntimeInput({
     ...rawInput,
+    ...(workspacePluginRootPresent === undefined ? {} : { workspacePluginRootPresent }),
     preserveWorkspaceDirOnRefresh:
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
   });

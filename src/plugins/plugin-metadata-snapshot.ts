@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -364,9 +362,6 @@ export function resolvePluginMetadataSnapshot(
         allowWorkspaceScopedSnapshot: true,
       });
       const targetWorkspace = params.workspaceDir;
-      const workspacePluginRoot = targetWorkspace
-        ? path.join(targetWorkspace, ".openclaw", "extensions")
-        : undefined;
       const hasWorkspacePlugin = lifecycleSnapshot?.index.plugins.some(
         (plugin) => plugin.origin === "workspace",
       );
@@ -377,8 +372,7 @@ export function resolvePluginMetadataSnapshot(
         targetWorkspace &&
         targetWorkspace !== lifecycleSnapshot.workspaceDir &&
         !hasWorkspacePlugin &&
-        workspacePluginRoot &&
-        !fs.existsSync(workspacePluginRoot)
+        params.workspacePluginRootPresent === false
       ) {
         const index = Object.freeze({
           ...lifecycleSnapshot.index,

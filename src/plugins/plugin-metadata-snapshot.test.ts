@@ -1,6 +1,5 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
@@ -22,8 +21,6 @@ const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForIns
       loadPluginManifestRegistryForInstalledIndex: vi.fn(),
     };
   });
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./plugin-registry-snapshot.js")>();
@@ -162,8 +159,8 @@ describe("plugin metadata snapshot", () => {
 
   it("reuses workspace-independent lifecycle metadata for a new workspace", () => {
     const config = {};
-    const sourceWorkspace = tempDirs.make("openclaw-plugin-metadata-source-");
-    const targetWorkspace = tempDirs.make("openclaw-plugin-metadata-target-");
+    const sourceWorkspace = "/workspace/source";
+    const targetWorkspace = "/workspace/target";
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     index.workspaceDir = sourceWorkspace;
@@ -190,6 +187,7 @@ describe("plugin metadata snapshot", () => {
       config,
       env: {},
       workspaceDir: targetWorkspace,
+      workspacePluginRootPresent: false,
     });
 
     expect(resolved).not.toBe(source);
@@ -198,6 +196,14 @@ describe("plugin metadata snapshot", () => {
     expect(resolved.plugins).toBe(source.plugins);
     expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+
+    resolvePluginMetadataSnapshot({
+      config,
+      env: {},
+      workspaceDir: targetWorkspace,
+      workspacePluginRootPresent: true,
+    });
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
   it("rewalks collection-bearing manifest graphs after prototype mutation", () => {

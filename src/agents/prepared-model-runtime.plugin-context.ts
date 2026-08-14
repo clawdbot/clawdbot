@@ -63,6 +63,9 @@ export function prepareOwnedPluginLoadContext(
     config: input.config,
     env,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    ...(input.workspacePluginRootPresent === undefined
+      ? {}
+      : { workspacePluginRootPresent: input.workspacePluginRootPresent }),
   });
   preparePluginLoadContext(input, env, registry, metadataSnapshot);
   return metadataSnapshot;
