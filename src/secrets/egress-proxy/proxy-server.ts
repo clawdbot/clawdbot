@@ -488,6 +488,12 @@ export async function startSecretEgressProxyServer(params: {
   proxy.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
+    // The proxy runs inside the Gateway process, so an unhandled socket 'error' would
+    // take the Gateway down. Clients legitimately reset refused tunnels (curl does this
+    // after a 407), so peer resets are expected and must stay local to the socket.
+    socket.on("error", () => {
+      socket.destroy();
+    });
   });
   proxy.on("connect", (request, clientSocket, head) => {
     void (async () => {
