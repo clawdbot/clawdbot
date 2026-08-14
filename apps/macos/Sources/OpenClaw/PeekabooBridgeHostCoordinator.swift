@@ -90,7 +90,12 @@ final class PeekabooBridgeHostCoordinator {
                     socketPath: socketPath,
                     allowlistedTeams: Self.allowedClientTeamIDs,
                     allowlistedBundles: Self.allowedClientBundleIDs,
-                    hostKind: .gui))
+                    hostKind: .gui),
+                snapshotOptions: .init(
+                    snapshotValidityWindow: 600,
+                    maxSnapshots: 50,
+                    deleteArtifactsOnCleanup: false,
+                    copyArtifactsOnStore: true))
         }
         self.aliasManager = LegacyPeekabooSocketAliasManager(
             targetSocketPath: socketPath,
