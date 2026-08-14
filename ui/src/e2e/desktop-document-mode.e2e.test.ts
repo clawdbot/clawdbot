@@ -82,6 +82,7 @@ async function startDesktopDocument(
     expiresAtMs: 60_000,
     control: false,
   },
+  sessions?: unknown[],
 ) {
   await page.setViewportSize({ width: 390, height: 844 });
   const gateway = await installMockGateway(page, {
@@ -89,6 +90,14 @@ async function startDesktopDocument(
     featureMethods: ["desktop.observe", "environments.list", "openclaw.setup.detect"],
     methodResponses: {
       "desktop.observe": desktopObserve,
+      ...(sessions
+        ? {
+            "sessions.list": {
+              count: sessions.length,
+              sessions,
+            },
+          }
+        : {}),
       "openclaw.setup.detect": {
         candidates: [],
         manualProviders: [],
@@ -110,8 +119,9 @@ async function openDesktopDocument(
   route: string,
   environments: unknown[],
   desktopObserve?: unknown,
+  sessions?: unknown[],
 ) {
-  const document = await startDesktopDocument(page, route, desktopObserve);
+  const document = await startDesktopDocument(page, route, desktopObserve, sessions);
   await document.gateway.resolveDeferred("environments.list", { environments });
   return document;
 }
@@ -161,6 +171,110 @@ suite.define(() => {
         .waitFor();
       await panel.getByText("Desktop sources", { exact: true }).waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+    });
+  });
+
+  it("resolves a session to its observable machine and auto-connects", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:mobile-session";
+      const { gateway, panel } = await openDesktopDocument(
+        page,
+        `?view=desktop&session=${encodeURIComponent(sessionKey)}`,
+        [
+          gatewayEnvironment,
+          {
+            id: "node:workstation",
+            type: "node",
+            status: "available",
+            desktop: true,
+          },
+        ],
+        undefined,
+        [
+          {
+            key: sessionKey,
+            kind: "direct",
+            updatedAt: 1,
+            execNode: "workstation",
+          },
+        ],
+      );
+
+      const request = await gateway.waitForRequest("desktop.observe");
+      expect(request.params).toEqual({
+        source: { kind: "node", nodeId: "workstation" },
+        control: false,
+      });
+      await panel.locator("[data-test-remote-desktop='true']").waitFor();
+      await mkdir(artifactDirectory, { recursive: true });
+      await page.screenshot({
+        path: path.join(artifactDirectory, "session-connected-390x844.png"),
+        fullPage: false,
+      });
+    });
+  });
+
+  it("lets an explicit source win over the session machine", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:mobile-session";
+      const { gateway } = await openDesktopDocument(
+        page,
+        `?view=desktop&source=gateway&session=${encodeURIComponent(sessionKey)}`,
+        [
+          gatewayEnvironment,
+          {
+            id: "node:workstation",
+            type: "node",
+            status: "available",
+            desktop: true,
+          },
+        ],
+        undefined,
+        [
+          {
+            key: sessionKey,
+            kind: "direct",
+            updatedAt: 1,
+            execNode: "workstation",
+          },
+        ],
+      );
+
+      const request = await gateway.waitForRequest("desktop.observe");
+      expect(request.params).toEqual({ source: { kind: "host" }, control: false });
+      expect(
+        (await gateway.getRequests("sessions.list")).filter(
+          (candidate) =>
+            typeof candidate.params === "object" &&
+            candidate.params !== null &&
+            "search" in candidate.params,
+        ),
+      ).toHaveLength(0);
+    });
+  });
+
+  it("falls back to the picker with a notice for an unknown session", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const { gateway, panel } = await openDesktopDocument(
+        page,
+        "?view=desktop&session=agent%3Amain%3Amissing",
+        [gatewayEnvironment],
+        undefined,
+        [],
+      );
+
+      await panel
+        .getByText("The requested desktop source is unavailable. Choose another source.", {
+          exact: true,
+        })
+        .waitFor();
+      await panel.getByText("Desktop sources", { exact: true }).waitFor();
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+      await mkdir(artifactDirectory, { recursive: true });
+      await page.screenshot({
+        path: path.join(artifactDirectory, "unknown-session-picker-390x844.png"),
+        fullPage: false,
+      });
     });
   });
 

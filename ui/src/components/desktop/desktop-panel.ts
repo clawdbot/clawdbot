@@ -8,6 +8,8 @@ import type {
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { resolveDesktopDocumentTarget } from "../../app/desktop-document-mode.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -57,6 +59,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ type: Boolean }) suppressed = false;
   @property({ type: Boolean }) documentMode = false;
   @property({ attribute: false }) documentSource: string | null = null;
+  @property({ attribute: false }) documentSession: string | null = null;
+  @property({ attribute: false }) resolveDocumentSession:
+    | ((sessionKey: string) => Promise<GatewaySessionRow | undefined>)
+    | null = null;
   @property({ type: Boolean }) documentControl = false;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
 
@@ -132,13 +138,14 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         void this.refreshEnvironments();
       }
     }
-    if (changed.has("documentSource")) {
+    if (changed.has("documentSource") || changed.has("documentSession")) {
       this.documentSourceResolved = false;
     }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
     const documentPresentationChanged =
       changed.has("documentMode") ||
       changed.has("documentSource") ||
+      changed.has("documentSession") ||
       changed.has("documentControl");
     if (this.documentMode && (gatewayAvailabilityChanged || documentPresentationChanged)) {
       if (!this.available) {
@@ -239,8 +246,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     } catch (error) {
       if (operationId === this.operationId) {
         this.errorText = t("desktop.errors.listFailed", { error: formatUiError(error) });
-        if (this.documentMode && this.documentSource !== null) {
-          this.environmentId = this.documentSource;
+        if (this.documentMode && (this.documentSource !== null || this.documentSession !== null)) {
+          this.environmentId = this.documentSource ?? this.documentSession;
           this.state = "inventory-error";
         }
       }
@@ -260,8 +267,30 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       return;
     }
     this.documentSourceResolved = true;
-    const requestedSource = this.documentSource;
+    let session: GatewaySessionRow | undefined;
+    if (this.documentSource === null && this.documentSession !== null) {
+      try {
+        session = await this.resolveDocumentSession?.(this.documentSession);
+      } catch {
+        session = undefined;
+      }
+      if (operationId !== this.operationId) {
+        return;
+      }
+    }
+    const requestedSource = resolveDesktopDocumentTarget(
+      {
+        source: this.documentSource,
+        session: this.documentSession,
+        control: this.documentControl,
+      },
+      session,
+    );
     if (requestedSource === null) {
+      if (this.documentSession !== null) {
+        this.state = "picker";
+        this.noticeText = t("desktop.sourceUnavailable");
+      }
       return;
     }
     if (!this.environments.some((environment) => environment.id === requestedSource)) {

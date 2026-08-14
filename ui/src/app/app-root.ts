@@ -89,6 +89,20 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private loginGatewaySource: ApplicationContext["gateway"] | null = null;
   private loginConnectionClient: GatewayBrowserClient | null = null;
 
+  private readonly resolveDesktopDocumentSession = async (sessionKey: string) => {
+    const context = this.context;
+    const normalizedKey = sessionKey.trim();
+    if (!context || !normalizedKey) {
+      return undefined;
+    }
+    const result = await context.sessions.list({
+      archivedFilter: "all",
+      limit: 5,
+      search: normalizedKey,
+    });
+    return result?.sessions.find((row) => row.key === normalizedKey);
+  };
+
   private get context(): ApplicationContext<RouteId> | undefined {
     return this.runtime?.context;
   }
@@ -250,6 +264,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .available=${desktopAvailable}
           .documentMode=${true}
           .documentSource=${this.desktopOptions.source}
+          .documentSession=${this.desktopOptions.session}
+          .resolveDocumentSession=${this.resolveDesktopDocumentSession}
           .documentControl=${this.desktopOptions.control}
           .onDocumentClose=${() => {
             if (globalThis.history.length > 1) {
