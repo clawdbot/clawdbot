@@ -184,19 +184,16 @@ async function copyClaimCrossStore(params: {
   return destination.found ? destination.value : undefined;
 }
 
-async function deleteExpectedClaim(claim: SessionClaim, env: NodeJS.ProcessEnv): Promise<boolean> {
-  const fresh = withOpenClawAgentDatabaseReadOnly(
-    (database) => readClaim(database, claim.store, claim.key, claim.canonicalKey),
-    { agentId: claim.store.databaseAgentId, env, path: claim.store.path },
-  );
-  if (!fresh.found || !fresh.value || !claimsMatch(fresh.value, claim)) {
-    return false;
-  }
+async function deleteExpectedClaim(claim: SessionClaim): Promise<boolean> {
   const result = await deleteSessionEntryLifecycle({
     agentId: parseAgentSessionKey(claim.key)?.agentId,
     archiveTranscript: false,
     deleteTranscriptWithoutArchive: true,
     expectedEntry: claim.entry,
+    expectedTranscript: {
+      sessionId: claim.entry.sessionId,
+      eventJson: claim.eventRows.map((row) => row.eventJson),
+    },
     requireWriteSuccess: true,
     storePath: claim.store.path,
     target: { canonicalKey: claim.key, storeKeys: [claim.key] },
@@ -348,7 +345,7 @@ export async function processIdenticalClaims(params: {
     if (samePhysicalStore(claim.store, params.destination)) {
       continue;
     }
-    if (!(await deleteExpectedClaim(claim, params.env))) {
+    if (!(await deleteExpectedClaim(claim))) {
       return {
         kind: "divergent-canonical",
         canonicalKey: params.canonicalKey,
@@ -435,7 +432,7 @@ export async function repairDivergentClaims(params: {
             store: params.destination,
             winner: canonical,
           })
-        : await deleteExpectedClaim(claim, params.env);
+        : await deleteExpectedClaim(claim);
       if (!cleaned) {
         return { quarantinedKeys, resolved: false };
       }

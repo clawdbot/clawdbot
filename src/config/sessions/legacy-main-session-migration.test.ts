@@ -627,6 +627,34 @@ describe("legacy main session migration", () => {
     ).rejects.toThrow(`cannot read legacy session store ${unreadablePath}`);
   });
 
+  it("keeps automatic mode report-only while a legacy JSON candidate blocks inspection", async () => {
+    const fixture = createFixture();
+    const mainPath = databasePath(fixture.stateDir, "main");
+    seedClaim({ databaseAgentId: "main", databasePath: mainPath, key: "agent:main:chat" });
+    const jsonPath = path.join(fixture.stateDir, "agents", "main", "sessions", "sessions.json");
+    fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
+    fs.writeFileSync(jsonPath, "{}\n");
+
+    const result = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "automatic",
+    });
+
+    expect(outcomeKinds(result)).toContain("legacy-json-store");
+    expect(result.changes).toEqual([]);
+    expect(
+      readClaim({ databaseAgentId: "main", databasePath: mainPath, key: "agent:main:chat" }),
+    ).toBeDefined();
+    expect(
+      readClaim({
+        databaseAgentId: "ops",
+        databasePath: databasePath(fixture.stateDir, "ops"),
+        key: "agent:ops:chat",
+      }),
+    ).toBeUndefined();
+  });
+
   it("dedupes symlinked state roots by physical database identity", async () => {
     const fixture = createFixture();
     fixture.cfg = {

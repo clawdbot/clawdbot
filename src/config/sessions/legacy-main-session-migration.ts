@@ -60,6 +60,7 @@ type LedgerReport = {
   mainKey: string;
   ownerAgentId: string;
   outcomes: LegacyMainSessionMigrationOutcome[];
+  sourceLayout: string[];
   status: "complete";
 };
 
@@ -116,17 +117,54 @@ function inspectPath(pathname: string): "missing" | "present" {
   return "present";
 }
 
+function resolveMissingPhysicalPath(pathname: string): string {
+  let current = path.resolve(pathname);
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...suffix);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return path.resolve(current, ...suffix);
+      }
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function resolvePhysicalPathIdentity(pathname: string): string {
+  try {
+    const stat = fs.statSync(pathname, { bigint: true });
+    if (!stat.isFile()) {
+      throw new Error(`session store is not a regular file: ${pathname}`);
+    }
+    return `file:${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    return `missing:${resolveMissingPhysicalPath(pathname)}`;
+  }
+}
+
+type ResolvedPhysicalStores = {
+  jsonPaths: string[];
+  stores: PhysicalStore[];
+  unreadable: LegacyMainSessionMigrationOutcome[];
+};
+
 function resolvePhysicalStores(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   legacyAgentId: string;
   mode: LegacyMainSessionMigrationMode;
   ownerAgentId: string;
-}): {
-  jsonPaths: string[];
-  stores: PhysicalStore[];
-  unreadable: LegacyMainSessionMigrationOutcome[];
-} {
+}): ResolvedPhysicalStores {
   const logicalTargets = [
     ...resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, { env: params.env }),
     ...resolveAgentSessionStoreTargetsSync(params.cfg, params.legacyAgentId, { env: params.env }),
@@ -162,6 +200,7 @@ function resolvePhysicalStores(params: {
         databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
         path: resolved.path,
       };
+      resolvePhysicalPathIdentity(physical.path);
       addPhysicalStore(stores, physical);
     } catch (error) {
       if (params.mode === "doctor-fix") {
@@ -180,6 +219,17 @@ function resolvePhysicalStores(params: {
     }
   }
   return { jsonPaths: [...jsonPaths], stores, unreadable };
+}
+
+function resolveSourceLayout(resolved: ResolvedPhysicalStores): string[] {
+  return [
+    ...new Set([
+      ...resolved.stores.map(
+        (store) => `sqlite:${store.databaseAgentId}:${resolvePhysicalPathIdentity(store.path)}`,
+      ),
+      ...resolved.jsonPaths.map((pathname) => `json:${resolvePhysicalPathIdentity(pathname)}`),
+    ]),
+  ].toSorted();
 }
 
 function readClaimsFromStore(params: {
@@ -246,6 +296,8 @@ function readLedger(env: NodeJS.ProcessEnv): { report: LedgerReport; status: str
             typeof parsed.mainKey !== "string" ||
             typeof parsed.ownerAgentId !== "string" ||
             !Array.isArray(parsed.outcomes) ||
+            !Array.isArray(parsed.sourceLayout) ||
+            parsed.sourceLayout.some((entry) => typeof entry !== "string") ||
             parsed.status !== "complete"
           ) {
             return undefined;
@@ -270,7 +322,9 @@ function ledgerMatches(
     ledger.report.status === "complete" &&
     ledger.report.legacyAgentId === identity.legacyAgentId &&
     ledger.report.ownerAgentId === identity.ownerAgentId &&
-    ledger.report.mainKey === identity.mainKey
+    ledger.report.mainKey === identity.mainKey &&
+    ledger.report.sourceLayout.length === identity.sourceLayout.length &&
+    ledger.report.sourceLayout.every((entry, index) => entry === identity.sourceLayout[index])
   );
 }
 
@@ -382,32 +436,6 @@ async function migrateLegacyMainSessionKeysInternal(params: {
     };
   }
   const ownerAgentId = arming.ownerAgentId;
-  const identity = { legacyAgentId, mainKey, ownerAgentId };
-  try {
-    const ledger = readLedger(env);
-    if (ledgerMatches(ledger, identity)) {
-      return {
-        ...base,
-        armed: true,
-        complete: true,
-        ownerAgentId,
-        outcomes: [{ kind: "no-legacy-rows", detail: "matching completed ledger" }],
-      };
-    }
-  } catch (error) {
-    if (params.mode === "doctor-fix") {
-      throw error;
-    }
-    return {
-      ...base,
-      armed: true,
-      complete: false,
-      ownerAgentId,
-      outcomes: [{ kind: "store-unreadable", detail: String(error) }],
-      warnings: [`session: could not read the legacy-main migration ledger: ${String(error)}`],
-    };
-  }
-
   const resolved = resolvePhysicalStores({
     cfg: params.cfg,
     env,
@@ -434,6 +462,31 @@ async function migrateLegacyMainSessionKeysInternal(params: {
       `session: deferred legacy-main session migration for JSON store ${pathname}; run openclaw doctor --fix`,
     );
   }
+  const identityBase = { legacyAgentId, mainKey, ownerAgentId };
+  const identity = { ...identityBase, sourceLayout: resolveSourceLayout(resolved) };
+  if (params.mode !== "doctor-fix" && outcomes.length === 0) {
+    try {
+      const ledger = readLedger(env);
+      if (ledgerMatches(ledger, identity)) {
+        return {
+          ...base,
+          armed: true,
+          complete: true,
+          ownerAgentId,
+          outcomes: [{ kind: "no-legacy-rows", detail: "matching completed ledger" }],
+        };
+      }
+    } catch (error) {
+      return {
+        ...base,
+        armed: true,
+        complete: false,
+        ownerAgentId,
+        outcomes: [{ kind: "store-unreadable", detail: String(error) }],
+        warnings: [`session: could not read the legacy-main migration ledger: ${String(error)}`],
+      };
+    }
+  }
 
   const allLegacy: SessionClaim[] = [];
   const allCanonical: SessionClaim[] = [];
@@ -452,6 +505,10 @@ async function migrateLegacyMainSessionKeysInternal(params: {
       warnings.push(`session: could not inspect ${store.path}: ${String(error)}`);
     }
   }
+  const inspectionBlocked = outcomes.some(
+    (outcome) => outcome.kind === "legacy-json-store" || outcome.kind === "store-unreadable",
+  );
+  const operationMode = params.mode === "automatic" && inspectionBlocked ? "detect" : params.mode;
 
   const destinationLogical = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: ownerAgentId,
@@ -552,7 +609,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
       canonicalKey,
       destination,
       env,
-      mode: params.mode,
+      mode: operationMode,
     });
     outcomes.push(outcome);
     if (outcome.kind === "divergent-aliases" || outcome.kind === "divergent-canonical") {
@@ -572,7 +629,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
   );
   const complete = !blocking;
   const changes =
-    params.mode === "detect"
+    operationMode === "detect"
       ? []
       : outcomes.flatMap((outcome) =>
           outcome.kind === "migrated-in-place" ||
@@ -588,7 +645,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
   if (complete && params.mode !== "detect") {
     writeLedger({
       env,
-      identity,
+      identity: { ...identityBase, sourceLayout: resolveSourceLayout(resolved) },
       now: params.now?.() ?? Date.now(),
       outcomes,
       stateDir: resolveStateDir(env),
