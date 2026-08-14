@@ -1,4 +1,3 @@
-// Health snapshot tests cover channel, session, runtime, and gateway health snapshot construction.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -478,6 +477,7 @@ describe("collectGatewayHealthSnapshot", () => {
     buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
     probeTelegramAccountForTestOverride = undefined;
     listHealthSessionEntriesCalls = [];
+    testStore = {};
     healthPluginsForTest = [createTelegramHealthPlugin()];
     setActivePluginRegistry(
       createTestRegistry([
@@ -496,7 +496,6 @@ describe("collectGatewayHealthSnapshot", () => {
       session: { store: "/tmp/x" },
       channels: { telegram: { botToken: "123:test" } },
     };
-    testStore = {};
     const timeouts: number[] = [];
     probeTelegramAccountForTestOverride = async (_account, timeoutMs) => {
       timeouts.push(timeoutMs);

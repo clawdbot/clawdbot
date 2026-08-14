@@ -46,6 +46,7 @@ import {
 } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
+import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -354,6 +355,7 @@ function createMinimalRun(params?: {
   sessionCtx?: Partial<TemplateContext>;
   sourceTurnId?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
+  bindActiveAuthority?: boolean;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -408,6 +410,12 @@ function createMinimalRun(params?: {
       ...params?.runOverrides,
     },
   } as unknown as FollowupRun;
+  const activeOperation = replyRunRegistry.get(sessionKey);
+  if (activeOperation && params?.bindActiveAuthority !== false) {
+    activeOperation.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(followupRun),
+    );
+  }
 
   return {
     followupRun,
@@ -524,6 +532,107 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
+  it("queues instead of steering when privilege facts differ on the active route", async () => {
+    const activeRoute = { provider: "openai", model: "gpt-fallback" };
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      bindActiveAuthority: false,
+    });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.bindToolAuthorityRoute(activeRoute);
+    active.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(
+        {
+          ...followupRun,
+          run: {
+            ...followupRun.run,
+            runtimePluginToolGrant: {
+              pluginId: "workboard",
+              toolNames: ["workboard_complete"],
+            },
+          },
+        },
+        activeRoute,
+      ),
+    );
+    active.setPhase("running");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    active.complete();
+  });
+
+  it("offers a route-only mismatch to the pending-input owner", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const activeRoute = { provider: "openai", model: "gpt-fallback" };
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      bindActiveAuthority: false,
+    });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.bindToolAuthorityRoute(activeRoute);
+    active.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(followupRun, activeRoute),
+    );
+    active.setPhase("running");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+      "session",
+      "hello",
+      expect.objectContaining({
+        pendingInputAuthorityFingerprint: active.toolAuthorityFingerprint,
+      }),
+    );
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    active.complete();
+  });
+
+  it("drains an authority-mismatched turn after its provided operation clears", async () => {
+    const provided = createReplyOperation({
+      sessionKey: "agent:main:telegram:slash:source",
+      sessionId: "provided-session",
+      resetTriggered: false,
+    });
+    provided.bindToolAuthorityFingerprint("different-authority");
+    provided.setPhase("running");
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      replyOperation: provided,
+      bindActiveAuthority: false,
+    });
+    const image = { type: "image" as const, data: "queued", mimeType: "image/png" };
+    followupRun.images = [image];
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    provided.complete();
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
+    await requireScheduledFollowupRunner()(followupRun);
+    expect(mockCallArgs(state.runEmbeddedAgentMock, "queued image drain")[0]).toMatchObject({
+      images: [image],
+    });
+  });
+
   it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const active = createReplyOperation({

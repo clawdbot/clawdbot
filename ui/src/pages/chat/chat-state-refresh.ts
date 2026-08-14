@@ -3,10 +3,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import {
-  areUiSessionKeysEquivalent,
-  resolveUiDefaultAgentId,
-} from "../../lib/sessions/session-key.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
@@ -181,11 +178,12 @@ async function refreshCompatibilityModelCatalog(
   request: ChatMetadataRequest,
   opts?: { refresh?: boolean },
 ) {
-  const agentId = canUseCompatibilityModelCatalog(request.host, request.agentId)
-    ? undefined
-    : request.agentId?.trim() || undefined;
+  const agentId = request.agentId?.trim();
+  if (!agentId) {
+    return;
+  }
   const models = await loadModels(request.client, {
-    ...(agentId ? { agentId } : {}),
+    agentId,
     ...(opts?.refresh ? { refresh: true } : { preparedOnly: true }),
   });
   if (ownsChatMetadataRequest(request)) {
@@ -200,13 +198,6 @@ async function refreshCompatibilityCommands(request: ChatMetadataRequest) {
     agentId: request.agentId,
     shouldApply: () => ownsChatMetadataRequest(request),
   });
-}
-
-function canUseCompatibilityModelCatalog(
-  host: ChatPageHost,
-  agentId: string | null | undefined,
-): boolean {
-  return agentId === resolveUiDefaultAgentId(host);
 }
 
 async function refreshMissingChatMetadata(
@@ -318,7 +309,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   host.requestUpdate?.();
   try {
     const models = await loadModels(client, {
-      ...(agentId ? { agentId } : {}),
+      agentId,
       rejectOnFailure: true,
     });
     if (ownsRequest()) {

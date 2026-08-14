@@ -9,12 +9,14 @@ import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
@@ -52,11 +54,18 @@ export type CompactEmbeddedAgentSessionParams = {
   groupChannel?: string | null;
   /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
   groupSpace?: string | null;
+  memberRoleIds?: string[];
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
   inputProvenance?: InputProvenance;
   /** Consumed in-process subagent-completion capability; never derived from public input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  toolsAllow?: string[];
+  disableTools?: boolean;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-resolved ambient native-tool boundary for this compaction operation. */
+  nativeToolSurface?: "unrestricted" | "host-isolated";
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;

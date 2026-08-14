@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCuaComputerCommands } from "./commands.js";
+import { createCuaComputerProvider } from "./commands.js";
 import {
   ClickButton,
   ScrollDirection,
@@ -68,25 +68,25 @@ function driver() {
   };
 }
 
-function commands(session: CuaDriverSession) {
-  return createCuaComputerCommands({
+async function execution(session: CuaDriverSession) {
+  return await createCuaComputerProvider({
     platform: "linux",
     driver: session,
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
     },
-  });
+  }).openExecution({});
 }
 
-describe("cua-computer direct SDK commands", () => {
+describe("cua-computer provider", () => {
   it("uses one typed session for snapshot and frame-authorized click", async () => {
     const { session, getDesktopState, getScreenSize, click } = driver();
-    const [snapshot, act] = commands(session);
-    const screen = JSON.parse(await snapshot!.handle('{"format":"png","maxWidth":100}')) as {
+    const computer = await execution(session);
+    const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
       displayFrameId: string;
       width: number;
     };
-    await act!.handle(
+    await computer.act(
       JSON.stringify({
         action: "left_click",
         displayFrameId: screen.displayFrameId,
@@ -110,9 +110,9 @@ describe("cua-computer direct SDK commands", () => {
 
   it("maps scroll and key through typed SDK enums", async () => {
     const { session, typeText, pressKey } = driver();
-    const [, act] = commands(session);
-    await act!.handle('{"action":"type","text":"hello"}');
-    await act!.handle('{"action":"key","keys":"ctrl+enter"}');
+    const computer = await execution(session);
+    await computer.act('{"action":"type","text":"hello"}');
+    await computer.act('{"action":"key","keys":"ctrl+enter"}');
     expect(typeText).toHaveBeenCalledWith("hello", undefined);
     expect(pressKey).toHaveBeenCalledWith({ key: "enter", modifiers: ["ctrl"] }, undefined);
     expect(ScrollDirection.Down).toBeTypeOf("number");
@@ -120,14 +120,14 @@ describe("cua-computer direct SDK commands", () => {
 
   it("maps all remaining projected desktop actions through direct SDK methods", async () => {
     const { session, scroll, moveCursor, drag } = driver();
-    const [snapshot, act] = commands(session);
-    const screen = JSON.parse(await snapshot!.handle('{"format":"png","maxWidth":100}')) as {
+    const computer = await execution(session);
+    const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
       displayFrameId: string;
       width: number;
     };
     const frame = { displayFrameId: screen.displayFrameId, refWidth: screen.width };
 
-    await act!.handle(
+    await computer.act(
       JSON.stringify({
         action: "scroll",
         ...frame,
@@ -137,8 +137,8 @@ describe("cua-computer direct SDK commands", () => {
         scrollAmount: 4,
       }),
     );
-    await act!.handle(JSON.stringify({ action: "mouse_move", ...frame, x: 11, y: 21 }));
-    await act!.handle(
+    await computer.act(JSON.stringify({ action: "mouse_move", ...frame, x: 11, y: 21 }));
+    await computer.act(
       JSON.stringify({
         action: "left_click_drag",
         ...frame,
@@ -169,13 +169,13 @@ describe("cua-computer direct SDK commands", () => {
       errorCode: "desktop_unavailable",
       text: "desktop input is unavailable",
     });
-    const [snapshot, act] = commands(session);
-    const screen = JSON.parse(await snapshot!.handle('{"format":"png","maxWidth":100}')) as {
+    const computer = await execution(session);
+    const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
       displayFrameId: string;
       width: number;
     };
     await expect(
-      act!.handle(
+      computer.act(
         JSON.stringify({
           action: "left_click",
           displayFrameId: screen.displayFrameId,
@@ -189,14 +189,14 @@ describe("cua-computer direct SDK commands", () => {
 
   it("rejects a mismatched reference width before desktop input", async () => {
     const { session, click } = driver();
-    const [snapshot, act] = commands(session);
-    const screen = JSON.parse(await snapshot!.handle('{"format":"png","maxWidth":100}')) as {
+    const computer = await execution(session);
+    const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
       displayFrameId: string;
       width: number;
     };
 
     await expect(
-      act!.handle(
+      computer.act(
         JSON.stringify({
           action: "left_click",
           displayFrameId: screen.displayFrameId,
@@ -213,7 +213,7 @@ describe("cua-computer direct SDK commands", () => {
     const { session, dispose } = driver();
     const createDriver = vi.fn(() => session);
     const clearInterval = vi.fn();
-    const [snapshot] = createCuaComputerCommands({
+    const provider = createCuaComputerProvider({
       platform: "linux",
       createDriver,
       imageProcessor: {
@@ -224,10 +224,11 @@ describe("cua-computer direct SDK commands", () => {
     });
     expect(createDriver).not.toHaveBeenCalled();
 
-    await snapshot!.handle('{"format":"png","maxWidth":100}');
+    const computer = await provider.openExecution({});
+    await computer.snapshot('{"format":"png","maxWidth":100}');
     expect(createDriver).toHaveBeenCalledOnce();
 
-    const stop = snapshot!.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
+    const stop = provider.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
     stop?.();
     await Promise.resolve();
     expect(clearInterval).toHaveBeenCalledOnce();
@@ -236,12 +237,9 @@ describe("cua-computer direct SDK commands", () => {
 
   it("passes node invocation cancellation to the direct SDK", async () => {
     const { session, getDesktopState } = driver();
-    const [snapshot] = commands(session);
+    const computer = await execution(session);
     const signal = AbortSignal.abort();
-    await snapshot!.handle('{"format":"png","maxWidth":100}', undefined, {
-      sendNodeEvent: vi.fn(),
-      signal,
-    });
+    await computer.snapshot('{"format":"png","maxWidth":100}', signal);
     expect(getDesktopState).toHaveBeenCalledWith(signal);
   });
 });

@@ -205,7 +205,21 @@ export function formatDeliveryQueueHealthLine(
   const oldestNote =
     oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
   if (deadLetterCounts) {
-    warnings.push(`dead-lettered entries — ${deadLetterCounts}${oldestNote}`);
+    const payloadBearing = failed.reduce((sum, queue) => sum + (queue.payloadBearing ?? 0), 0);
+    const payloadNote = payloadBearing > 0 ? `; payload-bearing ${payloadBearing}` : "";
+    const ownerCleanupPending = failed.reduce(
+      (sum, queue) => sum + (queue.ownerCleanupPending ?? 0),
+      0,
+    );
+    const ownerCleanupNote =
+      ownerCleanupPending > 0 ? `; owner cleanup pending ${ownerCleanupPending}` : "";
+    warnings.push(
+      `dead-lettered entries — ${deadLetterCounts}${oldestNote}${payloadNote}${ownerCleanupNote}`,
+    );
+  }
+  const maintenanceErrors = summary.deliveryQueues?.maintenance?.errors ?? 0;
+  if (maintenanceErrors > 0) {
+    warnings.push(`retention maintenance errors ${maintenanceErrors}`);
   }
   if (ingressPressure.length > 0) {
     const pressureCounts = ingressPressure
@@ -221,7 +235,12 @@ export function formatDeliveryQueueHealthLine(
       `ingress pressure — ${pressureCounts}; oldest ${formatDurationHuman(now - oldestPressure)} ago`,
     );
   }
-  return warnings.length > 0 ? `Delivery queue: warning (${warnings.join("; ")})` : null;
+  if (warnings.length === 0) {
+    return null;
+  }
+  const inspectNote =
+    deadLetterCounts || maintenanceErrors > 0 ? ". Inspect: openclaw delivery failures list" : "";
+  return `Delivery queue: warning (${warnings.join("; ")})${inspectNote}`;
 }
 
 /** Formats config hot-reload watcher degradation for text health output. */

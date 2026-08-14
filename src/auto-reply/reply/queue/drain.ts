@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
+import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
@@ -198,6 +199,8 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     resolveFollowupAuthorizationKey(execution),
     run.turnAdoptionLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
+    execution.provider,
+    execution.model,
     execution.messageProvider ?? "",
     JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
     stableStringify(execution.toolBindings ?? null),
@@ -206,6 +209,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.groupId ?? "",
     execution.groupChannel ?? "",
     execution.groupSpace ?? "",
+    JSON.stringify([...new Set(execution.memberRoleIds ?? [])].toSorted()),
     execution.spawnedBy ?? "",
     execution.traceAuthorized === true,
     execution.elevatedLevel ?? "",
@@ -214,6 +218,14 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     provenance?.sourceSessionKey ?? "",
     provenance?.sourceChannel ?? "",
     provenance?.sourceTool ?? "",
+    stableStringify(execution.trustedInternalHandoff ?? null),
+    stableStringify(execution.scheduledToolPolicy ?? null),
+    stableStringify(execution.runtimePluginToolGrant ?? null),
+    stableStringify(run.toolsAllow ?? null),
+    stableStringify(
+      run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
+    ),
+    run.disableTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",

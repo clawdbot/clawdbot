@@ -1007,8 +1007,13 @@ describe("createBackupArchive", () => {
         db.prepare(
           `
             INSERT INTO delivery_queue_entries (
-              queue_name, id, status, retry_count, entry_json, enqueued_at, updated_at
-            ) VALUES ('outbound', 'queued-1', 'pending', 0, '{"id":"queued-1"}', 10, 10)
+              queue_name, id, status, session_key, channel, target, retry_count, last_error,
+              entry_json, enqueued_at, updated_at, failed_at
+            ) VALUES (
+              'outbound', 'failed-1', 'failed', 'agent:main:private', 'telegram', 'secret-target',
+              2, 'raw provider error',
+              '{"id":"failed-1","message":"sensitive failed delivery"}', 10, 20, 20
+            )
           `,
         ).run();
         const transientBlobMarker = `transient-diffs-blob-${"sensitive".repeat(32)}`;

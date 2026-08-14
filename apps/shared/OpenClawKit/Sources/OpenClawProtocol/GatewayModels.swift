@@ -194,6 +194,22 @@ public enum TaskSuggestionResolution: String, Codable, Sendable {
     case expired = "expired"
 }
 
+public enum DeliveryFailureResubmitReason: String, Codable, Sendable {
+    case notFound = "not_found"
+    case notFailed = "not_failed"
+    case legacyUnknown = "legacy_unknown"
+    case compacted = "compacted"
+    case ownerManaged = "owner_managed"
+    case ambiguous = "ambiguous"
+    case fenced = "fenced"
+    case missingPayload = "missing_payload"
+    case missingMedia = "missing_media"
+    case ownershipChanged = "ownership_changed"
+    case migrationNamespace = "migration_namespace"
+    case unsupportedQueue = "unsupported_queue"
+    case ambiguousQueue = "ambiguous_queue"
+}
+
 public enum SystemChangeKind: String, Codable, Sendable {
     case operation = "operation"
     case configWrite = "config-write"
@@ -10943,6 +10959,68 @@ public struct ConfigSchemaLookupResult: Codable, Sendable {
     }
 }
 
+public struct DeliveryFailureResubmitParams: Codable, Sendable {
+    public let id: String
+    public let queuename: String?
+
+    public init(
+        id: String,
+        queuename: String? = nil)
+    {
+        self.id = id
+        self.queuename = queuename
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case queuename = "queueName"
+    }
+}
+
+public struct DeliveryFailureResubmitSuccessResult: Codable, Sendable {
+    public let ok: Bool
+    public let queuename: String
+    public let disposition: AnyCodable
+
+    public init(
+        ok: Bool,
+        queuename: String,
+        disposition: AnyCodable)
+    {
+        self.ok = ok
+        self.queuename = queuename
+        self.disposition = disposition
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case queuename = "queueName"
+        case disposition
+    }
+}
+
+public struct DeliveryFailureResubmitRefusedResult: Codable, Sendable {
+    public let ok: Bool
+    public let queuename: String?
+    public let reason: DeliveryFailureResubmitReason
+
+    public init(
+        ok: Bool,
+        queuename: String? = nil,
+        reason: DeliveryFailureResubmitReason)
+    {
+        self.ok = ok
+        self.queuename = queuename
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case queuename = "queueName"
+        case reason
+    }
+}
+
 public struct SystemAgentChatParams: Codable, Sendable {
     public let sessionid: String
     public let message: String?
@@ -11167,7 +11245,19 @@ public struct SystemChangesListResult: Codable, Sendable {
     }
 }
 
-public struct SystemAgentSetupDetectParams: Codable, Sendable {}
+public struct SystemAgentSetupDetectParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
 
 public struct SystemAgentSetupDetectResult: Codable, Sendable {
     public let candidates: [[String: AnyCodable]]
@@ -11219,9 +11309,22 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
     }
 }
 
-public struct SystemAgentSetupVerifyParams: Codable, Sendable {}
+public struct SystemAgentSetupVerifyParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
 
 public struct SystemAgentSetupActivateParams: Codable, Sendable {
+    public let agentid: String?
     public let kind: AnyCodable
     public let modelref: String?
     public let authchoice: String?
@@ -11229,12 +11332,14 @@ public struct SystemAgentSetupActivateParams: Codable, Sendable {
     public let workspace: String?
 
     public init(
+        agentid: String? = nil,
         kind: AnyCodable,
         modelref: String? = nil,
         authchoice: String? = nil,
         apikey: String? = nil,
         workspace: String? = nil)
     {
+        self.agentid = agentid
         self.kind = kind
         self.modelref = modelref
         self.authchoice = authchoice
@@ -11243,6 +11348,7 @@ public struct SystemAgentSetupActivateParams: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
         case kind
         case modelref = "modelRef"
         case authchoice = "authChoice"
@@ -11287,21 +11393,25 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
 
 public struct SystemAgentSetupAuthStartParams: Codable, Sendable {
     public let sessionid: String
+    public let agentid: String?
     public let authchoice: String
     public let workspace: String?
 
     public init(
         sessionid: String,
+        agentid: String? = nil,
         authchoice: String,
         workspace: String? = nil)
     {
         self.sessionid = sessionid
+        self.agentid = agentid
         self.authchoice = authchoice
         self.workspace = workspace
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
+        case agentid = "agentId"
         case authchoice = "authChoice"
         case workspace
     }
@@ -20086,6 +20196,31 @@ public enum AuditRunIdentityV1: Codable, Sendable {
         case .unknown(let value): try value.encode(to: encoder)
         case .unsupported(let value): try value.encode(to: encoder)
         case .ambiguous(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum DeliveryFailureResubmitResult: Codable, Sendable {
+    case success(DeliveryFailureResubmitSuccessResult)
+    case failure(DeliveryFailureResubmitRefusedResult)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "ok"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(Bool.self, forKey: .discriminator)
+        switch discriminator {
+        case true: self = try .success(DeliveryFailureResubmitSuccessResult(from: decoder))
+        case false: self = try .failure(DeliveryFailureResubmitRefusedResult(from: decoder))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .success(let value): try value.encode(to: encoder)
+        case .failure(let value): try value.encode(to: encoder)
         }
     }
 }

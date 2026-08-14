@@ -31,11 +31,11 @@ export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
 
 export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean; agentId?: string; signal?: AbortSignal },
+  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelAuthStatusResult> {
   const params = {
     ...(opts?.refresh ? { refresh: true } : {}),
-    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    agentId: opts.agentId,
   };
   const result = opts?.signal
     ? await client.request<ModelAuthStatusResult>("models.authStatus", params, {

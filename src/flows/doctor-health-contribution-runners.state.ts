@@ -96,6 +96,11 @@ export async function runChannelIngressDeadLettersHealth(): Promise<void> {
   noteChannelIngressDeadLetters();
 }
 
+export async function runDeliveryFailuresHealth(): Promise<void> {
+  const { noteDeliveryFailures } = await import("../commands/doctor-delivery-failures.js");
+  noteDeliveryFailures();
+}
+
 export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
