@@ -435,6 +435,30 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("uses the configured system agent for explicit rosters", () => {
+    const cfg = {
+      ...createCronConfig("server-cron-explicit-owner"),
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, worker: {} },
+        defaults: { systemAgent: { agentId: "main" } },
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      expect(state.cron.getDefaultAgentId()).toBe("main");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("passes the persisted payload tool cap to trigger evaluation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));

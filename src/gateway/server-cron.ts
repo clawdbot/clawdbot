@@ -10,7 +10,6 @@ import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
   tryGetLegacyDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
 } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
@@ -373,6 +372,16 @@ export function buildGatewayCronService(params: {
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
 
+  // Explicit agent rosters do not have a legacy default owner. Cron still
+  // needs a concrete owner for jobs and session reaping, so prefer the
+  // configured system agent and fall back to the compatibility session-store
+  // owner used by the rest of the Gateway.
+  const resolveCronDefaultAgentId = (cfg: OpenClawConfig) =>
+    normalizeAgentId(
+      cfg.agents?.defaults?.systemAgent?.agentId?.trim() ??
+        resolveSessionStoreCompatibilityAgentId(cfg),
+    );
+
   const hasConfiguredAgent = (cfg: OpenClawConfig, agentId: string) =>
     Boolean(findAgentEntry(cfg, agentId));
 
@@ -380,7 +389,7 @@ export function buildGatewayCronService(params: {
     const runtimeConfig = getRuntimeConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const defaultAgentId = tryResolveLegacyCompatibilityAgentId(runtimeConfig);
+    const defaultAgentId = resolveCronDefaultAgentId(runtimeConfig);
     if (
       normalized !== undefined &&
       normalized !== defaultAgentId &&
@@ -507,7 +516,7 @@ export function buildGatewayCronService(params: {
     return sanitizeCronHeartbeatOverride(heartbeatOverride);
   };
 
-  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+  const defaultAgentId = resolveCronDefaultAgentId(params.cfg);
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -728,7 +737,7 @@ export function buildGatewayCronService(params: {
       : {}),
     ...(defaultAgentId ? { defaultAgentId } : {}),
     ...(legacyDefaultAgentId ? { legacyDefaultAgentId } : {}),
-    resolveDefaultAgentId: () => tryResolveLegacyCompatibilityAgentId(getRuntimeConfig()),
+    resolveDefaultAgentId: () => resolveCronDefaultAgentId(getRuntimeConfig()),
     resolveSessionStoreAgentIds: () => {
       const cfg = getRuntimeConfig();
       try {
