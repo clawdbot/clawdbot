@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
+  noteSharedAuthStoreStatus: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
   noteWebFetchProxyDiagnostic: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
@@ -104,6 +105,7 @@ const mocks = vi.hoisted(() => ({
   }),
   listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   listAgentEntries: vi.fn(() => [{ id: "default" }]),
+  tryResolveSoleAgentId: vi.fn<(_cfg: OpenClawConfig) => string | undefined>(() => "default"),
   resolveAgentWorkspaceDir: vi.fn<(_cfg: OpenClawConfig, agentId: string) => string>(
     () => "/tmp/openclaw-workspace",
   ),
@@ -305,6 +307,7 @@ vi.mock("../commands/doctor-auth.js", () => ({
   collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
   noteAuthProfileHealth: mocks.noteAuthProfileHealth,
   noteLegacyCodexProviderOverride: mocks.noteLegacyCodexProviderOverride,
+  noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
 }));
 
 vi.mock("../commands/doctor-memory-search.js", () => ({
@@ -389,6 +392,7 @@ vi.mock("../commands/doctor-browser.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
   listAgentEntries: mocks.listAgentEntries,
+  tryResolveSoleAgentId: mocks.tryResolveSoleAgentId,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   tryResolveConfiguredAgentWorkspaceDir: mocks.tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
@@ -627,6 +631,7 @@ describe("doctor health contributions", () => {
     mocks.noteAuthProfileHealth.mockClear();
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteLegacyCodexProviderOverride.mockClear();
+    mocks.noteSharedAuthStoreStatus.mockClear();
     mocks.noteMemorySearchHealth.mockClear();
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.noteWebFetchProxyDiagnostic.mockClear();
@@ -708,6 +713,8 @@ describe("doctor health contributions", () => {
     mocks.listAgentIds.mockReturnValue(["default"]);
     mocks.listAgentEntries.mockReset();
     mocks.listAgentEntries.mockReturnValue([{ id: "default" }]);
+    mocks.tryResolveSoleAgentId.mockReset();
+    mocks.tryResolveSoleAgentId.mockReturnValue("default");
     mocks.resolveDefaultAgentId.mockReset();
     mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentContextLimits.mockReset();
@@ -825,7 +832,7 @@ describe("doctor health contributions", () => {
     vi.restoreAllMocks();
   });
 
-  it("continues after one doctor contribution throws", async () => {
+  it("continues after an advisory doctor contribution throws", async () => {
     const laterRun = vi.fn(async () => undefined);
     const contributions = [
       createDoctorHealthContribution({
@@ -860,6 +867,38 @@ describe("doctor health contributions", () => {
       "doctor:test-failure run failed: media migration required",
       "Doctor warnings",
     );
+  });
+
+  it("rejects a failed initial config write before later work runs", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const cfg = { gateway: { mode: "invalid" } } as unknown as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: { cfg, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("Config validation failed"));
+
+    await expect(
+      runDoctorHealthContributionList(ctx, [
+        requireDoctorContribution("doctor:write-config-migrations"),
+        createDoctorHealthContribution({
+          id: "doctor:test-later",
+          label: "Test later",
+          run: laterRun,
+        }),
+      ]),
+    ).rejects.toThrow("Config validation failed");
+
+    expect(laterRun).not.toHaveBeenCalled();
+    expect(ctx.configResultWriteCommitted).not.toBe(true);
+    expect(ctx.cfgForPersistence).toEqual(cfg);
   });
 
   it("keeps legacy plugin manifest lint opt-in for structured findings", async () => {
@@ -1002,8 +1041,10 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("writes a successful config migration once across both write phases", async () => {
-    const cfg = { gateway: { mode: "local" } } as OpenClawConfig;
+  it("persists migrated Discord config once across both write phases", async () => {
+    const cfg = {
+      channels: { discord: { streaming: { mode: "partial" } } },
+    } as OpenClawConfig;
     const ctx = {
       cfg,
       cfgForPersistence: structuredClone(cfg),
@@ -1020,6 +1061,9 @@ describe("doctor health contributions", () => {
     await requireDoctorContribution("doctor:write-config").run(ctx);
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: cfg }),
+    );
     expect(ctx.configResultWriteCommitted).toBe(true);
     expect(ctx.cfgForPersistence).toEqual(ctx.cfg);
   });
@@ -1050,6 +1094,51 @@ describe("doctor health contributions", () => {
     expect(ctx.configResultWriteCommitted).not.toBe(true);
     expect(ctx.cfgForPersistence).toEqual(cfg);
     expect(mocks.collectActiveToolSchemaProjectionWarnings).not.toHaveBeenCalled();
+  });
+
+  it("defers every config write after a cron ownership handoff refusal", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const cfg = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: { cfg, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.replaceConfigFile.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Config write refused: cannot inspect cron ownership. Run "openclaw doctor --fix", then retry.',
+        ),
+        { code: "CONFIG_WRITE_REJECTED", refusal: "cron-owner-safety" },
+      ),
+    );
+
+    await runDoctorHealthContributionList(ctx, [
+      requireDoctorContribution("doctor:write-config-migrations"),
+      createDoctorHealthContribution({
+        id: "doctor:test-later",
+        label: "Test later",
+        run: laterRun,
+      }),
+    ]);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(laterRun).not.toHaveBeenCalled();
+    expect(ctx.configResultWriteCommitted).not.toBe(true);
+    expect(ctx.configWriteDeferredByCronOwnership).toBe(true);
+    expect(ctx.cfgForPersistence).toEqual(cfg);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("preserving any retained legacy owner"),
+      "Doctor warnings",
+    );
   });
 
   it("skips read-scope gateway probes when gateway health only proved reachability", async () => {
@@ -2966,6 +3055,52 @@ describe("doctor health contributions", () => {
     expect(ctx.cfgForPersistence).toEqual({});
     expect(ctx.runtime.error).toHaveBeenCalledWith("structured warning");
     expect(ctx.runtime.log).toHaveBeenCalledWith("changed from structured health");
+  });
+
+  it.each([
+    ["explicit multi-agent config", undefined, undefined],
+    ["sole-agent config", "default", "/tmp/openclaw-workspace"],
+  ])("uses %s workspace scope for metadata and structured health", async (_, soleAgentId, cwd) => {
+    mocks.tryResolveSoleAgentId.mockReturnValue(soleAgentId);
+    const runWithPluginMetadataSnapshot = vi.fn(
+      async (_scope: unknown, run: () => Promise<void>) => await run(),
+    );
+    const contribution = createDoctorHealthContribution({
+      id: "doctor:test-workspace-scope",
+      label: "Test workspace scope",
+      healthChecks: {
+        description: "test workspace scope",
+        detect: vi.fn(async () => []),
+      },
+    });
+    const ctx = {
+      cfg: { agents: { ownership: "explicit" } },
+      cfgForPersistence: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+      runWithPluginMetadataSnapshot,
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await runDoctorHealthContributionList(ctx, [contribution]);
+
+    expect(runWithPluginMetadataSnapshot).toHaveBeenCalledWith(
+      { config: ctx.cfg, workspaceDir: cwd },
+      expect.any(Function),
+    );
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.objectContaining({ cwd }), {
+      checks: contribution.healthChecks,
+      dryRun: false,
+    });
+    if (soleAgentId === undefined) {
+      expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(ctx.cfg, soleAgentId, ctx.env);
+    }
   });
 
   it("renders findings from structured health when legacy run is omitted", async () => {

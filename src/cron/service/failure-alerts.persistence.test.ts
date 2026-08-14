@@ -5,9 +5,10 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
-import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -90,45 +91,35 @@ describe("cron failure alert persistence", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
     const order: string[] = [];
+    let resolveAlert: (() => void) | undefined;
+    const alertDone = new Promise<void>((resolve) => {
+      resolveAlert = resolve;
+    });
     const sendCronFailureAlert = vi.fn(async () => {
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs).toBe(
+        endedAt,
+      );
+      order.push("persist");
       order.push("alert");
+      resolveAlert?.();
     });
     const state = createAlertState({
       storePath: store.storePath,
       nowMs: () => endedAt,
       sendCronFailureAlert,
     });
-    const save = cronStoreModule.saveCronJobsStore;
-    const saveSpy = vi
-      .spyOn(cronStoreModule, "saveCronJobsStore")
-      .mockImplementation(async (...args) => {
-        if (args[1].jobs[0]?.state.lastFailureAlertAtMs === endedAt) {
-          expect(sendCronFailureAlert).not.toHaveBeenCalled();
-          await save(...args);
-          order.push("persist");
-          return;
-        }
-        await save(...args);
-      });
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: testCase.status,
+      error: testCase.status === "error" ? "provider unavailable" : "disabled",
+      startedAt: dueAt,
+      endedAt,
+    });
+    await alertDone;
 
-    try {
-      await finalizeAlertOutcome({
-        state,
-        job,
-        status: testCase.status,
-        error: testCase.status === "error" ? "provider unavailable" : "disabled",
-        startedAt: dueAt,
-        endedAt,
-      });
-
-      expect(order).toEqual(["persist", "alert"]);
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs).toBe(
-        endedAt,
-      );
-    } finally {
-      saveSpy.mockRestore();
-    }
+    expect(order).toEqual(["persist", "alert"]);
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
   });
 
   it("rolls back the cooldown without delivery when persistence fails", async () => {
@@ -143,9 +134,15 @@ describe("cron failure alert persistence", () => {
       nowMs: () => dueAt + 10,
       sendCronFailureAlert,
     });
-    const saveSpy = vi
-      .spyOn(cronStoreModule, "saveCronJobsStore")
-      .mockRejectedValueOnce(new Error("terminal write failed"));
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TEMP TRIGGER reject_failure_alert_terminal_write
+      BEFORE UPDATE ON cron_jobs
+      WHEN NEW.store_key = '${cronStoreKey(store.storePath)}' AND NEW.job_id = '${job.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal write failed');
+      END;
+    `);
 
     try {
       await expect(
@@ -165,7 +162,7 @@ describe("cron failure alert persistence", () => {
         (await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs,
       ).toBeUndefined();
     } finally {
-      saveSpy.mockRestore();
+      database.exec("DROP TRIGGER IF EXISTS reject_failure_alert_terminal_write");
     }
   });
 

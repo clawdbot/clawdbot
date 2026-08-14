@@ -130,7 +130,6 @@ export class ScopeUpgradeController {
 
 type ScopeUpgradeBannerProps = {
   snapshot: ApplicationGatewaySnapshot;
-  chromeOffset: boolean;
 };
 
 class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
@@ -186,7 +185,6 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
       class="callout ${state.phase === "error" || state.phase === "rejected"
         ? "danger"
         : "warn"} callout--action"
-      style=${props.chromeOffset ? "margin-left: 72px" : nothing}
       role="status"
     >
       <span class="callout__content">${text}</span>

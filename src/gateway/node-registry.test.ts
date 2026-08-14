@@ -9,15 +9,24 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  type WorkerAdmissionHandshake,
+  WORKER_PROTOCOL_FEATURES,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { NODE_WORKER_SUPERVISOR_COMMANDS } from "../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-worker-supervisor-dialect.js";
+import {
+  NODE_WORKER_SUPERVISOR_COMMANDS,
+  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+} from "../infra/node-commands.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import {
   createNodeRegistryRuntime,
-  updateNodeWorkerSupervisorProtocolFeatures,
+  isNodeRunnerSessionHost,
+  setNodeRunnerInventoryChangedListener,
+  updateNodeRunnerInventory,
 } from "./node-registry-private.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
@@ -33,6 +42,12 @@ type TestNodeSocket = {
   bufferedAmount: number;
   send: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+};
+
+const WORKER_RUNS = {
+  bundleHash: "a".repeat(64),
+  openclawVersion: "2026.8.1",
+  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
 
 const NON_OPEN_NODE_SOCKET_STATES = [
@@ -91,6 +106,7 @@ function makeClient(
     version?: string;
     caps?: string[];
     commands?: string[];
+    workerRuns?: WorkerAdmissionHandshake;
     permissions?: Record<string, boolean>;
     declaredCaps?: string[];
     declaredCommands?: string[];
@@ -123,6 +139,7 @@ function makeClient(
       },
       caps: opts.caps ?? [],
       commands: opts.commands ?? [],
+      workerRuns: opts.workerRuns,
       permissions: opts.permissions,
       declaredCaps: opts.declaredCaps,
       declaredCommands: opts.declaredCommands,
@@ -338,19 +355,23 @@ describe("gateway/node-registry", () => {
       makeClient("conn-1", "node-1", [], {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         commands: ["system.run"],
+        workerRuns: WORKER_RUNS,
       }),
       { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
     );
 
     await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
     expect(
-      updateNodeWorkerSupervisorProtocolFeatures({
+      updateNodeRunnerInventory({
         registry: nodeRegistry,
         nodeId: "node-1",
         connId: "conn-1",
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: WORKER_RUNS,
+        },
       }),
-    ).toBe(true);
+    ).toEqual({ changed: true });
     await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         nodeId: "node-1",
@@ -358,10 +379,19 @@ describe("gateway/node-registry", () => {
         pairingIdentity: "identity-a",
         pairingGeneration: "generation-a",
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerRuns: WORKER_RUNS,
         commands: ["system.run"],
       }),
     ]);
     expect(nodeRegistry.get("node-1")).not.toHaveProperty("protocolFeatures");
+    expect(
+      isNodeRunnerSessionHost({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        pairingGeneration: "generation-a",
+      }),
+    ).toBe(true);
 
     currentGeneration = "generation-b";
     expect(
@@ -377,8 +407,95 @@ describe("gateway/node-registry", () => {
       ),
     ).not.toBeNull();
     await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
-      expect.objectContaining({ pairingGeneration: "generation-b" }),
+      expect.objectContaining({ pairingGeneration: "generation-b", workerRuns: WORKER_RUNS }),
     ]);
+    expect(
+      isNodeRunnerSessionHost({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        pairingGeneration: "generation-b",
+      }),
+    ).toBe(true);
+
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-2", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+        workerRuns: WORKER_RUNS,
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-b" },
+    );
+    await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    expect(
+      isNodeRunnerSessionHost({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-2",
+        pairingGeneration: "generation-b",
+      }),
+    ).toBe(false);
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      }),
+    ).toBeNull();
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-2",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: WORKER_RUNS,
+        },
+      }),
+    ).toEqual({ changed: true });
+    await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({
+        connId: "conn-2",
+        pairingGeneration: "generation-b",
+        workerRuns: WORKER_RUNS,
+      }),
+    ]);
+    expect(
+      isNodeRunnerSessionHost({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-2",
+        pairingGeneration: "generation-b",
+      }),
+    ).toBe(true);
+  });
+
+  it("notifies when same-node replacement removes runner eligibility", async () => {
+    const inventoryChanged = vi.fn();
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+    setNodeRunnerInventoryChangedListener(nodeRegistry, inventoryChanged);
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-1", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: WORKER_RUNS,
+        },
+      }),
+    ).toEqual({ changed: true });
+    expect(inventoryChanged).toHaveBeenCalledTimes(1);
 
     registerNodeSession(
       nodeRegistry,
@@ -386,28 +503,139 @@ describe("gateway/node-registry", () => {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         commands: ["system.run"],
       }),
-      { pairingIdentity: "identity-a", pairingGeneration: "generation-b" },
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
     );
+
+    expect(inventoryChanged).toHaveBeenCalledTimes(2);
+    expect(inventoryChanged).toHaveBeenLastCalledWith("node-1");
     await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
     expect(
-      updateNodeWorkerSupervisorProtocolFeatures({
-        registry: nodeRegistry,
-        nodeId: "node-1",
-        connId: "conn-1",
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-      }),
-    ).toBe(false);
-    expect(
-      updateNodeWorkerSupervisorProtocolFeatures({
+      isNodeRunnerSessionHost({
         registry: nodeRegistry,
         nodeId: "node-1",
         connId: "conn-2",
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        pairingGeneration: "generation-a",
+      }),
+    ).toBe(false);
+  });
+
+  it("fences a retained private proof after the advertised worker build changes", async () => {
+    const frames: string[] = [];
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-1", "node-1", frames, {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+        workerRuns: WORKER_RUNS,
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: WORKER_RUNS,
+        },
+      }),
+    ).toEqual({ changed: true });
+    const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+    if (!proof) {
+      throw new Error("expected current supervisor proof");
+    }
+
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: { ...WORKER_RUNS, bundleHash: "b".repeat(64) },
+        },
+      }),
+    ).toEqual({ changed: true });
+
+    await expect(
+      nodeWorkerSupervisorTransport.invoke({
+        node: proof,
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        params: { launchId: "launch-1" },
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "PRIVATE_DIALECT_UNAVAILABLE",
+        message: "node worker supervisor dialect is unavailable",
+      },
+    });
+    expect(frames).toEqual([]);
+  });
+
+  it("keeps a private proof current across equivalent worker feature ordering", async () => {
+    const frames: string[] = [];
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-1", "node-1", frames, {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+        workerRuns: WORKER_RUNS,
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: WORKER_RUNS,
+        },
+      }),
+    ).toEqual({ changed: true });
+    const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+    if (!proof) {
+      throw new Error("expected current supervisor proof");
+    }
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: {
+            ...WORKER_RUNS,
+            protocolFeatures: WORKER_RUNS.protocolFeatures.toReversed(),
+          },
+        },
+      }),
+    ).toEqual({ changed: false });
+
+    const invocation = nodeWorkerSupervisorTransport.invoke({
+      node: proof,
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      params: { launchId: "launch-1" },
+      isDispatchAuthorized: () => true,
+    });
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    expect(
+      nodeRegistry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+        payloadJSON: "null",
       }),
     ).toBe(true);
-    await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
-      expect.objectContaining({ connId: "conn-2", pairingGeneration: "generation-b" }),
-    ]);
+    await expect(invocation).resolves.toMatchObject({ ok: true, payloadJSON: "null" });
   });
 
   it("rejects generation-mismatched lookup and dispatch without invalidating the session", async () => {

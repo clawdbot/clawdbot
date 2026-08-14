@@ -15,7 +15,9 @@ function contextWith(
   featureMethods: string[] = [],
 ) {
   const request = vi.fn().mockResolvedValue({ models });
+  const navigate = vi.fn();
   const context = {
+    navigate,
     gateway: {
       snapshot: {
         phase: "connected",
@@ -36,7 +38,7 @@ function contextWith(
       },
     },
   } as unknown as ApplicationContext;
-  return { context, request };
+  return { context, navigate, request };
 }
 
 function startupUnavailableError(retryAfterMs = 250): GatewayRequestError {
@@ -382,8 +384,21 @@ describe("new-session model runtime", () => {
     );
   });
 
-  it("renders a successful empty catalog as an explicit empty result", async () => {
-    const { context, request } = contextWith([]);
+  it("renders an all-cold catalog as disabled intent with a setup action", async () => {
+    const { context, navigate, request } = contextWith([
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        available: false,
+      },
+      {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+        available: false,
+      },
+    ]);
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
@@ -397,12 +412,26 @@ describe("new-session model runtime", () => {
           ?.getAttribute("data-chat-model-catalog-state"),
       ).toBe("ready");
       expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
-        "No models available",
+        "GPT-5.6 Luna",
       );
     });
     const container = renderControl(control, context);
-    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    const options = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
+    expect(
+      control.isModelUnavailable({
+        id: "main",
+        model: { primary: "openai/gpt-5.6-luna" },
+      }),
+    ).toBe(true);
+    expect(options).toHaveLength(2);
+    expect(options[0]?.textContent).toContain("Sign-in needed");
+    expect([...options].every((option) => option.disabled)).toBe(true);
+    expect(container.textContent).toContain(
+      "Authentication failed. Review the provider credential or sign-in, then retry.",
+    );
     expect(container.querySelector('[data-chat-model-catalog-retry="true"]')).toBeNull();
+    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+    expect(navigate).toHaveBeenCalledWith("model-setup");
   });
 
   it("keeps a successful empty catalog explicit when its refresh fails", async () => {
@@ -419,7 +448,7 @@ describe("new-session model runtime", () => {
     request.mockReturnValueOnce(refresh.promise);
 
     control.load(context, "main", true);
-    expect(renderControl(control, context).textContent).toContain("No models available");
+    expect(renderControl(control, context).textContent).toContain("Authentication failed");
 
     refresh.reject(new Error("refresh failed"));
     await vi.waitFor(() =>
@@ -430,7 +459,7 @@ describe("new-session model runtime", () => {
     const container = renderControl(control, context);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
-      "No models available",
+      "Authentication failed",
     );
     expect(container.textContent).not.toContain("GPT-5.6 Luna");
   });

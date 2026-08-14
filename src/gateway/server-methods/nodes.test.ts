@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   captureNodePairingGeneration,
   captureNodePairingState,
@@ -24,7 +25,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-worker-supervisor-dialect.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -45,8 +46,14 @@ import {
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
 import { nodeHandlers } from "./nodes.js";
-import { createWorkerSupervisorNodeClient } from "./nodes.protocol-features.test-support.js";
+import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+const WORKER_RUNS = {
+  bundleHash: "a".repeat(64),
+  openclawVersion: "2026.8.1",
+  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+};
 
 const createdStates: OpenClawTestState[] = [];
 const pairingGenerationHooks = vi.hoisted(() => ({
@@ -274,6 +281,50 @@ async function approveNodeSurface(stateDir: string, nodeId: string): Promise<voi
   expect(approved).toEqual(expect.objectContaining({ node: expect.objectContaining({ nodeId }) }));
 }
 
+describe("nodeHandlers node.describe", () => {
+  it("projects the current exact worker build as a safe session-host boolean", async () => {
+    const state = await createState("node-describe-session-host");
+    const nodeId = "node-1";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await approveNodeSurface(state.stateDir, nodeId);
+    const pairingState = await captureNodePairingState(nodeId);
+    expect(pairingState?.generation).not.toBeNull();
+
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    const nodeClient = createWorkerSupervisorNodeClient("conn-1", WORKER_RUNS);
+    runtime.nodeRegistry.register(nodeClient, {
+      pairingIdentity: pairingState?.identity.key ?? "",
+      pairingGeneration: pairingState?.generation?.key,
+    });
+    const publication = createOptions(
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerRuns: WORKER_RUNS,
+      },
+      { client: nodeClient as never },
+    );
+    Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
+    await expectDefined(
+      nodeHandlers["node.runnerInventory.update"],
+      'nodeHandlers["node.runnerInventory.update"] test invariant',
+    )(publication.opts);
+
+    const describeCall = createOptions({ nodeId });
+    Object.assign(describeCall.context, { nodeRegistry: runtime.nodeRegistry });
+    await expectDefined(
+      nodeHandlers["node.describe"],
+      'nodeHandlers["node.describe"] test invariant',
+    )(describeCall.opts);
+
+    expect(describeCall.opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ nodeId, sessionHost: true }),
+      undefined,
+    );
+    runtime.nodeRegistry.unregister(nodeClient.connId);
+  });
+});
+
 async function readPaired(stateDir: string): Promise<Record<string, unknown>> {
   const { paired } = await listDevicePairing(stateDir);
   return Object.fromEntries(paired.map((device) => [device.deviceId, device]));
@@ -409,8 +460,8 @@ describe("nodeHandlers node.pair.approve", () => {
     );
     Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
     await expectDefined(
-      nodeHandlers["node.protocolFeatures.update"],
-      'nodeHandlers["node.protocolFeatures.update"] test invariant',
+      nodeHandlers["node.runnerInventory.update"],
+      'nodeHandlers["node.runnerInventory.update"] test invariant',
     )(publication.opts);
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({ pairingGeneration: previousState?.generation?.key }),
