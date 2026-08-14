@@ -1,10 +1,9 @@
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export type GatewayModelCatalogOwnerSnapshot = Omit<
-  ResolvedPublishedModelCatalogOwner,
-  "pluginRegistry"
->;
-
-export type GatewayModelCatalogSnapshot = ModelCatalogSnapshot &
-  Omit<GatewayModelCatalogOwnerSnapshot, "modelCatalog">;
+export type GatewayModelCatalogSnapshot = ModelCatalogSnapshot & {
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  config: OpenClawConfig;
+};

@@ -20,6 +20,7 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
     config: hashRuntimeConfigValue(input.config),
     env: hashRuntimeConfigValue(input.env ?? process.env),
     readOnly: input.readOnly === true,
+    loadRuntimePlugins: input.loadRuntimePlugins === true,
     workspaceDir: input.workspaceDir,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     runtimePluginSelections: input.runtimePluginSelections,
@@ -54,9 +55,9 @@ export function prepareWorkspacePluginRegistries(
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
 } {
-  // Read-only catalog owners stay runtime-free, but setup probes carry an exact harness selection.
-  // That selected registry must belong to the generation instead of leaking from an outer scope.
-  if (input.readOnly && !input.runtimePluginSelections) {
+  // Read-only catalog owners stay runtime-free. Executable probes opt in to provider runtime,
+  // while non-core harness probes carry the exact selected plugin generation.
+  if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
     return {};
   }
   const inboundPluginRegistry = input.readOnly ? undefined : loadInboundRegistry?.(input);

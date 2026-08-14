@@ -39,11 +39,21 @@ export type DraftEnvironment = {
   type: "local" | "node" | "worker";
   platform?: string;
   sessionHost?: boolean;
+  lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
   trust?: "persistent" | "disposable";
   capabilities?: string[];
 };
 
 export type BrowserTarget = { nodeId: string; label: string };
+
+function normalizeTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
 
 export function readDraftNodes(value: unknown): DraftNode[] {
   const rawNodes = Array.isArray(value) ? value : [];
@@ -70,7 +80,7 @@ export function readDraftNodes(value: unknown): DraftNode[] {
         return [];
       }
       const connected = node.connected === true;
-      const canExec = connected && commands.includes("system.run");
+      const canExec = commands.includes("system.run");
       return [
         {
           nodeId,
@@ -81,7 +91,7 @@ export function readDraftNodes(value: unknown): DraftNode[] {
           remoteIp: normalizeOptionalString(node.remoteIp),
           connected,
           canExec,
-          canBrowse: canExec && commands.includes("fs.listDir"),
+          canBrowse: connected && canExec && commands.includes("fs.listDir"),
         },
       ];
     })
@@ -124,6 +134,10 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
         type?: unknown;
         platform?: unknown;
         sessionHost?: unknown;
+        lastConnectedAtMs?: unknown;
+        lastDisconnectedAtMs?: unknown;
+        lastSeenAtMs?: unknown;
+        lastSeenReason?: unknown;
         trust?: unknown;
         capabilities?: unknown;
       };
@@ -138,6 +152,10 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ? environment.trust
           : undefined;
       const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
+      const lastConnectedAtMs = normalizeTimestamp(environment.lastConnectedAtMs);
+      const lastDisconnectedAtMs = normalizeTimestamp(environment.lastDisconnectedAtMs);
+      const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
+      const lastSeenReason = normalizeOptionalString(environment.lastSeenReason);
       return [
         {
           id,
@@ -146,6 +164,10 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ...(typeof environment.sessionHost === "boolean"
             ? { sessionHost: environment.sessionHost }
             : {}),
+          ...(lastConnectedAtMs !== undefined ? { lastConnectedAtMs } : {}),
+          ...(lastDisconnectedAtMs !== undefined ? { lastDisconnectedAtMs } : {}),
+          ...(lastSeenAtMs !== undefined ? { lastSeenAtMs } : {}),
+          ...(lastSeenReason ? { lastSeenReason } : {}),
           ...(trust ? { trust } : {}),
           ...(capabilities ? { capabilities } : {}),
         },

@@ -42,6 +42,26 @@ const createOutput = () => createGoogleAssistantOutput(model);
 
 describe("buildGoogleSimpleThinking", () => {
   it.each([
+    { id: "gemini-flash-latest", expectedLevel: "MINIMAL" },
+    { id: "gemini-3.6-flash", expectedLevel: "MINIMAL" },
+    { id: "gemini-3.7-flash", expectedLevel: "LOW" },
+  ])("uses the supported thinking floor for $id", ({ id, expectedLevel }) => {
+    const flashModel = { ...model, id };
+
+    expect(buildGoogleSimpleThinking(flashModel, { reasoning: "minimal" })).toEqual({
+      enabled: true,
+      level: expectedLevel,
+    });
+    expect(
+      buildGoogleGenerateContentParams(
+        flashModel,
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        { thinking: { enabled: false } },
+      ).config?.thinkingConfig,
+    ).toEqual({ thinkingLevel: expectedLevel });
+  });
+
+  it.each([
     { id: "gemini-pro-latest", expectedLevel: "LOW" },
     { id: "gemini-flash-latest", expectedLevel: "LOW" },
   ])("recognizes the supported $id Gemini 3 alias", ({ id, expectedLevel }) => {

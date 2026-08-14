@@ -5,19 +5,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { renderConfiguredModel } from "./configured-model.ts";
+import type { ModelSetupVerifyState } from "./state.ts";
 
-function mount(result: SystemAgentSetupDetectResult, onContinue?: () => void) {
+function mount(
+  result: SystemAgentSetupDetectResult,
+  onContinue?: () => void,
+  verify: ModelSetupVerifyState = {
+    phase: "failed",
+    status: "unavailable",
+    error: "connect ECONNREFUSED",
+  },
+) {
   const container = document.createElement("div");
   document.body.append(container);
   const onVerify = vi.fn();
   render(
     renderConfiguredModel({
       result,
-      verify: {
-        phase: "failed",
-        status: "unavailable",
-        error: "connect ECONNREFUSED",
-      },
+      verify,
       canVerify: true,
       actionsDisabled: false,
       onVerify,
@@ -116,5 +121,28 @@ describe("renderConfiguredModel", () => {
     );
     button?.click();
     expect(onContinue).toHaveBeenCalledOnce();
+  });
+
+  it("explains a setup timeout without claiming the provider is unreachable", () => {
+    const result: SystemAgentSetupDetectResult = {
+      candidates: [],
+      manualProviders: [],
+      prepareOptions: [],
+      workspace: "/tmp/workspace",
+      configuredModel: "ollama/gemma4:latest",
+      setupComplete: true,
+    };
+    const { container } = mount(result, undefined, {
+      phase: "failed",
+      status: "timeout",
+      error: "LLM request timed out.",
+    });
+
+    expect(text(container)).toContain("Timed out. LLM request timed out.");
+    expect(text(container)).toContain(
+      "The model did not finish the setup test in time. Warm it or choose a faster model, then retry.",
+    );
+    expect(text(container)).not.toContain("isn’t responding");
+    expect(text(container)).not.toContain("service is running and reachable");
   });
 });

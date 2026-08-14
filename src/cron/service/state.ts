@@ -10,6 +10,7 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
@@ -262,6 +263,7 @@ type CronRunAdmission = {
 type QueuedCronRunReservation = {
   identity: object;
   markerAtMs: number;
+  runReceipt: CronRunReceiptHandle;
   preserveWhenDisabled: boolean;
   activationPreviousLastError?: { value: string | undefined };
 };

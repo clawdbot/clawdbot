@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
+  noteSharedAuthStoreStatus: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
   noteWebFetchProxyDiagnostic: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
@@ -109,6 +110,7 @@ const mocks = vi.hoisted(() => ({
     () => "/tmp/openclaw-workspace",
   ),
   tryResolveConfiguredAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  tryResolveSystemAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn<(_cfg: OpenClawConfig) => string>(() => "default"),
   resolveAgentContextLimits: vi.fn(
     (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
@@ -306,6 +308,7 @@ vi.mock("../commands/doctor-auth.js", () => ({
   collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
   noteAuthProfileHealth: mocks.noteAuthProfileHealth,
   noteLegacyCodexProviderOverride: mocks.noteLegacyCodexProviderOverride,
+  noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
 }));
 
 vi.mock("../commands/doctor-memory-search.js", () => ({
@@ -393,6 +396,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   tryResolveSoleAgentId: mocks.tryResolveSoleAgentId,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   tryResolveConfiguredAgentWorkspaceDir: mocks.tryResolveConfiguredAgentWorkspaceDir,
+  tryResolveSystemAgentWorkspaceDir: mocks.tryResolveSystemAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentContextLimits: mocks.resolveAgentContextLimits,
 }));
@@ -629,6 +633,7 @@ describe("doctor health contributions", () => {
     mocks.noteAuthProfileHealth.mockClear();
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteLegacyCodexProviderOverride.mockClear();
+    mocks.noteSharedAuthStoreStatus.mockClear();
     mocks.noteMemorySearchHealth.mockClear();
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.noteWebFetchProxyDiagnostic.mockClear();
@@ -706,6 +711,8 @@ describe("doctor health contributions", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.tryResolveConfiguredAgentWorkspaceDir.mockReset();
     mocks.tryResolveConfiguredAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
+    mocks.tryResolveSystemAgentWorkspaceDir.mockReset();
+    mocks.tryResolveSystemAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.listAgentIds.mockReset();
     mocks.listAgentIds.mockReturnValue(["default"]);
     mocks.listAgentEntries.mockReset();
@@ -1091,6 +1098,51 @@ describe("doctor health contributions", () => {
     expect(ctx.configResultWriteCommitted).not.toBe(true);
     expect(ctx.cfgForPersistence).toEqual(cfg);
     expect(mocks.collectActiveToolSchemaProjectionWarnings).not.toHaveBeenCalled();
+  });
+
+  it("defers every config write after a cron ownership handoff refusal", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const cfg = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: { cfg, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.replaceConfigFile.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Config write refused: cannot inspect cron ownership. Run "openclaw doctor --fix", then retry.',
+        ),
+        { code: "CONFIG_WRITE_REJECTED", refusal: "cron-owner-safety" },
+      ),
+    );
+
+    await runDoctorHealthContributionList(ctx, [
+      requireDoctorContribution("doctor:write-config-migrations"),
+      createDoctorHealthContribution({
+        id: "doctor:test-later",
+        label: "Test later",
+        run: laterRun,
+      }),
+    ]);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(laterRun).not.toHaveBeenCalled();
+    expect(ctx.configResultWriteCommitted).not.toBe(true);
+    expect(ctx.configWriteDeferredByCronOwnership).toBe(true);
+    expect(ctx.cfgForPersistence).toEqual(cfg);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("preserving any retained legacy owner"),
+      "Doctor warnings",
+    );
   });
 
   it("skips read-scope gateway probes when gateway health only proved reachability", async () => {

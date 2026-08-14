@@ -166,6 +166,36 @@ export const boardChatDockLayout = createDockPanelLayout({
   defaultHeight: 320,
   defaultWidth: 420,
 });
+
+export const chatWorkspaceRailLayout = createDockPanelLayout({
+  storageKey: "openclaw.control.chat-workspace-rail.v1",
+  minHeight: 180,
+  minWidth: 260,
+  defaultDock: "right",
+  supportedDocks: ["right"],
+  defaultHeight: 320,
+  defaultWidth: 280,
+});
+
+export const chatTasksRailLayout = createDockPanelLayout({
+  storageKey: "openclaw.control.chat-tasks-rail.v1",
+  minHeight: 180,
+  minWidth: 270,
+  defaultDock: "right",
+  supportedDocks: ["right"],
+  defaultHeight: 320,
+  defaultWidth: 330,
+});
+
+export const chatCompanionRailLayout = createDockPanelLayout({
+  storageKey: "openclaw.control.chat-companion-rail.v1",
+  minHeight: 180,
+  minWidth: 300,
+  defaultDock: "right",
+  supportedDocks: ["right"],
+  defaultHeight: 320,
+  defaultWidth: 400,
+});
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 export const CHAT_HISTORY_INTENT_EDGE_PX = 300;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
@@ -231,8 +261,8 @@ export type ChatPaneConnectionScope = {
 export const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open], details.msg-meta[open]:not([data-preview])";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
-export const CHAT_TEXT_ENTRY_SELECTOR =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
+export const CHAT_AUTOTYPE_EXEMPT_SELECTOR =
+  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox'], [data-chat-autotype-exempt]";
 export const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
 export const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
@@ -245,12 +275,8 @@ export const CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT = 1;
  * measured width, never viewport media queries. */
 // Side rail (230-280px) plus a readable thread; below this the rail docks bottom.
 export const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
-// Widest the rail's grid column gets; a side-docked rail takes this from the
-// width available to the chat + detail-panel split.
-export const WORKSPACE_RAIL_MAX_WIDTH = 280;
-// Widest the session companion's docked column gets; keep in sync with the
-// flex-basis in chat/sidebar.css. Wider than the workspace rail because it
-// hosts a reading surface, not a file list.
+// The companion defaults wider than the workspace rail because it hosts a
+// reading surface, not a file list.
 const SESSION_RAIL_MAX_WIDTH = 400;
 // The companion is a side surface, not an overlay: it docks whenever its column
 // and a readable thread both fit. Measured against the width left after the
@@ -258,6 +284,24 @@ const SESSION_RAIL_MAX_WIDTH = 400;
 // columns, so the companion becomes a full-height sheet instead of covering
 // the thread as a floating card.
 export const SESSION_RAIL_SIDE_MIN_PANE_WIDTH = SESSION_RAIL_MAX_WIDTH + 480;
+export function sidebarChatLayoutWidth(
+  paneWidth: number,
+  sidebarChatWidth: number | undefined,
+  collapsed: boolean,
+): number {
+  return collapsed ? paneWidth : (sidebarChatWidth ?? paneWidth);
+}
+export function chatMainWidth(
+  layoutWidth: number,
+  workspaceWidth: number | null,
+  tasksWidth: number | null,
+): number {
+  return (
+    layoutWidth -
+    (workspaceWidth === null ? 0 : workspaceWidth + 4) -
+    (tasksWidth === null ? 0 : tasksWidth + 4)
+  );
+}
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
