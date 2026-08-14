@@ -27,9 +27,24 @@ export function createAcpConnection(
 
 /** Creates a mocked Gateway client for translator tests. */
 export function createAcpGateway(
-  request: GatewayClient["request"] = vi.fn(async () => ({ ok: true })) as GatewayClient["request"],
+  request: GatewayClient["request"] = vi.fn(async (method: string, params?: unknown) =>
+    acpGatewayDefaultResponse(method, params),
+  ) as GatewayClient["request"],
 ): GatewayClient {
   return {
     request,
   } as unknown as GatewayClient;
+}
+
+/**
+ * Mirrors the Gateway shapes the ACP bridge actually reads: sessions.create echoes the requested
+ * cwd back as the new row's spawnedCwd, which the bridge treats as the session's real directory.
+ * Partial mocks should fall through to this so they keep modelling the responses they don't stub.
+ */
+export function acpGatewayDefaultResponse(method: string, params?: unknown): unknown {
+  if (method === "sessions.create") {
+    const cwd = (params as { cwd?: string } | undefined)?.cwd;
+    return { ok: true, entry: cwd ? { spawnedCwd: cwd } : {} };
+  }
+  return { ok: true };
 }

@@ -83,10 +83,16 @@ export class AcpTranslatorSessionLifecycle {
       "sessions.create",
       { key: sessionKey, cwd: params.cwd, cwdOnCreateOnly: true },
     );
-    // The Gateway owns the run directory, and an adopted row keeps its owner's. Read that back
-    // instead of assuming the request won, so the prompt prefix and provenance receipt describe
-    // the directory the turn actually uses.
-    const sessionCwd = normalizeOptionalString(created?.entry?.spawnedCwd) ?? params.cwd;
+    // The Gateway owns the run directory, so read back what it kept rather than assuming the
+    // request won. A create that passed a cwd always returns one for a new row, so its absence
+    // means an existing row owns this key and has no directory: the turn would run in the agent
+    // workspace while ACP reported otherwise, so refuse instead of claiming a directory.
+    const sessionCwd = normalizeOptionalString(created?.entry?.spawnedCwd);
+    if (!sessionCwd) {
+      throw new Error(
+        `ACP session/new cannot use ${params.cwd}: session ${sessionKey} already exists without a working directory, so the agent would run in its workspace instead. Route to a session created with that directory, or omit the session key to start a new one.`,
+      );
+    }
 
     const session = this.sessionStore.createSession({
       sessionId,

@@ -10,7 +10,11 @@ import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createInMemoryAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
 import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  acpGatewayDefaultResponse,
+  createAcpConnection,
+  createAcpGateway,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
@@ -94,11 +98,11 @@ describe("ACP translator event ledger replay", () => {
     const eventLedger = createInMemoryAcpEventLedger();
     const firstSessionStore = createInMemorySessionStore();
     const firstConnection = createAcpConnection();
-    const firstRequestMock = vi.fn(async (method: string) => {
+    const firstRequestMock = vi.fn(async (method: string, params?: unknown) => {
       if (method === "chat.send") {
         return { ok: true };
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     });
     const firstRequest = firstRequestMock as GatewayClient["request"];
     const firstAgent = new AcpGatewayAgent(firstConnection, createAcpGateway(firstRequest), {
@@ -164,11 +168,11 @@ describe("ACP translator event ledger replay", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
 
     const secondConnection = createAcpConnection();
-    const secondRequestMock = vi.fn(async (method: string) => {
+    const secondRequestMock = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.get") {
         throw new Error("ledger replay should not call sessions.get");
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     });
     const secondRequest = secondRequestMock as GatewayClient["request"];
     const secondAgent = new AcpGatewayAgent(secondConnection, createAcpGateway(secondRequest), {
@@ -216,11 +220,11 @@ describe("ACP translator event ledger replay", () => {
 
     const listedSessionStore = createInMemorySessionStore();
     const listedConnection = createAcpConnection();
-    const listedRequestMock = vi.fn(async (method: string) => {
+    const listedRequestMock = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.get") {
         throw new Error("listed session ledger replay should not call sessions.get");
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     });
     const listedAgent = new AcpGatewayAgent(
       listedConnection,
@@ -283,11 +287,11 @@ describe("ACP translator event ledger replay", () => {
     const eventLedger = createInMemoryAcpEventLedger();
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const requestMock = vi.fn(async (method: string) => {
+    const requestMock = vi.fn(async (method: string, params?: unknown) => {
       if (method === "chat.send") {
         throw new Error("send failed before acceptance");
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     });
     const agent = new AcpGatewayAgent(
       connection,
@@ -317,11 +321,11 @@ describe("ACP translator event ledger replay", () => {
     );
 
     const loadConnection = createAcpConnection();
-    const loadRequestMock = vi.fn(async (method: string) => {
+    const loadRequestMock = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.get") {
         throw new Error("ledger replay should not call sessions.get");
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     });
     const loadAgent = new AcpGatewayAgent(
       loadConnection,
@@ -358,7 +362,9 @@ describe("ACP translator event ledger replay", () => {
     };
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const requestMock = vi.fn(async (_method: string) => ({ ok: true }));
+    const requestMock = vi.fn(async (method: string, params?: unknown) =>
+      acpGatewayDefaultResponse(method, params),
+    );
     const agent = new AcpGatewayAgent(
       connection,
       createAcpGateway(requestMock as GatewayClient["request"]),
