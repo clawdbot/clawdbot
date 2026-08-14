@@ -3860,14 +3860,26 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
       "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
     );
+    // PR events validate the artifact build on hosted runners (landing gate
+    // stays satisfiable during Blacksmith outages); Testbox leases are
+    // dispatch-only, mirroring ci-check-testbox.yml.
     expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
-      "blacksmith-16vcpu-ubuntu-2404",
+      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );
+    for (const stepName of ["Begin Testbox", "Run Testbox"]) {
+      expect(
+        buildArtifactsTestbox.jobs["build-artifacts"].steps.find(
+          (step: { name?: string }) => step.name === stepName,
+        ).if,
+      ).toContain("github.event_name == 'workflow_dispatch'");
+    }
     expect(
       buildArtifactsTestbox.jobs["build-artifacts"].steps.find(
         (step: { name?: string }) => step.name === "Build dist on cache miss",
       ).env.NODE_OPTIONS,
-    ).toBe("--max-old-space-size=16384");
+    ).toBe(
+      "${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}",
+    );
     expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
       "blacksmith-4vcpu-ubuntu-2404",
     );
