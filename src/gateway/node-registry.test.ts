@@ -16,7 +16,7 @@ import {
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
-  NODE_WORKER_SUPERVISOR_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
@@ -321,7 +321,7 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
-  it.each(NODE_WORKER_SUPERVISOR_COMMANDS)(
+  it.each(NODE_WORKER_PRIVATE_COMMANDS)(
     "rejects private command %s through the generic invoke surface",
     async (command) => {
       const registry = createNodeRegistry();

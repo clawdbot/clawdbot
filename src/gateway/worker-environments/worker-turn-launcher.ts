@@ -9,9 +9,8 @@ import type {
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
-import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import type {
@@ -19,7 +18,6 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
-import type { WorkerEnvironmentService } from "./service.js";
 import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import {
   claimWorkerTurn,
@@ -29,6 +27,14 @@ import {
   resolvePlacementIdentity,
   waitForTurnOperation,
 } from "./worker-turn-admission.js";
+import {
+  failHandedOffTurn,
+  WorkerTurnExecutionError,
+  WorkerWorkspaceReconciliationError,
+  workerTurnRecoveryError as recoveryError,
+  type ActiveWorkerPlacement,
+  type WorkerTurnEnvironmentService,
+} from "./worker-turn-failure.js";
 import {
   assertSupportedTurn,
   assistantText,
@@ -57,17 +63,6 @@ import {
 } from "./workspace-result-finalize.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
-type WorkerTurnEnvironmentService = Pick<
-  WorkerEnvironmentService,
-  | "acknowledgeCredentialDelivery"
-  | "acquireTurnCredential"
-  | "destroy"
-  | "get"
-  | "startTunnel"
-  | "stopTunnel"
->;
-
-type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
 
 type WorkerTurnLauncherOptions = {
@@ -78,9 +73,6 @@ type WorkerTurnLauncherOptions = {
   workspaceOperations?: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
-
-class WorkerTurnExecutionError extends Error {}
-class WorkerWorkspaceReconciliationError extends Error {}
 
 async function executeLocalTurn<T>(params: {
   claim: LocalTurnPlacementClaim;
@@ -98,71 +90,6 @@ async function executeLocalTurn<T>(params: {
     return await params.runLocal();
   } finally {
     await releaseClaimIfOwned(params.placements, turnClaim);
-  }
-}
-
-function recoveryError(error: unknown): string {
-  const message = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
-    .replace(/\s+/gu, " ")
-    .trim();
-  return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
-}
-
-async function failHandedOffTurn(params: {
-  environments: WorkerTurnEnvironmentService;
-  placements: WorkerSessionPlacementStore;
-  placement: ActiveWorkerPlacement;
-  turnClaim: WorkerSessionTurnClaim;
-  error: unknown;
-}): Promise<void> {
-  const failures = [recoveryError(params.error)];
-  let draining: WorkerSessionPlacementRecord;
-  try {
-    draining = params.placements.startDrain({
-      sessionId: params.placement.sessionId,
-      environmentId: params.placement.environmentId,
-      ownerEpoch: params.placement.activeOwnerEpoch,
-      expectedGeneration: params.placement.generation,
-    });
-  } catch {
-    // Exact drain ownership failed. Do not tear down an environment that may
-    // now belong to a newer placement generation.
-    return;
-  }
-  if (draining.state !== "draining") {
-    return;
-  }
-  await releaseClaimIfOwned(params.placements, params.turnClaim);
-  try {
-    await params.environments.stopTunnel(
-      params.placement.environmentId,
-      params.placement.activeOwnerEpoch,
-    );
-  } catch (error) {
-    failures.push(`tunnel stop: ${recoveryError(error)}`);
-  }
-  try {
-    await params.environments.destroy(params.placement.environmentId);
-  } catch (error) {
-    failures.push(`environment destroy: ${recoveryError(error)}`);
-  }
-  try {
-    const reconciling = params.placements.startReconcile({
-      sessionId: draining.sessionId,
-      environmentId: draining.environmentId,
-      ownerEpoch: draining.activeOwnerEpoch,
-      expectedGeneration: draining.generation,
-    });
-    if (reconciling.state !== "reconciling") {
-      return;
-    }
-    params.placements.fail({
-      sessionId: reconciling.sessionId,
-      expectedGeneration: reconciling.generation,
-      recoveryError: failures.join("; "),
-    });
-  } catch {
-    // Leave the durable draining or reconciling row for startup reconciliation.
   }
 }
 
@@ -327,9 +254,8 @@ async function executeWorkerTurn(params: {
     runtimeIdentity,
     messages: initialMessages,
     build: (agentRuntimeIdentityToken, windowedMessages) =>
-      parseWorkerLaunchDescriptor({
+      parseWorkerLaunchPlan({
         version: 3,
-        connectionEndpoint: tunnel.connectionEndpoint,
         admission: {
           environmentId: placement.environmentId,
           credential: credential.credential,
@@ -372,13 +298,14 @@ async function executeWorkerTurn(params: {
     });
     throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
   }
-  const descriptor = launchPlan.descriptor;
+  const plan = launchPlan.plan;
   turn.userTurnTranscriptRecorder?.markSentToProvider?.();
   turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
   const handoffAbort = new AbortController();
   params.onHandoff();
   const processPromise = tunnel.launchTurn({
-    descriptor,
+    plan,
+    placementGeneration: placement.generation,
     timeoutMs: turn.timeoutMs,
     signal: turn.abortSignal
       ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])
