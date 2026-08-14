@@ -1,7 +1,8 @@
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { mcpConfigInternal } from "../config/mcp-config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   setConfiguredMcpServer,
@@ -43,6 +44,7 @@ function seedOAuthState(name: string) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -132,6 +134,12 @@ describe("configured MCP ownership coordination", () => {
       const leaseEntered = createDeferred();
       const releaseLease = createDeferred();
       const order: string[] = [];
+      const set = vi.spyOn(mcpConfigInternal, "set").mockImplementation(async () => ({
+        ok: true,
+        path: "config",
+        config: {},
+        mcpServers: {},
+      }));
       const lifecycle = withMcpLifecycleLease("fixture", {}, async () => {
         order.push("lifecycle");
         leaseEntered.resolve();
@@ -146,9 +154,8 @@ describe("configured MCP ownership coordination", () => {
         order.push("operator");
         return result;
       });
-      await new Promise((resolve) => {
-        setTimeout(resolve, 50);
-      });
+      await Promise.resolve();
+      expect(set).not.toHaveBeenCalled();
       expect(order).toEqual(["lifecycle"]);
 
       releaseLease.resolve();
@@ -156,6 +163,7 @@ describe("configured MCP ownership coordination", () => {
       const result = await mutation;
 
       expect(result.ok).toBe(true);
+      expect(set).toHaveBeenCalledOnce();
       expect(order).toEqual(["lifecycle", "operator"]);
     });
   });
