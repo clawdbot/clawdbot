@@ -54,7 +54,7 @@ type NodeWorkerLaunch = (request: {
   signal?: AbortSignal;
 }) => Promise<TerminalNodeWorkerSupervisorReceipt>;
 
-export type NodeWorkerWorkspaceBinding = {
+type NodeWorkerWorkspaceBinding = {
   localPath: string;
   manifestRef: string;
   remoteWorkspaceDir: string;

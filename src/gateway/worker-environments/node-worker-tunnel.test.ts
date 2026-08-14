@@ -203,7 +203,7 @@ describe("node worker tunnel manager", () => {
 
   it("cancels a replacement start before it can install a late handle", async () => {
     const record = environment();
-    const releaseLaunch = createDeferred<void>();
+    const releaseLaunch = createDeferred();
     const launch: NodeWorkerLaunch = async (request): Promise<TerminalReceipt> =>
       await new Promise<TerminalReceipt>((resolve) => {
         request.signal?.addEventListener(
