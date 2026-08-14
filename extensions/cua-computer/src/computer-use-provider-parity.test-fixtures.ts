@@ -53,9 +53,9 @@ export const COMPUTER_USE_V2_ACTION_NAMES = [
   "invoke_menu",
 ] as const;
 
-export type ComputerUseV2ActionName = (typeof COMPUTER_USE_V2_ACTION_NAMES)[number];
-export type ComputerUseProviderId = "cua" | "peekaboo";
-export type ComputerUseDeliveryMode = "background" | "foreground";
+type ComputerUseV2ActionName = (typeof COMPUTER_USE_V2_ACTION_NAMES)[number];
+type ComputerUseProviderId = "cua" | "peekaboo";
+type ComputerUseDeliveryMode = "background" | "foreground";
 
 export const CUA_PROVIDER_PARITY_SOURCE = {
   version: "0.19.3",
@@ -150,8 +150,8 @@ export const CUA_MCP_TOOL_NAMES = [
   "end_session",
 ] as const;
 
-export type CuaMcpToolName = (typeof CUA_MCP_TOOL_NAMES)[number];
-export type CuaPlatform = "macos" | "windows" | "linux";
+type CuaMcpToolName = (typeof CUA_MCP_TOOL_NAMES)[number];
+type CuaPlatform = "macos" | "windows" | "linux";
 
 type CuaPortableActionClassification = {
   tool: CuaMcpToolName;
@@ -172,9 +172,7 @@ type CuaNonPortableClassification = {
   reason: string;
 };
 
-export type CuaMcpToolClassification =
-  | CuaPortableActionClassification
-  | CuaNonPortableClassification;
+type CuaMcpToolClassification = CuaPortableActionClassification | CuaNonPortableClassification;
 
 const CUA_ALL_PLATFORMS = ["macos", "windows", "linux"] as const;
 const CUA_WINDOWS_ONLY = ["windows"] as const;
@@ -560,7 +558,7 @@ export const PEEKABOO_MCP_TOOL_NAMES = [
   "space",
 ] as const;
 
-export type PeekabooMcpToolName = (typeof PEEKABOO_MCP_TOOL_NAMES)[number];
+type PeekabooMcpToolName = (typeof PEEKABOO_MCP_TOOL_NAMES)[number];
 
 type PeekabooPortableActionClassification = {
   tool: PeekabooMcpToolName;
@@ -575,7 +573,7 @@ type PeekabooNonPortableClassification = {
   reason: string;
 };
 
-export type PeekabooMcpToolClassification =
+type PeekabooMcpToolClassification =
   | PeekabooPortableActionClassification
   | PeekabooNonPortableClassification;
 
@@ -703,7 +701,7 @@ type UnmappedProviderActionSupport = {
   unmappedReason: string;
 };
 
-export type ComputerUseV2ProviderActionSupport =
+type ComputerUseV2ProviderActionSupport =
   | MappedProviderActionSupport
   | UnmappedProviderActionSupport;
 
