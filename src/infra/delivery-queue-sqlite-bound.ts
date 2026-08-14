@@ -76,7 +76,7 @@ export function pruneDeliveryQueueTombstones(
   now: number,
   prefix?: { queueName: string; idPrefix: string },
 ): void {
-  // kysely-allow-raw: JSON1 and a window rank enforce authored policies in place.
+  // sqlite-allow-raw: JSON1 and a window rank enforce authored policies in place.
   db.prepare(`WITH policies AS (
       ${BOUNDED_DELIVERY_RECEIPTS_SQL}
       AND (@queueName IS NULL OR (queue_name = @queueName AND id_prefix = @idPrefix))
@@ -98,7 +98,7 @@ export function pruneDeliveryQueueTombstones(
 
 /** Cheap maintenance cleanup: age predicates only, with no window sort. */
 export function pruneDeliveryQueueTombstoneAges(db: DatabaseSync, now: number): void {
-  // kysely-allow-raw: JSON1 reads the compact authored age policy in place.
+  // sqlite-allow-raw: JSON1 reads the compact authored age policy in place.
   db.prepare(`DELETE FROM delivery_queue_entries WHERE rowid IN (
     SELECT receipt_rowid FROM (${BOUNDED_DELIVERY_RECEIPTS_SQL})
     WHERE enqueued_at < @now - max_age_ms)`).run({ now });
@@ -116,6 +116,7 @@ export function terminalizeBoundDeliveryQueueEntry(
 ): boolean {
   if (!failedEntry) {
     return (
+      // sqlite-allow-raw: Exact JSON CAS keeps deletion atomic on the caller's transaction.
       db
         .prepare(
           `DELETE FROM delivery_queue_entries
@@ -125,6 +126,7 @@ export function terminalizeBoundDeliveryQueueEntry(
     );
   }
   return (
+    // sqlite-allow-raw: Exact JSON CAS keeps compaction atomic on the caller's transaction.
     db
       .prepare(
         `UPDATE delivery_queue_entries SET status = 'failed', entry_kind = NULL,
@@ -147,6 +149,7 @@ export function terminalizeBoundDeliveryQueueEntry(
 }
 
 function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): void {
+  // sqlite-allow-raw: This bounded age delete runs on the caller's existing database handle.
   db.prepare(`DELETE FROM delivery_queue_entries WHERE status = 'completed'
     AND enqueued_at < ? AND (recovery_state IS NULL OR recovery_state NOT IN (
       'completed_permanent', 'completed_bounded'

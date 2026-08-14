@@ -89,18 +89,19 @@ export function expireStagingAndLoadDeliveryQueueEntries(params: {
   const snapshot = runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      // SQLite JSON1 keeps the namespace set bound while both reads share this write snapshot.
+      // sqlite-allow-raw: Expiry must share the write snapshot with both ownership reads.
       database.db
         .prepare(
           `DELETE FROM delivery_queue_entries
             WHERE queue_name = ? AND status = 'pending' AND enqueued_at <= ?`,
         )
         .run(params.stagingQueueName, params.expireBeforeMs);
-      const selectPending = database.db.prepare(
-        `SELECT ${deliveryQueueRowColumns.join(", ")} FROM delivery_queue_entries
+      const selectPending =
+        /* sqlite-allow-raw: JSON1 binds the namespace set inside this write snapshot. */ database.db.prepare(
+          `SELECT ${deliveryQueueRowColumns.join(", ")} FROM delivery_queue_entries
           WHERE status = 'pending' AND queue_name IN (SELECT value FROM json_each(?))
           ORDER BY enqueued_at, id`,
-      );
+        );
       const read = (queueNames: readonly string[]) =>
         selectPending.all(JSON.stringify(queueNames)) as DeliveryQueueSqliteRow[];
       return {
