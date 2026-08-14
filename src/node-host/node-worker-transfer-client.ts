@@ -30,14 +30,15 @@ import {
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 const validatedTlsSocketPins = new WeakMap<TLSSocket, string>();
-// A resumed TLS session may omit the peer certificate, so replacement sockets cannot prove the pin.
-// Keep pooled pinned sockets, but require a full handshake whenever a new socket is created.
-const pinnedTransferAgent = new https.Agent({
-  keepAlive: true,
-  maxCachedSessions: 0,
-  timeout: 5_000,
-});
+// Replacement sockets must expose a full peer certificate for pin verification.
+const pinnedTransferAgent = new https.Agent({ keepAlive: true, maxCachedSessions: 0 });
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
+
+function tlsPinMismatch(): NodeWorkerWorkspaceTransferError {
+  return new NodeWorkerWorkspaceTransferError(
+    "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+  );
+}
 
 function transferUrl(gatewayUrl: string, routePath: string): URL {
   const gateway = new URL(gatewayUrl);
@@ -94,23 +95,13 @@ function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<vo
       tlsSocket = socket as TLSSocket;
       const validated = validatedTlsSocketPins.get(tlsSocket);
       if (validated) {
-        finish(
-          validated === expected
-            ? undefined
-            : new NodeWorkerWorkspaceTransferError(
-                "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-              ),
-        );
+        finish(validated === expected ? undefined : tlsPinMismatch());
         return;
       }
       verify = () => {
         const actual = normalizeFingerprint(tlsSocket!.getPeerCertificate().fingerprint256 ?? "");
         if (!actual || expected !== actual) {
-          finish(
-            new NodeWorkerWorkspaceTransferError(
-              "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-            ),
-          );
+          finish(tlsPinMismatch());
           return;
         }
         validatedTlsSocketPins.set(tlsSocket!, actual);

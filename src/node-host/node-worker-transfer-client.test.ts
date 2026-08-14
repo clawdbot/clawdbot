@@ -7,7 +7,11 @@ import http, {
   type RequestOptions,
   type Server as HttpServer,
 } from "node:http";
-import https, { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
+import https, {
+  createServer as createHttpsServer,
+  type RequestOptions as HttpsRequestOptions,
+  type Server as HttpsServer,
+} from "node:https";
 import type { Socket } from "node:net";
 import path from "node:path";
 import type { TLSSocket } from "node:tls";
@@ -259,11 +263,15 @@ describe("node worker transfer client", () => {
       (socket as TLSSocket).getPeerCertificate = (() => ({})) as TLSSocket["getPeerCertificate"];
     };
     const request = https.request.bind(https);
-    const requestSpy = vi.spyOn(https, "request").mockImplementation(((url, options) => {
+    const requestSpy = vi.spyOn(https, "request").mockImplementation(((
+      url: string | URL,
+      options: HttpsRequestOptions,
+    ) => {
       const clientRequest = request(url, options);
-      if (!pinnedAgent && options.agent instanceof https.Agent) {
-        pinnedAgent = options.agent;
-        pinnedAgent.on("free", hidePeerCertificate);
+      const agent = options.agent;
+      if (!pinnedAgent && agent instanceof https.Agent) {
+        pinnedAgent = agent;
+        agent.on("free", hidePeerCertificate);
       }
       return clientRequest;
     }) as typeof https.request);
