@@ -9,6 +9,8 @@ import {
   resolveCodexNativeExecutionBlock,
   resolveCodexNativeSandboxBlock,
 } from "./app-server/sandbox-guard.js";
+import { sessionBindingIdentity } from "./app-server/session-binding.js";
+import { isSameCodexAppServerThreadOwner } from "./app-server/thread-ownership.js";
 import { canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText, formatComputerUseStatus } from "./command-formatters.js";
 import {
@@ -434,6 +436,21 @@ export async function startThreadAction(
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
   if (kind === "compact") {
+    if (target.identity.kind === "conversation") {
+      const sessionBinding = ctx.sessionId
+        ? await deps.bindingStore.read(
+            sessionBindingIdentity({
+              sessionId: ctx.sessionId,
+              sessionKey: ctx.sessionKey,
+              agentId: resolveCodexConversationControlScope(ctx).agentId,
+              config: ctx.config,
+            }),
+          )
+        : undefined;
+      if (!isSameCodexAppServerThreadOwner(binding, sessionBinding)) {
+        return "Codex compaction is unavailable because the conversation-bound thread differs from the current session binding. Resume that thread into the session first.";
+      }
+    }
     const compactCurrent = ctx.runtimeContext?.compactCurrent;
     if (!compactCurrent) {
       return "Codex compaction is unavailable because this command is not bound to a session.";

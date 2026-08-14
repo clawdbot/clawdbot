@@ -2776,6 +2776,43 @@ describe("codex command", () => {
     expect(codexControlRequest).not.toHaveBeenCalled();
   });
 
+  it("rejects a conversation-bound thread that differs from the current session", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-session", clientId: "client-session", cwd: "/repo" },
+    );
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { threadId: "thread-conversation", clientId: "client-conversation", cwd: "/repo" },
+    );
+    const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
+
+    const result = await handleCodexCommand(
+      createContext("compact", undefined, {
+        runtimeContext: { compactCurrent },
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: "binding-data-1",
+            workspaceDir: "/repo",
+          },
+        }),
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result.text).toContain("conversation-bound thread differs");
+    expect(compactCurrent).not.toHaveBeenCalled();
+  });
+
   it("starts review with the generated app-server target shape", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestBinding(
