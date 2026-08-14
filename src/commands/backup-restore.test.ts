@@ -305,7 +305,9 @@ describe("backupRestoreCommand", () => {
             backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
           ).rejects.toThrow(error);
           await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
         },
       );
@@ -343,7 +345,9 @@ describe("backupRestoreCommand", () => {
           backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
         ).rejects.toThrow(/incomplete target was cleaned/iu);
         await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
       },
     );
@@ -387,6 +391,10 @@ describe("backupRestoreCommand", () => {
         expect((restoreError as Error).message).toMatch(/cleanup denied/iu);
         expect((restoreError as Error).cause).toBeInstanceOf(Error);
         expect((restoreError as Error).cause).not.toBe(cleanupError);
+        expect((restoreError as AggregateError).errors).toEqual([
+          (restoreError as Error).cause,
+          cleanupError,
+        ]);
       },
     );
   });

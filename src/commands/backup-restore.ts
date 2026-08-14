@@ -138,7 +138,9 @@ export async function backupRestoreCommand(
     try {
       await cleanupFailedRestore(targetPath, target.created);
     } catch (cleanupError) {
-      throw new Error(
+      // oxlint-disable-next-line preserve-caught-error -- cleanup is the second AggregateError entry; extraction stays the primary cause.
+      throw new AggregateError(
+        [error, cleanupError],
         `Backup restore failed and the incomplete target could not be cleaned: ${targetPath}. Cleanup error: ${formatErrorMessage(cleanupError)}`,
         { cause: error },
       );
