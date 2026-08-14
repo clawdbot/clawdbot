@@ -172,12 +172,20 @@ function createDefaultGatewayReloadState(
   };
 }
 
-async function withWeixinAccountIndexReloadPath(run: () => Promise<void>) {
+async function withWeixinAccountIndexReloadPath(
+  run: () => Promise<void>,
+  options: { pluginId?: string; aliases?: string[] } = {},
+) {
+  const basePlugin = createChannelTestPluginBase({ id: "openclaw-weixin" });
   const registry = createTestRegistry([
     {
-      pluginId: "openclaw-weixin",
+      pluginId: options.pluginId ?? "openclaw-weixin",
       plugin: {
-        ...createChannelTestPluginBase({ id: "openclaw-weixin" }),
+        ...basePlugin,
+        meta: {
+          ...basePlugin.meta,
+          ...(options.aliases ? { aliases: options.aliases } : {}),
+        },
         reload: {
           configPrefixes: [],
           accountIndexReloadPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
@@ -5952,6 +5960,115 @@ describe("gateway plugin hot reload handlers", () => {
       expect.objectContaining({ includeKnownAccounts: true }),
     );
   });
+
+  it.each([
+    ["plugin id", "plugins.entries.wechat-runtime.config.accounts.primary.enabled"],
+    ["channel alias", "plugins.entries.wechat-alias.config.accounts.primary.enabled"],
+  ] as const)(
+    "does not union known accounts when plugin-owned account config changes by %s",
+    async (_caseName, changedPath) => {
+      const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+      const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+      delete process.env.OPENCLAW_SKIP_CHANNELS;
+      delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+      const heartbeatRunner = {
+        stop: vi.fn(),
+        updateConfig: vi.fn(),
+      };
+      const startChannel = vi.fn(async () => {});
+      const stopChannel = vi.fn(async () => {});
+      const reloadPlugins = vi.fn(
+        async (params: {
+          beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+        }): Promise<GatewayPluginReloadResult> => {
+          await params.beforeReplace(new Set(["openclaw-weixin"]));
+          return {
+            restartChannels: new Set(["openclaw-weixin"]),
+            activeChannels: new Set(["openclaw-weixin"]),
+          };
+        },
+      );
+      const { applyHotReload } = createGatewayReloadHandlers({
+        deps: {} as never,
+        broadcast: vi.fn(),
+        getState: () => ({
+          hooksConfig: {} as never,
+          hookClientIpConfig: {} as never,
+          heartbeatRunner: heartbeatRunner as never,
+          cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
+          channelHealthMonitor: null,
+        }),
+        setState: vi.fn(),
+        startChannel,
+        stopChannel,
+        reloadPlugins,
+        logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        logChannels: { info: vi.fn(), error: vi.fn() },
+        logCron: { error: vi.fn() },
+        logReload: { info: vi.fn(), warn: vi.fn() },
+        createHealthMonitor: () => null,
+      });
+
+      try {
+        await withWeixinAccountIndexReloadPath(
+          async () => {
+            await applyHotReload(
+              {
+                changedPaths: [changedPath],
+                restartGateway: false,
+                restartReasons: [],
+                hotReasons: [changedPath],
+                reloadHooks: false,
+                restartGmailWatcher: false,
+                restartCron: false,
+                restartHeartbeat: false,
+                restartHealthMonitor: false,
+                reloadPlugins: true,
+                restartChannels: new Set(),
+                disposeMcpRuntimes: false,
+                noopPaths: [],
+              },
+              {
+                plugins: {
+                  entries: {
+                    "wechat-runtime": { config: { accounts: { primary: { enabled: false } } } },
+                    "wechat-alias": { config: { accounts: { primary: { enabled: false } } } },
+                  },
+                },
+              },
+            );
+          },
+          { pluginId: "wechat-runtime", aliases: ["wechat-alias"] },
+        );
+      } finally {
+        if (previousSkipChannels === undefined) {
+          delete process.env.OPENCLAW_SKIP_CHANNELS;
+        } else {
+          process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+        }
+        if (previousSkipProviders === undefined) {
+          delete process.env.OPENCLAW_SKIP_PROVIDERS;
+        } else {
+          process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+        }
+      }
+
+      expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+        manual: false,
+        restartPending: false,
+        preserveKnownAccount: true,
+      });
+      expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+        preserveManualStop: true,
+      });
+      expect(startChannel).not.toHaveBeenCalledWith(
+        "openclaw-weixin",
+        undefined,
+        expect.objectContaining({ includeKnownAccounts: true }),
+      );
+    },
+  );
 
   it("uses the known-account safety net for channel account-index reload markers", async () => {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
