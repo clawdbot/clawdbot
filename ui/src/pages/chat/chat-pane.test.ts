@@ -113,6 +113,7 @@ describe("chat pane header state", () => {
       key: "agent:main:current",
       kind: "direct",
       updatedAt: 0,
+      hasActiveRun: true,
     } satisfies GatewaySessionRow;
 
     await pane.handleHeaderSessionAction({ kind: "fork" }, session);
@@ -120,6 +121,7 @@ describe("chat pane header state", () => {
     expect(create).toHaveBeenCalledWith({
       parentSessionKey: session.key,
       fork: true,
+      forkFrom: "last-completed",
       agentId: "main",
     });
     expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");

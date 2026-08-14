@@ -5,7 +5,6 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
-import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
   describeToolResultMediaPlaceholder,
@@ -16,7 +15,6 @@ import { shortHash } from "../utils/hash.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./host-policy.js";
 import {
-  buildOpenAIResponsesReasoningReplayMetadata,
   buildOpenAIResponsesReplayContext,
   buildOpenAIResponsesCompactionReplayPlan,
   isOpenAIResponsesReplayContext,
@@ -74,23 +72,6 @@ export function stripEncryptedReasoningContentFields(value: unknown): {
   return changed ? { value: next, changed: true } : { value, changed: false };
 }
 
-export function tagOpenAIResponsesReasoningReplayItem(
-  item: Record<string, unknown>,
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): Record<string, unknown> {
-  if (!("encrypted_content" in item)) {
-    return item;
-  }
-  return {
-    ...item,
-    [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: buildOpenAIResponsesReasoningReplayMetadata(
-      model,
-      options,
-    ),
-  };
-}
-
 function isOpenAIResponsesReasoningReplayMetadata(
   value: unknown,
 ): value is OpenAIResponsesReasoningReplayMetadata {
@@ -121,7 +102,7 @@ function normalizeOpenAIResponsesReasoningReplayItem(
   return { ...record, summary: [] } as ReplayableResponseReasoningItem;
 }
 
-export function prepareOpenAIResponsesReasoningItemForReplay(
+function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
   context: OpenAIResponsesReplayContext,
   blockMetadata?: OpenAIResponsesReasoningReplayMetadata | null,

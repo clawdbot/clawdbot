@@ -30,7 +30,7 @@ import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
 } from "../../../utils/message-channel.js";
-import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import {
@@ -490,8 +490,20 @@ export async function attachAuthenticatedGatewayConnect(
   }
 
   if (isWebchatConnect(connectParams)) {
+    const gatewayBuildId = resolveRuntimeServiceBuildId();
+    const clientBuildId = connectParams.client.buildId?.trim();
+    if (
+      connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+      !context.configSnapshot.gateway?.controlUi?.root &&
+      gatewayBuildId &&
+      clientBuildId !== gatewayBuildId
+    ) {
+      logWsControl.warn(
+        `control ui build mismatch conn=${connId} clientBuild=${formatForLog(clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(gatewayBuildId)}; reload required`,
+      );
+    }
     logWsControl.info(
-      `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+      `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} build=${formatForLog(clientBuildId ?? "legacy")}`,
     );
   }
 

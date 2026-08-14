@@ -190,8 +190,11 @@ stated honestly (revision 1 undersold this):
   silent superseded-pairing pruning share one client-invalidation, credential,
   environment, and placement reconciliation flow. Explicit RPCs wait for the
   credential fence before success returns; periodic reconciliation retries
-  failed provider or placement cleanup. Unreferenced
-  terminal environment rows retain
+  failed provider or placement cleanup. Placement startup, identity-mutation,
+  and periodic reconciliation also compare each durable placement with the
+  canonical session entry: confirmed absence force-fences live environments
+  and exact-CAS retires safe terminal rows, while unreadable session evidence
+  retains the placement. Unreferenced terminal environment rows retain
   seven days of operator diagnostics, then prune in bounded post-reconcile
   batches; any surviving placement keeps its environment provenance.
   Device-side GC of per-session workspace dirs and superseded bundles is a

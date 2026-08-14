@@ -15,8 +15,18 @@ import {
 import { createApplicationOverlays } from "./overlays.ts";
 
 vi.mock("../build-info.ts", () => ({
-  controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
-    Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
+  controlUiBuildDiffersFrom: (identity: {
+    version?: string | null;
+    buildId?: string | null;
+    controlUiBuildSource?: "bundled" | "configured";
+  }) =>
+    identity.controlUiBuildSource === "configured"
+      ? false
+      : Boolean(
+          identity.buildId?.trim()
+            ? identity.buildId.trim() !== "test"
+            : identity.version?.trim() && identity.version.trim() !== "1.0.0",
+        ),
   reloadControlUiIfStale: vi.fn(),
 }));
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
@@ -235,6 +245,47 @@ describe("device-auth upgrade migration", () => {
 });
 
 describe("Control UI refresh nudge", () => {
+  it("flags an exact build mismatch on the first connection", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "reconnecting",
+      hello: {
+        server: { version: "1.0.0", buildId: "other" },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+    overlays.dispose();
+  });
+
+  it("does not flag an independently built configured UI root", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: {
+        server: { version: "2.0.0", controlUiBuildSource: "configured" },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.update({ phase: "stopped", hello: null });
+    harness.update({
+      phase: "connected",
+      hello: {
+        server: { version: "2.0.0", controlUiBuildSource: "configured" },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+    overlays.dispose();
+  });
+
   it("waits for a reconnect before flagging a version mismatch", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);

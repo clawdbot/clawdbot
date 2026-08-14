@@ -44,6 +44,7 @@ async function mountMenu(
     onAction?: (action: SessionMenuAction) => void;
     onClose?: () => void;
     actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
+    forkFromLastCompleted?: boolean;
   } = {},
 ): Promise<SessionMenuElement> {
   const container = document.createElement("div");
@@ -68,6 +69,7 @@ async function mountMenu(
       .disabled=${false}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
+      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ??
       (session.archived || (options.archiveAllowed ?? true))}
@@ -157,6 +159,12 @@ describe("session menu", () => {
       "Archive session",
       "Delete…",
     ]);
+  });
+
+  it("names the stable fork boundary for an active session", async () => {
+    const menu = await mountMenu({ forkFromLastCompleted: true });
+
+    expect(menuItemLabels(menu)).toContain("Fork from last completed message");
   });
 
   it("renders only batch actions with counts for a multi-selection", async () => {

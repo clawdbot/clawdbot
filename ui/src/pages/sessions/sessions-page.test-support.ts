@@ -53,7 +53,7 @@ export type TestSessionsPage = HTMLElement & {
     expectedSessionId?: string,
   ) => Promise<unknown>;
   archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
-  forkSession: (key: string) => Promise<void>;
+  forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   addToWorkboard: (session: GatewaySessionRow) => Promise<void>;

@@ -936,4 +936,20 @@ describe("sessions page lifecycle", () => {
 
     expect(context.navigate).not.toHaveBeenCalled();
   });
+
+  it("forks an active session from its last completed message", async () => {
+    const create = vi.fn(async () => "active-fork");
+    const sessions = createSessions({ create });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, sessions);
+    const page = await createPage(context);
+
+    await page.forkSession("main", true);
+
+    expect(create).toHaveBeenCalledWith({
+      parentSessionKey: "main",
+      fork: true,
+      forkFrom: "last-completed",
+    });
+  });
 });

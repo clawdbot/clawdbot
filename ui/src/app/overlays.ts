@@ -4,7 +4,7 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
-import { controlUiVersionDiffersFrom } from "../build-info.ts";
+import { controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
@@ -312,6 +312,8 @@ export function createApplicationOverlays(
       if (!next.client) {
         connectedEpoch = 0;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
+      } else if (next.hello) {
+        snapshot = { ...snapshot, controlUiRefreshRequired: true };
       }
       clearExecApprovalTimers(promptState);
       publish();
@@ -319,6 +321,12 @@ export function createApplicationOverlays(
     }
     const updateSchedule =
       connectedSourceChanged || helloChanged ? readUpdateSchedule(next.hello) : undefined;
+    const serverBuildIdentity = {
+      version: next.hello?.server?.version,
+      buildId: next.hello?.server?.buildId,
+      controlUiBuildSource: next.hello?.server?.controlUiBuildSource,
+    };
+    const exactBuildIdentityAvailable = Boolean(serverBuildIdentity.buildId?.trim());
     snapshot = {
       ...snapshot,
       ...(connectedSourceChanged || helloChanged
@@ -329,7 +337,8 @@ export function createApplicationOverlays(
           }
         : {}),
       controlUiRefreshRequired: connectedSourceChanged
-        ? connectedEpoch > 0 && controlUiVersionDiffersFrom(next.hello?.server?.version)
+        ? (exactBuildIdentityAvailable || connectedEpoch > 0) &&
+          controlUiBuildDiffersFrom(serverBuildIdentity)
         : snapshot.controlUiRefreshRequired,
     };
     publish();

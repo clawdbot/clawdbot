@@ -267,7 +267,7 @@ struct MacNodeHostWorkerTests {
             ["system", "mcp"]) == ["canvas", "screen", "system", "mcp"])
     }
 
-    @Test func `provider selection filters command ownership and publishes only the CUA descriptor`() throws {
+    @Test func `provider selection filters command ownership and publishes each provider descriptor`() throws {
         let descriptor = OpenClawProtocol.AnyCodable([
             "contractVersion": OpenClawProtocol.AnyCodable(2),
         ])
@@ -282,6 +282,25 @@ struct MacNodeHostWorkerTests {
         #expect(!peekaboo.commands.contains(MacNodeScreenCommand.snapshot.rawValue))
         #expect(!peekaboo.commands.contains(OpenClawComputerCommand.act.rawValue))
         #expect(peekaboo.computerUse == nil)
+        let peekabooDescriptor = try #require(MacNodeModeCoordinator.computerUseDescriptor(
+            provider: .peekaboo,
+            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            workerManifest: peekaboo))
+        let peekabooJSON = try JSONEncoder().encode(peekabooDescriptor)
+        let peekabooObject = try #require(
+            JSONSerialization.jsonObject(with: peekabooJSON) as? [String: Any])
+        #expect(peekabooObject["contractVersion"] as? Int == 2)
+        #expect((peekabooObject["provider"] as? [String: Any])?["id"] as? String == "peekaboo")
+        let actions = try #require(peekabooObject["actions"] as? [String])
+        #expect(actions.contains("get_window_state"))
+        #expect(actions.contains("invoke_menu"))
+        #expect(!actions.contains("zoom"))
+        #expect(!actions.contains("get_browser_state"))
+        #expect(!actions.contains("start_recording"))
+        let features = try #require(peekabooObject["features"] as? [String: Any])
+        #expect(features["recording"] as? Bool == false)
+        #expect(features["agentCursor"] as? Bool == false)
+        #expect(features["multiDisplay"] as? Bool == true)
 
         let cua = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: .cua))
         #expect(cua.commands == manifest.commands)

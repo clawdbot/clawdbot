@@ -1,7 +1,8 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -46,15 +47,18 @@ function loadGatewayCallModule() {
 function shouldUseConfiguredCodexSyntheticUsage(params: {
   config: OpenClawConfig;
   agentDir: string;
+  agentId?: string;
 }): boolean {
   const configuredDefault = resolveDefaultModelForAgent({
     cfg: params.config,
+    agentId: params.agentId,
     allowPluginNormalization: false,
   });
   const policy = resolveAgentHarnessPolicy({
     config: params.config,
     provider: configuredDefault.provider,
     modelId: configuredDefault.model,
+    agentId: params.agentId,
   });
   if (
     !shouldUseCodexSyntheticUsageForRuntime({
@@ -108,19 +112,27 @@ export async function resolveStatusSecurityAudit(params: {
 type StatusUsageSummaryOptions = {
   config: OpenClawConfig;
   timeoutMs?: number;
+  agentId?: string;
   agentDir?: string;
 };
 
-/** Loads provider usage for status output, defaulting to the config's default agent directory. */
+/** Loads provider usage for status output from an explicit or ambient system-agent scope. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
-  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config);
+  let agentId = params.agentId
+    ? resolveSystemAgentTargetAgentId(params.config, params.agentId)
+    : undefined;
+  let agentDir = params.agentDir;
+  if (!agentDir) {
+    agentId ??= resolveSystemAgentTargetAgentId(params.config);
+    agentDir = resolveAgentDir(params.config, agentId);
+  }
   const usage = await loadProviderUsageSummary({
     timeoutMs: params.timeoutMs,
     config: params.config,
     agentDir,
   });
-  if (!shouldUseConfiguredCodexSyntheticUsage({ config: params.config, agentDir })) {
+  if (!shouldUseConfiguredCodexSyntheticUsage({ config: params.config, agentDir, agentId })) {
     return usage;
   }
   const codexUsage = await loadProviderUsageSummary({

@@ -249,6 +249,4 @@ export {
   convertResponsesMessages,
   createOpenAIResponsesAssistantOutput,
   encodeTextSignatureV1,
-  prepareOpenAIResponsesReasoningItemForReplay,
-  tagOpenAIResponsesReasoningReplayItem,
 } from "./openai-responses-replay-messages-internal.js";
