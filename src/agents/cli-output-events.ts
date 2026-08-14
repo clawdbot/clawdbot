@@ -272,11 +272,9 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
-          // Some backends deliver the complete tool input on the start block
-          // instead of streaming it as input_json_delta chunks; keep it as a
-          // separate fallback seed so the stop event still emits a start delta
-          // with real args when no delta ever arrives. An empty input object is
-          // the streaming placeholder, so only seed non-empty inputs.
+          // Seed the start-block input only when it carries real args (see
+          // startInputJson on PendingToolUse); an empty input object is the
+          // streaming placeholder.
           const completeInput = isRecord(block.input) && Object.keys(block.input).length > 0;
           tracker.pendingByIndex.set(event.index, {
             toolCallId,
@@ -319,8 +317,8 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
           pending.toolCallId,
           pending.name,
           pending.kind,
-          // Streamed deltas are the canonical representation; the start-block
-          // seed is only a fallback for backends that never stream deltas.
+          // Streamed deltas stay canonical; the start-block seed is the
+          // fallback (see startInputJson on PendingToolUse).
           parseToolInputJson(
             pending.inputJsonParts.length > 0
               ? pending.inputJsonParts
