@@ -250,6 +250,7 @@ describe("node worker transfer client", () => {
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     const gatewayPort = Number(new URL(gatewayUrl).port);
     let hidPeerCertificate = false;
+    let pinnedAgent: https.Agent | undefined;
     const hidePeerCertificate = (socket: Socket) => {
       if (socket.remotePort !== gatewayPort || hidPeerCertificate) {
         return;
@@ -257,7 +258,15 @@ describe("node worker transfer client", () => {
       hidPeerCertificate = true;
       (socket as TLSSocket).getPeerCertificate = (() => ({})) as TLSSocket["getPeerCertificate"];
     };
-    https.globalAgent.on("free", hidePeerCertificate);
+    const request = https.request.bind(https);
+    const requestSpy = vi.spyOn(https, "request").mockImplementation(((url, options) => {
+      const clientRequest = request(url, options);
+      if (!pinnedAgent && options.agent instanceof https.Agent) {
+        pinnedAgent = options.agent;
+        pinnedAgent.on("free", hidePeerCertificate);
+      }
+      return clientRequest;
+    }) as typeof https.request);
     try {
       await expect(
         runNodeWorkerWorkspaceTransfer({
@@ -294,7 +303,79 @@ describe("node worker transfer client", () => {
       expect(requestCount).toBe(3);
       expect(connectionCount).toBe(1);
     } finally {
-      https.globalAgent.off("free", hidePeerCertificate);
+      pinnedAgent?.off("free", hidePeerCertificate);
+      requestSpy.mockRestore();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("performs a full pinned handshake on a replacement socket", async () => {
+    const root = tempDirs.make("node-worker-transfer-tls-resumed-");
+    const workspaceDir = path.join(root, "workspace");
+    const body = Buffer.from("resumed pinned transfer\n");
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    const rawManifest = serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [
+        {
+          path: "result.txt",
+          type: "file",
+          mode: 0o644,
+          size: body.byteLength,
+          sha256,
+        },
+      ],
+    });
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const sessionReuse: boolean[] = [];
+    const server = createHttpsServer(
+      {
+        cert: TEST_TLS_CERT_PEM,
+        key: TEST_TLS_KEY_PEM,
+        maxVersion: "TLSv1.2",
+      },
+      (req, res) => {
+        if (req.url?.endsWith("/manifest")) {
+          res.writeHead(200, {
+            connection: "close",
+            "content-length": String(Buffer.byteLength(rawManifest)),
+          });
+          res.end(rawManifest);
+          return;
+        }
+        if (req.url?.endsWith(`/blobs/${sha256}`)) {
+          res.writeHead(200, {
+            connection: "close",
+            "content-length": String(body.byteLength),
+          });
+          res.end(body);
+          return;
+        }
+        res.writeHead(404, { connection: "close" }).end();
+      },
+    );
+    server.on("secureConnection", (socket) => {
+      sessionReuse.push(socket.isSessionReused());
+    });
+    const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
+    const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+    try {
+      await expect(
+        runNodeWorkerWorkspaceTransfer({
+          gatewayUrl,
+          gatewayTlsFingerprint: fingerprint,
+          environmentId: "environment-tls-resumed",
+          workspaceDir,
+          manifestHome: root,
+          transfer: { direction: "download", token: "test-token", manifestRef },
+        }),
+      ).resolves.toBe(manifestRef);
+      expect(sessionReuse).toEqual([false, false]);
+    } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());

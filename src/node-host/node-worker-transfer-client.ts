@@ -30,6 +30,13 @@ import {
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 const validatedTlsSocketPins = new WeakMap<TLSSocket, string>();
+// A resumed TLS session may omit the peer certificate, so replacement sockets cannot prove the pin.
+// Keep pooled pinned sockets, but require a full handshake whenever a new socket is created.
+const pinnedTransferAgent = new https.Agent({
+  keepAlive: true,
+  maxCachedSessions: 0,
+  timeout: 5_000,
+});
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
 
 function transferUrl(gatewayUrl: string, routePath: string): URL {
@@ -137,7 +144,9 @@ async function openRequest(params: {
     method: params.method,
     headers: { authorization: `Bearer ${params.token}`, ...params.headers },
     signal: params.signal,
-    ...(url.protocol === "https:" && params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
+    ...(url.protocol === "https:" && params.tlsFingerprint
+      ? { agent: pinnedTransferAgent, rejectUnauthorized: false }
+      : {}),
   });
   const response = once(request, "response").then(([message]) => message as IncomingMessage);
   const send = async () => {
