@@ -74,9 +74,9 @@ function expectRuntimePolicy(
 }
 
 describe("Codex app-server config", () => {
-  it("enables subscription realtime once on an isolated stdio spawn", () => {
+  it("enables subscription realtime without weakening prepared-auth isolation", () => {
     const runtime = resolveRuntimeForTest({
-      pluginConfig: { appServer: { clearEnv: ["KEEP_CLEAR"] } },
+      pluginConfig: { appServer: { clearEnv: ["KEEP_CLEAR", "CODEX_ACCESS_TOKEN"] } },
     });
     const enabled = enableCodexRealtimeConversation(runtime);
 
@@ -85,13 +85,20 @@ describe("Codex app-server config", () => {
       "--enable",
       "realtime_conversation",
     ]);
-    expect(enabled.start.clearEnv).toEqual(["KEEP_CLEAR", "CODEX_API_KEY", "OPENAI_API_KEY"]);
+    expect(enabled.start.clearEnv).toEqual([
+      "KEEP_CLEAR",
+      "CODEX_ACCESS_TOKEN",
+      "CODEX_API_KEY",
+      "OPENAI_API_KEY",
+    ]);
     const spawnEnv = resolveCodexAppServerSpawnEnv(enabled.start, {
       KEEP: "1",
+      CODEX_ACCESS_TOKEN: "prepared-access-token",
       CODEX_API_KEY: "ambient-codex",
       OPENAI_API_KEY: "ambient-openai",
     });
     expect(spawnEnv).toMatchObject({ KEEP: "1" });
+    expect(spawnEnv).not.toHaveProperty("CODEX_ACCESS_TOKEN");
     expect(spawnEnv).not.toHaveProperty("CODEX_API_KEY");
     expect(spawnEnv).not.toHaveProperty("OPENAI_API_KEY");
     expect(resolveCodexAppServerSpawnEnv(enabled.start)).not.toHaveProperty("CODEX_API_KEY");
