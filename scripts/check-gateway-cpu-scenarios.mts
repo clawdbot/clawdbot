@@ -456,8 +456,10 @@ async function runGatewayCpuScenarios(
               "--concurrency",
               String(DEFAULT_GATEWAY_CONCURRENCY),
               "--workspace-fanout",
+              // Post-fix readyz/sessions.list p100 is 1.3-2.6s across environments;
+              // 4s still catches the pre-fix 8s+ stalls and handshake timeouts.
               "--max-control-ms",
-              "2000",
+              "4000",
               "--max-handshake-ms",
               "2000",
               "--runs",
