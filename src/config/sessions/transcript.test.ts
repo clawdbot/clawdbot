@@ -1062,6 +1062,112 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ]);
   });
 
+  it("bounds recent context to the session's start when the caller opts in (post-reset boundary)", async () => {
+    await writeTranscriptStore({ sessionStartedAt: 5_000 });
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [
+        { message: { role: "user", content: "before reset", timestamp: 4_000 } },
+        { message: { role: "user", content: "after reset", timestamp: 6_000 } },
+      ],
+    });
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+        applySessionStartMinTimestamp: true,
+      }),
+    ).resolves.toEqual([
+      { id: expect.any(String), role: "user", text: "after reset", timestamp: 6_000 },
+    ]);
+  });
+
+  it("does not bound recent context to session start when the caller doesn't opt in (upstream-monitor parity)", async () => {
+    await writeTranscriptStore({ sessionStartedAt: 5_000 });
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [
+        { message: { role: "user", content: "before reset", timestamp: 4_000 } },
+        { message: { role: "user", content: "after reset", timestamp: 6_000 } },
+      ],
+    });
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      }),
+    ).resolves.toEqual([
+      { id: expect.any(String), role: "user", text: "before reset", timestamp: 4_000 },
+      { id: expect.any(String), role: "user", text: "after reset", timestamp: 6_000 },
+    ]);
+  });
+
+  it("prefers an explicit minTimestampMs over the session-start default", async () => {
+    await writeTranscriptStore({ sessionStartedAt: 5_000 });
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [
+        { message: { role: "user", content: "before reset", timestamp: 4_000 } },
+        { message: { role: "user", content: "after reset", timestamp: 6_000 } },
+      ],
+    });
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+        minTimestampMs: 3_000,
+        applySessionStartMinTimestamp: true,
+      }),
+    ).resolves.toEqual([
+      { id: expect.any(String), role: "user", text: "before reset", timestamp: 4_000 },
+      { id: expect.any(String), role: "user", text: "after reset", timestamp: 6_000 },
+    ]);
+  });
+
+  it("fails closed on an unstamped row when the session-start default is active", async () => {
+    await writeTranscriptStore({ sessionStartedAt: 5_000 });
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [
+        { message: { role: "user", content: "before reset, no timestamp" } },
+        { message: { role: "user", content: "after reset", timestamp: 6_000 } },
+      ],
+    });
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+        applySessionStartMinTimestamp: true,
+      }),
+    ).resolves.toEqual([
+      { id: expect.any(String), role: "user", text: "after reset", timestamp: 6_000 },
+    ]);
+  });
+
+  it("still admits an unstamped row when the caller doesn't opt into the session-start default", async () => {
+    await writeTranscriptStore({ sessionStartedAt: 5_000 });
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [{ message: { role: "user", content: "no timestamp, no opt-in" } }],
+    });
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      }),
+    ).resolves.toEqual([{ id: expect.any(String), role: "user", text: "no timestamp, no opt-in" }]);
+  });
+
   it("reads recent context only from the active transcript branch", async () => {
     await writeTranscriptStore();
     await persistSessionTranscriptTurn(

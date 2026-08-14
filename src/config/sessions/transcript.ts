@@ -132,6 +132,20 @@ type ReadRecentSessionConversationTextOptions = {
   minTimestampMs?: number;
   role?: "user" | "assistant";
   preferUpstreamUserText?: boolean;
+  /**
+   * When set and the caller doesn't supply `minTimestampMs`, bound the read to the
+   * session's current `sessionStartedAt` — a reset preserves `sessionId` but bumps
+   * this field, so without it a post-reset read still sees pre-reset turns. Opt-in
+   * (not a blanket default) so callers like the upstream-activity monitor, which
+   * read across resets by design, are unaffected.
+   */
+  applySessionStartMinTimestamp?: boolean;
+  /**
+   * Internal: set by `readRecentUserAssistantTextForSession` (never by a caller)
+   * when it applied the `applySessionStartMinTimestamp` default, so the SQLite
+   * read path fails closed on rows with no timestamp instead of admitting them.
+   */
+  requireTimestampWithinMinBound?: boolean;
 };
 
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
@@ -193,6 +207,7 @@ function parseAssistantTranscriptText(
 
 type SessionConversationTranscriptTarget = {
   sqliteScope?: SqliteSessionFileMarker;
+  sessionStartedAt?: number;
 };
 
 function parseRecentConversationText(
@@ -280,7 +295,7 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
       storePath: scope.storePath,
     };
     const recent: SessionRecentConversationText[] = [];
-    for (let offset = 0; recent.length < limit; offset += pageSize) {
+    paging: for (let offset = 0; recent.length < limit; offset += pageSize) {
       const page = readSessionTranscriptMessageEventPage(readScope, {
         maxMessages: pageSize,
         offset,
@@ -290,10 +305,22 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
       }
       for (const event of page.events.toReversed()) {
         const entry = parseRecentConversationText(JSON.stringify(event.event), options);
-        if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
+        if (!entry) {
+          continue;
+        }
+        if (
+          options.requireTimestampWithinMinBound &&
+          options.minTimestampMs !== undefined &&
+          entry.timestamp === undefined
+        ) {
+          // An unstamped row can't be shown to fall on either side of the bound;
+          // fail closed rather than risk re-surfacing pre-reset content.
+          continue;
+        }
+        if (isWithinTranscriptWindow(entry.timestamp, options)) {
           recent.push(entry);
           if (recent.length >= limit) {
-            break;
+            break paging;
           }
         }
       }
@@ -338,17 +365,29 @@ function resolveSessionConversationTranscriptTarget(params: {
       sessionId: entry.sessionId,
       storePath,
     },
+    sessionStartedAt: entry.sessionStartedAt,
   };
 }
 
 export async function readRecentUserAssistantTextForSession(
   params: ReadRecentSessionConversationTextParams,
 ): Promise<SessionRecentConversationText[]> {
+  const { applySessionStartMinTimestamp, ...options } = params;
   const target = resolveSessionConversationTranscriptTarget(params);
-  if (target.sqliteScope) {
-    return await readRecentUserAssistantTextFromSqliteTranscript(target.sqliteScope, params);
+  if (!target.sqliteScope) {
+    return [];
   }
-  return [];
+  const usingSessionStartDefault =
+    options.minTimestampMs === undefined &&
+    applySessionStartMinTimestamp === true &&
+    target.sessionStartedAt !== undefined;
+  const minTimestampMs =
+    options.minTimestampMs ?? (usingSessionStartDefault ? target.sessionStartedAt : undefined);
+  return await readRecentUserAssistantTextFromSqliteTranscript(target.sqliteScope, {
+    ...options,
+    ...(minTimestampMs !== undefined ? { minTimestampMs } : {}),
+    requireTimestampWithinMinBound: usingSessionStartDefault,
+  });
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(

@@ -132,6 +132,11 @@ export async function mergeSessionTranscriptContext(params: {
       ? { beforeTimestampMs: options?.beforeTimestampMs ?? params.ctx.Timestamp }
       : {}),
     ...(options?.minTimestampMs !== undefined ? { minTimestampMs: options.minTimestampMs } : {}),
+    // Bound to the current session's start when the caller doesn't supply its own
+    // cutoff: a reset preserves sessionId but bumps sessionStartedAt, so without
+    // this a post-reset turn on non-telegram channels still surfaces pre-reset
+    // transcript content (session-transcript-boundary-cutoff).
+    applySessionStartMinTimestamp: true,
   });
   const labels = options?.senderLabels ?? { assistant: "Assistant", user: "User" };
   const transcript = turns.map((turn) => {
