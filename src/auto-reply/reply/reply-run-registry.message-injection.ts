@@ -142,6 +142,15 @@ export function resolveReplyMessageInjectionRejection(params: {
   return mismatch ? { reason: mismatch } : { backend, injection };
 }
 
+function isLeafOwnershipRejection(reason: ReplyMessageInjectionRejectionReason): boolean {
+  return (
+    reason === "no_active_run" ||
+    reason === "not_running" ||
+    reason === "stale_run" ||
+    reason === "leaf_mismatch"
+  );
+}
+
 export function beginReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   text: string,
@@ -170,7 +179,9 @@ export function beginReplyMessageInjectionTarget(
     const immediateRejection = { status: "rejected" as const, ...resolved };
     return {
       targetRunId: target.runId,
-      ...(target.identity === "leaf" ? { rejectBeforeAck: true as const } : {}),
+      ...(target.identity === "leaf" && isLeafOwnershipRejection(resolved.reason)
+        ? { rejectBeforeAck: true as const }
+        : {}),
       acceptance: Promise.resolve(false),
       outcome: Promise.resolve(immediateRejection),
     };

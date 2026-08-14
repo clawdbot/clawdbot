@@ -19,7 +19,9 @@ export function createMockReplyOperation(
   const updateSessionIdMock = vi.fn();
   const sessionId = overrides.sessionId ?? "session";
   let toolAuthorityFingerprint = overrides.toolAuthorityFingerprint;
-  let toolAuthorityProjector: Parameters<ReplyOperation["bindToolAuthorityProjector"]>[0];
+  let toolAuthorityProjector:
+    | Parameters<ReplyOperation["bindToolAuthorityProjector"]>[0]
+    | undefined;
   let toolAuthorityRoute: ReplyOperation["toolAuthorityRoute"];
   const replyOperation: ReplyOperation = {
     key: overrides.key ?? "main",
