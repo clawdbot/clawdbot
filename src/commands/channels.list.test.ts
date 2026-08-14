@@ -248,6 +248,41 @@ describe("channels list", () => {
     expect(output).not.toContain("Auth providers");
   });
 
+  it("sanitizes channel labels only in terminal output", async () => {
+    const control = "\u001B]0;channels-list-injection\u0007";
+    const accountId = `${control}default\nforged-row`;
+    const channelLabel = `${control}Telegram 🦞\r\nAdmin`;
+    const accountName = `${control}Primary\tAccount`;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ label: channelLabel, accountIds: [accountId] }),
+    ]);
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+      accountId,
+      name: accountName,
+      configured: true,
+      enabled: true,
+    });
+    const config = { channels: { telegram: { accounts: { [accountId]: {} } } } };
+    mocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, config });
+
+    const textRuntime = createTestRuntime();
+    await channelsListCommand({}, textRuntime);
+
+    const textOutput = loggedText(textRuntime);
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nforged-row");
+    expect(textOutput).toContain("Telegram 🦞\\r\\nAdmin");
+    expect(textOutput).toContain("\\nforged-row");
+    expect(textOutput).toContain("Primary\\tAccount");
+
+    const jsonRuntime = createTestRuntime();
+    await channelsListCommand({ json: true }, jsonRuntime);
+    const payload = JSON.parse(loggedText(jsonRuntime)) as {
+      chat?: Record<string, { accounts: string[] }>;
+    };
+    expect(payload.chat?.telegram?.accounts).toStrictEqual([accountId]);
+  });
+
   it("prefers reachable gateway account snapshots over command-local token state", async () => {
     const runtime = createTestRuntime();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
