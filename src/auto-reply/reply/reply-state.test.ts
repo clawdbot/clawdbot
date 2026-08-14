@@ -25,6 +25,7 @@ import {
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
+  resolveServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -410,6 +411,74 @@ describe("shouldRunPreflightCompaction", () => {
         softThresholdTokens: 2_000,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveServerCompactionThreshold", () => {
+  it.each([
+    {
+      name: "keeps Anthropic disabled by default",
+      params: {},
+      contextWindowTokens: 200_000,
+      expected: undefined,
+    },
+    {
+      name: "uses 70 percent of the Anthropic context window",
+      params: { anthropicServerCompaction: true },
+      contextWindowTokens: 200_000,
+      expected: 140_000,
+    },
+    {
+      name: "uses the Anthropic minimum for small windows",
+      params: { anthropicServerCompaction: true },
+      contextWindowTokens: 32_000,
+      expected: 50_000,
+    },
+    {
+      name: "clamps configured Anthropic thresholds",
+      params: { anthropicServerCompaction: true, anthropicCompactThreshold: 42_000 },
+      contextWindowTokens: 200_000,
+      expected: 50_000,
+    },
+    {
+      name: "uses configured Anthropic thresholds",
+      params: { anthropicServerCompaction: true, anthropicCompactThreshold: 80_000 },
+      contextWindowTokens: 200_000,
+      expected: 80_000,
+    },
+  ])("$name", ({ params, contextWindowTokens, expected }) => {
+    expect(
+      resolveServerCompactionThreshold({
+        cfg: { agents: { defaults: { params } } },
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        contextWindowTokens,
+      }),
+    ).toBe(expected);
+  });
+
+  it("preserves OpenAI Responses threshold behavior", () => {
+    expect(
+      resolveServerCompactionThreshold({
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        contextWindowTokens: 200_000,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveServerCompactionThreshold({
+        cfg: {
+          agents: {
+            defaults: {
+              params: { responsesServerCompaction: true, responsesCompactThreshold: 120_000 },
+            },
+          },
+        },
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.6-luna",
+        contextWindowTokens: 200_000,
+      }),
+    ).toBe(120_000);
   });
 });
 

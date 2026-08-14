@@ -269,6 +269,9 @@ const OPENAI_REASONING_REPLAY_METADATA_KEY = "__openclaw_replay";
 const OPENAI_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
 const OPENAI_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
 const OPENAI_COMPACTION_SUPPRESSION_DATA = "rejected";
+const ANTHROPIC_COMPACTION_REPLAY_TYPE = "anthropic-compaction";
+const ANTHROPIC_COMPACTION_SUPPRESSION_TYPE = "anthropic-compaction-suppression";
+const ANTHROPIC_COMPACTION_SUPPRESSION_DATA = "rejected";
 
 function sanitizeOpenAICompactionReplayState(
   value: unknown,
@@ -311,6 +314,52 @@ function sanitizeOpenAICompactionReplayState(
     type: replayType,
     ...(replayId !== undefined ? { id: replayId } : {}),
     data: value.data,
+    ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
+    provider: value.provider,
+    api: value.api,
+    model: value.model,
+    baseUrlHash: value.baseUrlHash,
+    ...(value.sessionHash !== undefined ? { sessionHash: value.sessionHash } : {}),
+    ...(value.authProfileHash !== undefined ? { authProfileHash: value.authProfileHash } : {}),
+  };
+}
+
+function sanitizeAnthropicCompactionReplayState(
+  value: unknown,
+  route: TranscriptAssistantRoute | undefined,
+  cfg: OpenClawConfig | undefined,
+): Record<string, unknown> | undefined {
+  const replayType =
+    value && typeof value === "object" && isPlainTranscriptObject(value) ? value.type : undefined;
+  const isSuppression = replayType === ANTHROPIC_COMPACTION_SUPPRESSION_TYPE;
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !isPlainTranscriptObject(value) ||
+    !isAnthropicReasoningRoute(route) ||
+    value.v !== 1 ||
+    (replayType !== ANTHROPIC_COMPACTION_REPLAY_TYPE && !isSuppression) ||
+    typeof value.data !== "string" ||
+    (isSuppression
+      ? value.data !== ANTHROPIC_COMPACTION_SUPPRESSION_DATA
+      : value.data.length === 0) ||
+    (value.replayIndex !== undefined &&
+      (isSuppression ||
+        !Number.isSafeInteger(value.replayIndex) ||
+        (value.replayIndex as number) < 0)) ||
+    value.provider !== route?.provider ||
+    value.api !== route?.api ||
+    value.model !== route?.model ||
+    !isOpenAIReplayContextHash(value.baseUrlHash) ||
+    (value.sessionHash !== undefined && !isOpenAIReplayContextHash(value.sessionHash)) ||
+    (value.authProfileHash !== undefined && !isOpenAIReplayContextHash(value.authProfileHash))
+  ) {
+    return undefined;
+  }
+  return {
+    v: 1,
+    type: replayType,
+    data: isSuppression ? value.data : redactTranscriptText(value.data, cfg),
     ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
     provider: value.provider,
     api: value.api,
@@ -577,7 +626,9 @@ function redactTranscriptStructuredValue(
   }
   for (const [key, item] of Object.entries(source)) {
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
-      const sanitizedReplay = sanitizeOpenAICompactionReplayState(item, currentAssistantRoute);
+      const sanitizedReplay =
+        sanitizeOpenAICompactionReplayState(item, currentAssistantRoute) ??
+        sanitizeAnthropicCompactionReplayState(item, currentAssistantRoute, cfg);
       if (sanitizedReplay !== undefined) {
         if (sanitizedReplay !== item) {
           next ??= { ...source };
