@@ -397,17 +397,37 @@ export async function incrementCompactionCount(params: {
     : undefined;
   if (effectiveStorePath) {
     let committed = false;
-    const persistedEntry = await patchSessionEntryCore(
-      { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
-      (current) => {
-        if (!canApply(current)) {
-          return null;
-        }
-        committed = true;
-        return updates;
-      },
-      expectedSession ? {} : { fallbackEntry: nextEntry },
-    );
+    const authorityRevoked = new Error("compaction accounting authority revoked");
+    let persistedEntry: SessionEntry | null;
+    try {
+      persistedEntry = await patchSessionEntryCore(
+        { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
+        (current) => {
+          if (!canApply(current)) {
+            return null;
+          }
+          committed = true;
+          return updates;
+        },
+        {
+          ...(expectedSession ? {} : { fallbackEntry: nextEntry }),
+          ...(authorize
+            ? {
+                assertCommitAllowed: () => {
+                  if (!authorize()) {
+                    throw authorityRevoked;
+                  }
+                },
+              }
+            : {}),
+        },
+      );
+    } catch (error) {
+      if (error === authorityRevoked) {
+        return undefined;
+      }
+      throw error;
+    }
     if (!committed || !persistedEntry) {
       return undefined;
     }

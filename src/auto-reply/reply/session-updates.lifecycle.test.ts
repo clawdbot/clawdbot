@@ -265,4 +265,37 @@ describe("session-updates lifecycle hooks", () => {
     });
     expect(loadSessionEntry({ storePath, sessionKey })).not.toHaveProperty("totalTokens");
   });
+
+  it("does not commit accounting when authority closes after the queued updater", async () => {
+    const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+    let authorized = true;
+    let authorizeCalls = 0;
+
+    const result = await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      tokensAfter: 123,
+      expectedSession: entry,
+      authorize: () => {
+        authorizeCalls += 1;
+        if (authorizeCalls === 2) {
+          queueMicrotask(() => {
+            authorized = false;
+          });
+        }
+        return authorized;
+      },
+    });
+
+    expect(result).toBeUndefined();
+    expect(authorizeCalls).toBe(3);
+    expect(sessionStore[sessionKey]).toBe(entry);
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      sessionId: "s1",
+      compactionCount: 0,
+    });
+    expect(loadSessionEntry({ storePath, sessionKey })).not.toHaveProperty("totalTokens");
+  });
 });
