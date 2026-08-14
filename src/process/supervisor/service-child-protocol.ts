@@ -19,7 +19,7 @@ type ServiceChildHostMessage =
       signal: "SIGTERM" | "SIGKILL";
     };
 
-export type ServiceChildAnchorPayload =
+type ServiceChildAnchorPayload =
   | {
       type: "ready";
       commandPid: number;

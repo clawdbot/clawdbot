@@ -4,9 +4,11 @@ import type { Readable } from "node:stream";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
-  type ServiceChildAnchorPayload,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
+
+type WithoutEnvelope<T> = T extends unknown ? Omit<T, "generation" | "sequence"> : never;
+type ServiceChildAnchorPayload = WithoutEnvelope<ServiceChildAnchorMessage>;
 
 const TERM_GRACE_MS = 1_000;
 const LINEAGE_EXIT_OBSERVATION_MS = 100;
