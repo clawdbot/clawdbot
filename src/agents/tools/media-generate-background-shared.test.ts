@@ -38,6 +38,7 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 const agentRunRegistryMocks = vi.hoisted(() => ({
   getAgentRunTaskRunId: vi.fn<(runId: string) => string | undefined>(() => undefined),
+  getAgentRunCronReceipt: vi.fn<(runId: string) => object | undefined>(() => undefined),
 }));
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
@@ -56,6 +57,7 @@ vi.mock("../../infra/agent-run-registry.js", async () => ({
     "../../infra/agent-run-registry.js",
   )),
   getAgentRunTaskRunId: agentRunRegistryMocks.getAgentRunTaskRunId,
+  getAgentRunCronReceipt: agentRunRegistryMocks.getAgentRunCronReceipt,
 }));
 
 import {
@@ -77,6 +79,7 @@ beforeEach(() => {
   cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry.mockReset().mockReturnValue(undefined);
   agentRunRegistryMocks.getAgentRunTaskRunId.mockReset().mockReturnValue(undefined);
+  agentRunRegistryMocks.getAgentRunCronReceipt.mockReset().mockReturnValue(undefined);
 });
 
 function createImageMediaLifecycle() {
@@ -891,7 +894,18 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
 describe("createMediaGenerationTaskLifecycle", () => {
   it("pins the owner-issued cron task run id when detached media starts", () => {
+    const receipt = {
+      receiptId: "receipt-exact",
+      storeKey: "store-exact",
+      jobId: "daily-media",
+      configRevision: "revision-exact",
+      agentId: "main",
+      ownerPid: 123,
+      ownerStartTime: 456,
+      startedAtMs: 789,
+    };
     agentRunRegistryMocks.getAgentRunTaskRunId.mockReturnValue("cron-task-run-exact");
+    agentRunRegistryMocks.getAgentRunCronReceipt.mockReturnValue(receipt);
     const lifecycle = createImageMediaLifecycle();
 
     const handle = lifecycle.createTaskRun({
@@ -900,9 +914,11 @@ describe("createMediaGenerationTaskLifecycle", () => {
     });
 
     expect(agentRunRegistryMocks.getAgentRunTaskRunId).toHaveBeenCalledWith("cron-session-123");
+    expect(agentRunRegistryMocks.getAgentRunCronReceipt).toHaveBeenCalledWith("cron-session-123");
     expect(handle).toMatchObject({
       requesterSessionKey: "agent:main:cron:daily-media:run:cron-session-123",
       originatingCronTaskRunId: "cron-task-run-exact",
+      originatingCronRunReceipt: receipt,
     });
   });
 

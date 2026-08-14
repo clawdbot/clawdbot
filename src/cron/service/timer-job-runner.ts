@@ -23,7 +23,7 @@ import {
   trackServiceCronRunReceiptSettlement,
 } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
-import { tryUpdateCronTaskRunSession, withCronTaskRunId } from "./task-runs.js";
+import { tryUpdateCronTaskRunSession, withCronRunReceipt, withCronTaskRunId } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
@@ -266,8 +266,10 @@ export async function executeJobCoreWithTimeout(
         onExecutionPhase: accumulateExecution,
         assertRunCurrent,
       };
-      const corePromise = withCronTaskRunId(opts?.runId, () =>
-        executeJobCore(state, job, runAbortController.signal, coreOptions),
+      const corePromise = withCronRunReceipt(opts?.runReceipt, () =>
+        withCronTaskRunId(opts?.runId, () =>
+          executeJobCore(state, job, runAbortController.signal, coreOptions),
+        ),
       );
       const runPromise = corePromise.then(async (result) => {
         progress.completedCoreResult = result;
@@ -353,8 +355,10 @@ export async function executeJobCoreWithTimeout(
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
       assertRunCurrent,
     };
-    const corePromise = withCronTaskRunId(opts?.runId, () =>
-      executeJobCore(state, job, runAbortController.signal, coreOptions),
+    const corePromise = withCronRunReceipt(opts?.runReceipt, () =>
+      withCronTaskRunId(opts?.runId, () =>
+        executeJobCore(state, job, runAbortController.signal, coreOptions),
+      ),
     );
     watchdog.start();
     const runPromise = corePromise.then(async (result) => {
