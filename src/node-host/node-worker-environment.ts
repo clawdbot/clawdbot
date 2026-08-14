@@ -47,5 +47,9 @@ export function snapshotNodeWorkerEnv(source: NodeJS.ProcessEnv): NodeJS.Process
     }
     snapshot[key] = value;
   }
+  // The supervised start gate is carried by Node IPC. Launcher respawns do not
+  // inherit that channel, so workers must stay in the owned child process.
+  snapshot.NODE_DISABLE_COMPILE_CACHE = "1";
+  snapshot.OPENCLAW_NO_RESPAWN = "1";
   return snapshot;
 }
