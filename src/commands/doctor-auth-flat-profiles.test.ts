@@ -495,9 +495,12 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       env: state.env,
     });
 
-    expect(result.warnings).toContain(
-      "Failed to migrate shared legacy OAuth credentials; the source was left in place.",
-    );
+    // The warning must carry the underlying cause so the user can act on it.
+    expect(result.warnings).toEqual([
+      expect.stringMatching(
+        /^Failed to migrate shared legacy OAuth credentials; the source was left in place: .+/,
+      ),
+    ]);
     expect(fs.existsSync(oauthPath)).toBe(true);
     expectNoMigratedArchive(oauthPath);
     expect(readPersistedAuthProfileStoreRaw(state.agentDir())).toEqual(unreadableStore);

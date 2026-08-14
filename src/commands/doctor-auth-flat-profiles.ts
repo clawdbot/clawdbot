@@ -1380,9 +1380,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   } else if (hasLegacyOAuth) {
     try {
       migrateLegacyOAuthFile({ oauthPath, env, now, result });
-    } catch {
+    } catch (err) {
       result.warnings.push(
-        `Failed to migrate shared legacy OAuth credentials; the source was left in place.`,
+        `Failed to migrate shared legacy OAuth credentials; the source was left in place: ${String(err)}`,
       );
     }
   }

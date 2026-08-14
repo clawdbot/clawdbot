@@ -2,10 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 
-vi.mock("../../../lib/toast.ts", () => ({ showToast: vi.fn() }));
-
-import { showToast } from "../../../lib/toast.ts";
-
 class StubFileReader {
   static failNames = new Set<string>();
   result: string | ArrayBuffer | null = null;
@@ -52,16 +48,18 @@ function pasteEventWithFiles(files: File[]): ClipboardEvent {
 }
 
 describe("chat attachment read failures", () => {
-  const realFileReader = globalThis.FileReader;
+  let toastHost: HTMLElementTagNameMap["openclaw-toast-host"];
 
   beforeEach(() => {
     vi.stubGlobal("FileReader", StubFileReader as unknown as typeof FileReader);
     StubFileReader.failNames = new Set();
+    toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
   });
 
   afterEach(() => {
-    vi.stubGlobal("FileReader", realFileReader);
-    vi.clearAllMocks();
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
   });
 
   it("names files whose read failed instead of dropping them silently", async () => {
@@ -77,11 +75,8 @@ describe("chat attachment read failures", () => {
     await vi.waitFor(() => {
       expect(onAttachmentsChange).toHaveBeenCalled();
     });
-    expect(vi.mocked(showToast)).toHaveBeenCalledTimes(1);
-    const message = vi.mocked(showToast).mock.calls[0]?.[0]?.message;
-    // The read-failure toast is a plain t() string, not a template.
-    expect(typeof message).toBe("string");
-    expect(message).toContain("bad.png");
+    await toastHost.updateComplete;
+    expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("bad.png");
     // The successful sibling still attaches.
     const attached = onAttachmentsChange.mock.calls[0]?.[0] as Array<{ fileName?: string }>;
     expect(attached).toHaveLength(1);
@@ -97,6 +92,7 @@ describe("chat attachment read failures", () => {
     await vi.waitFor(() => {
       expect(onAttachmentsChange).toHaveBeenCalled();
     });
-    expect(vi.mocked(showToast)).not.toHaveBeenCalled();
+    await toastHost.updateComplete;
+    expect(toastHost.querySelector(".app-toast")).toBeNull();
   });
 });
