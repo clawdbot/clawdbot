@@ -5,11 +5,13 @@ import {
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
   classifyGatewayConnectFailure,
+  ConnectErrorDetailCodes,
   describePairingConnectRequirement,
   formatConnectErrorMessage,
   formatConnectPairingRequiredMessage,
   normalizePairingConnectRequestId,
   readConnectErrorDetailCode,
+  readControlUiBuildMismatchDetails,
   readConnectErrorRecoveryAdvice,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
@@ -39,6 +41,39 @@ describe("readConnectErrorDetailCode", () => {
   it("returns null for invalid detail payloads", () => {
     expect(readConnectErrorDetailCode(null)).toBeNull();
     expect(readConnectErrorDetailCode("AUTH_TOKEN_MISMATCH")).toBeNull();
+  });
+});
+
+describe("readControlUiBuildMismatchDetails", () => {
+  it("returns a bounded reload target", () => {
+    expect(
+      readControlUiBuildMismatchDetails({
+        code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+        gatewayBuildId: "gateway-build",
+        reloadRequired: true,
+      }),
+    ).toEqual({
+      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+      gatewayBuildId: "gateway-build",
+      reloadRequired: true,
+    });
+  });
+
+  it.each([
+    {},
+    { code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH },
+    {
+      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+      gatewayBuildId: "x".repeat(97),
+      reloadRequired: true,
+    },
+    {
+      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+      gatewayBuildId: "gateway-build",
+      reloadRequired: false,
+    },
+  ])("rejects malformed details", (details) => {
+    expect(readControlUiBuildMismatchDetails(details)).toBeNull();
   });
 });
 

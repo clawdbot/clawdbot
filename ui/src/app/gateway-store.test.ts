@@ -12,6 +12,14 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
 
+const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
+  scheduleStaleChunkReloadMock: vi.fn(async () => true),
+}));
+
+vi.mock("./stale-chunk-reload.ts", () => ({
+  scheduleStaleChunkReload: scheduleStaleChunkReloadMock,
+}));
+
 vi.mock("../build-info.ts", () => ({
   CONTROL_UI_BUILD_INFO: {
     version: "2026.7.19",
@@ -112,6 +120,7 @@ function createStore(
 
 describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
+    scheduleStaleChunkReloadMock.mockClear();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -193,6 +202,32 @@ describe("createApplicationGateway connection phase", () => {
     current().opts.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
     current().opts.onHello?.(legacyHello);
     expect(gateway.snapshot.phase).toBe("reconnecting");
+  });
+
+  it("turns a structured build rejection into one guarded reload", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "connect failed",
+      willRetry: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+      },
+    });
+
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH);
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledWith({
+      buildId: "replacement-build",
+    });
   });
 
   it("does not compare a separately hosted Control UI with a remote gateway build", () => {

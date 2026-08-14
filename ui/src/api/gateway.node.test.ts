@@ -461,6 +461,47 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
+  it("retries an old closed-schema Gateway once without client build identity", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      clientBuildId: "build-a",
+    });
+
+    const first = await startConnect(client);
+    expect(first.connectFrame.params?.client.buildId).toBe("build-a");
+    first.ws.emitMessage({
+      type: "res",
+      id: first.connectFrame.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "invalid connect params: at /client: unexpected property 'buildId'",
+      },
+    });
+    await expectSocketClosed(first.ws);
+    first.ws.emitClose(4008, "connect retry");
+
+    await vi.advanceTimersByTimeAsync(250);
+    const second = await continueConnect(getLatestWebSocket(), "nonce-2");
+    expect(second.connectFrame.params?.client.buildId).toBeUndefined();
+    second.ws.emitMessage({
+      type: "res",
+      id: second.connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    expect(wsInstances).toHaveLength(2);
+
+    client.stop();
+    vi.useRealTimers();
+  });
+
   it("signs device proof with Gateway time instead of browser wall-clock time", async () => {
     useNodeFakeTimers();
     vi.setSystemTime(new Date("2040-01-01T00:00:00.000Z"));
