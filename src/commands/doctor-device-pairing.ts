@@ -472,7 +472,7 @@ function formatLocalDeviceAuthIssue(issue: LocalDeviceAuthIssue): string {
 }
 
 function formatLegacyPairingStoreIssue(filePath: string): string {
-  return `- Legacy device pairing store ${filePath} has not been imported into the SQLite state store yet. The gateway imports and archives it at startup, so restart the gateway. If the file persists across restarts it is likely unreadable; OpenClaw refused to treat it as empty to avoid dropping approved pairings, so fix or move it aside, then restart.`;
+  return `- Legacy device pairing store ${filePath} has not been imported into the SQLite state store yet. The gateway imports and archives it at startup, so restart the gateway. If the file persists across restarts it is likely unreadable; OpenCrustacean refused to treat it as empty to avoid dropping approved pairings, so fix or move it aside, then restart.`;
 }
 
 /** Warn about legacy devices/*.json files the startup SQLite import has not archived. */

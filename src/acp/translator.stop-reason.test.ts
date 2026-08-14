@@ -236,7 +236,7 @@ describe("acp translator stop reason mapping", () => {
 
       await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
       const expectedText =
-        "[OpenClaw interruption] The Gateway disconnected after accepting this message, so its final outcome is unknown. Check the session before retrying.";
+        "[OpenCrustacean interruption] The Gateway disconnected after accepting this message, so its final outcome is unknown. Check the session before retrying.";
       expect(sessionUpdate).toHaveBeenCalledWith({
         sessionId,
         update: {
@@ -314,7 +314,7 @@ describe("acp translator stop reason mapping", () => {
       await vi.advanceTimersByTimeAsync(1);
       await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
       const expectedText =
-        "[OpenClaw interruption] The Gateway disconnected before OpenClaw could confirm whether this message was accepted, so its final outcome is unknown. Check the session before retrying.";
+        "[OpenCrustacean interruption] The Gateway disconnected before OpenCrustacean could confirm whether this message was accepted, so its final outcome is unknown. Check the session before retrying.";
       expect(sessionUpdate).toHaveBeenCalledWith({
         sessionId,
         update: {

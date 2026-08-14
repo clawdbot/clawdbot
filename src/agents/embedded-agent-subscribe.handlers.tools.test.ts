@@ -1946,7 +1946,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     {
       name: "preserves compact cwd labels in semantic raw exec metadata payload warnings",
       toolCallId: "tool-exec-repo-raw-command",
-      args: { command: "git status", workdir: "/Users/agent/Projects/OpenClaw" },
+      args: { command: "git status", workdir: "/Users/agent/Projects/OpenCrustacean" },
       meta: "check git status (repo), `git status`",
       warning: "⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)",
     },

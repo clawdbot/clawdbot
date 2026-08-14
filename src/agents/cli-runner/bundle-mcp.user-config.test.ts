@@ -26,7 +26,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
 
-  it("merges user-configured mcp.servers from OpenClaw config", async () => {
+  it("merges user-configured mcp.servers from OpenCrustacean config", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-",
     );
@@ -63,7 +63,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     await prepared.cleanup?.();
   });
 
-  it("translates OpenClaw transport field on user mcp.servers into Claude type", async () => {
+  it("translates OpenCrustacean transport field on user mcp.servers into Claude type", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-transport-",
     );

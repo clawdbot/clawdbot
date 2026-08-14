@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 
 const STARTUP_REFUSAL =
-  "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
+  "OpenCrustacean startup migrations did not complete cleanly; refusing to report the gateway ready.";
 
 function seedPluginStateConflict(stateDir: string): void {
   const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");

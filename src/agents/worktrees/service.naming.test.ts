@@ -25,7 +25,7 @@ describe("ManagedWorktreeService naming", () => {
     repo = path.join(root, "repo");
     await fs.mkdir(repo);
     await git(repo, "init", "-b", "main");
-    await git(repo, "config", "user.name", "OpenClaw Test");
+    await git(repo, "config", "user.name", "OpenCrustacean Test");
     await git(repo, "config", "user.email", "openclaw-test@example.invalid");
     await fs.writeFile(path.join(repo, "README.md"), "base\n");
     await git(repo, "add", "README.md");

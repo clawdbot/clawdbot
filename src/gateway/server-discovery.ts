@@ -17,12 +17,12 @@ type ResolveBonjourCliPathOptions = {
 export function formatBonjourInstanceName(displayName: string) {
   const trimmed = displayName.trim();
   if (!trimmed) {
-    return "OpenClaw";
+    return "OpenCrustacean";
   }
   if (/openclaw/i.test(trimmed)) {
     return trimmed;
   }
-  return `${trimmed} (OpenClaw)`;
+  return `${trimmed} (OpenCrustacean)`;
 }
 
 /** Resolves the CLI path advertised to Bonjour clients, preferring explicit env config. */

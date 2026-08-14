@@ -48,7 +48,7 @@ describe("shared/node-match", () => {
     ).toBe("mac-studio");
   });
 
-  it("prefers a unique current OpenClaw client over a legacy clawdbot client", () => {
+  it("prefers a unique current OpenCrustacean client over a legacy clawdbot client", () => {
     expect(
       resolveNodeIdFromCandidates(
         [

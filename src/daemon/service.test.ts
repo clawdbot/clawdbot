@@ -65,7 +65,7 @@ describe("resolveGatewayService", () => {
     );
   });
 
-  it("guards mutating service adapters when config was written by a newer OpenClaw", async () => {
+  it("guards mutating service adapters when config was written by a newer OpenCrustacean", async () => {
     const tempHome = await makeTempWorkspace("openclaw-service-future-config-");
     const stateDir = path.join(tempHome, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -293,7 +293,7 @@ describe("startGatewayService", () => {
     expect(result.outcome).toBe("repair-required");
     if (result.outcome === "repair-required") {
       expect(formatGatewayServiceStartRepairIssues(result.issues)).toContain(
-        "service was installed by OpenClaw 2026.4.24",
+        "service was installed by OpenCrustacean 2026.4.24",
       );
     }
     expect(service.start).not.toHaveBeenCalled();

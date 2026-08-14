@@ -30,7 +30,7 @@ describe("gateway tailscale bind validation", () => {
     });
     expect(validRes.ok).toBe(true);
 
-    for (const serviceName of ["openclaw", "svc:", "svc:-openclaw", "svc:OpenClaw"]) {
+    for (const serviceName of ["openclaw", "svc:", "svc:-openclaw", "svc:OpenCrustacean"]) {
       const res = validateConfigObject({
         gateway: {
           bind: "loopback",

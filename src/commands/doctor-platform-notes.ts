@@ -70,7 +70,7 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   }
 
   return [
-    "- Stale OpenClaw updater launchd job(s) detected.",
+    "- Stale OpenCrustacean updater launchd job(s) detected.",
     ...jobs.map((job) => {
       const exitStatus =
         job.lastExitStatus !== undefined ? `, last exit ${job.lastExitStatus}` : "";

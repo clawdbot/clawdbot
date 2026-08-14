@@ -19,11 +19,11 @@ import { generateSlugViaLLM } from "./llm-slug-generator.js";
 function requireFirstRunOptions(): Record<string, unknown> {
   const [call] = runEmbeddedAgentMock.mock.calls;
   if (!call) {
-    throw new Error("expected embedded OpenClaw agent run");
+    throw new Error("expected embedded OpenCrustacean agent run");
   }
   const [options] = call;
   if (!options || typeof options !== "object") {
-    throw new Error("expected embedded OpenClaw agent run options");
+    throw new Error("expected embedded OpenCrustacean agent run options");
   }
   return options as Record<string, unknown>;
 }

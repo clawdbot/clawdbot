@@ -261,7 +261,7 @@ function firstRunCliAgentArg(callIndex = 0) {
 }
 
 function firstEmbeddedAgentArg(callIndex = 0) {
-  return requireMockArg(runEmbeddedAgentMock, callIndex, "embedded OpenClaw agent argument");
+  return requireMockArg(runEmbeddedAgentMock, callIndex, "embedded OpenCrustacean agent argument");
 }
 
 describe("CLI attempt execution", () => {
@@ -3780,7 +3780,7 @@ describe("embedded attempt harness pinning", () => {
     expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
-  it("honors a resolved persisted OpenClaw harness", async () => {
+  it("honors a resolved persisted OpenCrustacean harness", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "stale-agent-session",
       updatedAt: Date.now(),
@@ -3826,7 +3826,7 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("honors an explicit OpenClaw session runtime override", async () => {
+  it("honors an explicit OpenCrustacean session runtime override", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-openclaw-session",
       updatedAt: Date.now(),
@@ -3875,7 +3875,7 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("routes explicit OpenAI native runs with legacy Codex OAuth through OpenClaw", async () => {
+  it("routes explicit OpenAI native runs with legacy Codex OAuth through OpenCrustacean", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-agent-codex-oauth-session",
       updatedAt: Date.now(),

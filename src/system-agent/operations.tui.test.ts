@@ -20,7 +20,7 @@ describe("system-agent TUI operations", () => {
       expect(result).toEqual({ applied: false });
       expect(isPersistentSystemAgentOperation({ kind: "doctor-fix" })).toBe(false);
       expect(runDoctor).not.toHaveBeenCalled();
-      expect(lines.join("\n")).toContain("Exit OpenClaw");
+      expect(lines.join("\n")).toContain("Exit OpenCrustacean");
       expect(lines.join("\n")).toContain("openclaw doctor --fix");
       expect(lines.join("\n")).not.toContain("[openclaw] running: doctor.fix");
       await expect(
@@ -29,7 +29,7 @@ describe("system-agent TUI operations", () => {
     });
   });
 
-  it("returns from the agent TUI back to OpenClaw", async () => {
+  it("returns from the agent TUI back to OpenCrustacean", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const runTui = vi.fn(async () => ({
       exitReason: "return-to-system-agent" as const,
@@ -77,7 +77,7 @@ describe("system-agent TUI operations", () => {
     });
   });
 
-  it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {
+  it("re-enters the OpenCrustacean shell when the agent TUI returns without a request", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const runTui = vi.fn(async () => ({
       exitReason: "return-to-system-agent" as const,

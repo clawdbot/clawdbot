@@ -1351,7 +1351,7 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
       expect(mockError).not.toHaveBeenCalled();
       expect(parseLastLogPayload()).toMatchObject({
-        error: expect.stringContaining("OpenClaw config is invalid"),
+        error: expect.stringContaining("OpenCrustacean config is invalid"),
         issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
       });
     });
@@ -1971,7 +1971,7 @@ describe("config cli", () => {
             appId: "app-id",
             appSecret: "secret",
             replyMode: "thread",
-            footer: "OpenClaw",
+            footer: "OpenCrustacean",
           },
         },
       });

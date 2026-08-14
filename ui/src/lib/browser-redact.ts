@@ -20,7 +20,7 @@ const SECRET_DETAIL_PATTERNS: RegExp[] = [
   ),
   /Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)/gi,
   /Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)/gi,
-  /(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)/gi,
+  /(?:X-OpenCrustacean-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)/gi,
   /\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b/gi,
   new RegExp(
     `(^|[\\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|token|secret|password|passwd|${PAYMENT_CREDENTIAL_KEYS})=([^\\s&#]+)`,

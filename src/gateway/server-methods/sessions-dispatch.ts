@@ -158,7 +158,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!isWorkerPlacementSessionRuntimeSupported(sessionRuntime)) {
       respondInvalidWorkerSession(
         respond,
-        `cloud worker dispatch requires the OpenClaw runtime, not ${sessionRuntime}`,
+        `cloud worker dispatch requires the OpenCrustacean runtime, not ${sessionRuntime}`,
       );
       return;
     }

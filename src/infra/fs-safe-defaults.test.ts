@@ -28,7 +28,7 @@ describe("fs-safe defaults", () => {
     delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
   });
 
-  it("disables the native helper by default in OpenClaw", async () => {
+  it("disables the native helper by default in OpenCrustacean", async () => {
     await importDefaults();
 
     expect(configureFsSafeNative).toHaveBeenCalledWith({ mode: "off" });
@@ -42,7 +42,7 @@ describe("fs-safe defaults", () => {
     expect(configureFsSafeNative).not.toHaveBeenCalled();
   });
 
-  it("honors the OpenClaw-specific env mode override", async () => {
+  it("honors the OpenCrustacean-specific env mode override", async () => {
     process.env.OPENCLAW_FS_SAFE_NATIVE_MODE = "auto";
 
     await importDefaults();

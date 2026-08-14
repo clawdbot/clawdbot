@@ -47,7 +47,7 @@ const RESERVATION_ROLLBACK_RETRY_DELAY_MS = 1_000;
 const RESERVATION_ROLLBACK_RETRY_MAX_DELAY_MS = 30_000;
 const RESTART_RECOVERY_RESUME_MESSAGE =
   "[System] Your previous turn was interrupted by a gateway restart while " +
-  "OpenClaw was waiting on tool/model work. Continue from the existing " +
+  "OpenCrustacean was waiting on tool/model work. Continue from the existing " +
   "transcript and finish the interrupted response.";
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";

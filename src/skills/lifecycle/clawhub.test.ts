@@ -688,7 +688,7 @@ describe("skills-clawhub", () => {
     expect(result.code).toBe("clawhub_download_blocked");
     expect(result.warning).toContain("BLOCKED - ClawHub flagged this release as malicious");
     expect(warnings.join("\n")).toContain("BLOCKED - ClawHub flagged this release as malicious");
-    expect(warnings.join("\n")).toContain("OpenClaw will not install this skill release");
+    expect(warnings.join("\n")).toContain("OpenCrustacean will not install this skill release");
     expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
     expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
@@ -1978,7 +1978,7 @@ describe("skills-clawhub", () => {
       }),
     ]);
     expect(warnings.join("\n")).toContain(
-      "Latest skill version is marked malicious; OpenClaw will not download it.",
+      "Latest skill version is marked malicious; OpenCrustacean will not download it.",
     );
     expect(warnings.join("\n")).toContain(
       "Uninstall the installed skill unless you have independently reviewed it.",

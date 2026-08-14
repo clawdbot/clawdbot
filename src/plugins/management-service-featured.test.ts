@@ -425,7 +425,7 @@ describe("plugin management Featured authority", () => {
         name: "firecrawl",
         packageName: "@openclaw/firecrawl-plugin",
         featured: false,
-        description: "Optional OpenClaw capability.",
+        description: "Optional OpenCrustacean capability.",
         icon: "https://cdn.example.test/firecrawl-bundled.png",
       }),
     );

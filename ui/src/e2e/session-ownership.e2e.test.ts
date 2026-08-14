@@ -94,7 +94,7 @@ async function replaceGatewayClient(targetPage: Page) {
       runtime?: { context: { gateway: { connect: () => void } } };
     };
     if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
+      throw new Error("OpenCrustacean application runtime is unavailable");
     }
     app.runtime.context.gateway.connect();
   });

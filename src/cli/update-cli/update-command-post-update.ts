@@ -146,7 +146,7 @@ export async function finishUpdate(params: {
     if (params.result.reason === "not-git-install") {
       defaultRuntime.log(
         theme.warn(
-          `Skipped: this OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
+          `Skipped: this OpenCrustacean install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
         ),
       );
       defaultRuntime.log(

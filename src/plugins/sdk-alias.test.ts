@@ -665,7 +665,7 @@ describe("plugin sdk alias helpers", () => {
 
   it.each([
     {
-      name: "does not derive plugin-sdk subpaths from cwd fallback when package root is not an OpenClaw root",
+      name: "does not derive plugin-sdk subpaths from cwd fallback when package root is not an OpenCrustacean root",
       fixture: () =>
         createPluginSdkAliasFixture({
           trustedRootIndicators: false,
@@ -1745,7 +1745,7 @@ describe("plugin sdk alias helpers", () => {
 
   it.each([
     {
-      name: "does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root",
+      name: "does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenCrustacean root",
       fixture: () =>
         createPluginSdkAliasFixture({
           srcFile: "channel-runtime-context.ts",

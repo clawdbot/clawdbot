@@ -68,7 +68,7 @@ afterEach(() => {
   resetAppHostTestGlobals();
 });
 
-describe("OpenClaw shell deleted-session recovery", () => {
+describe("OpenCrustacean shell deleted-session recovery", () => {
   it("replaces an unresolvable session with the owning agent's main chat", () => {
     const { replace, setSessionKey, shell } = createSessionRecoveryShell({
       activeSessionKey: deletedKey,

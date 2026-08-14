@@ -154,7 +154,7 @@ describe("resolveAcpClientSpawnEnv", () => {
     expect(env.OPENAI_API_KEY).toBeUndefined();
   });
 
-  it("strips provider auth env vars for the default OpenClaw bridge", () => {
+  it("strips provider auth env vars for the default OpenCrustacean bridge", () => {
     const stripKeys = new Set(["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"]);
     const env = resolveAcpClientSpawnEnv(
       {

@@ -2707,7 +2707,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("does not include Codex when an OpenAI model is manually pinned to OpenClaw", () => {
+  it("does not include Codex when an OpenAI model is manually pinned to OpenCrustacean", () => {
     expectStartupPluginIds({
       config: {
         agents: {

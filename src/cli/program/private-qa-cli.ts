@@ -66,7 +66,7 @@ export function loadPrivateQaCliModule(params?: {
 }): Promise<Record<string, unknown>> {
   const specifier = resolvePrivateQaSourceModuleSpecifier(params);
   if (!specifier) {
-    throw new Error("Private QA CLI is only available from an OpenClaw source checkout.");
+    throw new Error("Private QA CLI is only available from an OpenCrustacean source checkout.");
   }
   return (params?.importModule ?? dynamicImportPrivateQaCliModule)(specifier);
 }

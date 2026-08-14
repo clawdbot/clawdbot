@@ -2051,7 +2051,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("does not treat backend CLI session id as OpenClaw session identity", async () => {
+  it("does not treat backend CLI session id as OpenCrustacean session identity", async () => {
     setupSingleAttemptFallback();
     setupStoredSession();
     const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
@@ -2112,7 +2112,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards an explicit OpenClaw runtime override into fallback and attempt execution", async () => {
+  it("forwards an explicit OpenCrustacean runtime override into fallback and attempt execution", async () => {
     setupSingleAttemptFallback();
     state.runtimeConfigMock = {
       agents: {
@@ -4210,7 +4210,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await agentCommand({
       message: [
         INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        "OpenClaw runtime context (internal):",
+        "OpenCrustacean runtime context (internal):",
         "hidden task completion event",
         INTERNAL_RUNTIME_CONTEXT_END,
       ].join("\n"),

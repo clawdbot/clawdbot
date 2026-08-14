@@ -418,7 +418,7 @@ export type ProviderPlugin = {
    * Provider-owned unknown-model hint override.
    *
    * Return a suffix when the provider wants a more specific recovery hint than
-   * OpenClaw's generic `Unknown model` error after catalog/runtime lookup
+   * OpenCrustacean's generic `Unknown model` error after catalog/runtime lookup
    * fails.
    */
   buildUnknownModelHint?: (ctx: ProviderBuildUnknownModelHintContext) => string | null | undefined;
@@ -426,7 +426,7 @@ export type ProviderPlugin = {
    * Provider-owned built-in model suppression.
    *
    * Return `{ suppress: true }` to hide a stale upstream row. Include
-   * `errorMessage` when OpenClaw should surface a provider-specific hint for
+   * `errorMessage` when OpenCrustacean should surface a provider-specific hint for
    * direct model resolution failures.
    *
    * @deprecated Use manifest `modelCatalog.suppressions`. Runtime suppression
@@ -443,7 +443,7 @@ export type ProviderPlugin = {
    * compatibility during the migration window.
    *
    * Return extra rows to append to the final catalog after discovery/config
-   * merging. OpenClaw deduplicates by `provider/id`, so plugins only need to
+   * merging. OpenCrustacean deduplicates by `provider/id`, so plugins only need to
    * describe the desired supplemental rows.
    */
   augmentModelCatalog?: (
@@ -510,7 +510,7 @@ export type ProviderPlugin = {
    * Provider-owned bidirectional text replacements.
    *
    * `input` applies to system prompts and text message content before transport.
-   * `output` applies to assistant text deltas/final text before OpenClaw handles
+   * `output` applies to assistant text deltas/final text before OpenCrustacean handles
    * its own control markers or channel delivery.
    */
   textTransforms?: PluginTextTransforms;
@@ -559,7 +559,7 @@ export type ProviderPlugin = {
   /**
    * Provider-owned OAuth refresh.
    *
-   * OpenClaw calls this before falling back to the shared `shared model runtime` OAuth
+   * OpenCrustacean calls this before falling back to the shared `shared model runtime` OAuth
    * refreshers. Use it when the provider has a custom refresh endpoint, or when
    * the provider needs custom refresh-failure behavior that should stay out of
    * core auth-profile code.

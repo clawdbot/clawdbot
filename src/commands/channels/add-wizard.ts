@@ -267,7 +267,7 @@ export async function runChannelsSetupWizard(
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(
-      "OpenClaw config is invalid; run `openclaw doctor --fix`, then retry channel setup.",
+      "OpenCrustacean config is invalid; run `openclaw doctor --fix`, then retry channel setup.",
     );
   }
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;

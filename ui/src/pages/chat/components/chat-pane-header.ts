@@ -8,6 +8,7 @@ import type {
 } from "../../../app/native-gateways.runtime.ts";
 import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -16,9 +17,9 @@ import {
 import { icons } from "../../../components/icons.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
-import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
+import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 
@@ -508,16 +509,19 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           : nothing}
       </div>
       ${props.mergedChrome || props.narrow
-        ? html`<openclaw-tooltip .content=${t("chat.hardRefresh")}>
-            <button
-              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__refresh-btn"
-              type="button"
-              aria-label=${t("chat.hardRefresh")}
-              @click=${() => void hardReloadControlUi()}
-            >
-              ${icons.refresh}
-            </button>
-          </openclaw-tooltip>`
+        ? html` ${CONTROL_UI_BUILD_INFO.version
+              ? html`<span class="chat-pane__version">${CONTROL_UI_BUILD_INFO.version}</span>`
+              : nothing}
+            <openclaw-tooltip .content=${t("chat.hardRefresh")}>
+              <button
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__refresh-btn"
+                type="button"
+                aria-label=${t("chat.hardRefresh")}
+                @click=${() => void hardReloadControlUi()}
+              >
+                ${icons.refresh}
+              </button>
+            </openclaw-tooltip>`
         : nothing}
     </div>
   `;

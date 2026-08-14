@@ -1220,7 +1220,7 @@ describe("parseCliJsonl", () => {
       }),
     ).toBe(
       "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
-        "OpenClaw run: run-max-turns. OpenClaw session: openclaw-session-max-turns. " +
+        "OpenCrustacean run: run-max-turns. OpenCrustacean session: openclaw-session-max-turns. " +
         "Claude session: session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
         "Retry with a higher --max-turns value or a narrower task.",
     );
@@ -3259,7 +3259,7 @@ describe("createCliJsonlStreamingParser", () => {
       toolCallId: "srvtoolu_1",
       name: "web_search",
       input: { query: "openclaw" },
-      result: [{ type: "web_search_result", title: "OpenClaw", url: "https://example.com" }],
+      result: [{ type: "web_search_result", title: "OpenCrustacean", url: "https://example.com" }],
       isError: false,
     },
     {

@@ -910,7 +910,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
   });
 
   it.each(["max", "ultra"] as const)(
-    "normalizes OpenClaw-only %s before using shared model runtime simple completion",
+    "normalizes OpenCrustacean-only %s before using shared model runtime simple completion",
     async (reasoning) => {
       const model = {
         provider: "openai",

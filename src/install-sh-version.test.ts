@@ -24,7 +24,7 @@ function resolveInstallerVersionCases(params: { stdinCwd: string }): string[] {
       "-c",
       `${versionHelperSource}
 fake_openclaw_decorated() { printf '%s\\n' 'OpenClaw 2026.3.10 (abcdef0)'; }
-fake_openclaw_raw() { printf '%s\\n' "OpenClaw dev's build"; }
+fake_openclaw_raw() { printf '%s\\n' "OpenCrustacean dev's build"; }
 OPENCLAW_BIN=fake_openclaw_decorated resolve_openclaw_version
 OPENCLAW_BIN=fake_openclaw_raw resolve_openclaw_version
 (
@@ -81,7 +81,7 @@ extract_openclaw_semver() {
         resolveInstallerVersionCases({
           stdinCwd: hostileCwd,
         }),
-      ).toEqual(["2026.3.10", "OpenClaw dev's build", "2026.3.10"]);
+      ).toEqual(["2026.3.10", "OpenCrustacean dev's build", "2026.3.10"]);
     },
   );
 });

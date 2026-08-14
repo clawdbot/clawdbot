@@ -33,7 +33,7 @@ describe("custodian page session lifecycle", () => {
       .mockRejectedValueOnce(
         new GatewayProtocolRequestError({
           code: "UNAVAILABLE",
-          message: "OpenClaw inference became unavailable.",
+          message: "OpenCrustacean inference became unavailable.",
           details: buildSystemAgentSessionInvalidatedErrorDetails(),
         }),
       )

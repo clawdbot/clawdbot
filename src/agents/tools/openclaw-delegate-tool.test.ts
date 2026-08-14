@@ -30,7 +30,7 @@ describe("openclaw delegation tool", () => {
       agentChannel: "webchat",
     })[0];
     if (!tool) {
-      throw new Error("expected OpenClaw delegation tool");
+      throw new Error("expected OpenCrustacean delegation tool");
     }
 
     const result = await tool.execute("call-1", { message: "Add channel." });
@@ -67,7 +67,7 @@ describe("openclaw delegation tool", () => {
       runSessionKey: "agent:main:main",
     })[0];
     if (!tool) {
-      throw new Error("expected OpenClaw delegation tool");
+      throw new Error("expected OpenCrustacean delegation tool");
     }
 
     await tool.execute("call-1", { message: "First." });

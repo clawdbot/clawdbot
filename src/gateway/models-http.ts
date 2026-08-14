@@ -1,4 +1,4 @@
-// OpenAI-compatible `/v1/models` HTTP route backed by configured OpenClaw agents.
+// OpenAI-compatible `/v1/models` HTTP route backed by configured OpenCrustacean agents.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";

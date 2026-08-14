@@ -160,7 +160,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     await expect(runOffer({ root: "/repo/link", confirm })).resolves.toEqual({ updated: false });
 
     expect(confirm).toHaveBeenCalledWith({
-      message: "Update OpenClaw from git before running doctor?",
+      message: "Update OpenCrustacean from git before running doctor?",
       initialValue: true,
     });
     expect(mocks.note).not.toHaveBeenCalledWith(
@@ -285,7 +285,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       }),
     );
     expect(mocks.note).toHaveBeenCalledWith(
-      "Restarted the running gateway service after updating OpenClaw.",
+      "Restarted the running gateway service after updating OpenCrustacean.",
       "Update",
     );
   });

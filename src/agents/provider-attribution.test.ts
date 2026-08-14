@@ -323,13 +323,13 @@ describe("provider attribution", () => {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("resolves the canonical OpenClaw product and runtime version", () => {
+  it("resolves the canonical OpenCrustacean product and runtime version", () => {
     const identity = resolveProviderAttributionIdentity({
       OPENCLAW_VERSION: "2026.3.99",
     });
 
     expect(identity).toEqual({
-      product: "OpenClaw",
+      product: "OpenCrustacean",
       version: "2026.3.99",
     });
   });
@@ -345,12 +345,12 @@ describe("provider attribution", () => {
       verification: "vendor-documented",
       hook: "request-headers",
       docsUrl: "https://openrouter.ai/docs/app-attribution",
-      reviewNote: "Documented app attribution headers. Verified in OpenClaw runtime wrapper.",
-      product: "OpenClaw",
+      reviewNote: "Documented app attribution headers. Verified in OpenCrustacean runtime wrapper.",
+      product: "OpenCrustacean",
       version: "2026.3.22",
       headers: {
         "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
+        "X-OpenRouter-Title": "OpenCrustacean",
         "X-OpenRouter-Categories":
           "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
       },
@@ -370,10 +370,10 @@ describe("provider attribution", () => {
       hook: "request-headers",
       reviewNote:
         "NVIDIA NIM billing invoke-origin attribution header. Applied only on verified NVIDIA routes.",
-      product: "OpenClaw",
+      product: "OpenCrustacean",
       version: "2026.3.22",
       headers: {
-        "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
+        "X-BILLING-INVOKE-ORIGIN": "OpenCrustacean",
       },
     });
   });
@@ -391,7 +391,7 @@ describe("provider attribution", () => {
       docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
       reviewNote:
         "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
-      product: "OpenClaw",
+      product: "OpenCrustacean",
       version: "2026.3.22",
       headers: {
         "x-goog-api-client": "openclaw/2026.3.22",
@@ -406,7 +406,7 @@ describe("provider attribution", () => {
       })?.headers,
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Title": "OpenCrustacean",
       "X-OpenRouter-Categories":
         "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
     });
@@ -420,7 +420,7 @@ describe("provider attribution", () => {
       hook: "request-headers",
       reviewNote:
         "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
-      product: "OpenClaw",
+      product: "OpenCrustacean",
       version: "2026.3.22",
       headers: {
         originator: "openclaw",
@@ -445,7 +445,7 @@ describe("provider attribution", () => {
       hook: "request-headers",
       reviewNote:
         "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
-      product: "OpenClaw",
+      product: "OpenCrustacean",
       version: "2026.3.22",
       headers: {
         originator: "openclaw",
@@ -463,7 +463,7 @@ describe("provider attribution", () => {
       hook: "request-headers",
       reviewNote:
         "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
-      product: "OpenClaw",
+      product: "OpenCrustacean",
       version: "2026.3.22",
       headers: {
         originator: "openclaw",
@@ -832,7 +832,7 @@ describe("provider attribution", () => {
         capability: "llm",
       }).attributionHeaders,
     ).toEqual({
-      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
+      "X-BILLING-INVOKE-ORIGIN": "OpenCrustacean",
     });
 
     expect(

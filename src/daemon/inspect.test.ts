@@ -194,12 +194,12 @@ describe("renderGatewayServiceCleanupHints", () => {
       renderGatewayServiceCleanupHints([
         {
           platform: "win32",
-          label: "\\OpenClaw Gateway Backup",
-          detail: "task: \\OpenClaw Gateway Backup",
+          label: "\\OpenCrustacean Gateway Backup",
+          detail: "task: \\OpenCrustacean Gateway Backup",
           scope: "system",
         },
       ]),
-    ).toEqual(['schtasks /Delete /TN "\\OpenClaw Gateway Backup" /F']);
+    ).toEqual(['schtasks /Delete /TN "\\OpenCrustacean Gateway Backup" /F']);
   });
 
   it.each(["$(Start-Process calc)", "%OPENCLAW_GATEWAY_TASK%", "unsafe&task", "task`name"])(
@@ -529,8 +529,8 @@ describe("findExtraGatewayServices (win32)", () => {
     execSchtasksMock.mockResolvedValueOnce({
       code: 0,
       stdout: [
-        "TaskName:\\OpenClaw Gateway",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "TaskName:\\OpenCrustacean Gateway",
+        "Task To Run: C:\\Program Files\\OpenCrustacean\\openclaw.exe gateway run",
         "",
         "TaskName: Clawdbot Legacy",
         "Task To Run: C:\\clawdbot\\clawdbot.exe run",
@@ -561,14 +561,14 @@ describe("findExtraGatewayServices (win32)", () => {
     execSchtasksMock.mockResolvedValueOnce({
       code: 0,
       stdout: [
-        "TaskName:\\OpenClaw Gateway",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "TaskName:\\OpenCrustacean Gateway",
+        "Task To Run: C:\\Program Files\\OpenCrustacean\\openclaw.exe gateway run",
         "",
-        "TaskName:\\OpenClaw Gateway (dev)",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run --profile dev",
+        "TaskName:\\OpenCrustacean Gateway (dev)",
+        "Task To Run: C:\\Program Files\\OpenCrustacean\\openclaw.exe gateway run --profile dev",
         "",
-        "TaskName:\\OpenClaw Gateway Backup",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "TaskName:\\OpenCrustacean Gateway Backup",
+        "Task To Run: C:\\Program Files\\OpenCrustacean\\openclaw.exe gateway run",
         "",
       ].join("\n"),
       stderr: "",
@@ -578,9 +578,9 @@ describe("findExtraGatewayServices (win32)", () => {
     expect(result).toEqual([
       {
         platform: "win32",
-        label: "\\OpenClaw Gateway Backup",
+        label: "\\OpenCrustacean Gateway Backup",
         detail:
-          "task: \\OpenClaw Gateway Backup, run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+          "task: \\OpenCrustacean Gateway Backup, run: C:\\Program Files\\OpenCrustacean\\openclaw.exe gateway run",
         scope: "system",
         marker: "openclaw",
         legacy: false,

@@ -77,13 +77,13 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
   const metadata = readExistingAgentSchemaMeta(database);
   if (!metadata) {
     throw new Error(
-      `OpenClaw agent database ${options.pathname} has no schema ownership metadata.`,
+      `OpenCrustacean agent database ${options.pathname} has no schema ownership metadata.`,
     );
   }
   assertExistingAgentSchemaOwner(metadata, agentId, options.pathname);
   if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw new Error(
-      `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
+      `OpenCrustacean agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
     );
   }
   assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
@@ -121,20 +121,20 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   const userVersion = readSqliteUserVersion(database);
   if (userVersion !== 14) {
     throw new Error(
-      `OpenClaw agent database ${options.pathname} uses schema version ${userVersion}; expected 14 before migrating it.`,
+      `OpenCrustacean agent database ${options.pathname} uses schema version ${userVersion}; expected 14 before migrating it.`,
     );
   }
   const agentId = normalizeAgentId(options.agentId);
   const metadata = readExistingAgentSchemaMeta(database);
   if (!metadata) {
     throw new Error(
-      `OpenClaw agent database ${options.pathname} has no schema ownership metadata.`,
+      `OpenCrustacean agent database ${options.pathname} has no schema ownership metadata.`,
     );
   }
   assertExistingAgentSchemaOwner(metadata, agentId, options.pathname);
   if (metadata.schemaVersion !== 14) {
     throw new Error(
-      `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match 14; repair the ownership metadata before migrating it.`,
+      `OpenCrustacean agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match 14; repair the ownership metadata before migrating it.`,
     );
   }
 
@@ -162,7 +162,7 @@ export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: st
   const userVersion = readSqliteUserVersion(db);
   if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw createNewerSqliteSchemaVersionError(
-      "OpenClaw agent database",
+      "OpenCrustacean agent database",
       pathname,
       userVersion,
       OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -217,15 +217,15 @@ export function assertExistingAgentSchemaOwner(
   // Agent DB files are not interchangeable; opening another role/id would corrupt ownership.
   if (existing.role !== "agent") {
     throw new Error(
-      `OpenClaw agent database ${pathname} has schema role ${existing.role ?? "unknown"}; expected agent.`,
+      `OpenCrustacean agent database ${pathname} has schema role ${existing.role ?? "unknown"}; expected agent.`,
     );
   }
   if (!existing.agentId) {
-    throw new Error(`OpenClaw agent database ${pathname} has no agent owner.`);
+    throw new Error(`OpenCrustacean agent database ${pathname} has no agent owner.`);
   }
   if (normalizeAgentId(existing.agentId) !== agentId) {
     throw new Error(
-      `OpenClaw agent database ${pathname} belongs to agent ${existing.agentId}; requested agent ${agentId}.`,
+      `OpenCrustacean agent database ${pathname} belongs to agent ${existing.agentId}; requested agent ${agentId}.`,
     );
   }
 }

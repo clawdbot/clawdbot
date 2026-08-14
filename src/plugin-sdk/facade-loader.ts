@@ -144,7 +144,7 @@ function resolveFacadeBoundaryOpenParams(boundaryRoot: string): {
   rejectHardlinks: boolean;
 } {
   if (isPathAtOrInside(boundaryRoot, getOpenClawPackageRoot())) {
-    return { boundaryLabel: "OpenClaw package root", rejectHardlinks: false };
+    return { boundaryLabel: "OpenCrustacean package root", rejectHardlinks: false };
   }
   const bundledDir = resolveBundledPluginsDir();
   if (bundledDir && isPathAtOrInside(boundaryRoot, bundledDir)) {

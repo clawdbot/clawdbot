@@ -108,12 +108,12 @@ describe("TuiStreamAssembler", () => {
     const finalText = assembler.finalize(
       "run-pair-qr",
       messageWithContent([
-        text("Scan this QR code with the OpenClaw iOS app:"),
+        text("Scan this QR code with the OpenCrustacean iOS app:"),
         pairingQr("\u001b[47m\u001b[30m█ ▄\u001b[0m"),
       ]),
       false,
     );
-    expect(finalText).toContain("Scan this QR code with the OpenClaw iOS app:");
+    expect(finalText).toContain("Scan this QR code with the OpenCrustacean iOS app:");
     expect(finalText).toContain("█ ▄");
     expect(finalText).not.toContain("\u001b[47m");
     expect(finalText).not.toBe("(no output)");

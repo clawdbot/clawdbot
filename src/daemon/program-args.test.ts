@@ -183,7 +183,7 @@ describe("resolveGatewayProgramArguments", () => {
   it("uses trusted Windows where.exe when resolving the Node runtime", async () => {
     const repoIndexPath = path.resolve("/repo/src/index.ts");
     const repoEntryPath = path.resolve("/repo/src/entry.ts");
-    const launcherPath = String.raw`D:\OpenClaw\openclaw.exe`;
+    const launcherPath = String.raw`D:\OpenCrustacean\openclaw.exe`;
     process.argv = [launcherPath, repoIndexPath];
     process.execPath = launcherPath;
     vi.stubEnv("SystemRoot", String.raw`D:\Windows`);

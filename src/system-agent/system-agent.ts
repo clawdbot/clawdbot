@@ -161,7 +161,7 @@ export async function runSystemAgent(
     // same snapshot for planning so reply-only plans do not print before it.
     const overview = await withProgress(
       {
-        label: "Loading OpenClaw overview…",
+        label: "Loading OpenCrustacean overview…",
         indeterminate: true,
         delayMs: 0,
         fallback: "none",
@@ -190,7 +190,7 @@ export async function runSystemAgent(
   const outputIsTty = (output as { isTTY?: boolean }).isTTY === true;
   if (!inputIsTty || !outputIsTty) {
     // Without a TTY, OpenClaw cannot safely ask for confirmation; require --message instead.
-    runtime.error("OpenClaw needs an interactive TTY. Use --message for one command.");
+    runtime.error("OpenCrustacean needs an interactive TTY. Use --message for one command.");
     runtime.exit(1);
     return;
   }

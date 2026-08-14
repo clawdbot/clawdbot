@@ -105,12 +105,12 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
           return null;
         }
         params.logger.warn?.(
-          `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${prereleaseSpec} because this trusted official OpenClaw package has no stable npm versions yet.`,
+          `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${prereleaseSpec} because this trusted official OpenCrustacean package has no stable npm versions yet.`,
         );
         return { kind: "prerelease-only", resolution: metadataResult.metadata };
       }
       params.logger.warn?.(
-        `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
+        `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenCrustacean package has no stable npm versions yet.`,
       );
       return { kind: "allow-prerelease-only" };
     }
@@ -126,7 +126,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
     return null;
   }
   params.logger.warn?.(
-    `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${stableSpec} for this trusted official OpenClaw install.`,
+    `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${stableSpec} for this trusted official OpenCrustacean install.`,
   );
   return { kind: "stable", resolution: metadataResult.metadata };
 }
@@ -241,7 +241,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     });
     if (!compatibilityError) {
       params.logger.warn?.(
-        `Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
+        `Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenCrustacean runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
       );
       return metadataResult.metadata;
     }

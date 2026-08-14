@@ -1130,7 +1130,7 @@ describe("runWithModelFallback", () => {
       },
     });
     const missingToolResultError = new Error(
-      "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.",
+      "OpenCrustacean recorded a native Codex tool.call without a matching tool.result before the turn completed.",
     );
     const run = vi.fn().mockRejectedValue(missingToolResultError);
 
@@ -1201,7 +1201,7 @@ describe("runWithModelFallback", () => {
     );
   });
 
-  it("does not prepare agent harness plugins for forced OpenClaw candidates", async () => {
+  it("does not prepare agent harness plugins for forced OpenCrustacean candidates", async () => {
     const cfg = makeCfg({
       models: {
         providers: {
@@ -1214,7 +1214,7 @@ describe("runWithModelFallback", () => {
       },
     });
     const prepareAgentHarnessRuntime = vi.fn(() => {
-      throw new Error("OpenClaw candidates should not prepare plugin harnesses");
+      throw new Error("OpenCrustacean candidates should not prepare plugin harnesses");
     });
     const run = vi.fn().mockResolvedValueOnce("ok");
 
@@ -1231,7 +1231,7 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("does not prepare agent harness plugins for forced OpenClaw runtime candidates", async () => {
+  it("does not prepare agent harness plugins for forced OpenCrustacean runtime candidates", async () => {
     const cfg = makeCfg({
       models: {
         providers: {
@@ -1244,7 +1244,7 @@ describe("runWithModelFallback", () => {
       },
     });
     const prepareAgentHarnessRuntime = vi.fn(() => {
-      throw new Error("OpenClaw candidates should not prepare plugin harnesses");
+      throw new Error("OpenCrustacean candidates should not prepare plugin harnesses");
     });
     const run = vi.fn().mockResolvedValueOnce("ok");
 

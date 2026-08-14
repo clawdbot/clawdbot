@@ -18,7 +18,7 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 function lastEmbeddedLane(): string | undefined {
   const params = runEmbeddedAgentMock.mock.calls.at(-1)?.[0];
   if (!params || typeof params !== "object" || Array.isArray(params)) {
-    throw new Error("Expected embedded OpenClaw agent params to be an object");
+    throw new Error("Expected embedded OpenCrustacean agent params to be an object");
   }
   return (params as { lane?: string }).lane;
 }

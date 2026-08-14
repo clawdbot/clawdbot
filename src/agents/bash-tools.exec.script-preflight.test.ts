@@ -73,7 +73,7 @@ async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
   });
 }
 
-describe("exec interactive OpenClaw channel login guard", () => {
+describe("exec interactive OpenCrustacean channel login guard", () => {
   it("recognizes direct and package-runner channel login commands before execution", async () => {
     await expect(
       detectUnsafeExecControlShellCommand("openclaw channels login --channel whatsapp"),

@@ -2839,14 +2839,14 @@ describe("task-registry", () => {
     });
   });
 
-  it("uses normal reconcile grace for OpenClaw-owned subagent tasks", async () => {
+  it("uses normal reconcile grace for OpenCrustacean-owned subagent tasks", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests();
       const now = Date.now();
       const task = createTaskFixture("subagent", {
         childSessionKey: "agent:main:subagent:missing",
         runId: "openclaw-subagent:missing",
-        task: "OpenClaw-owned child",
+        task: "OpenCrustacean-owned child",
         notifyPolicy: "silent",
         lastEventAt: now - 10 * 60_000,
       });
@@ -4819,7 +4819,7 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "cancels harness-owned tasks without routing through OpenClaw subagent sessions",
+      name: "cancels harness-owned tasks without routing through OpenCrustacean subagent sessions",
       taskKind: "external-harness",
       sourceId: "harness:child",
       task: "Harness-owned child",
@@ -4829,7 +4829,7 @@ describe("task-registry", () => {
       name: "does not cancel childless subagent tasks without a harness task kind",
       taskKind: undefined,
       sourceId: "openclaw-subagent:child",
-      task: "Childless OpenClaw row",
+      task: "Childless OpenCrustacean row",
       cancellable: false,
     },
   ])("$name", async ({ taskKind, sourceId, task: taskName, cancellable }) => {

@@ -133,7 +133,7 @@ describe("installSkill before_install hooks", () => {
     });
   });
 
-  it("runs npm node installs with an OpenClaw-managed user prefix", async () => {
+  it("runs npm node installs with an OpenCrustacean-managed user prefix", async () => {
     await withWorkspaceCase(async ({ workspaceDir, stateDir }) => {
       await writeInstallableSkill(workspaceDir, "node-prefix-skill");
 

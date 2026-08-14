@@ -7,7 +7,7 @@ import { parseClawOpenClawProfile } from "./schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("OpenClaw profile schema", () => {
+describe("OpenCrustacean profile schema", () => {
   it("accepts typed settings", () => {
     const result = parseClawOpenClawProfile({
       schemaVersion: 1,
@@ -70,7 +70,7 @@ describe("OpenClaw profile schema", () => {
   });
 });
 
-describe("OpenClaw profile reader", () => {
+describe("OpenCrustacean profile reader", () => {
   it("loads and integrity-binds a metadata-referenced profile", async () => {
     const root = tempDirs.make("openclaw-claw-profile-");
     await mkdir(join(root, "profiles"));
@@ -127,7 +127,7 @@ describe("OpenClaw profile reader", () => {
       },
     });
     if (!first.ok) {
-      throw new Error("expected OpenClaw profile to parse");
+      throw new Error("expected OpenCrustacean profile to parse");
     }
 
     await writeFile(
@@ -138,7 +138,7 @@ describe("OpenClaw profile reader", () => {
     const second = await readClawManifestFile(root);
     expect(second.ok).toBe(true);
     if (!second.ok) {
-      throw new Error("expected changed OpenClaw profile to parse");
+      throw new Error("expected changed OpenCrustacean profile to parse");
     }
     expect(second.source.integrity).not.toBe(first.source.integrity);
   });

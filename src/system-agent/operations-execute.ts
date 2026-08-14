@@ -290,8 +290,8 @@ export async function executeSystemAgentOperation(
     case "model-setup":
       runtime.log(
         [
-          "Changing model providers must happen outside the inference session that powers OpenClaw.",
-          "Exit OpenClaw and run `openclaw onboard`; it stages credentials, live-tests the candidate route, and saves only a passing setup.",
+          "Changing model providers must happen outside the inference session that powers OpenCrustacean.",
+          "Exit OpenCrustacean and run `openclaw onboard`; it stages credentials, live-tests the candidate route, and saves only a passing setup.",
         ].join("\n"),
       );
       return { applied: false };
@@ -349,8 +349,8 @@ export async function executeSystemAgentOperation(
     case "plugin-uninstall": {
       if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
         const message = [
-          `Uninstalling ${operation.pluginId} could remove the provider behind OpenClaw's own active inference route.`,
-          `Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+          `Uninstalling ${operation.pluginId} could remove the provider behind OpenCrustacean's own active inference route.`,
+          `Exit OpenCrustacean and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
         ].join("\n");
         runtime.log(message);
         return { applied: false, message };
@@ -374,7 +374,7 @@ export async function executeSystemAgentOperation(
             // moment so the destructive removal never hits the active route.
             if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
               throw new Error(
-                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Exit OpenCrustacean and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
               );
             }
             await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
@@ -398,7 +398,7 @@ export async function executeSystemAgentOperation(
       }
       if (operation.model?.trim()) {
         throw new Error(
-          "OpenClaw cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent inherits the verified default, then use `set_default_model` with agentId to live-test and save its own model.",
+          "OpenCrustacean cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent inherits the verified default, then use `set_default_model` with agentId to live-test and save its own model.",
         );
       }
       return await applyPersistentOperation({
@@ -436,7 +436,7 @@ export async function executeSystemAgentOperation(
     }
     case "doctor-fix":
       runtime.log(
-        "Doctor repairs can change the inference route that powers this session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal.",
+        "Doctor repairs can change the inference route that powers this session. Exit OpenCrustacean and run `openclaw doctor --fix` in a terminal.",
       );
       return { applied: false };
     case "status": {

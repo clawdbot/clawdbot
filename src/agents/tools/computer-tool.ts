@@ -328,7 +328,7 @@ function isEligibleComputerNode(node: NodeListNode): boolean {
 }
 
 const NOT_COMPUTER_CAPABLE_HINT =
-  "enable Computer Control in the OpenClaw app and approve the pairing update";
+  "enable Computer Control in the OpenCrustacean app and approve the pairing update";
 
 const COMPUTER_NODE_MESSAGES: EligibleNodeMessages = {
   ineligibleExact: (query, eligibleIds) =>

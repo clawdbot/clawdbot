@@ -82,7 +82,7 @@ export const en = {
       existingPasswordConfirm: "Use existing gateway password ({password})?",
       existingTokenConfirm: "Use existing gateway token ({token})?",
       passwordPrompt: "Gateway password",
-      plaintextPasswordHint: "Stores the password directly in OpenClaw config",
+      plaintextPasswordHint: "Stores the password directly in OpenCrustacean config",
       plaintextPasswordLabel: "Enter password now",
       plaintextTokenHint: "Default",
       plaintextTokenLabel: "Generate/store plaintext token",
@@ -138,7 +138,7 @@ export const en = {
     memoryImport: {
       applyFailed:
         "{label} memory import failed: {reason}\nRetry from the dashboard's Memory import page (Settings → Import Memory).",
-      confirm: "Import these memories into your OpenClaw workspace?",
+      confirm: "Import these memories into your OpenCrustacean workspace?",
       conflictSuffix: ", {count} already imported",
       errorTitle: "Memory import failed",
       failureLine: "{label} failed: {reason}. Retry from the Memory import page.",
@@ -258,9 +258,9 @@ export const en = {
         "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
       noGatewaysFound: "No gateways found",
       passwordPrompt: "Gateway password",
-      plaintextPasswordHint: "Stores the password directly in OpenClaw config",
+      plaintextPasswordHint: "Stores the password directly in OpenCrustacean config",
       plaintextPasswordLabel: "Enter password now",
-      plaintextTokenHint: "Stores the token directly in OpenClaw config",
+      plaintextTokenHint: "Stores the token directly in OpenCrustacean config",
       plaintextTokenLabel: "Enter token now",
       searchProgress: "Searching for gateways...",
       selectGateway: "Select gateway",
@@ -291,7 +291,7 @@ export const en = {
       browserHandoffTitle: "Continue in your browser",
       codingAgentQuip:
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
-      custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
+      custodianIntro: "Hi — I'm OpenCrustacean. I keep this system running. Let's get you set up.",
       failedOptionLine: "{label}: {reason}",
       failedOptionsIntro: "These didn't work just now:",
       findMeLater:
@@ -308,8 +308,8 @@ export const en = {
       setupDone: "Everything's in place.",
       silentFailures:
         '{count} detected option(s) didn\'t respond — details under "See other options".',
-      complete: "OpenClaw is ready.",
-      completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
+      complete: "OpenCrustacean is ready.",
+      completeWithoutAi: "OpenCrustacean setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
       detectedCandidate: "{label} — {detail}{recommended}",
       detectedGroupLabel: "Detected on this machine",
@@ -331,7 +331,7 @@ export const en = {
       recommendedInstall: "{label} — {hint}\n  {website}",
       recommendedInstallsTitle: "Recommended installs",
       intro: "Connect your AI",
-      invalidConfigDetails: "OpenClaw config {path} is invalid:\n{issues}",
+      invalidConfigDetails: "OpenCrustacean config {path} is invalid:\n{issues}",
       invalidConfigRepair:
         "Nothing was changed. Repair with {fixCommand}, inspect with {inspectCommand}, then retry onboarding.",
       invalidConfigUnknown: "- The config could not be parsed.",
@@ -377,7 +377,7 @@ export const en = {
       flowKeepModelHint: "Skip model/auth setup and keep the current default model.",
       flowQuickstart: "QuickStart (recommended)",
       flowQuickstartHint: "Recommended local setup. Change details later with {command}.",
-      intro: "OpenClaw setup",
+      intro: "OpenCrustacean setup",
       invalidConfigTitle: "Invalid config",
       keepCurrent: "Keep current values",
       localGateway: "Local gateway (this machine)",
@@ -432,7 +432,7 @@ export const en = {
       askForHelp:
         "Ask someone experienced to help before enabling tools or exposing it to the internet.",
       attribution:
-        "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
+        "OpenCrustacean is an open-source assistant that learns and grows with you, by the OpenCrustacean Foundation (a non-profit).",
       baselineDmSessions:
         "Shared inboxes: isolate DM sessions (session.dmScope: per-channel-peer) and keep tool access minimal.",
       baselinePairing: "Pairing/allowlists + mention gating.",
@@ -445,10 +445,11 @@ export const en = {
       confirm:
         "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
-        "If you're not comfortable with security hardening and access control, don't run OpenClaw.",
+        "If you're not comfortable with security hardening and access control, don't run OpenCrustacean.",
       learnMore: "Learn more",
-      notMultitenant: "OpenClaw is not a hostile multi-tenant boundary by default.",
-      personalAgent: "By default, OpenClaw is a personal agent: one trusted operator boundary.",
+      notMultitenant: "OpenCrustacean is not a hostile multi-tenant boundary by default.",
+      personalAgent:
+        "By default, OpenCrustacean is a personal agent: one trusted operator boundary.",
       promptRisk: "A bad prompt can trick it into doing unsafe things.",
       recommendedBaseline: "Recommended baseline",
       runRegularly: "Run regularly",
@@ -735,7 +736,7 @@ export const en = {
       connected: "Connected as @{handle} — workspace {workspace} resolved.",
       envPrompt: "CLICKCLACK_BOT_TOKEN detected. Use env var?",
       helpCreateToken:
-        "In ClickClack: Workspace settings → Integrations → OpenClaw → create bot → copy token",
+        "In ClickClack: Workspace settings → Integrations → OpenCrustacean → create bot → copy token",
       invalidToken:
         "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
       validationWarningTitle: "ClickClack connection check",
@@ -760,7 +761,7 @@ export const en = {
       helpEnableRoom: "4) Enable the bot in your Nextcloud Talk room settings",
       helpEnvTip: "Tip: you can also set NEXTCLOUD_TALK_BOT_SECRET in your env.",
       helpInstallCommand:
-        '2) Run: ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction',
+        '2) Run: ./occ talk:bot:install "OpenCrustacean" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction',
       helpSsh: "1) SSH into your Nextcloud server",
       instanceUrlPrompt: "Enter Nextcloud instance URL (e.g., https://cloud.example.com)",
       setupTitle: "Nextcloud Talk bot setup",
@@ -818,7 +819,7 @@ export const en = {
       linkNowPrompt: "Link WhatsApp now (QR)?",
       linkingTitle: "WhatsApp linking",
       numberTitle: "WhatsApp number",
-      ownerNumberNote: "We need the sender/owner number so OpenClaw can allowlist you.",
+      ownerNumberNote: "We need the sender/owner number so OpenCrustacean can allowlist you.",
       personalNumberPrompt: "Your personal WhatsApp number (the phone you will message from)",
       personalPhoneLabel: "This is my personal phone number",
       personalPhoneModeEnabled: "Personal phone mode enabled.",
@@ -826,7 +827,7 @@ export const en = {
       phoneSetupPrompt: "WhatsApp phone setup",
       relinkPrompt: "WhatsApp already linked. Re-link now?",
       scanQr: "Scan the QR with WhatsApp on your phone.",
-      separatePhoneLabel: "Separate phone just for OpenClaw",
+      separatePhoneLabel: "Separate phone just for OpenCrustacean",
       setAllowFromNumbers: "Set allowFrom to specific numbers",
       unsetAllowFromDefault: "Unset allowFrom (default)",
       unsetAllowFromPairing: "Unset allowFrom (use pairing approvals only)",
@@ -918,7 +919,8 @@ export const en = {
       helpIncomingWebhook: "1) Create an incoming webhook in Synology Chat and copy its URL",
       helpOutgoingWebhook: "2) Create an outgoing webhook and copy its secret token",
       helpPointWebhook: "3) Point the outgoing webhook to https://<gateway-host>{path}",
-      incomingWebhookHelpReplies: "This is the URL OpenClaw uses to send replies back to Chat.",
+      incomingWebhookHelpReplies:
+        "This is the URL OpenCrustacean uses to send replies back to Chat.",
       incomingWebhookHelpUseUrl: "Use the incoming webhook URL from Synology Chat integrations.",
       incomingWebhookKeep: "Incoming webhook URL set ({value}). Keep it?",
       incomingWebhookTitle: "Synology Chat incoming webhook",
@@ -944,7 +946,7 @@ export const en = {
       examples: "Examples:",
       installPrompt: "signal-cli not found. Install now?",
       multipleEntries: "Multiple entries: comma-separated.",
-      nextLinkDevice: 'Link device with: signal-cli link -n "OpenClaw"',
+      nextLinkDevice: 'Link device with: signal-cli link -n "OpenCrustacean"',
       nextScanQr: "Scan QR in Signal -> Linked Devices",
       nextStepsTitle: "Signal next steps",
       reinstallPrompt: "signal-cli detected. Reinstall/update now?",
@@ -1057,7 +1059,8 @@ export const en = {
         qqbot: "Connect to QQ via official QQ Bot API",
         signal: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
         slack: "supported (Socket Mode).",
-        synologyChat: "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
+        synologyChat:
+          "Connect your Synology NAS Chat to OpenCrustacean with full agent capabilities.",
         telegram: "simplest way to get started — register a bot with @BotFather and get going.",
         tlon: "decentralized messaging on Urbit; install the plugin to enable.",
         twitch: "Twitch chat integration",
@@ -1092,9 +1095,10 @@ export const en = {
       codexNativeSearchTitle: "Codex native search",
       controlUiTitle: "Control UI",
       controlUiDocs: "Docs: https://docs.openclaw.ai/web/control-ui",
-      dashboardCopyPaste: "Copy/paste this URL in a browser on this machine to control OpenClaw.",
+      dashboardCopyPaste:
+        "Copy/paste this URL in a browser on this machine to control OpenCrustacean.",
       dashboardLinkWithToken: "Dashboard link (with token): {url}",
-      dashboardOpened: "Opened in your browser. Keep that tab to control OpenClaw.",
+      dashboardOpened: "Opened in your browser. Keep that tab to control OpenCrustacean.",
       dashboardOpenAnytime: "Open the dashboard anytime: {command}",
       dashboardReady: "Dashboard ready",
       dashboardTokenMemory:
@@ -1105,7 +1109,7 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint:
-        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
+        "Required because OpenCrustacean state uses node:sqlite; Bun cannot run the Gateway.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',
@@ -1148,9 +1152,10 @@ export const en = {
       nodeIos: "iOS app (camera/canvas)",
       nodeMac: "macOS app (system + notifications)",
       optionalApps: "Optional apps",
-      outroDashboardLink: "Onboarding complete. Use the dashboard link above to control OpenClaw.",
+      outroDashboardLink:
+        "Onboarding complete. Use the dashboard link above to control OpenCrustacean.",
       outroDashboardOpened:
-        "Onboarding complete. Dashboard opened; keep that tab to control OpenClaw.",
+        "Onboarding complete. Dashboard opened; keep that tab to control OpenCrustacean.",
       outroSeeded:
         "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above.",
       quickstartNodeRuntime: "QuickStart uses Node for the Gateway service (stable + supported).",
@@ -1159,7 +1164,7 @@ export const en = {
       restart: "Restart",
       containerRuntimeTitle: "Container runtime",
       containerSystemdUnavailable:
-        "Systemd user services are not available inside this container. OpenClaw is skipping only the background service install; run the Gateway in the foreground or use your container supervisor.",
+        "Systemd user services are not available inside this container. OpenCrustacean is skipping only the background service install; run the Gateway in the foreground or use your container supervisor.",
       securityReminder:
         "Running agents on your computer is risky — harden your setup: https://docs.openclaw.ai/security",
       secretRefAuthFailed: "Could not resolve {field} SecretRef for setup auth.",

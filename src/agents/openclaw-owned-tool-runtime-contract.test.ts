@@ -105,7 +105,7 @@ async function waitForAfterToolCall(hooks: {
   return call as [Record<string, unknown>, Record<string, unknown>];
 }
 
-describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => {
+describe("OpenCrustacean-owned tool runtime contract - embedded agent adapter", () => {
   afterEach(() => {
     resetOpenClawOwnedToolHooks();
   });

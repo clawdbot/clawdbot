@@ -444,7 +444,7 @@ async function sendFollowupPayloads(params: {
   if (crossChannelFailure && !deliveredCrossChannelOrigin && defaults.opts?.onBlockReply) {
     await defaults.opts.onBlockReply({
       text:
-        "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
+        "Follow-up completed, but OpenCrustacean could not deliver it to the originating channel. " +
         "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
       isError: true,
     });

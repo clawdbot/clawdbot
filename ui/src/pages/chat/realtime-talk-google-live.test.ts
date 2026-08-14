@@ -644,7 +644,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
           mode: "status",
           sessionKey: "main",
           active: true,
-          message: "OpenClaw is working in read (running).",
+          message: "OpenCrustacean is working in read (running).",
           speak: true,
           show: true,
           suppress: false,
@@ -698,7 +698,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const sent = ws.sent.map((payload) => JSON.parse(payload));
     expect(sent).toContainEqual({
       realtimeInput: {
-        text: expect.stringContaining('Status: "OpenClaw is working in read (running)."'),
+        text: expect.stringContaining('Status: "OpenCrustacean is working in read (running)."'),
       },
     });
     transport.stop();
@@ -790,7 +790,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
           sessionKey: "main",
           active: true,
           aborted: true,
-          message: "Cancelled the active OpenClaw run.",
+          message: "Cancelled the active OpenCrustacean run.",
           speak: true,
           show: true,
           suppress: false,

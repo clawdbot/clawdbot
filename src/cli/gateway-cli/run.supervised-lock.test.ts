@@ -201,7 +201,7 @@ describe("supervised gateway lock recovery", () => {
     });
   });
 
-  it("recognizes only the OpenClaw health response", () => {
+  it("recognizes only the OpenCrustacean health response", () => {
     expect(
       testing.isGatewayHealthzResponse(200, JSON.stringify({ ok: true, status: "live" })),
     ).toBe(true);

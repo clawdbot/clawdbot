@@ -32,7 +32,7 @@ export function formatDoctorNonInteractiveHint(
   return `Recommended follow-up: run ${formatCliCommand(
     "openclaw doctor --non-interactive",
     env,
-  )} in a terminal or approvals-capable OpenClaw surface.`;
+  )} in a terminal or approvals-capable OpenCrustacean surface.`;
 }
 
 export async function writeRestartSentinel(

@@ -137,7 +137,7 @@ export async function collectWriteConfigHealthFindings(
     findings.push({
       checkId: "core/doctor/write-config",
       severity: "warning",
-      message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
+      message: "Doctor config writes are disabled because OpenCrustacean is running in Nix mode.",
       ...(configPath ? { path: configPath } : {}),
       requirement: "mutable-config-write-path",
       fixHint:

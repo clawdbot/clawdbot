@@ -197,7 +197,7 @@ export async function detectSetupInference(
       label: candidate.label,
       detail: candidate.detail,
       reason:
-        "OpenClaw cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenClaw or use a Gemini API key to create a connection it can verify.",
+        "OpenCrustacean cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenCrustacean or use a Gemini API key to create a connection it can verify.",
       ...(authOptionId ? { authOptionId } : {}),
       ...(manualProviderId ? { manualProviderId } : {}),
       ...(ownerChoice?.icon ? { icon: ownerChoice.icon } : {}),

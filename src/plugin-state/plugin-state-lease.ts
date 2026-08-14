@@ -111,7 +111,7 @@ function mapErrorCode(code: OpenClawStateLeaseErrorCode): PluginStateLeaseErrorC
     case "OPENCLAW_STATE_LEASE_STORAGE_FAILED":
       return "PLUGIN_STATE_LEASE_STORAGE_FAILED";
     default:
-      throw new Error(`unsupported OpenClaw state lease error code: ${String(code)}`);
+      throw new Error(`unsupported OpenCrustacean state lease error code: ${String(code)}`);
   }
 }
 

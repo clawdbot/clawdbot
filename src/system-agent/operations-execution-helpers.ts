@@ -282,7 +282,7 @@ export async function applyPersistentOperation(params: {
     // The mutation already committed. Keep success truthful while making the
     // missing audit record visible to every CLI/chat capture surface.
     runtime.error(
-      `${outcome.summary}, but OpenClaw could not record its audit entry: ${formatErrorMessage(error)}`,
+      `${outcome.summary}, but OpenCrustacean could not record its audit entry: ${formatErrorMessage(error)}`,
     );
   }
   runtime.log(`[openclaw] done: ${auditOperation}`);
@@ -381,7 +381,7 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
       return;
     }
     throw new Error(
-      `Direct config writes cannot change plugin "${pluginId}" because it may back OpenClaw's own active inference route. Exit OpenClaw and edit it from a terminal.`,
+      `Direct config writes cannot change plugin "${pluginId}" because it may back OpenCrustacean's own active inference route. Exit OpenCrustacean and edit it from a terminal.`,
     );
   }
   const deniedRoot = segments[0]?.trim().toLowerCase() ?? "";
@@ -389,7 +389,7 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
   throw new Error(
     denialReason
       ? `Direct config writes cannot change \`${deniedRoot}\` (${denialReason}).`
-      : "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
+      : "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route, or exit OpenCrustacean and run `openclaw onboard` to change provider/auth access.",
   );
 }
 
@@ -405,14 +405,14 @@ async function verifyCurrentSetupInference(
   const before = await readConfigFileSnapshot();
   if (!before.exists || !before.valid) {
     throw new Error(
-      "OpenClaw setup requires a valid configured inference route. Exit OpenClaw and run `openclaw onboard`, then retry.",
+      "OpenCrustacean setup requires a valid configured inference route. Exit OpenCrustacean and run `openclaw onboard`, then retry.",
     );
   }
   const beforeConfig = before.runtimeConfig ?? before.config;
   const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
   if (!beforeRoute.route) {
     throw new Error(
-      "OpenClaw setup requires working inference first. Exit OpenClaw and run `openclaw onboard`, then retry.",
+      "OpenCrustacean setup requires working inference first. Exit OpenCrustacean and run `openclaw onboard`, then retry.",
     );
   }
   const verifyInferenceConfig =
@@ -421,7 +421,7 @@ async function verifyCurrentSetupInference(
   const verification = await verifyInferenceConfig({ config: beforeConfig, runtime });
   if (!verification.ok) {
     throw new Error(
-      `OpenClaw setup requires working inference first. The configured route failed a live check: ${verification.error} Exit OpenClaw and run \`openclaw onboard\`, then retry.`,
+      `OpenCrustacean setup requires working inference first. The configured route failed a live check: ${verification.error} Exit OpenCrustacean and run \`openclaw onboard\`, then retry.`,
     );
   }
 
@@ -457,13 +457,13 @@ export async function executeSetup(
   const defaultModel = overview.defaultModel?.trim();
   if (!defaultModel) {
     throw new Error(
-      "OpenClaw setup requires working inference first. Run `openclaw onboard` to configure and verify a default model, then start OpenClaw again.",
+      "OpenCrustacean setup requires working inference first. Run `openclaw onboard` to configure and verify a default model, then start OpenCrustacean again.",
     );
   }
   const requestedModel = operation.model?.trim();
   if (requestedModel && requestedModel !== defaultModel) {
     throw new Error(
-      `OpenClaw setup will preserve the verified default model ${defaultModel}. Exit OpenClaw and run \`openclaw onboard\` to stage, live-test, and save a different inference route.`,
+      `OpenCrustacean setup will preserve the verified default model ${defaultModel}. Exit OpenCrustacean and run \`openclaw onboard\` to stage, live-test, and save a different inference route.`,
     );
   }
   if (!opts.approved) {
@@ -477,7 +477,7 @@ export async function executeSetup(
   const verified = await verifyCurrentSetupInference(runtime, opts.deps);
   if (requestedModel && requestedModel !== verified.modelRef) {
     throw new Error(
-      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route or exit OpenClaw and run \`openclaw onboard\` before retrying setup.`,
+      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route or exit OpenCrustacean and run \`openclaw onboard\` before retrying setup.`,
     );
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());

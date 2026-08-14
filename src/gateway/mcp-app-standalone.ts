@@ -406,7 +406,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       initializeAccepted = true;
       respond(message.id, {
         protocolVersion: config.protocolVersion,
-        hostInfo: { name: "OpenClaw standalone host", version: "1.0.0" },
+        hostInfo: { name: "OpenCrustacean standalone host", version: "1.0.0" },
         hostCapabilities: {
           sandbox: { csp: payload.csp ?? {} },
           ...(payload.serverTools === true ? { serverTools: {} } : {}),

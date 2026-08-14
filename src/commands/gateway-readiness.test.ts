@@ -81,7 +81,7 @@ describe("ensureGatewayReadyForOperation", () => {
 
     expect(result.ready).toBe(false);
     expect(confirm).toHaveBeenCalledWith(
-      "Gateway is not installed. Install and start it now so OpenClaw can open the dashboard?",
+      "Gateway is not installed. Install and start it now so OpenCrustacean can open the dashboard?",
       true,
     );
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(

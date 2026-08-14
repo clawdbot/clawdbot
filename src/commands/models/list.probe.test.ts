@@ -42,7 +42,7 @@ describe("mapFailoverReasonToProbeStatus", () => {
 });
 
 describe("runAuthProbes", () => {
-  it("runs Codex auth probes through raw OpenClaw model-run mode", async () => {
+  it("runs Codex auth probes through raw OpenCrustacean model-run mode", async () => {
     const runEmbeddedAgent = vi.fn(
       async (_params: {
         agentDir?: string;

@@ -297,7 +297,7 @@ function selectAgentHarnessDecision(
       } as AgentHarnessPolicy)
     : resolvedPolicy;
   // OpenClaw's built-in harness is intentionally not part of the plugin candidate list. Explicit plugin
-  // runtimes fail closed; only `auto` may route an unmatched turn to OpenClaw.
+  // runtimes fail closed; only `auto` may route an unmatched turn to OpenCrustacean.
   const pluginHarnesses = listPluginAgentHarnesses();
   const openClawHarness = createOpenClawAgentHarness();
   const runtime = policy.runtime;
@@ -477,7 +477,7 @@ export async function runAgentHarnessSettledTurnFinalization(
     throw new Error(`Agent harness ${harness.id} cannot safely finalize a settled tool turn.`);
   }
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
-    throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
+    throw new Error('OpenCrustacean host authority requires toolsAllow: ["openclaw"]');
   }
   const pluginParams = withoutInternalHarnessAuthority({
     ...internalParams,
@@ -503,7 +503,7 @@ async function runSelectedAgentHarnessAttempt(
   const selection = selectPreparedAgentHarness(params);
   const harness = selection.harness;
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
-    throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
+    throw new Error('OpenCrustacean host authority requires toolsAllow: ["openclaw"]');
   }
   const ringZeroTools = internalParams.systemAgentTool
     ? [
@@ -567,7 +567,7 @@ async function runAgentHarnessOperation<T>(
   try {
     return await runWithDiagnosticTraceContext(harnessTrace, execute);
   } catch (error) {
-    log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
+    log.warn(`${harness.label} failed; not falling back to embedded OpenCrustacean backend`, {
       harnessId: harness.id,
       provider: params.provider,
       modelId: params.modelId,

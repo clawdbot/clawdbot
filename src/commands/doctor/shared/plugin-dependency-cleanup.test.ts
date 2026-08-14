@@ -125,7 +125,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expectPathMissing(path.join(stateDirectory, "plugin-runtime-deps"));
   });
 
-  it("removes configured plugin stage roots outside OpenClaw roots", async () => {
+  it("removes configured plugin stage roots outside OpenCrustacean roots", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "package");
     const stageRoot = path.join(tempDir, "stage");
@@ -182,7 +182,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expectDirectoryPresent(legacyRuntimeRoot);
   });
 
-  it("refuses arbitrary explicit plugin stage roots outside OpenClaw roots", async () => {
+  it("refuses arbitrary explicit plugin stage roots outside OpenCrustacean roots", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "package");
     const stageRoot = path.join(tempDir, "stage-without-marker");
@@ -231,7 +231,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expectDirectoryPresent(resolvedDotDotStage);
   });
 
-  it("does not follow symlinked extension roots outside OpenClaw roots", async () => {
+  it("does not follow symlinked extension roots outside OpenCrustacean roots", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "package");
     const extensionsRoot = path.join(packageRoot, "extensions");
@@ -260,7 +260,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expectDirectoryPresent(externalNodeModules);
   });
 
-  it("refuses legacy roots that resolve outside OpenClaw roots", async () => {
+  it("refuses legacy roots that resolve outside OpenCrustacean roots", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "package");
     const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
@@ -278,7 +278,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toContain(
-      `Skipped legacy plugin dependency state ${legacyRuntimeRoot}: resolved outside OpenClaw cleanup roots`,
+      `Skipped legacy plugin dependency state ${legacyRuntimeRoot}: resolved outside OpenCrustacean cleanup roots`,
     );
     expect((await fs.lstat(legacyRuntimeRoot)).isSymbolicLink()).toBe(true);
     await expectDirectoryPresent(externalRuntimeRoot);
@@ -317,7 +317,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toContain(
-      `Skipped legacy plugin dependency state ${legacyRuntimeRoot}: resolved outside OpenClaw cleanup roots`,
+      `Skipped legacy plugin dependency state ${legacyRuntimeRoot}: resolved outside OpenCrustacean cleanup roots`,
     );
     expect((await fs.lstat(leftPadLink)).isSymbolicLink()).toBe(true);
     expect((await fs.lstat(legacyRuntimeRoot)).isSymbolicLink()).toBe(true);

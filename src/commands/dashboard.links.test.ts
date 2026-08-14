@@ -125,7 +125,7 @@ describe("dashboardCommand", () => {
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
     expect(runtime.log).toHaveBeenCalledWith(
-      "Opened in your browser. Keep that tab to control OpenClaw.",
+      "Opened in your browser. Keep that tab to control OpenCrustacean.",
     );
   });
 

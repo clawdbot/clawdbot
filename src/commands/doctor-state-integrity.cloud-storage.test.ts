@@ -13,7 +13,7 @@ describe("detectMacCloudSyncedStateDir", () => {
       "Library",
       "Mobile Documents",
       "com~apple~CloudDocs",
-      "OpenClaw",
+      "OpenCrustacean",
       ".openclaw",
     );
 
@@ -29,7 +29,14 @@ describe("detectMacCloudSyncedStateDir", () => {
   });
 
   it("detects state dir under Library/CloudStorage", () => {
-    const stateDir = path.join(home, "Library", "CloudStorage", "Dropbox", "OpenClaw", ".openclaw");
+    const stateDir = path.join(
+      home,
+      "Library",
+      "CloudStorage",
+      "Dropbox",
+      "OpenCrustacean",
+      ".openclaw",
+    );
 
     const result = detectMacCloudSyncedStateDir(stateDir, {
       platform: "darwin",
@@ -49,7 +56,7 @@ describe("detectMacCloudSyncedStateDir", () => {
       "Library",
       "CloudStorage",
       "OneDrive-Personal",
-      "OpenClaw",
+      "OpenCrustacean",
       ".openclaw",
     );
 
@@ -71,7 +78,7 @@ describe("detectMacCloudSyncedStateDir", () => {
       "Library",
       "CloudStorage",
       "OneDrive-Personal",
-      "OpenClaw",
+      "OpenCrustacean",
       ".openclaw",
     );
     const resolvedLocalPath = path.join(home, ".openclaw");
@@ -115,7 +122,7 @@ describe("detectMacCloudSyncedStateDir", () => {
       "Library",
       "Mobile Documents",
       "com~apple~CloudDocs",
-      "OpenClaw",
+      "OpenCrustacean",
       ".openclaw",
     );
 

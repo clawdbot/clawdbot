@@ -120,5 +120,5 @@ function resolveOpenClawCliExecutable(): string {
       return resolved;
     }
   }
-  throw new Error("Cannot resolve OpenClaw CLI executable path for native hook relay");
+  throw new Error("Cannot resolve OpenCrustacean CLI executable path for native hook relay");
 }

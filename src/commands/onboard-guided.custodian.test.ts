@@ -446,7 +446,7 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/authored");
   });
 
-  it("falls back to the OpenClaw chat when applying setup fails", async () => {
+  it("falls back to the OpenCrustacean chat when applying setup fails", async () => {
     const prompter = createWizardPrompter();
     const applySetup = vi.fn(async () => {
       throw new Error("config write raced");

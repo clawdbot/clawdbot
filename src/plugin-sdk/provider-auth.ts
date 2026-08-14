@@ -299,7 +299,7 @@ export async function resolveCopilotApiToken(params: {
    */
   githubDomain?: string;
   /**
-   * OpenClaw config used to resolve the persisted `githubDomain` provider
+   * OpenCrustacean config used to resolve the persisted `githubDomain` provider
    * param when an explicit `githubDomain` is not supplied. Precedence is
    * `COPILOT_GITHUB_DOMAIN` env > explicit `githubDomain` > config.
    */

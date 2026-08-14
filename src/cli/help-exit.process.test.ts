@@ -338,7 +338,7 @@ describe("JSON console style process output", () => {
     expect(stdoutRecords.length).toBeGreaterThan(0);
     expect([...stdoutRecords, ...stderrRecords]).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ level: "info", message: "OpenClaw status" }),
+        expect.objectContaining({ level: "info", message: "OpenCrustacean status" }),
       ]),
     );
     expect([...stdoutRecords, ...stderrRecords]).not.toEqual(

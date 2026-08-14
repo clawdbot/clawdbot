@@ -40,7 +40,7 @@ describe("entry root version fast path", () => {
       }),
     ).toBe(true);
     await flushVersionFastPath();
-    expect(output).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
+    expect(output).toHaveBeenCalledWith("OpenCrustacean 9.9.9-test (abc1234)");
     expect(exit).toHaveBeenCalledWith(0);
 
     output.mockClear();
@@ -58,7 +58,7 @@ describe("entry root version fast path", () => {
       }),
     ).toBe(true);
     await flushVersionFastPath();
-    expect(output).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
+    expect(output).toHaveBeenCalledWith("OpenCrustacean 9.9.9-test");
     expect(exit).toHaveBeenCalledWith(0);
 
     output.mockClear();

@@ -121,7 +121,7 @@ describe("sidebar entries", () => {
     expect(normalizeSidebarEntries([])).toEqual([]);
   });
 
-  it("keeps OpenClaw only in Settings and drops stale sidebar pins", () => {
+  it("keeps OpenCrustacean only in Settings and drops stale sidebar pins", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("custodian");
     expect(settingsRoutes).toContain("custodian");
     expect(isSettingsNavigationRoute("custodian")).toBe(true);

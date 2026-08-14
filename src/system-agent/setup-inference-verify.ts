@@ -72,7 +72,7 @@ export async function verifySetupInference(
     return {
       ok: false,
       status: "unavailable",
-      error: "No OpenClaw config exists. Run `openclaw onboard` first.",
+      error: "No OpenCrustacean config exists. Run `openclaw onboard` first.",
     };
   }
   if (!snapshot.valid) {
@@ -131,7 +131,7 @@ export async function verifySetupInference(
       ok: false,
       status: "unknown",
       error:
-        "The successful inference run did not report an exact execution binding. Retry setup before starting OpenClaw.",
+        "The successful inference run did not report an exact execution binding. Retry setup before starting OpenCrustacean.",
     };
   }
   return { ...verification, binding: verifiedBinding };
@@ -473,7 +473,7 @@ export async function completeSetupInference(params: {
     (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   if (!snapshot.exists) {
-    return { ok: false, status: "unavailable", error: "No OpenClaw config exists." };
+    return { ok: false, status: "unavailable", error: "No OpenCrustacean config exists." };
   }
   if (!snapshot.valid) {
     return { ok: false, status: "format", error: invalidSetupConfigError(snapshot) };

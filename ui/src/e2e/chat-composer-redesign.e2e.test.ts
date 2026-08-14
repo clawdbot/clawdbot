@@ -581,7 +581,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       methodResponses: {
         "chat.startup": {
           agentsList: {
-            agents: [{ id: "main", name: "OpenClaw" }],
+            agents: [{ id: "main", name: "OpenCrustacean" }],
             defaultId: "main",
             mainKey: "main",
             scope: "agent",

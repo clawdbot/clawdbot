@@ -206,7 +206,7 @@ function buildCliSessionDriftUserContext(
   if (reusableCliSession.mode !== "reuse-with-drift") {
     return undefined;
   }
-  return `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
+  return `OpenCrustacean resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
 }
 
 function prependCliSessionDriftUserContext(
@@ -372,7 +372,7 @@ function buildCliAuthProfileResolutionError(params: {
   });
   const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
   return new Error(
-    `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
+    `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenCrustacean did not start the run.`,
   );
 }
 
@@ -499,7 +499,7 @@ export async function prepareCliRunContext(
     // Cron persists this verbatim and failure alerts truncate at 200 characters,
     // so keep the upgrade recovery and fail-closed outcome compact.
     throw new Error(
-      `CLI backend "${backendResolved.id}" cannot enforce this run's tool cap. Upgrade its plugin and retry; if current, ask its maintainer to add exact-cap support. OpenClaw did not start the run.`,
+      `CLI backend "${backendResolved.id}" cannot enforce this run's tool cap. Upgrade its plugin and retry; if current, ask its maintainer to add exact-cap support. OpenCrustacean did not start the run.`,
     );
   }
   const sideQuestionDisablesNativeTools =
@@ -850,7 +850,7 @@ export async function prepareCliRunContext(
       await prepareDeps.ensureMcpLoopbackServer();
     } catch (error) {
       throw new Error(
-        `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
+        `Bundled MCP is enabled, but the OpenCrustacean MCP loopback server failed to start: ${String(error)}`,
         { cause: error },
       );
     }
@@ -858,7 +858,7 @@ export async function prepareCliRunContext(
   }
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     throw new Error(
-      "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
+      "Bundled MCP is enabled, but the OpenCrustacean MCP loopback server did not publish a runtime after startup.",
     );
   }
   const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);

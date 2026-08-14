@@ -40,7 +40,7 @@ afterEach(() => {
   resetAppHostTestGlobals();
 });
 
-describe("OpenClaw native shell", () => {
+describe("OpenCrustacean native shell", () => {
   it("opens Settings with Shift-Command-Comma", () => {
     const navigate = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
@@ -287,7 +287,7 @@ describe("OpenClaw native shell", () => {
   });
 });
 
-describe("OpenClaw shell update affordance", () => {
+describe("OpenCrustacean shell update affordance", () => {
   it("renders a floating card only while desktop navigation is collapsed", () => {
     const container = document.createElement("div");
     const shared = {

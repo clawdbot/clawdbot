@@ -34,7 +34,7 @@ describe("buildCurrentOpenClawCliArgv", () => {
     ]);
   });
 
-  it("preserves a real OpenClaw launcher entry", () => {
+  it("preserves a real OpenCrustacean launcher entry", () => {
     setArgv1("/opt/openclaw/openclaw.mjs");
 
     expect(buildCurrentOpenClawCliArgv(["sessions", "export-trajectory"])).toEqual([
@@ -46,7 +46,7 @@ describe("buildCurrentOpenClawCliArgv", () => {
     ]);
   });
 
-  it("preserves OpenClaw dist entries from the package root", () => {
+  it("preserves OpenCrustacean dist entries from the package root", () => {
     const distEntry = path.join(process.cwd(), "dist", "entry.js");
     setArgv1(distEntry);
 
@@ -59,7 +59,7 @@ describe("buildCurrentOpenClawCliArgv", () => {
     ]);
   });
 
-  it("preserves OpenClaw source entries from the package root", () => {
+  it("preserves OpenCrustacean source entries from the package root", () => {
     const sourceEntry = path.join(process.cwd(), "src", "entry.ts");
     setArgv1(sourceEntry);
 
@@ -72,7 +72,7 @@ describe("buildCurrentOpenClawCliArgv", () => {
     ]);
   });
 
-  it("does not treat foreign dist entries as OpenClaw launchers", () => {
+  it("does not treat foreign dist entries as OpenCrustacean launchers", () => {
     setArgv1("/app/dist/index.js");
 
     expect(buildCurrentOpenClawCliArgv(["sessions", "export-trajectory"])).toEqual([

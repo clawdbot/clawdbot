@@ -1141,7 +1141,7 @@ describe("statusCommand", () => {
     ]);
     const logs = await runStatusAndGetLogs({ verbose: true });
     for (const token of [
-      "OpenClaw status",
+      "OpenCrustacean status",
       "Overview",
       "Security audit",
       "Skipped in fast status",

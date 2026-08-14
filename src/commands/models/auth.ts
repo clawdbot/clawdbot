@@ -715,9 +715,9 @@ export async function modelsAuthPasteTokenCommand(
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
-    runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
-    runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
-    runtime.log("Anthropic staff told us this OpenClaw path is allowed again.");
+    runtime.log("Anthropic setup-token auth is supported in OpenCrustacean.");
+    runtime.log("OpenCrustacean prefers Claude CLI reuse when it is available on the host.");
+    runtime.log("Anthropic staff told us this OpenCrustacean path is allowed again.");
   }
 }
 

@@ -88,7 +88,7 @@ export function resolveSystemAgentRescuePolicy(
       sandboxActive,
       reason: "sandbox-active",
       message:
-        "OpenClaw rescue is blocked because OpenClaw sandboxing is active. Fix the install locally or disable sandboxing before using remote rescue.",
+        "OpenCrustacean rescue is blocked because OpenCrustacean sandboxing is active. Fix the install locally or disable sandboxing before using remote rescue.",
     };
   }
   if (!enabled) {
@@ -100,7 +100,7 @@ export function resolveSystemAgentRescuePolicy(
       yolo,
       sandboxActive,
       reason: "disabled",
-      message: "OpenClaw rescue requires YOLO host posture with sandboxing off.",
+      message: "OpenCrustacean rescue requires YOLO host posture with sandboxing off.",
     };
   }
   if (!input.senderIsOwner) {
@@ -112,7 +112,7 @@ export function resolveSystemAgentRescuePolicy(
       yolo,
       sandboxActive,
       reason: "not-owner",
-      message: "OpenClaw rescue only accepts commands from an OpenClaw owner.",
+      message: "OpenCrustacean rescue only accepts commands from an OpenCrustacean owner.",
     };
   }
   if (ownerDmOnly && !input.isDirectMessage) {
@@ -124,7 +124,7 @@ export function resolveSystemAgentRescuePolicy(
       yolo,
       sandboxActive,
       reason: "not-direct-message",
-      message: "OpenClaw rescue is restricted to owner DMs by default.",
+      message: "OpenCrustacean rescue is restricted to owner DMs by default.",
     };
   }
   return {

@@ -310,7 +310,7 @@ describe("collectCodexRouteWarnings", () => {
       [
         "- Codex runtime is selected, but the Codex plugin is disabled.",
         "- agents.defaults.model.primary: gpt-5.5 resolves to openai/gpt-5.5 with Codex runtime while the Codex plugin is disabled by config.",
-        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
+        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenCrustacean runtime policy.",
       ].join("\n"),
     ]);
   });
@@ -327,7 +327,7 @@ describe("collectCodexRouteWarnings", () => {
       [
         "- Codex runtime is selected, but the Codex plugin is disabled.",
         "- agents.defaults.model.primary: openai/gpt-5.6 resolves to openai/gpt-5.6 with Codex runtime while the Codex plugin is disabled by config.",
-        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
+        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenCrustacean runtime policy.",
       ].join("\n"),
     ]);
   });
@@ -346,7 +346,7 @@ describe("collectCodexRouteWarnings", () => {
       [
         "- Codex runtime is selected, but the Codex plugin is disabled.",
         "- agents.defaults.model.primary: openai/gpt-5.3-codex-spark resolves to openai/gpt-5.3-codex-spark with Codex runtime while the Codex plugin is disabled by config.",
-        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
+        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenCrustacean runtime policy.",
       ].join("\n"),
     ]);
   });
@@ -372,12 +372,12 @@ describe("collectCodexRouteWarnings", () => {
       [
         "- Codex runtime is selected, but the Codex plugin is disabled.",
         "- agents.defaults.model.primary: openai/gpt-5.4-nano resolves to openai/gpt-5.4-nano with Codex runtime while the Codex plugin is disabled by config.",
-        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
+        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenCrustacean runtime policy.",
       ].join("\n"),
     ]);
   });
 
-  it("warns when Codex runtime has OpenClaw compaction summarizer overrides", () => {
+  it("warns when Codex runtime has OpenCrustacean compaction summarizer overrides", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {
         agents: {
@@ -394,7 +394,7 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Run `openclaw doctor --fix`: it removes unsupported Codex compaction overrides.",
@@ -418,7 +418,7 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Run `openclaw doctor --fix`: it removes unsupported Codex compaction overrides.",
@@ -444,7 +444,7 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Run `openclaw doctor --fix`: it removes unsupported Codex compaction overrides.",
@@ -1565,7 +1565,7 @@ describe("collectCodexRouteWarnings", () => {
     });
     expect(result.warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
@@ -1602,7 +1602,7 @@ describe("collectCodexRouteWarnings", () => {
     });
     expect(result.warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
@@ -1647,7 +1647,7 @@ describe("collectCodexRouteWarnings", () => {
     });
     expect(result.warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
       ].join("\n"),
@@ -1686,7 +1686,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.changes.join("\n")).not.toContain("Removed agents.defaults.compaction");
     expect(result.warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
@@ -1838,7 +1838,7 @@ describe("collectCodexRouteWarnings", () => {
         "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
       ].join("\n"),
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Run `openclaw doctor --fix`: it removes unsupported Codex compaction overrides.",
@@ -1960,12 +1960,12 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
       ].join("\n"),
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.list.codex.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- Run `openclaw doctor --fix`: it removes unsupported Codex compaction overrides.",
       ].join("\n"),
@@ -2002,7 +2002,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(result.warnings).toStrictEqual([
       [
-        "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+        "- Codex runtime uses native server-side compaction and ignores OpenCrustacean compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
@@ -2273,7 +2273,7 @@ describe("collectCodexRouteWarnings", () => {
       [
         "- Codex runtime is selected, but the Codex plugin is disabled.",
         "- agents.defaults.model.primary: gpt-5.5 resolves to openai/gpt-5.5 with Codex runtime while the Codex plugin is disabled by config.",
-        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
+        "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenCrustacean runtime policy.",
       ].join("\n"),
     ]);
     expect(result.changes).toStrictEqual([]);
@@ -3015,7 +3015,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.plugins?.allow).toEqual(["openai", "codex"]);
   });
 
-  it("keeps the Codex plugin disabled when OpenAI routes explicitly use the OpenClaw runtime", () => {
+  it("keeps the Codex plugin disabled when OpenAI routes explicitly use the OpenCrustacean runtime", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         plugins: {
@@ -3052,7 +3052,7 @@ describe("collectCodexRouteWarnings", () => {
     ).toBe("openclaw");
   });
 
-  it("keeps the Codex plugin disabled when an auth-profiled OpenAI route explicitly uses the OpenClaw runtime", () => {
+  it("keeps the Codex plugin disabled when an auth-profiled OpenAI route explicitly uses the OpenCrustacean runtime", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         plugins: {
@@ -3210,7 +3210,7 @@ describe("collectCodexRouteWarnings", () => {
     );
   });
 
-  it("keeps repaired OpenAI refs on Codex runtime even when the OpenAI provider is otherwise OpenClaw/API-key routed", () => {
+  it("keeps repaired OpenAI refs on Codex runtime even when the OpenAI provider is otherwise OpenCrustacean/API-key routed", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         models: {
@@ -4311,7 +4311,7 @@ describe("collectCodexRouteWarnings", () => {
     ).toBeUndefined();
   });
 
-  it("preserves explicit OpenClaw runtime pins while repairing legacy session routes", () => {
+  it("preserves explicit OpenCrustacean runtime pins while repairing legacy session routes", () => {
     const store: Record<string, SessionEntry> = {
       main: {
         sessionId: "s1",
@@ -4343,7 +4343,7 @@ describe("collectCodexRouteWarnings", () => {
     );
   });
 
-  it("preserves Codex runtime intent alongside explicit OpenClaw harness pins", () => {
+  it("preserves Codex runtime intent alongside explicit OpenCrustacean harness pins", () => {
     const store: Record<string, SessionEntry> = {
       main: {
         sessionId: "s1",
@@ -4528,7 +4528,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").modelOverride).toBe("gpt-5.5");
   });
 
-  it("preserves canonical OpenAI sessions that are explicitly pinned to OpenClaw", () => {
+  it("preserves canonical OpenAI sessions that are explicitly pinned to OpenCrustacean", () => {
     const store: Record<string, SessionEntry> = {
       main: {
         sessionId: "s1",

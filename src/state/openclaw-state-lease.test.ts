@@ -19,7 +19,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-describe("OpenClaw state lease", () => {
+describe("OpenCrustacean state lease", () => {
   it("releases ownership when a CLI exits from inside the leased operation", async () => {
     await withOpenClawTestState({ label: "core-state-lease-process-exit" }, async (state) => {
       const leaseModuleUrl = pathToFileURL(path.resolve("src/state/openclaw-state-lease.ts")).href;

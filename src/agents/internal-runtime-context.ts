@@ -18,14 +18,15 @@ export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
 /** Header for context attached to the immediately preceding user message. */
 export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the immediately preceding user message.";
+  "OpenCrustacean runtime context for the immediately preceding user message.";
 /** Header for runtime events passed as prompt context. */
-export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
+export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenCrustacean runtime event.";
 /** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
 const LEGACY_INTERNAL_CONTEXT_HEADER =
-  ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
+  ["OpenCrustacean runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") +
+  "\n";
 
 const LEGACY_INTERNAL_EVENT_MARKER = "[Internal task completion event]";
 const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";

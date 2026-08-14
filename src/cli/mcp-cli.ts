@@ -593,16 +593,16 @@ async function probeMcpServersOrFail(params: {
 }
 
 const OPENCLAW_MCP_REGISTRY_SCOPE_NOTE =
-  "Note: this command only shows OpenClaw-managed mcp.servers entries and does not include mcporter servers from config/mcporter.json.";
+  "Note: this command only shows OpenCrustacean-managed mcp.servers entries and does not include mcporter servers from config/mcporter.json.";
 
 export function registerMcpCli(program: Command) {
   const mcp = program
     .command("mcp")
-    .description("Manage OpenClaw mcp.servers config and channel bridge");
+    .description("Manage OpenCrustacean mcp.servers config and channel bridge");
 
   mcp
     .command("serve")
-    .description("Expose OpenClaw channels over MCP stdio")
+    .description("Expose OpenCrustacean channels over MCP stdio")
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--token-file <path>", "Read gateway token from file")
@@ -644,7 +644,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("list")
-    .description("List OpenClaw-managed MCP servers from mcp.servers")
+    .description("List OpenCrustacean-managed MCP servers from mcp.servers")
     .option("--json", "Print JSON")
     .action(async (opts: { json?: boolean }) => {
       const loaded = await listConfiguredMcpServers();
@@ -658,12 +658,12 @@ export function registerMcpCli(program: Command) {
       const names = Object.keys(loaded.mcpServers).toSorted();
       if (names.length === 0) {
         defaultRuntime.log(
-          `No OpenClaw-managed MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
+          `No OpenCrustacean-managed MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
         );
         defaultRuntime.log(OPENCLAW_MCP_REGISTRY_SCOPE_NOTE);
         return;
       }
-      defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
+      defaultRuntime.log(`OpenCrustacean-managed MCP servers (${loaded.path}):`);
       for (const name of names) {
         defaultRuntime.log(`- ${name}`);
       }
@@ -692,9 +692,9 @@ export function registerMcpCli(program: Command) {
         return;
       }
       if (name) {
-        defaultRuntime.log(`OpenClaw-managed MCP server "${name}" (${loaded.path}):`);
+        defaultRuntime.log(`OpenCrustacean-managed MCP server "${name}" (${loaded.path}):`);
       } else {
-        defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
+        defaultRuntime.log(`OpenCrustacean-managed MCP servers (${loaded.path}):`);
       }
       printJson(value ?? {});
     });
@@ -1044,7 +1044,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("set")
-    .description("Set one OpenClaw-managed MCP server from a JSON object")
+    .description("Set one OpenCrustacean-managed MCP server from a JSON object")
     .argument("<name>", "MCP server name")
     .argument("<value>", 'JSON object, for example {"command":"uvx","args":["context7-mcp"]}')
     .action(async (name: string, rawValue: string) => {
@@ -1377,7 +1377,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("unset")
-    .description("Remove one OpenClaw-managed MCP server")
+    .description("Remove one OpenCrustacean-managed MCP server")
     .argument("<name>", "MCP server name")
     .action(async (name: string) => {
       const loaded = await listConfiguredMcpServers();

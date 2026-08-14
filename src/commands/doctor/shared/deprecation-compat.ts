@@ -374,7 +374,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/cli/mcp",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
     notes:
-      "OpenClaw stores transport names; CLI backends receive their own type fields through runtime adapters.",
+      "OpenCrustacean stores transport names; CLI backends receive their own type fields through runtime adapters.",
   }),
   deprecatedCompatRecord({
     code: "doctor-gateway-bind-host-aliases",

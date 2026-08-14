@@ -345,7 +345,7 @@ export type CliBackendPlugin = {
    * Session/auth epoch source policy.
    *
    * `combined` keeps the legacy "host credential + auth profile" fingerprint.
-   * `profile-only` treats the selected OpenClaw auth profile as the sole auth
+   * `profile-only` treats the selected OpenCrustacean auth profile as the sole auth
    * owner for session invalidation when one is present.
    */
   authEpochMode?: CliBackendAuthEpochMode;

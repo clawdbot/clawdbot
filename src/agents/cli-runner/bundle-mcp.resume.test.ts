@@ -12,7 +12,7 @@ import {
 setupCliBundleMcpTestHarness();
 
 describe("prepareCliBundleMcpConfig resume hash", () => {
-  it("stabilizes the resume hash when only the OpenClaw loopback port changes", async () => {
+  it("stabilizes the resume hash when only the OpenCrustacean loopback port changes", async () => {
     // Loopback ports are volatile per gateway run and should not force CLI
     // session abandonment when stable MCP semantics are unchanged.
     const first = await prepareBundleProbeCliConfig({
@@ -83,7 +83,7 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     await second.cleanup?.();
   });
 
-  it("keeps OpenClaw approval state out of the resume identity", async () => {
+  it("keeps OpenCrustacean approval state out of the resume identity", async () => {
     const prepare = async (options: Parameters<typeof buildSystemAgentToolsMcpServerConfig>[0]) =>
       await prepareCliBundleMcpConfig({
         enabled: true,

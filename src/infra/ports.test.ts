@@ -114,7 +114,7 @@ describe("ports helpers", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("prints an OpenClaw-specific hint when port details look like another OpenClaw instance", async () => {
+  it("prints an OpenCrustacean-specific hint when port details look like another OpenCrustacean instance", async () => {
     const runtime = {
       error: vi.fn(),
       log: vi.fn(),
@@ -129,7 +129,7 @@ describe("ports helpers", () => {
     ).catch(() => {});
 
     const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
-    expect(messages.join("\n")).toContain("another OpenClaw instance is already running");
+    expect(messages.join("\n")).toContain("another OpenCrustacean instance is already running");
   });
 });
 
@@ -755,7 +755,7 @@ describe("inspectPortUsage on Windows", () => {
     expect(result.connections[0]?.commandLine).toContain("openclaw");
   });
 
-  it("uses PowerShell process command lines to classify OpenClaw listeners", async () => {
+  it("uses PowerShell process command lines to classify OpenCrustacean listeners", async () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;

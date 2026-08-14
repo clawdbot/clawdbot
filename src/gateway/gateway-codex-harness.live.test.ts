@@ -697,7 +697,7 @@ async function verifyCodexCodeModeOnlyDynamicToolProbe(params: {
     sessionKey: params.sessionKey,
     message: [
       "Code-mode-only bridge probe.",
-      "Before replying, call the OpenClaw sessions_list tool exactly once.",
+      "Before replying, call the OpenCrustacean sessions_list tool exactly once.",
       "Use limit=1 and includeLastMessage=false.",
       `After the tool result returns, reply exactly ${expectedToken} and nothing else.`,
     ].join("\n"),

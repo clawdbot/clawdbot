@@ -522,7 +522,7 @@ function normalizeHandshake(artifact: WorkerInstallationArtifact): WorkerAdmissi
     throw new Error("Worker bundle hash must be a lowercase SHA-256 digest");
   }
   if (!openclawVersion) {
-    throw new Error("Worker OpenClaw version must be non-empty");
+    throw new Error("Worker OpenCrustacean version must be non-empty");
   }
   if (
     protocolFeatures.length > WORKER_PROTOCOL_MAX_FEATURES ||

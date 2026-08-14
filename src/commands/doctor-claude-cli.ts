@@ -238,7 +238,9 @@ export function noteClaudeCliHealth(
   }
 
   if (!storedProfile && credential?.type !== "api_key_helper") {
-    lines.push(`- OpenClaw auth profile: missing (${CLAUDE_CLI_PROFILE_ID}) in ${authStorePath}.`);
+    lines.push(
+      `- OpenCrustacean auth profile: missing (${CLAUDE_CLI_PROFILE_ID}) in ${authStorePath}.`,
+    );
     fixHints.push(
       `- Fix: run ${formatCliCommand(
         "openclaw models auth login --provider anthropic --method cli --set-default",
@@ -246,7 +248,7 @@ export function noteClaudeCliHealth(
     );
   } else if (storedProfile && storedProfile.provider !== CLAUDE_CLI_PROVIDER) {
     lines.push(
-      `- OpenClaw auth profile: ${CLAUDE_CLI_PROFILE_ID} is wired to provider "${storedProfile.provider}" instead of "${CLAUDE_CLI_PROVIDER}".`,
+      `- OpenCrustacean auth profile: ${CLAUDE_CLI_PROFILE_ID} is wired to provider "${storedProfile.provider}" instead of "${CLAUDE_CLI_PROVIDER}".`,
     );
     fixHints.push(
       `- Fix: rerun ${formatCliCommand(

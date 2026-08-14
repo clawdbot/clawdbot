@@ -51,7 +51,7 @@ function parseProfileYaml(
       diagnostics: [
         diagnostic(
           "unsupported_openclaw_profile_yaml_feature",
-          `${path} uses ${unsupportedFeature}; OpenClaw profile YAML must map directly to JSON data.`,
+          `${path} uses ${unsupportedFeature}; OpenCrustacean profile YAML must map directly to JSON data.`,
         ),
       ],
     };
@@ -128,9 +128,9 @@ export async function readClawOpenClawProfile(params: {
               ? "openclaw_profile_too_large"
               : "openclaw_profile_read_failed",
           unsafe
-            ? "The OpenClaw profile must be a regular, non-symlinked, non-hardlinked file."
+            ? "The OpenCrustacean profile must be a regular, non-symlinked, non-hardlinked file."
             : tooLarge
-              ? `The OpenClaw profile exceeds ${MAX_PROFILE_BYTES} bytes.`
+              ? `The OpenCrustacean profile exceeds ${MAX_PROFILE_BYTES} bytes.`
               : `Could not read ${declaredPath}: ${(error as Error).message}`,
           "$.metadata.openclaw.config",
         ),

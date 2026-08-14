@@ -56,7 +56,7 @@ describe("meeting browser leave ownership", () => {
 
     expect(result).toEqual({
       left: true,
-      note: "Test meeting tab belongs to another OpenClaw meeting session; left its current call untouched.",
+      note: "Test meeting tab belongs to another OpenCrustacean meeting session; left its current call untouched.",
     });
   });
 
@@ -69,7 +69,7 @@ describe("meeting browser leave ownership", () => {
 
     expect(result).toEqual({
       left: false,
-      note: "Browser control could not verify that the Test meeting tab still belongs to this OpenClaw meeting session.",
+      note: "Browser control could not verify that the Test meeting tab still belongs to this OpenCrustacean meeting session.",
     });
   });
 

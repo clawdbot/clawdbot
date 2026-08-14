@@ -135,9 +135,9 @@ suite.define(() => {
           agents: [
             {
               id: "main",
-              identity: { name: "OpenClaw" },
+              identity: { name: "OpenCrustacean" },
               model: { primary: "openai/gpt-5.5" },
-              name: "OpenClaw",
+              name: "OpenCrustacean",
             },
           ],
           defaultId: "main",
@@ -153,11 +153,11 @@ suite.define(() => {
       await gateway.rejectDeferred("openclaw.chat", {
         code: "UNAVAILABLE",
         details: { code: "system_agent_inference_unavailable" },
-        message: "OpenClaw requires working inference: provider authentication failed",
+        message: "OpenCrustacean requires working inference: provider authentication failed",
       });
 
       await page
-        .getByRole("heading", { name: "OpenClaw couldn't use your configured AI" })
+        .getByRole("heading", { name: "OpenCrustacean couldn't use your configured AI" })
         .waitFor();
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
       await expect

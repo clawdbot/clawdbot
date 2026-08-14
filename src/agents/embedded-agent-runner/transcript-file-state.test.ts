@@ -307,7 +307,7 @@ describe("readTranscriptState", () => {
     ]);
   });
 
-  it("preserves OpenClaw-authored non-model content blocks", async () => {
+  it("preserves OpenCrustacean-authored non-model content blocks", async () => {
     const root = await makeRoot("openclaw-transcript-state-openclaw-blocks-");
     const sessionFile = path.join(root, "session.jsonl");
     await fs.writeFile(

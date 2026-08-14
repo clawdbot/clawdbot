@@ -9,7 +9,7 @@ describe("formatCliParseErrorOutput", () => {
     });
 
     expect(output).toBe(
-      'OpenClaw does not know the command "wat".\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
+      'OpenCrustacean does not know the command "wat".\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
     );
   });
 
@@ -19,7 +19,7 @@ describe("formatCliParseErrorOutput", () => {
     });
 
     expect(output).toBe(
-      'OpenClaw does not know the command "upate".\nDid you mean this?\n  openclaw update\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
+      'OpenCrustacean does not know the command "upate".\nDid you mean this?\n  openclaw update\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
     );
   });
 
@@ -55,7 +55,7 @@ describe("formatCliParseErrorOutput", () => {
     });
 
     expect(output).toBe(
-      'OpenClaw does not recognize option "--wat".\nTry: openclaw channels status --help\n',
+      'OpenCrustacean does not recognize option "--wat".\nTry: openclaw channels status --help\n',
     );
   });
 
@@ -76,7 +76,7 @@ describe("formatCliParseErrorOutput", () => {
     });
 
     expect(output).toBe(
-      'OpenClaw does not recognize option "--wat".\nTry: openclaw plugins list --help\n',
+      'OpenCrustacean does not recognize option "--wat".\nTry: openclaw plugins list --help\n',
     );
   });
 });

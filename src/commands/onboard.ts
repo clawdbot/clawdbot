@@ -539,7 +539,7 @@ export async function setupWizardCommand(
   if (process.platform === "win32") {
     runtime.log(
       [
-        "Windows detected - OpenClaw runs great on WSL2!",
+        "Windows detected - OpenCrustacean runs great on WSL2!",
         "Native Windows might be trickier.",
         "Quick setup: wsl --install (one command, one reboot)",
         "Guide: https://docs.openclaw.ai/windows",

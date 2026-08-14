@@ -507,7 +507,7 @@ suite.define(() => {
             };
           };
           if (!app.runtime) {
-            throw new Error("OpenClaw application runtime is unavailable");
+            throw new Error("OpenCrustacean application runtime is unavailable");
           }
           app.runtime.context.navigate(targetRouteId, { search: targetSearch });
         },

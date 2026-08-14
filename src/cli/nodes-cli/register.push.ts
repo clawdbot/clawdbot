@@ -34,13 +34,13 @@ export function registerNodesPushCommand(nodes: Command) {
       .command("push")
       .description("Send an APNs test push to an iOS node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .option("--title <text>", "Push title", "OpenClaw")
+      .option("--title <text>", "Push title", "OpenCrustacean")
       .option("--body <text>", "Push body")
       .option("--environment <sandbox|production>", "Override APNs environment")
       .action(async (opts: NodesPushOpts) => {
         await runNodesCommand("push", async () => {
           const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
-          const title = normalizeOptionalString(opts.title) || "OpenClaw";
+          const title = normalizeOptionalString(opts.title) || "OpenCrustacean";
           const body = normalizeOptionalString(opts.body) || `Push test for node ${nodeId}`;
           const environment = normalizeEnvironment(opts.environment);
           if (opts.environment && !environment) {

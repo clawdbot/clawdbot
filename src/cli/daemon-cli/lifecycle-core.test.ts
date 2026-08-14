@@ -613,7 +613,7 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("already-running");
     expect(payload.warnings).toEqual([
       expect.stringMatching(
-        /^Gateway service already running, but its installed service definition needs repair: service was installed by OpenClaw 2026\.4\.24, current CLI is .+; run `openclaw gateway restart` to apply\.$/,
+        /^Gateway service already running, but its installed service definition needs repair: service was installed by OpenCrustacean 2026\.4\.24, current CLI is .+; run `openclaw gateway restart` to apply\.$/,
       ),
     ]);
     expect(service.start).not.toHaveBeenCalled();
@@ -728,7 +728,7 @@ describe("runServiceRestart token drift", () => {
       return {
         result: "started" as const,
         message: "Gateway service definition repaired and started.",
-        warnings: ["service was installed by OpenClaw 2026.4.24, current CLI is 2026.5.2"],
+        warnings: ["service was installed by OpenCrustacean 2026.4.24, current CLI is 2026.5.2"],
         loaded: true,
       };
     });
@@ -753,7 +753,7 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toBe("Gateway service definition repaired and started.");
     expect(payload.warnings).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("service was installed by OpenClaw"),
+        expect.stringContaining("service was installed by OpenCrustacean"),
         expect.stringContaining("custom behavior and will be overwritten"),
       ]),
     );

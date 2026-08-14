@@ -66,7 +66,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
 
         const text = Array.isArray(res) ? res[0]?.text : res?.text;
         expect(text).toContain("Model:");
-        expect(text).toContain("OpenClaw");
+        expect(text).toContain("OpenCrustacean");
         expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       });
     });

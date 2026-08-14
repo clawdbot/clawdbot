@@ -96,7 +96,7 @@ vi.mock("../../status/status-plugin-health.runtime.js", () => pluginHealthRuntim
 vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
   createOpenClawAgentHarness: () => ({
     id: "openclaw",
-    label: "OpenClaw Default",
+    label: "OpenCrustacean Default",
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: async () => {
       throw new Error("not used in status tests");
@@ -529,7 +529,7 @@ describe("buildStatusReply subagent summary", () => {
       runId: "run-status-task-leak",
       endedAt: Date.now(),
       error: [
-        "OpenClaw runtime context (internal):",
+        "OpenCrustacean runtime context (internal):",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
         "[Internal task completion event]",
@@ -541,7 +541,7 @@ describe("buildStatusReply subagent summary", () => {
 
     expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
     expect(reply?.text).toContain("leaked context task");
-    expect(reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(reply?.text).not.toContain("OpenCrustacean runtime context (internal):");
     expect(reply?.text).not.toContain("Internal task completion event");
   });
 
@@ -836,7 +836,7 @@ describe("buildStatusReply subagent summary", () => {
     expect(pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot).not.toHaveBeenCalled();
   });
 
-  it("shows the effective non-OpenClaw embedded harness in /status", async () => {
+  it("shows the effective non-OpenCrustacean embedded harness in /status", async () => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({
@@ -1818,7 +1818,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
+  it("uses Codex OAuth auth labels for explicit OpenAI OpenCrustacean auth order", async () => {
     await withTempHome(
       async (dir) => {
         const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
@@ -2170,7 +2170,7 @@ describe("buildStatusReply subagent summary", () => {
     }
   });
 
-  it("keeps /status on an explicit OpenClaw runtime override after config changes", async () => {
+  it("keeps /status on an explicit OpenCrustacean runtime override after config changes", async () => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({

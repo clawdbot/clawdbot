@@ -91,7 +91,7 @@ function requireEmbeddedAgentCall(index: number): {
       }
     | undefined;
   if (!call) {
-    throw new Error(`Expected embedded OpenClaw agent call ${index}`);
+    throw new Error(`Expected embedded OpenCrustacean agent call ${index}`);
   }
   return call;
 }

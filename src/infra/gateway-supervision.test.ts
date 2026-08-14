@@ -30,7 +30,7 @@ describe("gateway supervision", () => {
         [GATEWAY_SUPERVISOR_MODE_ENV]: "external",
       }),
     ).toThrow(
-      "OpenClaw gateway lifecycle is managed by an external supervisor " +
+      "OpenCrustacean gateway lifecycle is managed by an external supervisor " +
         "(OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to restart the gateway.",
     );
   });

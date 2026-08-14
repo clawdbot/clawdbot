@@ -329,7 +329,7 @@ describe("noteAuthProfileHealth", () => {
         path: expectedAuthStorePath(mainDir),
         target: "zai:default",
         requirement: "malformed_api_key",
-        fixHint: "Paste the API key value, not an OpenClaw onboarding command.",
+        fixHint: "Paste the API key value, not an OpenCrustacean onboarding command.",
       }),
     ]);
   });

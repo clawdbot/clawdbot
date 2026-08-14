@@ -91,7 +91,7 @@ describe("private-qa-cli", () => {
         resolvePackageRootSync: () => root,
         importModule,
       }),
-    ).toThrow("Private QA CLI is only available from an OpenClaw source checkout.");
+    ).toThrow("Private QA CLI is only available from an OpenCrustacean source checkout.");
     expect(importModule).not.toHaveBeenCalled();
   });
 
@@ -100,7 +100,7 @@ describe("private-qa-cli", () => {
     const importModule = vi.fn(async () => ({}));
 
     expect(() => loadPrivateQaCliModule({ importModule })).toThrow(
-      "Private QA CLI is only available from an OpenClaw source checkout.",
+      "Private QA CLI is only available from an OpenCrustacean source checkout.",
     );
     expect(importModule).not.toHaveBeenCalled();
   });

@@ -129,7 +129,7 @@ function ruleRow(params?: {
   remoteAddress?: string;
 }) {
   return {
-    DisplayName: params?.displayName ?? "OpenClaw Gateway",
+    DisplayName: params?.displayName ?? "OpenCrustacean Gateway",
     Profile: params?.profile ?? "Any",
     PolicyStoreSource: params?.policyStoreSource ?? "PersistentStore",
     PolicyStoreSourceType: params?.policyStoreSourceType ?? "Local",
@@ -243,7 +243,7 @@ describe("Windows Gateway firewall diagnostics", () => {
       severity: "warning",
       code: "windows_firewall_local_rules_ignored",
     });
-    expect(diagnostic.details.join("\n")).toContain("OpenClaw Gateway");
+    expect(diagnostic.details.join("\n")).toContain("OpenCrustacean Gateway");
   });
 
   it("requires every active profile to allow local firewall rules", async () => {

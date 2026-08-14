@@ -33,7 +33,7 @@ describe("buildPlatformRuntimeLogHints", () => {
       buildPlatformRuntimeLogHints({
         platform: "darwin",
         systemdServiceName: "openclaw-gateway",
-        windowsTaskName: "OpenClaw Gateway",
+        windowsTaskName: "OpenCrustacean Gateway",
       }),
     ).toEqual([
       "Launchd stdout (if installed): /Users/test/Library/Logs/openclaw/gateway.log",

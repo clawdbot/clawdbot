@@ -9,7 +9,7 @@ export type RequestFn = (
   options?: { timeoutMs?: number | null },
 ) => Promise<unknown>;
 
-const SYSTEM_APPROVAL_TITLE = "OpenClaw change";
+const SYSTEM_APPROVAL_TITLE = "OpenCrustacean change";
 const SYSTEM_APPROVAL_COMMAND = "Set gateway.port to 19001";
 
 export function deferred<T = unknown>() {

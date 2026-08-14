@@ -468,7 +468,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
   };
   const idLiteral = jsStringLiteral(params.id);
   const nameLiteral = jsStringLiteral(params.name);
-  const description = `Add ${params.name} tools to OpenClaw.`;
+  const description = `Add ${params.name} tools to OpenCrustacean.`;
   const descriptionLiteral = jsStringLiteral(description);
   const indexSource = `import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
@@ -535,11 +535,11 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
   const flagName = `--${params.id}-api-key`;
   const defaultModelId = "example-chat";
   const defaultModelRef = `${params.id}/${defaultModelId}`;
-  const description = `Add ${params.name} models to OpenClaw.`;
+  const description = `Add ${params.name} models to OpenCrustacean.`;
   const packageManifest = {
     name: packageName,
     version: "0.1.0",
-    description: `OpenClaw provider plugin for ${params.name}.`,
+    description: `OpenCrustacean provider plugin for ${params.name}.`,
     type: "module",
     scripts: {
       build: "tsc -p tsconfig.json",

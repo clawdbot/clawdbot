@@ -837,11 +837,11 @@ const codexSessionRoutesCheck: HealthCheck = {
         fixHint: issue.repairBlocked
           ? [
               "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny;",
-              "or set the affected OpenAI models to an OpenClaw runtime policy.",
+              "or set the affected OpenAI models to an OpenCrustacean runtime policy.",
             ].join(" ")
           : [
               "Run `openclaw doctor --fix`: it enables plugins.entries.codex,",
-              "or set the affected OpenAI models to an OpenClaw runtime policy.",
+              "or set the affected OpenAI models to an OpenCrustacean runtime policy.",
             ].join(" "),
       }),
     );
@@ -1109,7 +1109,7 @@ const browserClawdProfileResidueCheck: HealthCheck = {
   id: BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID,
   kind: "core",
   description:
-    "Legacy clawd managed browser profile residue has been archived after the OpenClaw rename.",
+    "Legacy clawd managed browser profile residue has been archived after the OpenCrustacean rename.",
   source: "doctor",
   async detect(ctx, scope) {
     const residue = await detectLegacyClawdBrowserProfileResidue(ctx.cfg, browserResidueDeps(ctx));

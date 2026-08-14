@@ -22,7 +22,7 @@ export function describeRunningOpenClawBuild(): string {
   const moduleUrl = import.meta.url;
   const commit = resolveCommitHash({ moduleUrl });
   const root = resolveOpenClawPackageRootSync({ moduleUrl });
-  const identity = commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`;
+  const identity = commit ? `OpenCrustacean ${VERSION} (${commit})` : `OpenCrustacean ${VERSION}`;
   return root ? `${identity} installed at ${root}` : identity;
 }
 

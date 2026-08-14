@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 const RESEED_HEADER = [
-  "Continue this conversation using the OpenClaw transcript below as prior session history.",
+  "Continue this conversation using the OpenCrustacean transcript below as prior session history.",
   "Treat it as authoritative context for this fresh CLI session.",
   "",
   "<conversation_history>",

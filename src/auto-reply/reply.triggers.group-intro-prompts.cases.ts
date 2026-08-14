@@ -42,7 +42,7 @@ export function registerGroupIntroPromptCases(): void {
     const telegramGroupParticipationNote =
       "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const groupSilentNote =
-      'If no response is needed, reply with exactly "NO_REPLY" (and nothing else) so OpenClaw stays silent.';
+      'If no response is needed, reply with exactly "NO_REPLY" (and nothing else) so OpenCrustacean stays silent.';
     const groupSilentProseGuard =
       'Any prose describing silence is wrong; the whole final answer must be only "NO_REPLY".';
     const automaticGroupDeliveryGuidance = [

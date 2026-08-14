@@ -220,7 +220,7 @@ export type AgentDefaultsConfig = {
   /** Embedded OpenClaw runner hardening and compatibility controls. */
   embeddedAgent?: {
     /**
-     * How embedded OpenClaw should trust workspace-local `.openclaw/settings.json`.
+     * How embedded OpenCrustacean should trust workspace-local `.openclaw/settings.json`.
      * - sanitize (default): apply project settings except shellPath/shellCommandPrefix
      * - ignore: ignore project settings entirely
      * - trusted: trust project settings as-is

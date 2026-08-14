@@ -76,7 +76,7 @@ export function createMeetingPluginNodeHostHandler(options: MeetingPluginNodeHos
       buildProfileArgs: (profile) => ["--args", `--profile-directory=${profile}`],
       openedStatus: "chrome-opened",
       openedNotes: [
-        `${options.browserPageName} page control is handled by OpenClaw browser automation when using chrome-node.`,
+        `${options.browserPageName} page control is handled by OpenCrustacean browser automation when using chrome-node.`,
       ],
     },
   });
@@ -217,7 +217,7 @@ export function createMeetingPluginShellEntry<
     gatewayMethodPrefix: methodPrefix,
     nodeCommand: options.platform.nodeCommandName,
     normalizeUrl: (value) => options.platform.urls.validateAndNormalize(value),
-    toolDescription: `Join and manage ${options.browserGuestLabel} browser guests. Guest admission, tenant sign-in, and media permissions may require manual action in the OpenClaw Chrome profile.`,
+    toolDescription: `Join and manage ${options.browserGuestLabel} browser guests. Guest admission, tenant sign-in, and media permissions may require manual action in the OpenCrustacean Chrome profile.`,
     toolLabel: options.platform.displayName,
     toolName,
     transcriptSource: { ...options.transcriptSource, name: options.platform.displayName },

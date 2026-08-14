@@ -299,7 +299,7 @@ export async function collectLegacyWhatsAppCrontabHealthWarning(
 
   return [
     "Legacy WhatsApp crontab health check detected.",
-    "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
+    "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenCrustacean and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
     `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
     `Matched ${pluralize(legacyLines.length, "entry")}.`,
   ].join("\n");

@@ -166,7 +166,7 @@ describe("sessionsCommand model resolution", () => {
     );
   });
 
-  it("reports the owning Codex harness for locked sessions despite a stale OpenClaw override", async () => {
+  it("reports the owning Codex harness for locked sessions despite a stale OpenCrustacean override", async () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {

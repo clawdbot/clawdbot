@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { loadOpenClawProviderIndex } from "./index.js";
 import { normalizeOpenClawProviderIndex } from "./normalize.js";
 
-describe("OpenClaw provider index", () => {
+describe("OpenCrustacean provider index", () => {
   it("normalizes provider preview catalog rows through model catalog validation", () => {
     const index = normalizeOpenClawProviderIndex({
       version: 1,

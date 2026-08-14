@@ -74,7 +74,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         },
         "openclaw.chat": {
           sessionId: "e2e-custodian",
-          reply: "## Hi, I'm OpenClaw",
+          reply: "## Hi, I'm OpenCrustacean",
           action: "none",
           question: {
             id: "onboarding-next-step",
@@ -114,7 +114,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Continue setup" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
       expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
-      await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "OpenCrustacean", exact: true }).waitFor();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--onboarding");
@@ -315,7 +315,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
                   "Start or restart the Ollama server for this address.",
                   "If Ollama is not installed on that machine, download it at https://ollama.com/download",
                   "",
-                  "Continue when it is running. OpenClaw will retry this address.",
+                  "Continue when it is running. OpenCrustacean will retry this address.",
                 ].join("\n"),
               },
             },
@@ -352,7 +352,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Submit" }).click();
       await page.getByText("Ollama could not be reached at http://127.0.0.1:11434.").waitFor();
       await page
-        .getByText("Continue when it is running. OpenClaw will retry this address.")
+        .getByText("Continue when it is running. OpenCrustacean will retry this address.")
         .waitFor();
 
       if (artifactDir) {
@@ -440,7 +440,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
               label: "Gemini CLI",
               detail: "installed; login status unavailable",
               reason:
-                "OpenClaw cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenClaw or use a Gemini API key to create a connection it can verify.",
+                "OpenCrustacean cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenCrustacean or use a Gemini API key to create a connection it can verify.",
               authOptionId: "google-gemini-cli",
               manualProviderId: "gemini-api-key",
             },

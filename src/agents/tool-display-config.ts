@@ -332,7 +332,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     },
     openclaw: {
       emoji: "🦀",
-      title: "OpenClaw",
+      title: "OpenCrustacean",
       detailKeys: ["action", "path", "model"],
     },
     gateway: {

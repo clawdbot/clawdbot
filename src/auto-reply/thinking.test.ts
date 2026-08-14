@@ -601,7 +601,7 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
-  it("uses advanced catalog efforts and derives OpenClaw Ultra from Max", () => {
+  it("uses advanced catalog efforts and derives OpenCrustacean Ultra from Max", () => {
     const catalog = [
       {
         provider: "myazure",

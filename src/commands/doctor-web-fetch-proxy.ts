@@ -101,7 +101,7 @@ async function collectWebFetchProxyDiagnostic(params: {
     directProbe,
     "- If direct web_fetch requests time out and the proxy is operator-controlled, enable the explicit opt-in:",
     `  ${formatCliCommand("openclaw config set tools.web.fetch.useTrustedEnvProxy true")}`,
-    "- Keep the opt-in disabled for untrusted proxies; enabling it lets the proxy resolve DNS after OpenClaw's hostname checks.",
+    "- Keep the opt-in disabled for untrusted proxies; enabling it lets the proxy resolve DNS after OpenCrustacean's hostname checks.",
   ].join("\n");
 }
 

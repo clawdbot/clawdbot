@@ -679,7 +679,7 @@ exit 0
       expect(content).not.toContain("powershell -NoProfile -ExecutionPolicy Bypass -File");
       expect(content).toContain('$ErrorActionPreference = "Continue"');
       expect(content).toContain("gateway-restart.log");
-      expect(content).toContain("$taskName = 'OpenClaw Gateway'");
+      expect(content).toContain("$taskName = 'OpenCrustacean Gateway'");
       expect(content).toContain("function Invoke-OpenClawSchtasksWithTimeout");
       expect(content).toContain("function Get-OpenClawScheduledTaskState");
       expect(content).toContain("function Get-OpenClawListenerKillDecision");
@@ -904,9 +904,9 @@ Write-Output "OPENCLAW_RESTART_POLICY_OK"
 
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (custom)",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenCrustacean Gateway (custom)",
       });
-      expect(content).toContain("$taskName = 'OpenClaw Gateway (custom)'");
+      expect(content).toContain("$taskName = 'OpenCrustacean Gateway (custom)'");
       expect(content).toContain("Get-OpenClawScheduledTaskState -TaskName $taskName");
       expect(content).toContain(
         'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/End", "/TN", $taskName) -TimeoutSeconds 10',
@@ -962,7 +962,7 @@ Write-Output "OPENCLAW_RESTART_POLICY_OK"
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "production",
       });
-      expect(content).toContain("$taskName = 'OpenClaw Gateway (production)'");
+      expect(content).toContain("$taskName = 'OpenCrustacean Gateway (production)'");
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });

@@ -174,7 +174,7 @@ function configWriteSummary(
         : source === "plugin-install"
           ? "Plugin installation updated configuration"
           : source === "system-agent"
-            ? "OpenClaw updated configuration"
+            ? "OpenCrustacean updated configuration"
             : source === "cli"
               ? "CLI updated configuration"
               : "Configuration updated";
@@ -213,7 +213,7 @@ function toConfigCandidate(
         at: recordTime(value.ts, record.createdAt),
         kind: "external-edit",
         source: "external",
-        summary: summarizePaths("Configuration edited outside OpenClaw", changedPaths),
+        summary: summarizePaths("Configuration edited outside OpenCrustacean", changedPaths),
         ...(changedPaths ? { changedPaths } : {}),
         ...(!value.valid ? { invalid: true } : {}),
         ...(value.opaqueChange ? { opaqueChange: true } : {}),

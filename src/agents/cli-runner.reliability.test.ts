@@ -356,7 +356,7 @@ function createCliUserTurnRecorder(params: {
 }
 
 const CLI_RESEED_PROMPT =
-  "Continue this conversation using the OpenClaw transcript below as prior session history.\n\n<conversation_history>\nUser: earlier context\n</conversation_history>\n\n<next_user_message>\nhi\n</next_user_message>";
+  "Continue this conversation using the OpenCrustacean transcript below as prior session history.\n\n<conversation_history>\nUser: earlier context\n</conversation_history>\n\n<next_user_message>\nhi\n</next_user_message>";
 
 describe("runCliAgent reliability", () => {
   beforeEach(() => {
@@ -1149,7 +1149,7 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves first-turn delivery through cleanup without binding the OpenClaw session id", async () => {
+  it("preserves first-turn delivery through cleanup without binding the OpenCrustacean session id", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
@@ -2947,7 +2947,7 @@ describe("runCliAgent reliability", () => {
     });
   });
 
-  it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {
+  it("seeds fresh CLI sessions from the OpenCrustacean transcript", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "exit",
@@ -2964,7 +2964,7 @@ describe("runCliAgent reliability", () => {
     const result = await runPreparedCliAgent(
       buildPreparedContext({
         openClawHistoryPrompt:
-          "Continue this conversation using the OpenClaw transcript below.\n\nUser: earlier ask\n\nAssistant: earlier answer\n\n<next_user_message>\nhi\n</next_user_message>",
+          "Continue this conversation using the OpenCrustacean transcript below.\n\nUser: earlier ask\n\nAssistant: earlier answer\n\n<next_user_message>\nhi\n</next_user_message>",
       }),
     );
 
@@ -3624,7 +3624,7 @@ describe("runCliAgent reliability", () => {
     );
     const { dir, sessionFile } = createSessionFile();
     const historyPrompt = [
-      "Continue this conversation using the OpenClaw transcript below as prior session history.",
+      "Continue this conversation using the OpenCrustacean transcript below as prior session history.",
       "Treat it as authoritative context for this fresh CLI session.",
       "",
       "<conversation_history>",
@@ -4933,7 +4933,7 @@ describe("runCliAgent reliability", () => {
       runId: "run-retry-success",
       cliSessionId: "thread-123",
       openClawHistoryPrompt:
-        "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
+        "Continue this conversation using the OpenCrustacean transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
     });
     const clearBeforeRetry = vi.fn(async () => true);
 

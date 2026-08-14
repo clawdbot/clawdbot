@@ -24,7 +24,7 @@ function session(): MeetingSessionRecord<"chrome", "agent"> {
     state: "active",
     createdAt: "2026-07-23T12:00:00.000Z",
     updatedAt: "2026-07-23T12:00:00.000Z",
-    participantIdentity: "OpenClaw browser guest",
+    participantIdentity: "OpenCrustacean browser guest",
     realtime: { enabled: true, toolPolicy: "safe-read-only" },
     notes: [],
   };

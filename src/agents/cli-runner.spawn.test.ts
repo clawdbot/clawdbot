@@ -718,7 +718,7 @@ describe("runCliAgent spawn path", () => {
     expect(allArgs).toContain("You are a helpful assistant.");
   });
 
-  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
+  it("includes the OpenCrustacean skills prompt in CLI system prompts", () => {
     const systemPrompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp",
       modelDisplay: "claude-cli/sonnet",
@@ -1311,7 +1311,7 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("passes OpenClaw skills to Claude as a session plugin", async () => {
+  it("passes OpenCrustacean skills to Claude as a session plugin", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
     const skillDir = path.join(workspaceDir, "skills", "weather");
     await fs.mkdir(skillDir, { recursive: true });
@@ -2117,13 +2117,13 @@ describe("runCliAgent spawn path", () => {
       reason: "session_expired",
       code: "cli_live_session_changed",
     });
-    missingContext.openClawHistoryPrompt = "bounded OpenClaw history\n\nsecond";
+    missingContext.openClawHistoryPrompt = "bounded OpenCrustacean history\n\nsecond";
     expect((await executePreparedCliRun(missingContext)).text).toBe("one");
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
     expect(
       (JSON.parse(liveRuns[2]?.writes.at(-1) ?? "") as { message: { content: string } }).message
         .content,
-    ).toBe("bounded OpenClaw history\n\nsecond");
+    ).toBe("bounded OpenCrustacean history\n\nsecond");
   });
 
   it("keeps pre-tool commentary out of an empty-result Claude live reply", async () => {
@@ -2969,7 +2969,7 @@ describe("runCliAgent spawn path", () => {
     expectClaudeControlDecision(live, {
       behavior: "deny",
       requestId: "req-approval-unavailable",
-      messageIncludes: "OpenClaw approval was not granted",
+      messageIncludes: "OpenCrustacean approval was not granted",
     });
   });
 
@@ -3615,7 +3615,7 @@ describe("runCliAgent spawn path", () => {
     expectClaudeControlDecision(live, {
       behavior: "deny",
       requestId: "req-deny",
-      messageIncludes: "OpenClaw user denied Claude native tool use (Bash).",
+      messageIncludes: "OpenCrustacean user denied Claude native tool use (Bash).",
     });
     expect(diagnosticEvents).toMatchObject([
       {
@@ -3818,7 +3818,7 @@ describe("runCliAgent spawn path", () => {
       requestId: "req-approval-default-deny",
       toolUseId: "tool-approval-default-deny-1",
       input: { command: "ls" },
-      expected: { behavior: "deny", messageIncludes: "OpenClaw user denied" },
+      expected: { behavior: "deny", messageIncludes: "OpenCrustacean user denied" },
       approvals: {
         version: 1,
         defaults: { security: "allowlist", ask: "on-miss" },
@@ -3837,7 +3837,7 @@ describe("runCliAgent spawn path", () => {
       requestId: "req-session-ask-deny",
       toolUseId: "tool-session-ask-deny-1",
       input: { command: "ls" },
-      expected: { behavior: "deny", messageIncludes: "OpenClaw user denied" },
+      expected: { behavior: "deny", messageIncludes: "OpenCrustacean user denied" },
       context: {
         backend: {
           liveSession: "claude-stdio",
@@ -3883,7 +3883,7 @@ describe("runCliAgent spawn path", () => {
       expectedPermissionMode: "default",
     },
     {
-      name: "allows tools when OpenClaw exec is YOLO despite raw --permission-mode default",
+      name: "allows tools when OpenCrustacean exec is YOLO despite raw --permission-mode default",
       requestId: "req-permmode-allow",
       toolUseId: "tool-permmode-allow-1",
       input: { command: "ls" },
@@ -4158,7 +4158,7 @@ describe("runCliAgent spawn path", () => {
         name: "FailoverError",
         message:
           "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
-          "OpenClaw run: run-live-max-turns. OpenClaw session: s1. " +
+          "OpenCrustacean run: run-live-max-turns. OpenCrustacean session: s1. " +
           "Claude session: live-max-turns. Tool actions may already have run; verify their effects before retrying. " +
           "Retry with a higher --max-turns value or a narrower task.",
         sessionId: "s1",

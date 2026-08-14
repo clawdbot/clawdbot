@@ -10,7 +10,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "channels.discord.activities.applicationId":
     "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
   meta: "Backward-readable compatibility metadata retained so older binaries can refuse unsafe config downgrades.",
-  "meta.lastTouchedVersion": "OpenClaw version that most recently wrote this config.",
+  "meta.lastTouchedVersion": "OpenCrustacean version that most recently wrote this config.",
   "meta.migrations": "Bounded compatibility markers for completed config migrations.",
   "meta.migrations.modelPolicyAllowlist":
     "Records that legacy model-map restrictions were preserved or evaluated.",
@@ -22,7 +22,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "env.shellEnv.timeoutMs":
     "Maximum time in milliseconds allowed for shell environment resolution before fallback behavior applies. Use tighter timeouts for faster startup, or increase when shell initialization is heavy.",
   "env.vars":
-    "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
+    "Explicit key/value environment variable overrides merged into runtime process environment for OpenCrustacean. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
   wizard:
     "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
   "wizard.accessMode":
@@ -30,7 +30,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "wizard.appRecommendations":
     "Controls whether guided setup may use installed-application labels to recommend relevant plugins and skills.",
   "wizard.lastRunAt": "Timestamp of the last successfully committed wizard run.",
-  "wizard.lastRunVersion": "OpenClaw version used by the last wizard run.",
+  "wizard.lastRunVersion": "OpenCrustacean version used by the last wizard run.",
   "wizard.lastRunCommit": "Source commit used by the last development wizard run.",
   "wizard.lastRunCommand": "Command that invoked the last wizard run.",
   "wizard.lastRunMode": 'Whether the last wizard run targeted "local" or "remote" setup.',
@@ -63,7 +63,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
   update:
-    "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
+    "Update-channel and startup-check behavior for keeping OpenCrustacean runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
     'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only: installation is foreground-only, with optional read-only startup hints.',
   "update.checkOnStart":
@@ -128,9 +128,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.tailscale.resetOnExit":
     "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
   "gateway.tailscale.serviceName":
-    'Optional Tailscale Service name for Serve mode, such as "svc:openclaw". The value must use Tailscale\'s svc:<dns-label> format. When set, OpenClaw passes it to tailscale serve --service and reports the derived Service URL.',
+    'Optional Tailscale Service name for Serve mode, such as "svc:openclaw". The value must use Tailscale\'s svc:<dns-label> format. When set, OpenCrustacean passes it to tailscale serve --service and reports the derived Service URL.',
   "gateway.tailscale.preserveFunnel":
-    "When mode='serve' and an externally configured Tailscale Funnel route already covers the gateway port, skip re-applying tailscale serve on startup. Lets operators keep Funnel exposure managed outside OpenClaw without losing it across gateway restarts.",
+    "When mode='serve' and an externally configured Tailscale Funnel route already covers the gateway port, skip re-applying tailscale serve on startup. Lets operators keep Funnel exposure managed outside OpenCrustacean without losing it across gateway restarts.",
   "gateway.remote":
     "Remote gateway connection settings for direct or SSH transport when this instance proxies to another runtime host. Use remote mode only when split-host operation is intentionally configured.",
   "gateway.remote.transport":
@@ -195,7 +195,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.realtime.speakerVoiceId":
     "Realtime provider speaker voice id override for browser or Gateway-owned Talk sessions.",
   "talk.realtime.instructions":
-    "Additional system instructions appended to OpenClaw's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
+    "Additional system instructions appended to OpenCrustacean's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
   "talk.realtime.transport":
     "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room.",
@@ -210,7 +210,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.realtime.brain":
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
   "talk.realtime.consultRouting":
-    "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenClaw.",
+    "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenCrustacean.",
   "talk.consultThinkingLevel":
     "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
   "talk.consultFastMode":
@@ -296,13 +296,13 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.defaults.fastModeDefault":
     'Default fast-mode policy for the agent loop ("auto", true, or false). Individual agent entries override it.',
   "agents.entries.*.runtime":
-    "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
+    "Optional runtime descriptor for this agent. Use embedded for default OpenCrustacean execution or acp for external ACP harness defaults.",
   "agents.entries.*.runtime.type":
-    'Runtime type for this agent: "embedded" (default OpenClaw runtime) or "acp" (ACP harness defaults).',
+    'Runtime type for this agent: "embedded" (default OpenCrustacean runtime) or "acp" (ACP harness defaults).',
   "agents.entries.*.runtime.acp":
     "ACP runtime defaults for this agent when runtime.type=acp. Binding-level ACP overrides still take precedence per conversation.",
   "agents.entries.*.runtime.acp.agent":
-    "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
+    "Optional ACP harness agent id to use for this OpenCrustacean agent (for example codex, claude, cursor, gemini, openclaw).",
   "agents.entries.*.runtime.acp.backend":
     "Optional ACP backend override for this agent's ACP sessions (falls back to global acp.backend).",
   "agents.entries.*.runtime.acp.mode":
@@ -318,7 +318,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.defaults.systemAgent":
-    "Target settings for ambient OpenClaw system-agent and Custodian inference.",
+    "Target settings for ambient OpenCrustacean system-agent and Custodian inference.",
   "agents.defaults.systemAgent.agentId":
     "Agent whose model and credentials own ambient system-agent and Custodian consults. Delegated consults still use their requesting agent.",
   "talk.agentId":

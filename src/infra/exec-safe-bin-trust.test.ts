@@ -73,7 +73,7 @@ describe("exec safe bin trust", () => {
   });
 
   it("matches trusted dirs through path-local case folding on case-insensitive filesystems", async () => {
-    await withTempDir({ prefix: "OpenClaw-Safe-Bin-" }, async (dir) => {
+    await withTempDir({ prefix: "OpenCrustacean-Safe-Bin-" }, async (dir) => {
       const swapped = swapAsciiCase(dir);
       if (swapped === dir) {
         return;

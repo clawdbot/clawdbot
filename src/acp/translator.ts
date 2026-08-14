@@ -1358,8 +1358,8 @@ export class AcpGatewayAgent implements Agent {
     try {
       if (options.recordDisconnectNotice) {
         const text = pending.sendAccepted
-          ? "[OpenClaw interruption] The Gateway disconnected after accepting this message, so its final outcome is unknown. Check the session before retrying."
-          : "[OpenClaw interruption] The Gateway disconnected before OpenClaw could confirm whether this message was accepted, so its final outcome is unknown. Check the session before retrying.";
+          ? "[OpenCrustacean interruption] The Gateway disconnected after accepting this message, so its final outcome is unknown. Check the session before retrying."
+          : "[OpenCrustacean interruption] The Gateway disconnected before OpenCrustacean could confirm whether this message was accepted, so its final outcome is unknown. Check the session before retrying.";
         // Make replay durable before rejecting, but do not let ACP client backpressure
         // extend the disconnect deadline indefinitely.
         await this.sessionUpdates.emit({
@@ -1808,7 +1808,7 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     throw new Error(
-      "ACP bridge mode does not support per-session MCP servers. Configure MCP on the OpenClaw gateway or agent instead.",
+      "ACP bridge mode does not support per-session MCP servers. Configure MCP on the OpenCrustacean gateway or agent instead.",
     );
   }
 

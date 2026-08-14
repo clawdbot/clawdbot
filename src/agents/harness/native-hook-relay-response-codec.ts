@@ -36,7 +36,7 @@ export const codexNativeHookRelayResponseCodec = {
               ? { behavior: "allow" }
               : {
                   behavior: "deny",
-                  message: message?.trim() || "Denied by OpenClaw",
+                  message: message?.trim() || "Denied by OpenCrustacean",
                 },
         },
       })}\n`,

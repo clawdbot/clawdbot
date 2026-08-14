@@ -97,7 +97,9 @@ function checkpointTruncate(database: DatabaseSync, sqlitePath: string): void {
     throw new Error(`SQLite checkpoint returned an invalid result for ${sqlitePath}.`);
   }
   if (busy !== 0) {
-    throw new Error(`SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`);
+    throw new Error(
+      `SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenCrustacean and retry.`,
+    );
   }
 }
 

@@ -1070,7 +1070,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(result.lines).toEqual(
       expect.arrayContaining([
         "Workspace files: workspace exploded",
-        "OpenClaw exec approval: approval exploded; local model harnesses may ask again.",
+        "OpenCrustacean exec approval: approval exploded; local model harnesses may ask again.",
         "Plugin registry refresh failed: registry exploded",
         "Gateway service: service exploded",
       ]),

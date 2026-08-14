@@ -21,7 +21,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("OpenClaw tools MCP server", () => {
+describe("OpenCrustacean tools MCP server", () => {
   it("exposes cron", async () => {
     const handlers = createPluginToolsMcpHandlers(
       resolveOpenClawToolsForMcp({ agentSessionKey: "agent:worker:main" }),

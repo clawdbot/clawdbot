@@ -134,7 +134,7 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("OpenClaw");
+    expect(normalized).toContain("OpenCrustacean");
     expect(normalized).toContain("Model: anthropic/test:opus");
     expect(normalized).toContain("api-key");
     expect(normalized).toContain("Plugins: OK");
@@ -146,7 +146,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("duration 2h 14m");
     expect(normalized).toContain("updated 4h ago");
     expect(normalized).toContain("Execution: direct");
-    expect(normalized).toContain("Runtime: OpenClaw Default");
+    expect(normalized).toContain("Runtime: OpenCrustacean Default");
     expect(normalized).not.toContain("Runner:");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
@@ -714,7 +714,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("· codex");
   });
 
-  it("shows the default OpenClaw harness as the model runtime", () => {
+  it("shows the default OpenCrustacean harness as the model runtime", () => {
     const text = buildStatusMessage({
       agent: {
         model: "openai/gpt-5.4",
@@ -731,7 +731,7 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Fast");
-    expect(normalized).toContain("Runtime: OpenClaw Default");
+    expect(normalized).toContain("Runtime: OpenCrustacean Default");
     expect(normalized).not.toContain("· openclaw");
   });
 

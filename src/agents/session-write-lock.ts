@@ -470,7 +470,7 @@ async function acquireSessionKeyWriteLease(params: {
     if (elapsedMs >= params.timeoutMs) {
       throw new SessionWriteLockTimeoutError({
         timeoutMs: params.timeoutMs,
-        owner: "another OpenClaw process",
+        owner: "another OpenCrustacean process",
         lockPath: sessionKeyLeasePath(params.sessionKey),
       });
     }

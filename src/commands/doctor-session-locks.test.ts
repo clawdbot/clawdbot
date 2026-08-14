@@ -226,7 +226,7 @@ describe("noteSessionLockHealth", () => {
     }
   });
 
-  it("preserves report-only live OpenClaw locks in dry-run repair effects", async () => {
+  it("preserves report-only live OpenCrustacean locks in dry-run repair effects", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -247,7 +247,7 @@ describe("noteSessionLockHealth", () => {
 
     expect(lock.staleReasons).toEqual(["too-old"]);
     expect(sessionLockToHealthFinding(lock).fixHint).toBe(
-      "OpenClaw is preserving this live owned lock; inspect the owning process if it appears stuck.",
+      "OpenCrustacean is preserving this live owned lock; inspect the owning process if it appears stuck.",
     );
     expect(sessionLockToRepairEffect(lock)).toEqual({
       kind: "state",
@@ -258,7 +258,7 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(reportOnlyLock)).resolves.toBeUndefined();
   });
 
-  it("uses the emergency stale-threshold environment override without removing live OpenClaw lock files", async () => {
+  it("uses the emergency stale-threshold environment override without removing live OpenCrustacean lock files", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -282,7 +282,7 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(configuredStaleLock)).resolves.toBeUndefined();
   });
 
-  it("removes fresh live locks when the owner is not an OpenClaw process", async () => {
+  it("removes fresh live locks when the owner is not an OpenCrustacean process", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
 

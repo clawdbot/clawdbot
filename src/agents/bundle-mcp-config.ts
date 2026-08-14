@@ -31,7 +31,7 @@ const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
  * User config stores OpenClaw MCP transport names, while CLI backends such as
  * Claude Code and Gemini expect a downstream `type` field. Keep this adapter
  * out of the generic merge path because embedded OpenClaw still consumes the raw
- * OpenClaw `transport` shape directly.
+ * OpenCrustacean `transport` shape directly.
  */
 export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
   const next = { ...server } as Record<string, unknown>;

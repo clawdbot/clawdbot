@@ -108,7 +108,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
     });
   });
 
-  it("falls through a blank OpenClaw home when scanning global manifests", () => {
+  it("falls through a blank OpenCrustacean home when scanning global manifests", () => {
     const root = createTempRoot();
     const home = path.join(root, "home");
     const pluginDir = path.join(home, ".openclaw", "extensions", "example");

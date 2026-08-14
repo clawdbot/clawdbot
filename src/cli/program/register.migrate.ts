@@ -112,7 +112,7 @@ export function registerMigrateCommand(program: Command) {
         collectMigrationPlugin,
       )
       .option("--backup-output <path>", "Pre-migration backup archive path or directory")
-      .option("--no-backup", "Skip the pre-migration OpenClaw backup")
+      .option("--no-backup", "Skip the pre-migration OpenCrustacean backup")
       .option("--force", "Allow dangerous options such as --no-backup", false)
       .option("--json", "Output JSON", false),
   )
@@ -167,7 +167,7 @@ export function registerMigrateCommand(program: Command) {
   addMigrationOptions(
     migrate
       .command("plan <provider>")
-      .description("Preview a migration without changing OpenClaw state"),
+      .description("Preview a migration without changing OpenCrustacean state"),
   ).action(async (provider, opts) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       await migratePlanCommand(defaultRuntime, {
@@ -189,7 +189,7 @@ export function registerMigrateCommand(program: Command) {
   )
     .option("--yes", "Apply without prompting", false)
     .option("--backup-output <path>", "Pre-migration backup archive path or directory")
-    .option("--no-backup", "Skip the pre-migration OpenClaw backup")
+    .option("--no-backup", "Skip the pre-migration OpenCrustacean backup")
     .option("--force", "Allow dangerous options such as --no-backup", false)
     .action(async (provider, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {

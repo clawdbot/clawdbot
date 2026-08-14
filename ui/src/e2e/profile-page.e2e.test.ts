@@ -92,7 +92,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
 
       await page.locator(".profile-hero__name").waitFor({ timeout: 10_000 });
       await expect(page.locator(".profile-hero__name").textContent()).resolves.toContain(
-        "OpenClaw",
+        "OpenCrustacean",
       );
       await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain("@main");
       await page.locator(".profile-hero__avatar-mascot svg").waitFor({ timeout: 5_000 });

@@ -6,7 +6,7 @@ import {
 } from "./tool-hook-matcher.js";
 
 describe("plugin tool hook matchers", () => {
-  it("normalizes canonical OpenClaw tool ids without provider alias expansion", () => {
+  it("normalizes canonical OpenCrustacean tool ids without provider alias expansion", () => {
     expect(normalizePluginToolMatcher([" EXEC ", "apply_patch", "exec"])).toEqual([
       "apply_patch",
       "exec",
@@ -21,7 +21,7 @@ describe("plugin tool hook matchers", () => {
     "rejects non-canonical provider spelling %s",
     (toolName) => {
       expect(() => normalizePluginToolMatcher([toolName])).toThrow(
-        "tool hook matcher entries must use canonical OpenClaw tool ids",
+        "tool hook matcher entries must use canonical OpenCrustacean tool ids",
       );
     },
   );

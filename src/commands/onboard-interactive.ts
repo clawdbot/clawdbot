@@ -45,7 +45,7 @@ export async function runConversationalOnboarding(
   const { verifySetupInference } = await import("../system-agent/setup-inference.js");
   const inference = await verifySetupInference({ runtime, bindSession: true });
   if (!inference.ok) {
-    runtime.error(`OpenClaw requires working inference: ${inference.error}`);
+    runtime.error(`OpenCrustacean requires working inference: ${inference.error}`);
     runtime.exit(1);
     return;
   }

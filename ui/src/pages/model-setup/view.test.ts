@@ -27,7 +27,7 @@ const detected: SystemAgentSetupDetectResult = {
       brandId: "google-gemini-cli",
       label: "Gemini CLI",
       detail: "installed; login status unavailable",
-      reason: "OpenClaw could not confirm a usable login.",
+      reason: "OpenCrustacean could not confirm a usable login.",
       authOptionId: "google-gemini-cli",
       manualProviderId: "gemini-api-key",
     },
@@ -180,7 +180,7 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Codex CLI");
     expect(text(container)).toContain("openai/gpt-5 · Signed in locally");
     expect(text(container)).toContain("Found, but needs attention");
-    expect(text(container)).toContain("OpenClaw could not confirm a usable login");
+    expect(text(container)).toContain("OpenCrustacean could not confirm a usable login");
     expect(text(container)).toContain("Sign in with a provider");
     expect(text(container)).toContain("Set up a local model");
     expect(text(container)).toContain("Connect with an API key or token");
@@ -453,7 +453,7 @@ describe("renderModelSetup", () => {
     const dialog = container.querySelector('openclaw-modal-dialog[label="Connection verified"]');
     expect(dialog).not.toBeNull();
     expect(text(dialog!)).toContain(
-      "OpenClaw received a real reply from openai/gpt-5.6-sol. You can start chatting now.",
+      "OpenCrustacean received a real reply from openai/gpt-5.6-sol. You can start chatting now.",
     );
     expect(text(dialog!)).toContain("Verified in 73 ms");
     dialog?.querySelector<HTMLButtonElement>(".primary")?.click();
@@ -736,7 +736,7 @@ describe("renderModelSetup", () => {
     expect(admin.querySelector(".settings-section")).toBeNull();
 
     const old = mount(props({ gatewayTooOld: true }));
-    expect(text(old)).toContain("The Gateway is running an older OpenClaw version");
+    expect(text(old)).toContain("The Gateway is running an older OpenCrustacean version");
     expect(old.querySelector(".settings-section")).toBeNull();
   });
 

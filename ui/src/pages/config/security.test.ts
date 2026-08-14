@@ -148,7 +148,7 @@ describe("renderSecurity", () => {
 
     render(renderSecurity(createProps({ onPairMobile })), container);
 
-    expectRowByTitle(container, "OpenClaw mobile");
+    expectRowByTitle(container, "OpenCrustacean mobile");
     const button = expectButtonByText(container, "Pair mobile device");
     expect(button.disabled).toBe(false);
     button.click();

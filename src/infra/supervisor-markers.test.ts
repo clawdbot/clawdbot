@@ -19,7 +19,7 @@ describe("SUPERVISOR_HINT_ENV_VARS", () => {
 });
 
 describe("detectRespawnSupervisor", () => {
-  it("detects launchd from OpenClaw's explicit marker or current gateway launchd job", () => {
+  it("detects launchd from OpenCrustacean's explicit marker or current gateway launchd job", () => {
     expect(
       detectRespawnSupervisor({ OPENCLAW_LAUNCHD_LABEL: " ai.openclaw.gateway " }, "darwin"),
     ).toBe("launchd");
@@ -51,7 +51,7 @@ describe("detectRespawnSupervisor", () => {
     expect(detectRespawnSupervisor({ JOURNAL_STREAM: "" }, "linux")).toBeNull();
   });
 
-  it("detects Linux OpenClaw gateway service markers only for opt-in callers", () => {
+  it("detects Linux OpenCrustacean gateway service markers only for opt-in callers", () => {
     const gatewayServiceEnv = {
       OPENCLAW_SERVICE_MARKER: " openclaw ",
       OPENCLAW_SERVICE_KIND: " gateway ",
@@ -86,7 +86,7 @@ describe("detectRespawnSupervisor", () => {
 
   it("detects scheduled-task supervision on Windows from either hint family", () => {
     expect(
-      detectRespawnSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" }, "win32"),
+      detectRespawnSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "OpenCrustacean Gateway" }, "win32"),
     ).toBe("schtasks");
     expect(
       detectRespawnSupervisor(

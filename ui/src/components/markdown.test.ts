@@ -287,9 +287,9 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("does NOT rewrite explicit markdown links with CJK display text", () => {
-      const html = toSanitizedMarkdownHtml("[OpenClaw中文](https://docs.openclaw.ai)");
+      const html = toSanitizedMarkdownHtml("[OpenCrustacean中文](https://docs.openclaw.ai)");
       expect(html).toBe(
-        '<p><a href="https://docs.openclaw.ai" rel="noreferrer noopener" target="_blank">OpenClaw中文</a></p>\n',
+        '<p><a href="https://docs.openclaw.ai" rel="noreferrer noopener" target="_blank">OpenCrustacean中文</a></p>\n',
       );
     });
 

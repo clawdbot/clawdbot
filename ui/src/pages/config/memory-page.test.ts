@@ -302,7 +302,7 @@ describe("MemorySettingsPage engine slot", () => {
             .querySelector("wa-radio-group.settings-segmented")
             ?.querySelectorAll("wa-radio") ?? []),
         ].map((radio) => radio.textContent?.trim()),
-      ).toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
+      ).toEqual(["OpenCrustacean Memory", "Memory LanceDB", "Off"]);
     } finally {
       element.remove();
     }

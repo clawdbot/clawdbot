@@ -40,7 +40,7 @@ describe("custodian channel onboarding", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
     const nudge = page.querySelector(".custodian__nudge--channel-onboarding");
-    expect(nudge?.textContent).toContain("Reach OpenClaw outside this app");
+    expect(nudge?.textContent).toContain("Reach OpenCrustacean outside this app");
     expect(nudge?.textContent).toContain("The web app already works");
 
     page.querySelector<HTMLButtonElement>('button[aria-label="Keep using the web app"]')?.click();

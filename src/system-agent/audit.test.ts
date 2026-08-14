@@ -5,7 +5,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import { appendSystemAgentAuditEntry, SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 
-describe("OpenClaw audit log", () => {
+describe("OpenCrustacean audit log", () => {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 
   afterEach(() => {

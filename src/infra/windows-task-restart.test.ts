@@ -121,7 +121,7 @@ describe("relaunchGatewayScheduledTask", () => {
 
     expect(result.ok).toBe(true);
     expect(result.method).toBe("schtasks");
-    expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
+    expect(result.tried).toContain('schtasks /Run /TN "OpenCrustacean Gateway (work)"');
     expect(result.tried).toContain(`${cmdExePath} /d /s /c ${seenCommandArg}`);
     const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
     expect(spawnCall[0]).toBe(cmdExePath);
@@ -144,15 +144,15 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(script).toContain("timeout /t 1 /nobreak >nul");
     expect(script).toContain("gateway-restart.log");
     expect(script).toContain(
-      'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
+      'openclaw restart attempt source=windows-task-handoff target="OpenCrustacean Gateway (work)"',
     );
     expect(script).toContain(
-      `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$task = Get-ScheduledTask -TaskName 'OpenClaw Gateway (work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1" >nul 2>&1`,
+      `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$task = Get-ScheduledTask -TaskName 'OpenCrustacean Gateway (work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1" >nul 2>&1`,
     );
     expect(script).not.toContain("findstr");
-    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (work)" >>');
+    expect(script).toContain('schtasks /Run /TN "OpenCrustacean Gateway (work)" >>');
     expect(script.indexOf("powershell.exe -NoProfile")).toBeLessThan(
-      script.indexOf('schtasks /Run /TN "OpenClaw Gateway (work)"'),
+      script.indexOf('schtasks /Run /TN "OpenCrustacean Gateway (work)"'),
     );
     expect(script).toContain('del "%~f0" >nul 2>&1');
   });
@@ -165,7 +165,7 @@ describe("relaunchGatewayScheduledTask", () => {
 
     relaunchGatewayScheduledTask({
       OPENCLAW_PROFILE: "work",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (custom)",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenCrustacean Gateway (custom)",
     });
 
     const scriptPath = expectDefined(
@@ -173,7 +173,7 @@ describe("relaunchGatewayScheduledTask", () => {
       "[...createdScriptPaths][0] test invariant",
     );
     const script = fs.readFileSync(scriptPath, "utf8");
-    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)" >>');
+    expect(script).toContain('schtasks /Run /TN "OpenCrustacean Gateway (custom)" >>');
   });
 
   it("escapes custom task names in the PowerShell running-task probe", () => {
@@ -183,7 +183,7 @@ describe("relaunchGatewayScheduledTask", () => {
     });
 
     relaunchGatewayScheduledTask({
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (Bob's work)",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenCrustacean Gateway (Bob's work)",
     });
 
     const scriptPath = expectDefined(
@@ -192,7 +192,7 @@ describe("relaunchGatewayScheduledTask", () => {
     );
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain(
-      `-Command "$task = Get-ScheduledTask -TaskName 'OpenClaw Gateway (Bob''s work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1"`,
+      `-Command "$task = Get-ScheduledTask -TaskName 'OpenCrustacean Gateway (Bob''s work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1"`,
     );
     expect(script).not.toContain("findstr");
   });
@@ -284,7 +284,7 @@ describe("relaunchGatewayScheduledTask", () => {
 
     const result = relaunchGatewayScheduledTask({
       ...asciiPathEnv,
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (隆)",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenCrustacean Gateway (隆)",
     });
 
     expect(result.ok).toBe(true);
@@ -302,7 +302,7 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(raw.toString("utf8")).not.toContain("隆");
     const script = decodeWindowsLauncherScript({ buffer: raw });
     expect(script.startsWith("@echo off\r\n")).toBe(true);
-    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (隆)" >>');
+    expect(script).toContain('schtasks /Run /TN "OpenCrustacean Gateway (隆)" >>');
     expect(script).toContain('del "%~f0" >nul 2>&1');
   });
 

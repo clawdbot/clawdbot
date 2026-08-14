@@ -517,7 +517,7 @@ describe("provider request config", () => {
 
     expect(resolved).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Title": "OpenCrustacean",
       "X-OpenRouter-Categories":
         "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
       "X-Custom": "1",
@@ -539,7 +539,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved).toEqual({
-      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
+      "X-BILLING-INVOKE-ORIGIN": "OpenCrustacean",
       "X-Custom": "1",
     });
   });

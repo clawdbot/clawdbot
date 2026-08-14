@@ -27,7 +27,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     await fs.mkdir(path.join(template, "hooks"), { recursive: true });
     await fs.mkdir(repo);
     await git(repo, "init", "-b", "main", `--template=${template}`);
-    await git(repo, "config", "user.name", "OpenClaw Test");
+    await git(repo, "config", "user.name", "OpenCrustacean Test");
     await git(repo, "config", "user.email", "openclaw-test@example.invalid");
     await fs.writeFile(path.join(repo, "README.md"), "base\n");
     await git(repo, "add", "README.md");

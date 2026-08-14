@@ -1138,7 +1138,7 @@ function validateClawHubPluginPackage(params: {
     !satisfiesPluginApiRange(runtimeVersion, compatibility.pluginApiRange)
   ) {
     return buildClawHubInstallFailure(
-      `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenClaw runtime exposes ${runtimeVersion}.`,
+      `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenCrustacean runtime exposes ${runtimeVersion}.`,
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
     );
   }
@@ -1148,7 +1148,7 @@ function validateClawHubPluginPackage(params: {
     !satisfiesGatewayMinimum(runtimeVersion, compatibility.minGatewayVersion)
   ) {
     return buildClawHubInstallFailure(
-      `Plugin "${pkg.name}" requires OpenClaw >=${compatibility.minGatewayVersion}, but this host is ${runtimeVersion}.`,
+      `Plugin "${pkg.name}" requires OpenCrustacean >=${compatibility.minGatewayVersion}, but this host is ${runtimeVersion}.`,
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_GATEWAY,
     );
   }

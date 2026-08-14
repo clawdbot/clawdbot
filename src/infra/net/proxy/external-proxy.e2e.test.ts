@@ -50,7 +50,7 @@ function createDiscordTlsFixture(dir: string): DiscordTlsFixture {
       "-days",
       "1",
       "-subj",
-      "/CN=OpenClaw Proxy Test CA",
+      "/CN=OpenCrustacean Proxy Test CA",
     ],
     { stdio: "ignore" },
   );

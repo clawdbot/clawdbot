@@ -101,7 +101,7 @@ describe("setup migration import freshness", () => {
       "state agents/ exists",
     ]);
     expect(() => assertFreshSetupMigrationTarget(result)).toThrow(
-      "Migration import during onboarding requires a fresh OpenClaw setup.",
+      "Migration import during onboarding requires a fresh OpenCrustacean setup.",
     );
   });
 });

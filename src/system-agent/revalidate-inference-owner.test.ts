@@ -60,7 +60,7 @@ describe("revalidateSetupInferenceOwner", () => {
     });
   });
 
-  it("does not reload the built-in OpenClaw harness", async () => {
+  it("does not reload the built-in OpenCrustacean harness", async () => {
     const ensureSelectedAgentHarnessPlugin = vi.fn(async () => {});
     const binding = {} as SystemAgentVerifiedInferenceBinding;
 

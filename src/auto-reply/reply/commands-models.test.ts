@@ -760,12 +760,12 @@ describe("handleModelsCommand", () => {
     });
     expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
       id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
+      label: "OpenCrustacean Default",
+      description: "Use the built-in OpenCrustacean runtime.",
     });
   });
 
-  it("keeps custom OpenAI-compatible providers on the OpenClaw default runtime choice", async () => {
+  it("keeps custom OpenAI-compatible providers on the OpenCrustacean default runtime choice", async () => {
     const data = await buildModelsProviderData({
       models: {
         providers: {
@@ -784,8 +784,8 @@ describe("handleModelsCommand", () => {
 
     expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
       id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
+      label: "OpenCrustacean Default",
+      description: "Use the built-in OpenCrustacean runtime.",
     });
   });
 
@@ -817,8 +817,8 @@ describe("handleModelsCommand", () => {
     });
     expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
       id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
+      label: "OpenCrustacean Default",
+      description: "Use the built-in OpenCrustacean runtime.",
     });
   });
 
@@ -842,8 +842,8 @@ describe("handleModelsCommand", () => {
 
     expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
       id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
+      label: "OpenCrustacean Default",
+      description: "Use the built-in OpenCrustacean runtime.",
     });
   });
 
@@ -872,8 +872,8 @@ describe("handleModelsCommand", () => {
     });
     expect(data.runtimeChoicesByProvider?.get("anthropic")?.[1]).toEqual({
       id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
+      label: "OpenCrustacean Default",
+      description: "Use the built-in OpenCrustacean runtime.",
     });
   });
 

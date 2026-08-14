@@ -302,7 +302,7 @@ function formatDiagnosticsExportSuccess(aggregated: string): string {
       lines.push(`Generated at: ${manifest.generatedAt}`);
     }
     if (typeof manifest.openclawVersion === "string") {
-      lines.push(`OpenClaw version: ${manifest.openclawVersion}`);
+      lines.push(`OpenCrustacean version: ${manifest.openclawVersion}`);
     }
     const contents = formatDiagnosticsContents(manifest);
     if (contents.length > 0) {

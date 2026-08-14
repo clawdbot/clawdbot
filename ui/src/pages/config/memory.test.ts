@@ -20,7 +20,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     activeTab: "settings",
     onTabChange: vi.fn(),
     engineOptions: [
-      { id: "memory-core", label: "OpenClaw Memory", available: true },
+      { id: "memory-core", label: "OpenCrustacean Memory", available: true },
       { id: "memory-lancedb", label: "Memory LanceDB", available: true },
     ],
     engineSelection: { kind: "auto", engineId: "memory-core" },
@@ -86,7 +86,7 @@ describe("renderMemory", () => {
 
       expect(header?.querySelector(".page-title")?.textContent).toBe("Memory");
       expect(header?.querySelector(".page-subtitle")?.textContent).toContain(
-        "Choose how OpenClaw stores, searches, and maintains agent memory.",
+        "Choose how OpenCrustacean stores, searches, and maintains agent memory.",
       );
       expect(header?.querySelector(".memory-hub-tabs")).not.toBeNull();
       expect(container.textContent).not.toContain("Agent view");

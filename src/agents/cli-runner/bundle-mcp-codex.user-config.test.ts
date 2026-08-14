@@ -154,7 +154,7 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     });
   });
 
-  it("projects exact OpenClaw MCP tool filters into Codex-native tool filters", () => {
+  it("projects exact OpenCrustacean MCP tool filters into Codex-native tool filters", () => {
     const patch = buildCodexUserMcpServersThreadConfigPatch({
       mcp: {
         servers: {
@@ -180,7 +180,7 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     });
   });
 
-  it("rejects wildcard OpenClaw MCP tool filters that Codex cannot project exactly", () => {
+  it("rejects wildcard OpenCrustacean MCP tool filters that Codex cannot project exactly", () => {
     expect(() =>
       buildCodexUserMcpServersThreadConfigPatch({
         mcp: {
@@ -220,7 +220,7 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     });
   });
 
-  it("filters Codex-scoped user MCP servers by OpenClaw agent id", () => {
+  it("filters Codex-scoped user MCP servers by OpenCrustacean agent id", () => {
     // Agent-scoped MCP servers should follow the active OpenClaw agent, while
     // unscoped servers remain global.
     const cfg = {
@@ -363,7 +363,7 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     });
   });
 
-  it("omits scoped Codex MCP servers when no OpenClaw agent id is available", () => {
+  it("omits scoped Codex MCP servers when no OpenCrustacean agent id is available", () => {
     const patch = buildCodexUserMcpServersThreadConfigPatch({
       mcp: {
         servers: {

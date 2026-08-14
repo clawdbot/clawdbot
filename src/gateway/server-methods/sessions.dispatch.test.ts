@@ -219,7 +219,7 @@ describe("sessions.dispatch", () => {
       undefined,
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("OpenClaw runtime"),
+        message: expect.stringContaining("OpenCrustacean runtime"),
       }),
     );
   });

@@ -4,7 +4,7 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import type { SessionEntry } from "../../config/sessions.js";
 
 describe("resolveSessionRuntimeOverrideForProvider", () => {
-  it("honors an explicit OpenClaw override for OpenAI", () => {
+  it("honors an explicit OpenCrustacean override for OpenAI", () => {
     expect(
       resolveSessionRuntimeOverrideForProvider({
         provider: "openai",

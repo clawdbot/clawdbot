@@ -76,7 +76,7 @@ describeControlUiE2e("Control UI skill references", () => {
       methodResponses: {
         "chat.startup": {
           agentsList: {
-            agents: [{ id: "main", name: "OpenClaw" }],
+            agents: [{ id: "main", name: "OpenCrustacean" }],
             defaultId: "main",
             mainKey: "main",
             scope: "agent",

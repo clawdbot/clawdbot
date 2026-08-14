@@ -43,5 +43,5 @@ export async function verifyConfigAfterSystemAgentWrite(
   }
   return recovery.text
     ? `${notice}\n\n${recovery.text}`
-    : `${notice}\nExit OpenClaw and run \`openclaw doctor --fix\`, or use \`config schema <path>\` to check the expected shape before leaving.`;
+    : `${notice}\nExit OpenCrustacean and run \`openclaw doctor --fix\`, or use \`config schema <path>\` to check the expected shape before leaving.`;
 }

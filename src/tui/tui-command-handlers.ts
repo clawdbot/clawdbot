@@ -556,7 +556,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "openclaw":
         chatLog.addSystem(
-          args ? `returning to OpenClaw with request: ${args}` : "returning to OpenClaw",
+          args
+            ? `returning to OpenCrustacean with request: ${args}`
+            : "returning to OpenCrustacean",
         );
         requestExit({
           exitReason: "return-to-system-agent",

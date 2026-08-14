@@ -1046,7 +1046,7 @@ export function loadPluginManifestRegistry(
         level: "error",
         pluginId: candidate.idHint,
         source: candidate.source,
-        message: `plugin manifest id "${candidate.idHint}" is reserved by OpenClaw core`,
+        message: `plugin manifest id "${candidate.idHint}" is reserved by OpenCrustacean core`,
       });
       continue;
     }
@@ -1113,8 +1113,8 @@ export function loadPluginManifestRegistry(
             minHostVersionCheck.kind === "invalid"
               ? `plugin manifest invalid | ${minHostVersionCheck.error}`
               : minHostVersionCheck.kind === "unknown_host_version"
-                ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
-                : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+                ? `plugin requires OpenCrustacean >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+                : `plugin requires OpenCrustacean >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
         });
         continue;
       }

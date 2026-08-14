@@ -77,7 +77,7 @@ export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthF
   const fixHint = lock.removable
     ? 'Run "openclaw doctor --fix" to remove this stale lock file automatically.'
     : isReportOnlyStaleLock(lock)
-      ? "OpenClaw is preserving this live owned lock; inspect the owning process if it appears stuck."
+      ? "OpenCrustacean is preserving this live owned lock; inspect the owning process if it appears stuck."
       : 'Run "openclaw doctor --fix" after the cleanup grace period if this stale lock remains.';
   return {
     checkId: SESSION_LOCKS_CHECK_ID,

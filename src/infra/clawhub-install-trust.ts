@@ -516,11 +516,11 @@ function formatClawHubTrustWarning(params: {
       params.mode === "update"
         ? malicious
           ? [
-              `Latest ${noun} version is marked malicious; OpenClaw will not download it.`,
+              `Latest ${noun} version is marked malicious; OpenCrustacean will not download it.`,
               `Uninstall the installed ${noun} unless you have independently reviewed it.`,
             ]
-          : [`Latest ${noun} version is blocked by ClawHub; OpenClaw will not download it.`]
-        : [`OpenClaw will not install this ${noun} release from ClawHub.`];
+          : [`Latest ${noun} version is blocked by ClawHub; OpenCrustacean will not download it.`]
+        : [`OpenCrustacean will not install this ${noun} release from ClawHub.`];
     const blockedTitle = malicious
       ? "BLOCKED - ClawHub flagged this release as malicious"
       : "BLOCKED - ClawHub blocked this release";

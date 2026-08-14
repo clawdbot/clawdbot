@@ -149,7 +149,7 @@ export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection
       "Split root durable memory files detected:",
       `- canonical: ${shortenHomePath(detection.canonicalPath)} (${formatBytes(detection.canonicalBytes)})`,
       `- legacy: ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
-      `OpenClaw uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the canonical durable memory file.`,
+      `OpenCrustacean uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the canonical durable memory file.`,
       `Dreaming writes durable promotions to ${CANONICAL_ROOT_MEMORY_FILENAME}, so older facts in ${LEGACY_ROOT_MEMORY_FILENAME} can be shadowed.`,
       `Run "openclaw doctor --fix" to merge the legacy file into ${CANONICAL_ROOT_MEMORY_FILENAME} with a backup.`,
     ].join("\n");

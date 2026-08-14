@@ -621,7 +621,7 @@ describe("renderSkills", () => {
               score: 0.95,
               slug: "github",
               displayName: "GitHub",
-              summary: "GitHub integration for OpenClaw",
+              summary: "GitHub integration for OpenCrustacean",
               icon: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
               version: "1.2.3",
             },
@@ -644,7 +644,7 @@ describe("renderSkills", () => {
     expect(detailButton?.contains(installButton)).toBe(false);
     expect(resultItem?.querySelector(".settings-row__title")?.textContent?.trim()).toBe("GitHub");
     expect(resultItem?.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
-      "GitHub integration for OpenClaw",
+      "GitHub integration for OpenCrustacean",
     );
     expect(resultItem?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("v1.2.3");
     expect(resultItem?.querySelector<HTMLImageElement>(".clawhub-skill-icon")?.src).toBe(
@@ -672,7 +672,7 @@ describe("renderSkills", () => {
             skill: {
               slug: "github",
               displayName: "GitHub",
-              summary: "GitHub integration for OpenClaw",
+              summary: "GitHub integration for OpenCrustacean",
               icon: `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`,
               createdAt: 1_700_000_000,
               updatedAt: 1_700_000_100,
@@ -686,7 +686,7 @@ describe("renderSkills", () => {
               os: ["macos", "linux"],
             },
             owner: {
-              displayName: "OpenClaw",
+              displayName: "OpenCrustacean",
               handle: "openclaw",
             },
           },
@@ -702,7 +702,7 @@ describe("renderSkills", () => {
       Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
     ).toEqual(["rate limited", "Installed github"]);
     expect(normalizeText(container.querySelector(".md-preview-dialog__body")!)).toBe(
-      "GitHub integration for OpenClaw By OpenClaw (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
+      "GitHub integration for OpenCrustacean By OpenCrustacean (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
     );
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
       `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`,

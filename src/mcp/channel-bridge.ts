@@ -142,7 +142,7 @@ export class OpenClawChannelBridge {
       password: bootstrap.auth.password,
       preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: "OpenClaw MCP",
+      clientDisplayName: "OpenCrustacean MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
       caps: [GATEWAY_CLIENT_CAPS.APPROVALS],

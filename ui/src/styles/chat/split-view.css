@@ -406,6 +406,19 @@ openclaw-chat-pane {
   margin-left: auto;
 }
 
+/* Fork (2026-08-14): small build-version readout left of the hard-refresh button. */
+.chat-pane__version {
+  flex: 0 0 auto;
+  align-self: center;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .chat-pane__sharing-menu {
   flex: 0 0 auto;
 }

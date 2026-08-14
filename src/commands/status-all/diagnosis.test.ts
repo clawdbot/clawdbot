@@ -101,7 +101,7 @@ describe("status-all diagnosis port checks", () => {
     gatewayMocks.summarizeLogTail.mockImplementation((lines: string[]) => lines);
   });
 
-  it("labels OpenClaw Tailscale exposure separately from daemon state", async () => {
+  it("labels OpenCrustacean Tailscale exposure separately from daemon state", async () => {
     const params = createBaseParams([]);
     params.tailscale.backendState = "Running";
     params.tailscale.dnsName = "box.tail.ts.net";
@@ -136,7 +136,7 @@ describe("status-all diagnosis port checks", () => {
 
     const output = params.lines.join("\n");
     expect(output).toContain("✓ Port 18789");
-    expect(output).toContain("Detected OpenClaw Gateway listener on the configured port.");
+    expect(output).toContain("Detected OpenCrustacean Gateway listener on the configured port.");
     expect(output).not.toContain("Port 18789 is already in use.");
   });
 
@@ -150,7 +150,9 @@ describe("status-all diagnosis port checks", () => {
 
     const output = params.lines.join("\n");
     expect(output).toContain("! Port 18789");
-    expect(output).toContain("2 OpenClaw gateway processes appear to be listening on port 18789");
+    expect(output).toContain(
+      "2 OpenCrustacean gateway processes appear to be listening on port 18789",
+    );
     expect(output).toContain("Port 18789 is already in use.");
   });
 

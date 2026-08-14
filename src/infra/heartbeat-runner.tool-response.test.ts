@@ -845,7 +845,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expectHeartbeatToolPrompt(result);
   });
 
-  it("uses the isolated Codex runtime instead of the base OpenClaw runtime", async () => {
+  it("uses the isolated Codex runtime instead of the base OpenCrustacean runtime", async () => {
     // One direction proves prompt recalculation after isolation. Reciprocal
     // runtime precedence is covered directly by thinking-runtime.test.ts.
     const result = await runPromptScenario({

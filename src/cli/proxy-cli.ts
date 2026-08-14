@@ -48,7 +48,7 @@ function collectOption(value: string, previous: string[] | undefined): string[] 
 export function registerProxyCli(program: Command) {
   const proxy = program
     .command("proxy")
-    .description("Run the OpenClaw debug proxy and inspect captured traffic");
+    .description("Run the OpenCrustacean debug proxy and inspect captured traffic");
   setCommandJsonMode(proxy, "output", ({ argv }) => isProxyMachineOutput(argv));
 
   proxy
@@ -63,7 +63,7 @@ export function registerProxyCli(program: Command) {
 
   proxy
     .command("run")
-    .description("Run a child command with OpenClaw debug proxy capture enabled")
+    .description("Run a child command with OpenCrustacean debug proxy capture enabled")
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .option("--host <host>", "Bind host", "127.0.0.1")

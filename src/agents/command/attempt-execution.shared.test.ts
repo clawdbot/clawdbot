@@ -45,11 +45,11 @@ function makeTaskCompletionEvents(): NonNullable<AgentCommandOpts["internalEvent
 }
 
 describe("attempt execution prompt materialization", () => {
-  it("materializes ACP internal events without OpenClaw internal runtime markers", () => {
+  it("materializes ACP internal events without OpenCrustacean internal runtime markers", () => {
     const events = makeTaskCompletionEvents();
     const body = [
       INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "OpenClaw runtime context (internal):",
+      "OpenCrustacean runtime context (internal):",
       "hidden completion event",
       INTERNAL_RUNTIME_CONTEXT_END,
       "",
@@ -76,7 +76,7 @@ describe("attempt execution prompt materialization", () => {
     const transcriptBody = resolveInternalEventTranscriptBody(
       [
         INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        "OpenClaw runtime context (internal):",
+        "OpenCrustacean runtime context (internal):",
         "hidden completion event",
         INTERNAL_RUNTIME_CONTEXT_END,
       ].join("\n"),

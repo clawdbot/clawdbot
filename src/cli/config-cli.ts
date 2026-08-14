@@ -334,7 +334,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
           formatPathForDisplay: true,
           includeReceivedValueHint: true,
         });
-        runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
+        runtime.error(danger(`OpenCrustacean config is invalid: ${shortPath}`));
         for (const line of formatConfigIssueLines(displayIssues, danger("×"), {
           normalizeRoot: true,
         })) {

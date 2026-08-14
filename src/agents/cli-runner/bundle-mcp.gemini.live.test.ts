@@ -28,7 +28,7 @@ async function startLocalStreamableHttpMcpServer(): Promise<{
   // Real local MCP endpoint verifies Gemini consumes the generated settings
   // rather than just checking file shape.
   const mcpServer = new McpServer({ name: "openclaw-gemini-live-probe", version: "1.0.0" });
-  mcpServer.tool("openclaw_live_probe", "OpenClaw Gemini MCP live probe", async () => ({
+  mcpServer.tool("openclaw_live_probe", "OpenCrustacean Gemini MCP live probe", async () => ({
     content: [{ type: "text", text: "ok" }],
   }));
 
@@ -62,7 +62,7 @@ async function startLocalStreamableHttpMcpServer(): Promise<{
 }
 
 describeLive("Gemini CLI MCP settings smoke", () => {
-  it("connects to an OpenClaw-configured streamable-http server", async () => {
+  it("connects to an OpenCrustacean-configured streamable-http server", async () => {
     const geminiCommand = process.env.OPENCLAW_LIVE_GEMINI_COMMAND ?? "gemini";
     if (!(await canRunGemini(geminiCommand))) {
       console.warn(`Skipping Gemini MCP live smoke: ${geminiCommand} is not runnable.`);

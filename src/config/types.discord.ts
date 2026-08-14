@@ -174,7 +174,7 @@ export type DiscordVoiceRealtimeConfig = {
 };
 
 export type DiscordVoiceAgentSessionConfig = {
-  /** Which OpenClaw conversation should receive voice turns. Default: "voice". */
+  /** Which OpenCrustacean conversation should receive voice turns. Default: "voice". */
   mode?: "voice" | "target";
   /** Discord target used when mode is "target", for example "channel:123". */
   target?: string;

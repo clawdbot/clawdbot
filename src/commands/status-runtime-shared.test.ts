@@ -263,7 +263,7 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("does not add Codex synthetic usage for OpenAI routes pinned to OpenClaw runtime", async () => {
+  it("does not add Codex synthetic usage for OpenAI routes pinned to OpenCrustacean runtime", async () => {
     await resolveStatusUsageSummary({
       timeoutMs: 3456,
       config: {

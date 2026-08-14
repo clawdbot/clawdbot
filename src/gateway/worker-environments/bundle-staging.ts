@@ -274,7 +274,7 @@ export async function collectWorkerBundleManifest(
   );
   if (distFiles.length === 0) {
     throw new Error(
-      `OpenClaw worker bundle has no packaged dist files; build the running package at ${sourceRoot}`,
+      `OpenCrustacean worker bundle has no packaged dist files; build the running package at ${sourceRoot}`,
     );
   }
   const referencedPackages = new Set<string>();

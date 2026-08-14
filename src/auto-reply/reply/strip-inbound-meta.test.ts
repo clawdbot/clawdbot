@@ -300,7 +300,7 @@ Hello`;
   it("strips a timestamp prefix that remains after removing metadata blocks", () => {
     const input = `${markInboundContextLabel("Sender:")}
 \`\`\`json
-{"label":"OpenClaw UI"}
+{"label":"OpenCrustacean UI"}
 \`\`\`
 
 [Thu 2026-03-12 07:00 UTC] what time is it?`;

@@ -13,7 +13,7 @@ async function expectMinimaxUsageResult(params: {
   const mockFetch = createProviderUsageFetch(async (_url, init) => {
     const headers = (init?.headers as Record<string, string> | undefined) ?? {};
     expect(headers.Authorization).toBe("Bearer key");
-    expect(headers["MM-API-Source"]).toBe("OpenClaw");
+    expect(headers["MM-API-Source"]).toBe("OpenCrustacean");
     return makeResponse(200, params.payload);
   });
 

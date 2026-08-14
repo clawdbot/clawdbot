@@ -5,7 +5,7 @@ const LEGACY_TOOLS_MD_TEMPLATE =
   "Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.\n\n---\n\nAdd whatever helps you do your job. This is your cheat sheet.\n\n## Related\n\n- [Agent workspace](/concepts/agent-workspace)\n";
 
 const LEGACY_TOOLS_DEV_MD_TEMPLATE =
-  "# TOOLS.md - User Tool Notes (editable)\n\nThis file is for _your_ notes about external tools and conventions. It does not define which tools exist; OpenClaw provides built-in tools internally, and skills add the rest.\n\n## Examples\n\n### imsg\n\n" +
+  "# TOOLS.md - User Tool Notes (editable)\n\nThis file is for _your_ notes about external tools and conventions. It does not define which tools exist; OpenCrustacean provides built-in tools internally, and skills add the rest.\n\n## Examples\n\n### imsg\n\n" +
   "- Send an iMessage/SMS: describe who/what, confirm before sending.\n- Prefer short messages; avoid sending secrets.\n\n### sag\n\n" +
   "- Text-to-speech: specify voice, target speaker/room, and whether to stream.\n\nAdd whatever else you want the assistant to know about your local toolchain.\n\n## Related\n\n- [TOOLS.md template](/reference/templates/TOOLS)\n";
 const LEGACY_TOOLS_DEV_FALLBACK =

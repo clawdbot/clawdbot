@@ -75,7 +75,7 @@ describe("realtime voice agent consult tool", () => {
     expect(prompt).toBe(
       [
         "Live voice request from the participant during a private Google Meet.",
-        "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
+        "Act as the configured OpenCrustacean agent on behalf of this user. Use available tools when the request asks you to do work.",
         "When finished, return only the concise result the realtime voice agent should speak back.",
         "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
         "Recent voice transcript for context:\nParticipant: Can you check the repo?\nAgent: I'll verify.",
