@@ -35,15 +35,16 @@ async function runSystemGatewayCommand(
   action: () => Promise<unknown>,
   successText?: string,
 ): Promise<void> {
+  const machineOutput = opts.json || successText === undefined;
   try {
     const result = await action();
-    if (opts.json || successText === undefined) {
+    if (machineOutput) {
       defaultRuntime.writeJson(result);
     } else {
       defaultRuntime.log(successText);
     }
   } catch (err) {
-    if (opts.json) {
+    if (machineOutput) {
       defaultRuntime.writeJson({ error: String(err) });
     } else {
       defaultRuntime.error(danger(String(err)));

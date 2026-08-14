@@ -160,6 +160,24 @@ describe("system-cli", () => {
     expect(params).not.toHaveProperty("sessionKey");
   });
 
+  it("writes JSON when an implicit machine-output command fails", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(new Error("Gateway unavailable"));
+
+    await runCli(["system", "heartbeat", "last"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    const [method, gatewayOptions, params, requestOptions] = gatewayCall();
+    expect(method).toBe("last-heartbeat");
+    expect(typeof gatewayOptions).toBe("object");
+    expect(params).toBeUndefined();
+    expect(requestOptions).toEqual({ expectFinal: false });
+    const expectedError = "Error: Gateway unavailable";
+    expect(runtimeLogs).toEqual([JSON.stringify({ error: expectedError }, null, 2)]);
+    expect(runtimeErrors).toEqual([]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it.each([
     { args: ["system", "heartbeat", "last"], method: "last-heartbeat", params: undefined },
     {
