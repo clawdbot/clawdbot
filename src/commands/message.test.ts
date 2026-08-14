@@ -442,6 +442,16 @@ describe("messageCommand", () => {
     expect(readOnlyMessageActionCall().agentId).toBe("ops");
   });
 
+  it("resolves the ordinary owner from the effective command config", async () => {
+    const effectiveConfig = { agents: { entries: { ops: {} } } };
+    mockResolvedCommandConfig({ rawConfig: {}, resolvedConfig: effectiveConfig, diagnostics: [] });
+
+    await runMessageCommand();
+
+    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
+    expect(readOnlyMessageActionCall().agentId).toBe("ops");
+  });
+
   it("keeps local-fallback resolved cfg and logs diagnostics", async () => {
     const rawConfig = {
       channels: {
