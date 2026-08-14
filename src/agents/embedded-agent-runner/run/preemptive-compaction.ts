@@ -3,7 +3,6 @@
  */
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { IMAGE_BLOCK_TOKENS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
@@ -17,6 +16,7 @@ import {
   bashExecutionToText,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
+  IMAGE_BLOCK_TOKENS,
 } from "../../runtime/index.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";

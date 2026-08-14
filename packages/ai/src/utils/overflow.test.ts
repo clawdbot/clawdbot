@@ -62,6 +62,7 @@ describe("provider overflow messages", () => {
     "Provider returned error: Input length 131393 exceeds the maximum allowed input length of 131,040 tokens.",
     "Input length 131393 exceeds maximum allowed input length of 131040 token",
     "input length and `max_tokens` exceed context limit: 176312 + 32000 > 200000",
+    'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"input length and `max_tokens` exceed context limit: 176312 + 32000 > 200000"}}',
     "code 1210: tokens in request more than max tokens allowed",
     "code 1261: Prompt exceeds max length",
   ])("detects %s", (text) => {
