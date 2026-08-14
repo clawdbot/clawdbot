@@ -83,11 +83,12 @@ export async function runGatewayHealthJsonRoute(
     if (!emitReachableGatewayAuthDiagnostic || !readBestEffortConfig) {
       throw error;
     }
+    const parsedTimeout = Number(rpc.timeout ?? "10000");
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
       config: rpc.config ?? (await readBestEffortConfig()),
       runtime,
-      timeoutMs: Number(rpc.timeout ?? "10000"),
+      timeoutMs: Number.isFinite(parsedTimeout) ? parsedTimeout : 10_000,
       token: rpc.token,
       password: rpc.password,
       localPortOverride: rpc.localPortOverride,
