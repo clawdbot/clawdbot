@@ -267,7 +267,7 @@ export function cronRunStatusToTaskStatus(
   if (entry.status === "ok") {
     return "succeeded";
   }
-  return isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
+  return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }
 
 /** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */

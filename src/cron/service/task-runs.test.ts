@@ -164,7 +164,7 @@ describe("cron task run terminal records", () => {
         tryFinishCronTaskRunWithoutHistory(state, {
           taskRunId: runIds[0],
           status: "skipped",
-          error: "cron run skipped before execution",
+          error: "cron: job execution timed out",
           endedAt: 1_501,
         });
         expect(childSessionKey(systemEventJob)).toBeUndefined();
@@ -176,7 +176,7 @@ describe("cron task run terminal records", () => {
         ).toEqual([
           expect.objectContaining({
             status: "failed",
-            error: "cron run skipped before execution",
+            error: "cron: job execution timed out",
           }),
         ]);
       },
@@ -441,7 +441,7 @@ describe("cron task run terminal records", () => {
             action: "finished",
             job,
             status: "skipped",
-            error: "trigger condition not met",
+            error: "cron: job execution timed out",
             runId: "manual:skipped-job:1",
             runAtMs: startedAt,
             durationMs: 0,
@@ -461,7 +461,7 @@ describe("cron task run terminal records", () => {
           status: "failed",
           startedAt,
           endedAt: startedAt,
-          error: "trigger condition not met",
+          error: "cron: job execution timed out",
           detail: {
             kind: "cron-run",
             status: "skipped",
