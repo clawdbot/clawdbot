@@ -9,6 +9,7 @@ import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   assertOpenClawStateDatabaseFreshOpenAllowed,
   evictOpenClawStateDatabaseAfterCorruption,
@@ -28,7 +29,12 @@ type ReusedOpenClawStateReadOnlyDatabase<T> = { reused: false } | { reused: true
 
 type PreparedReadOnlyLocation = ReturnType<typeof prepareSqliteReadOnlyLocationSync>;
 
-const inspectionSnapshots = new AsyncLocalStorage<Map<string, PreparedReadOnlyLocation>>();
+const OPENCLAW_STATE_INSPECTION_SNAPSHOTS_KEY = Symbol.for(
+  "openclaw.stateDatabaseInspectionSnapshots",
+);
+const inspectionSnapshots = resolveGlobalSingleton<
+  AsyncLocalStorage<Map<string, PreparedReadOnlyLocation>>
+>(OPENCLAW_STATE_INSPECTION_SNAPSHOTS_KEY, () => new AsyncLocalStorage());
 
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));

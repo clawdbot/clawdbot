@@ -6,6 +6,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 
 const execFileAsync = promisify(execFile);
 const roots = new Set<string>();
@@ -13,6 +17,7 @@ const sharedStateDatabases = new Set<DatabaseSync>();
 const PREFLIGHT_FIXTURE_PLUGIN_ID = "gateway-preflight-fixture";
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   for (const database of sharedStateDatabases) {
     database.close();
   }
@@ -154,6 +159,7 @@ module.exports = { stateMigrations: [migration] };
 async function createFixture(params: {
   config: Record<string, unknown>;
   disableMemorySlot?: boolean;
+  canonicalSharedStateDatabase?: boolean;
   includeFixturePlugin?: boolean;
   includeSharedStateDatabase?: boolean;
   invalidSessionStore?: boolean;
@@ -207,14 +213,22 @@ async function createFixture(params: {
   if (params.includeSharedStateDatabase !== false) {
     const sharedStatePath = path.join(stateDir, "state", "openclaw.sqlite");
     await fs.mkdir(path.dirname(sharedStatePath), { recursive: true });
-    const sharedStateDatabase = new DatabaseSync(sharedStatePath);
-    sharedStateDatabase.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA wal_autocheckpoint = 0;
-      CREATE TABLE preflight_state_probe (value TEXT PRIMARY KEY);
-      INSERT INTO preflight_state_probe VALUES ('committed-in-wal');
-    `);
-    sharedStateDatabases.add(sharedStateDatabase);
+    if (params.canonicalSharedStateDatabase) {
+      openOpenClawStateDatabase({
+        path: sharedStatePath,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      closeOpenClawStateDatabaseForTest();
+    } else {
+      const sharedStateDatabase = new DatabaseSync(sharedStatePath);
+      sharedStateDatabase.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        CREATE TABLE preflight_state_probe (value TEXT PRIMARY KEY);
+        INSERT INTO preflight_state_probe VALUES ('committed-in-wal');
+      `);
+      sharedStateDatabases.add(sharedStateDatabase);
+    }
   }
   if (params.vectorModel) {
     const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -259,6 +273,7 @@ async function runCli(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   args: string[],
   envOverrides: NodeJS.ProcessEnv = {},
+  timeoutMs = 45_000,
 ) {
   try {
     const result = await execFileAsync(
@@ -267,7 +282,7 @@ async function runCli(
       {
         cwd: path.resolve("."),
         encoding: "utf8",
-        timeout: 45_000,
+        timeout: timeoutMs,
         env: {
           ...process.env,
           HOME: fixture.root,
@@ -304,8 +319,9 @@ async function runCli(
 async function runPreflight(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   envOverrides: NodeJS.ProcessEnv = {},
+  timeoutMs?: number,
 ) {
-  return runCli(fixture, ["gateway", "preflight", "--json"], envOverrides);
+  return runCli(fixture, ["gateway", "preflight", "--json"], envOverrides, timeoutMs);
 }
 
 async function runGateway(
@@ -806,6 +822,36 @@ describe("gateway preflight CLI process", () => {
           ),
         }),
       ],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+  });
+
+  it("keeps a closed canonical shared-state database sidecar-free across built artifact reads", async () => {
+    const fixture = await createFixture({
+      config: {
+        ...localMemoryConfig(),
+        gateway: { mode: "local", auth: { mode: "none" } },
+      },
+      canonicalSharedStateDatabase: true,
+      disableMemorySlot: false,
+      includeFixturePlugin: false,
+      vectorModel: "embeddinggemma-300m",
+    });
+    const before = await snapshotTree(fixture.root);
+
+    const result = await runPreflight(
+      fixture,
+      {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+      },
+      120_000,
+    );
+
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "blocked",
+      blockers: [expect.objectContaining({ code: "managed-server-config-missing" })],
+      errors: [],
     });
     expect(await snapshotTree(fixture.root)).toEqual(before);
   });
