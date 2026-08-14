@@ -227,10 +227,10 @@ describe("ACP event ledger", () => {
         const groundTruth = db
           .prepare(
             `SELECT
-               (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(cwd) + 32), 0)
+               (SELECT COALESCE(SUM(octet_length(session_id) + octet_length(session_key) + octet_length(cwd) + 32), 0)
                   FROM acp_replay_sessions)
-             + (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(update_json)
-                   + COALESCE(length(run_id), 0) + 32), 0)
+             + (SELECT COALESCE(SUM(octet_length(session_id) + octet_length(session_key) + octet_length(update_json)
+                   + COALESCE(octet_length(run_id), 0) + 32), 0)
                   FROM acp_replay_events) AS total`,
           )
           .get() as { total: number | bigint };
@@ -395,6 +395,58 @@ describe("ACP event ledger", () => {
     expect(replay.complete).toBe(true);
     expect(replay.sessionKey).toBe("acp:new-session");
     expect(replay.events).toEqual([]);
+  });
+
+  it("counts UTF-8 bytes instead of characters for multi-byte content", async () => {
+    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const databasePath = path.join(dir, "openclaw.sqlite");
+      // Use a budget tight enough that byte-count accuracy matters.
+      const ledger = createSqliteAcpEventLedger({
+        path: databasePath,
+        maxSerializedBytes: 512,
+      });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+      // CJK characters: 2 chars but 6 UTF-8 bytes each.
+      await ledger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "\u4f60\u597d".repeat(100) },
+        },
+      });
+
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        const aggregate = db
+          .prepare(
+            "SELECT COALESCE(SUM(estimated_bytes), 0) AS total FROM acp_replay_sessions",
+          )
+          .get() as { total: number | bigint };
+        const groundTruth = db
+          .prepare(
+            `SELECT
+               (SELECT COALESCE(SUM(octet_length(session_id) + octet_length(session_key) + octet_length(cwd) + 32), 0)
+                  FROM acp_replay_sessions)
+             + (SELECT COALESCE(SUM(octet_length(session_id) + octet_length(session_key) + octet_length(update_json)
+                   + COALESCE(octet_length(run_id), 0) + 32), 0)
+                  FROM acp_replay_events) AS total`,
+          )
+          .get() as { total: number | bigint };
+        // The aggregate must match ground truth computed with octet_length.
+        expect(Number(aggregate.total)).toBe(Number(groundTruth.total));
+        // The aggregate must stay within the byte budget.
+        expect(Number(aggregate.total)).toBeLessThanOrEqual(512);
+      } finally {
+        db.close();
+      }
+    });
   });
 
   it("marks replay incomplete when serialized byte retention trims payloads", async () => {

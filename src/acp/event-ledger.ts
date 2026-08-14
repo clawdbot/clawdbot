@@ -138,11 +138,11 @@ function upsertSqliteSession(
     // unbound the byte budget.
     db.prepare(
       `UPDATE acp_replay_sessions
-          SET estimated_bytes = estimated_bytes - length(session_key) - length(cwd) + ?,
+          SET estimated_bytes = estimated_bytes - octet_length(session_key) - octet_length(cwd) + ?,
               session_key = ?, cwd = ?, complete = ?, updated_at = ?
         WHERE session_id = ?`,
     ).run(
-      params.sessionKey.length + cwd.length,
+      Buffer.byteLength(params.sessionKey, "utf8") + Buffer.byteLength(cwd, "utf8"),
       params.sessionKey,
       cwd,
       complete,
@@ -220,7 +220,12 @@ function estimateSessionRowBytes(params: {
   sessionKey: string;
   cwd: string;
 }): number {
-  return params.sessionId.length + params.sessionKey.length + params.cwd.length + 32;
+  return (
+    Buffer.byteLength(params.sessionId, "utf8") +
+    Buffer.byteLength(params.sessionKey, "utf8") +
+    Buffer.byteLength(params.cwd, "utf8") +
+    32
+  );
 }
 
 function estimateEventRowBytes(params: {
@@ -230,10 +235,10 @@ function estimateEventRowBytes(params: {
   updateJson: string;
 }): number {
   return (
-    params.sessionId.length +
-    params.sessionKey.length +
-    params.updateJson.length +
-    (params.runId?.length ?? 0) +
+    Buffer.byteLength(params.sessionId, "utf8") +
+    Buffer.byteLength(params.sessionKey, "utf8") +
+    Buffer.byteLength(params.updateJson, "utf8") +
+    (params.runId ? Buffer.byteLength(params.runId, "utf8") : 0) +
     32
   );
 }
@@ -370,11 +375,11 @@ function appendSqliteUpdate(
   // expressions read the pre-update row, keeping the aggregate exact.
   db.prepare(
     `UPDATE acp_replay_sessions
-        SET estimated_bytes = estimated_bytes - length(session_key) + ?,
+        SET estimated_bytes = estimated_bytes - octet_length(session_key) + ?,
             session_key = ?, updated_at = ?, next_seq = ?
       WHERE session_id = ?`,
   ).run(
-    params.sessionKey.length + eventBytes,
+    Buffer.byteLength(params.sessionKey, "utf8") + eventBytes,
     params.sessionKey,
     now,
     session.nextSeq + 1,
