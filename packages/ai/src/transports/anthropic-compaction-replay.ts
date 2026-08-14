@@ -136,7 +136,7 @@ function replayContextMatches(
   );
 }
 
-export function captureAnthropicCompaction(
+function captureAnthropicCompaction(
   output: ReplayOut,
   summary: string,
   replayIndex: number,

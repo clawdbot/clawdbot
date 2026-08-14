@@ -11,7 +11,7 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
-import { captureAnthropicCompaction } from "./anthropic-compaction-replay.js";
+import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -656,7 +656,9 @@ describe("anthropic transport stream", () => {
       stopReason: "stop",
       timestamp: 1,
     };
-    captureAnthropicCompaction(checkpoint, "summary checkpoint", 0, model, replayIdentity);
+    const capture = createCompactionCapture(checkpoint, model, replayIdentity);
+    capture.begin(0, { type: "compaction", content: "summary checkpoint" }, 0);
+    capture.complete(0);
     guardedFetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({ error: { message: "context_management compaction block is invalid" } }),

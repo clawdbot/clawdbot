@@ -2,7 +2,7 @@ import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import {
   buildAnthropicReplayPlan,
-  captureAnthropicCompaction,
+  createCompactionCapture,
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
 } from "./anthropic-compaction-replay.js";
@@ -46,9 +46,20 @@ function assistant(texts: string[]): AssistantMessage {
   };
 }
 
+function captureCheckpoint(
+  message: AssistantMessage,
+  summary: string,
+  replayIndex: number,
+  options = replayOptions,
+): void {
+  const capture = createCompactionCapture(message, model, options);
+  capture.begin(0, { type: "compaction", content: summary }, replayIndex);
+  capture.complete(0);
+}
+
 function contextWithCheckpoint(summary = "summary of the earlier conversation"): Context {
   const checkpoint = assistant(["before checkpoint", "after checkpoint"]);
-  captureAnthropicCompaction(checkpoint, summary, 1, model, replayOptions);
+  captureCheckpoint(checkpoint, summary, 1);
   return {
     messages: [
       { role: "user", content: "old question", timestamp: 0 },
@@ -96,7 +107,7 @@ describe("Anthropic compaction replay", () => {
   it("uses the newest matching checkpoint", () => {
     const context = contextWithCheckpoint("older summary");
     const newest = assistant(["latest answer"]);
-    captureAnthropicCompaction(newest, "newest summary", 0, model, replayOptions);
+    captureCheckpoint(newest, "newest summary", 0);
     context.messages.push({ role: "user", content: "middle", timestamp: 3 }, newest, {
       role: "user",
       content: "latest question",
