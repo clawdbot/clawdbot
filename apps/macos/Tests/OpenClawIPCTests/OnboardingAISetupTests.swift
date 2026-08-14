@@ -646,6 +646,43 @@ private struct AISetupHarness {
     }
 }
 
+@MainActor
+private final class FirstRunGatewayTestPresenter: FirstRunOnboardingPresenting {
+    private let makeView: @MainActor () -> OnboardingView
+    private(set) var completionCount = 0
+    private(set) var showCount = 0
+    private(set) var view: OnboardingView?
+    private(set) var probeTask: Task<Void, Never>?
+
+    init(makeView: @escaping @MainActor () -> OnboardingView) {
+        self.makeView = makeView
+    }
+
+    func complete() {
+        self.completionCount += 1
+    }
+
+    func show() {
+        self.showCount += 1
+        let view = self.makeView()
+        self.view = view
+        self.probeTask = view.onboardingDidAppear()
+    }
+}
+
+@MainActor
+private func waitForFirstRunProbe(
+    _ presenter: FirstRunGatewayTestPresenter) async throws -> Task<Void, Never>
+{
+    for _ in 0..<200 {
+        if let probeTask = presenter.probeTask {
+            return probeTask
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    return try #require(presenter.probeTask)
+}
+
 private func makeAISetupSession(
     recorder: AISetupRequestRecorder,
     indeterminateActivationAfterDispatch: Bool = false,
@@ -799,38 +836,30 @@ struct OnboardingAISetupTests {
         let appState = AppState(preview: true)
         appState.connectionMode = .local
         appState.onboardingSeen = false
-        let delegate = AppDelegate()
-        var launchEvents: [String] = []
-        var probeTask: Task<Void, Never>?
-        var launchedView: OnboardingView?
-        var dashboardOpenCount = 0
-
-        delegate.scheduleFirstRunOnboardingIfNeeded(state: appState) { mode, routeIdentity in
-            launchEvents.append("onboarding")
-            let view = OnboardingView(
+        let routeIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: appState)
+        let presenter = FirstRunGatewayTestPresenter {
+            OnboardingView(
                 state: appState,
                 aiSetupGateway: harness.gateway,
                 systemAgentDefaults: defaults,
                 aiSetupRouteIdentityProvider: { routeIdentity },
-                gatewaySelectionPersister: { true },
-                configuredGatewayDashboardOpener: { dashboardOpenCount += 1 })
-            #expect(mode == .local)
-            launchedView = view
-            probeTask = view.onboardingDidAppear()
+                gatewaySelectionPersister: { true })
         }
 
-        let firstRunProbe = try #require(probeTask)
+        AppDelegate.scheduleFirstRunOnboardingIfNeeded(state: appState, presenter: presenter)
+        let firstRunProbe = try await waitForFirstRunProbe(presenter)
         await firstRunProbe.value
         let requests = await waitForAISetupRequests(harness.recorder, count: 2)
         await settleQueuedAISetupTasks()
 
-        #expect(launchEvents == ["onboarding"])
+        #expect(presenter.showCount == 1)
+        #expect(presenter.completionCount == 0)
         #expect(Array(requests.methods.prefix(2)) == [
             "agents.list",
             "openclaw.setup.verify",
         ])
-        #expect(dashboardOpenCount == 0)
-        launchedView?.onboardingDidDisappear()
+        #expect(presenter.view?.aiSetup.configuredGatewayVerificationFailure?.status == "auth")
+        presenter.view?.onboardingDidDisappear()
     }
 
     @Test func `failed configured route verification exposes provider reauthentication`() async throws {

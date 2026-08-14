@@ -527,7 +527,13 @@ enum OnboardingSystemAgentResumeStore {
 }
 
 @MainActor
-final class OnboardingController: NSObject, NSWindowDelegate {
+protocol FirstRunOnboardingPresenting: AnyObject {
+    func complete()
+    func show()
+}
+
+@MainActor
+final class OnboardingController: NSObject, NSWindowDelegate, FirstRunOnboardingPresenting {
     static let shared = OnboardingController()
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
@@ -541,6 +547,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         AppDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
         AppStateStore.shared.onboardingSeen = true
         DashboardManager.shared.handleOnboardingCompletion()
+    }
+
+    func complete() {
+        Self.markComplete()
     }
 
     func show() {
@@ -662,7 +672,6 @@ struct OnboardingView: View {
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
-    let configuredGatewayDashboardOpener: @MainActor () -> Void
     let dashboardOnboardingOpener: @MainActor () -> Void
 
     static let windowWidth: CGFloat = 630
@@ -843,9 +852,6 @@ struct OnboardingView: View {
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
-        configuredGatewayDashboardOpener: @escaping @MainActor () -> Void = {
-            AppNavigationActions.openDashboard()
-        },
         dashboardOnboardingOpener: @escaping @MainActor () -> Void = {
             AppNavigationActions.openDashboardOnboarding()
         })
@@ -859,7 +865,6 @@ struct OnboardingView: View {
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
-        self.configuredGatewayDashboardOpener = configuredGatewayDashboardOpener
         self.dashboardOnboardingOpener = dashboardOnboardingOpener
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)

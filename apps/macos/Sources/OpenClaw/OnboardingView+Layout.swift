@@ -260,7 +260,7 @@ extension OnboardingView {
         self.configuredGatewayProbe.invalidate()
         OnboardingController.markComplete()
         OnboardingController.shared.close()
-        self.configuredGatewayDashboardOpener()
+        AppNavigationActions.openDashboard()
     }
 
     private func reconcilePendingSystemAgent(
