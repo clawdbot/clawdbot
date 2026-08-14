@@ -458,6 +458,7 @@ export async function forkSession(
   const createParams = {
     parentSessionKey: session.key,
     fork: true,
+    ...(session.hasActiveRun ? { forkFrom: "last-completed" as const } : {}),
     agentId,
   };
   if (

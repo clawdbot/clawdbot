@@ -983,6 +983,7 @@ export const en: TranslationMap = {
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
     forkSession: "Fork",
+    forkFromLastCompleted: "Fork from last completed message",
     forkedSession: "Forked session",
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",

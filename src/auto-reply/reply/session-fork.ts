@@ -40,6 +40,7 @@ type ForkSessionFromParentParams = {
   config?: OpenClawConfig;
   sessionKey: string;
   storePath?: string;
+  forkFrom?: "last-completed";
 
   /** Cross-agent forks land the child transcript in the target agent's store. */
   targetStorePath?: string;
@@ -121,6 +122,7 @@ export async function forkSessionFromParent(
     parentSessionKey: params.parentSessionKey,
     sessionKey: params.sessionKey,
     storePath,
+    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
     ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
   });
   return fork.status === "created" ? fork.transcript : null;

@@ -80,6 +80,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       pinned: row.pinned === true,
       archived: row.archived === true,
       active: true,
+      hasActiveRun: row.hasActiveRun === true,
     };
     try {
       const operations = await (this.headerSessionOperationsLoad ??=

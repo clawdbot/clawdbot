@@ -265,6 +265,7 @@ export async function createGatewaySession(params: {
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
+  forkFrom?: "last-completed";
   /**
    * Controls whether a distinct child terminates its parent. Omission preserves
    * the legacy rollover; callers use `false` for a parallel child.
@@ -466,6 +467,12 @@ export async function createGatewaySession(params: {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "fork requires parentSessionKey"),
+    };
+  }
+  if (params.forkFrom && params.fork !== true) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "forkFrom requires fork=true"),
     };
   }
   if (params.spawnDepth !== undefined) {
@@ -758,7 +765,10 @@ export async function createGatewaySession(params: {
             canonicalParentSessionKey,
             currentParentEntry.sessionId,
           ]));
-      if (parentHasActiveWork) {
+      if (
+        parentHasActiveWork &&
+        (params.forkFrom !== "last-completed" || params.emitCommandHooks === true)
+      ) {
         return {
           ok: false,
           error: errorShape(
@@ -1137,6 +1147,7 @@ export async function createGatewaySession(params: {
           storePath: parentSessionTarget.storePath,
           // Keep the fork transcript owned by the child store across agent boundaries.
           targetStorePath: target.storePath,
+          ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
         });
         if (!fork) {
           return {

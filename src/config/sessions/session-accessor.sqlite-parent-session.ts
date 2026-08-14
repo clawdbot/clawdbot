@@ -73,6 +73,7 @@ export async function forkSessionTranscriptFromParent(
         result = forkSqliteParentTranscriptInTransaction(database, resolved, {
           parentEntry: params.parentEntry,
           parentSessionKey: params.parentSessionKey,
+          forkFrom: params.forkFrom,
           targetSessionId: params.targetSessionId,
           targetSessionKey: params.sessionKey,
         });
@@ -91,6 +92,7 @@ export async function forkSessionTranscriptFromParent(
   const sourceDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const source = resolveParentForkSourceTranscript(
     loadTranscriptEventsFromDatabase(sourceDatabase, params.parentEntry.sessionId),
+    params.forkFrom,
   );
   if (!source) {
     return { status: "failed" };
@@ -344,6 +346,7 @@ function forkSqliteParentTranscriptInTransaction(
   params: {
     parentEntry: SessionEntry;
     parentSessionKey: string;
+    forkFrom?: "last-completed";
     targetSessionId?: string;
     targetSessionKey: string;
   },
@@ -353,6 +356,7 @@ function forkSqliteParentTranscriptInTransaction(
   }
   const source = resolveParentForkSourceTranscript(
     loadTranscriptEventsFromDatabase(database, params.parentEntry.sessionId),
+    params.forkFrom,
   );
   if (!source) {
     return { status: "failed" };

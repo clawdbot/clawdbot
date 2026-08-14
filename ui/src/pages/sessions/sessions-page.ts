@@ -1214,7 +1214,7 @@ class SessionsPage extends OpenClawLightDomElement {
     });
   }
 
-  private async forkSession(key: string) {
+  private async forkSession(key: string, fromLastCompleted = false) {
     const scope = this.captureRequestScope();
     if (!scope) {
       return;
@@ -1223,6 +1223,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const createParams = {
       parentSessionKey: key,
       fork: true,
+      ...(fromLastCompleted ? { forkFrom: "last-completed" as const } : {}),
       ...(agentId ? { agentId } : {}),
     };
     if (!this.requireMutationAccess(scope, { method: "sessions.create", params: createParams })) {
@@ -1496,6 +1497,7 @@ class SessionsPage extends OpenClawLightDomElement {
           cloudWorkerStopAction,
         })}
         .forkDisabled=${row.modelSelectionLocked === true}
+        .forkFromLastCompleted=${row.hasActiveRun === true}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
@@ -1526,7 +1528,7 @@ class SessionsPage extends OpenClawLightDomElement {
               void this.renameSession(row);
               break;
             case "fork":
-              void this.forkSession(row.key);
+              void this.forkSession(row.key, row.hasActiveRun === true);
               break;
             case "workboard":
               void this.addToWorkboard(row);

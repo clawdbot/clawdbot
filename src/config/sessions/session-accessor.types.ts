@@ -362,6 +362,8 @@ export type SessionTranscriptWriteTransactionContext = {
   sessionId: string;
   sessionKey: string;
   storePath: string;
+  /** Optional stable boundary used when the parent may still be appending. */
+  forkFrom?: "last-completed";
 };
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
