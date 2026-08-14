@@ -30,6 +30,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
   }
 }
 
+function parsePidPair(output: string): [number, number] {
+  const match = /(\d+)\s+(\d+)/u.exec(output);
+  if (!match?.[1] || !match[2]) {
+    throw new Error(`expected PID pair in output: ${JSON.stringify(output)}`);
+  }
+  return [Number.parseInt(match[1], 10), Number.parseInt(match[2], 10)];
+}
+
 afterEach(async () => {
   delete process.env.OPENCLAW_SERVICE_MARKER;
   for (const pid of activePids) {
@@ -59,10 +67,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       output += chunk;
     });
     await waitFor(() => /^\d+ \d+/u.test(output));
-    const [rootPid, descendantPid] = output
-      .trim()
-      .split(/\s+/u)
-      .map((value) => Number.parseInt(value, 10));
+    const [rootPid, descendantPid] = parsePidPair(output);
     activePids.add(rootPid);
     activePids.add(descendantPid);
 
@@ -92,10 +97,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       noOutputTimeoutMs: timing.noOutputTimeoutMs,
     });
     const exit = await run.wait();
-    const [rootPid, descendantPid] = exit.stdout
-      .trim()
-      .split(/\s+/u)
-      .map((value) => Number.parseInt(value, 10));
+    const [rootPid, descendantPid] = parsePidPair(exit.stdout);
 
     expect(exit.reason).toBe(timing.reason);
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
@@ -118,10 +120,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     const startedAt = Date.now();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
     const elapsed = Date.now() - startedAt;
-    const [, descendantPid] = output
-      .trim()
-      .split(/\s+/u)
-      .map((value) => Number.parseInt(value, 10));
+    const [, descendantPid] = parsePidPair(output);
     activePids.add(descendantPid);
 
     expect(elapsed).toBeLessThan(300);
@@ -185,10 +184,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       output += chunk;
     });
     await waitFor(() => /^\d+ \d+/u.test(output));
-    const [rootPid, descendantPid] = output
-      .trim()
-      .split(/\s+/u)
-      .map((value) => Number.parseInt(value, 10));
+    const [rootPid, descendantPid] = parsePidPair(output);
     activePids.add(rootPid);
     activePids.add(descendantPid);
 
@@ -317,10 +313,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       host.once("exit", resolve);
     });
     expect(exitCode, stderr).toBe(0);
-    const match = /PROBE (\d+) (\d+)/u.exec(stdout);
-    expect(match, stdout).not.toBeNull();
-    const rootPid = Number.parseInt(match![1], 10);
-    const descendantPid = Number.parseInt(match![2], 10);
+    const [rootPid, descendantPid] = parsePidPair(stdout);
     activePids.add(rootPid);
     activePids.add(descendantPid);
 
