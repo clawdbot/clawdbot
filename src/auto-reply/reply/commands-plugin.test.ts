@@ -6,7 +6,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { registerPluginCommandInRegistry } from "../../plugins/command-registration.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
@@ -136,9 +140,9 @@ describe("handlePluginCommand", () => {
       session: { store: storePath },
     } as OpenClawConfig);
     params.storePath = storePath;
-    params.sessionStore = {
-      [sessionKey]: { sessionId: "session-plugin-command", updatedAt: Date.now() },
-    };
+    const entry = { sessionId: "session-plugin-command", updatedAt: Date.now() };
+    params.sessionStore = { [sessionKey]: entry };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
     params.provider = "openai";
     params.model = "gpt-5.4";
     params.workspaceDir = tempDir;
@@ -175,6 +179,61 @@ describe("handlePluginCommand", () => {
     await handlePluginCommand(params, true);
 
     expect(firstCommandContext(handler).runtimeContext?.compactCurrent).toBeUndefined();
+  });
+
+  it("closes retained session compaction when the command handler settles", async () => {
+    let retained: NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"];
+    registerTestCommand(undefined, {
+      handler: async (ctx) => {
+        retained = ctx.runtimeContext?.compactCurrent;
+        return { text: "saved" };
+      },
+    });
+
+    await handlePluginCommand(
+      buildPluginParams("/card", { commands: { text: true } } as OpenClawConfig),
+      true,
+    );
+
+    await expect(expectDefined(retained, "retained compact capability")()).resolves.toEqual({
+      compacted: false,
+      reason: "command invocation closed",
+    });
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects session compaction when the bound session disappeared", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-compact-gone-"));
+    const sessionKey = "agent:main:whatsapp:direct:test-user";
+    const storePath = path.join(tempDir, "sessions.json");
+    const entry = { sessionId: "session-plugin-command", updatedAt: Date.now() };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    registerTestCommand(undefined, {
+      handler: async (ctx) => {
+        await deleteSessionEntryLifecycle({
+          storePath,
+          archiveTranscript: false,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        });
+        return { text: JSON.stringify(await ctx.runtimeContext?.compactCurrent?.()) };
+      },
+    });
+    const params = buildPluginParams("/card", {
+      commands: { text: true },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = { [sessionKey]: entry };
+
+    try {
+      const response = await handlePluginCommand(params, true);
+      expect(response?.reply?.text).toBe(
+        JSON.stringify({ compacted: false, reason: "command session changed" }),
+      );
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("prefers the target session entry from sessionStore for plugin command metadata", async () => {

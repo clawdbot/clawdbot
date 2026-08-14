@@ -143,11 +143,13 @@ return {
 };
 ```
 
-The capability is absent when no current session is bound. Do not retain the
-callback beyond the command invocation or reconstruct compaction with session
-store patches and harness calls. The result contains `compacted`, optional
-`reason`, and optional `tokensBefore` and `tokensAfter` snapshots; OpenClaw owns
-all persistence and lifecycle coordination.
+This general capability is available to every plugin command, not only Codex.
+The host gates it to the current invocation and exact bound session generation.
+The capability is absent when no current session is bound; a retained callback
+fails closed after the handler settles. Do not retain it or reconstruct
+compaction with session-store patches and harness calls. The result contains
+`compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
+snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
 ## Runtime namespaces
 
