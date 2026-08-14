@@ -8,6 +8,7 @@ export const en: TranslationMap = {
     ok: "OK",
     yes: "Yes",
     no: "No",
+    default: "Default",
     assistant: "Assistant",
     active: "Active",
     loading: "Loading…",
@@ -718,6 +719,9 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
+    neverConnected: "Never connected",
+    offlineFor: "Offline for {duration}",
+    lastSeen: "Last seen {time}",
     capabilityCamera: "Camera",
     capabilityLocation: "Location",
     capabilityTalk: "Talk",
@@ -948,6 +952,8 @@ export const en: TranslationMap = {
     cloudWorkerPlacement: "Cloud worker: {state}",
     cloudWorkerPlacementConflict: "Cloud worker: {state} · 1 workspace conflict",
     cloudWorkerPlacementConflicts: "Cloud worker: {state} · {count} workspace conflicts",
+    cloudWorkerDiskWarning: "Cloud session disk space is low",
+    cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
     cloudWorkerDescendantConflicts: "Cloud worker children: {count} workspace conflicts",
     renameSession: "Rename session",
@@ -1951,6 +1957,7 @@ export const en: TranslationMap = {
     title: "Browser",
     toggle: "Toggle browser panel",
     hide: "Hide browser panel",
+    close: "Close browser panel",
     resize: "Resize browser panel",
     newTab: "New tab",
     closeTab: "Close tab",
@@ -2013,6 +2020,9 @@ export const en: TranslationMap = {
     resize: "Resize desktop panel",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    enterFullscreen: "Enter fullscreen",
+    exitFullscreen: "Exit fullscreen",
+    fullscreenUnavailable: "Fullscreen is unavailable in this browser",
     pickerTitle: "Desktop sources",
     thisMachine: "This machine",
     refresh: "Refresh",
@@ -2046,6 +2056,7 @@ export const en: TranslationMap = {
     unknownReason: "unknown reason",
     errors: {
       listFailed: "Could not load desktop sources: {error}",
+      fullscreenFailed: "Could not change fullscreen mode: {error}",
       securityFailed: "Desktop security negotiation failed: {reason}",
     },
   },
@@ -2222,7 +2233,7 @@ export const en: TranslationMap = {
     },
     prepare: {
       title: "Run a model locally",
-      intro: "Use a local model service, or run a private GGUF model directly inside this Gateway.",
+      intro: "Use a local model service or prepare a private GGUF model on this Gateway.",
       ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
       ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
@@ -2266,6 +2277,8 @@ export const en: TranslationMap = {
       auth: "Review the provider credential or sign-in, then retry.",
       rateLimit: "Wait for the provider limit to reset, then retry.",
       billing: "Restore provider billing or quota, then retry.",
+      timeout:
+        "The model did not finish the setup test in time. Warm it or choose a faster model, then retry.",
       unavailable: "Make sure the provider service is running and reachable, then retry.",
       format: "Check that the endpoint exposes a compatible chat model, then retry.",
       unknown: "Review the connection details, then retry.",
@@ -2410,6 +2423,7 @@ export const en: TranslationMap = {
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
     panel: {
       title: "OpenClaw",
+      toggle: "Toggle Ask OpenClaw",
       close: "Close Ask OpenClaw",
       resize: "Resize Ask OpenClaw",
       dockBottom: "Dock Ask OpenClaw at bottom",
@@ -4034,6 +4048,7 @@ export const en: TranslationMap = {
       missing: "Not signed in",
       apiKey: "API key",
       denied: "Credentials rejected",
+      configured: "Credentials configured",
     },
     expiresIn: "Credential expires in {time}",
     models: "{count} models",
@@ -4081,6 +4096,7 @@ export const en: TranslationMap = {
         format: "Invalid response",
         unknown: "Connection failed",
         no_model: "No models available",
+        partial: "Connected with warnings",
       },
     },
     readiness: {
@@ -4525,6 +4541,14 @@ export const en: TranslationMap = {
   },
   chat: {
     cloudWorkerFailed: "Cloud worker failed: {error}",
+    diskSpace: {
+      warningTitle: "Cloud session disk space is low",
+      criticalTitle: "Cloud session disk space is critically low",
+      warningBody:
+        "{percent}% used · {free} free. Delete unneeded files or stop the cloud worker before large writes.",
+      criticalBody:
+        "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
+    },
     sendErrors: {
       activeLeafChanged: "The session switched branches — review and resend.",
       steerRunNoLongerActive:
@@ -4828,6 +4852,10 @@ export const en: TranslationMap = {
     },
     codeBlock: {
       jsonLines: "JSON · {count} lines",
+      jsonBadge: "JSON",
+      jsonArrayItem: "Array ({count} item)",
+      jsonArrayItems: "Array ({count} items)",
+      jsonObjectKeys: "Object ({count} keys)",
     },
     workspaceConflict: {
       titleOne: "1 cloud workspace conflict",
@@ -5074,6 +5102,7 @@ export const en: TranslationMap = {
       showLess: "Show less",
       showMore: "Show more",
       unknownDate: "Unknown date",
+      toolSender: "Tool",
       voiceNote: "Voice note",
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
@@ -5125,6 +5154,7 @@ export const en: TranslationMap = {
       expand: "Expand session companion",
       collapse: "Collapse session companion",
       hide: "Hide session companion",
+      close: "Close session companion",
       show: "Show session companion",
       moreActions: "More companion actions",
       clear: "Clear companion session",
@@ -5370,6 +5400,7 @@ export const en: TranslationMap = {
     },
     attachments: {
       attachedFile: "Attached file",
+      readFailed: "Could not attach: {names}{more}",
       showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
@@ -5467,6 +5498,7 @@ export const en: TranslationMap = {
       title: "Background tasks",
       show: "Show background tasks",
       collapse: "Collapse background tasks",
+      close: "Close background tasks",
       refresh: "Refresh background tasks",
       loading: "Loading background tasks…",
       empty: "No background tasks for this agent yet.",
@@ -5563,6 +5595,7 @@ export const en: TranslationMap = {
     workspaceFiles: {
       label: "Session workspace",
       collapse: "Collapse session workspace",
+      close: "Close session workspace",
       showFiles: "Show session files",
       dockRight: "Dock to the right",
       dockBottom: "Dock to the bottom",

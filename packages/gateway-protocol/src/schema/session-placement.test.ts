@@ -207,6 +207,44 @@ describe("session dispatch protocol schemas", () => {
     },
   );
 
+  it("bounds optional worker-owned disk-space observations", () => {
+    for (const status of ["ok", "warning", "critical"] as const) {
+      expect(
+        Value.Check(SessionPlacementSchema, {
+          state: "active",
+          ...basePlacement,
+          ...workerOwnedFields,
+          diskSpace: {
+            status,
+            availableBytes: 200,
+            totalBytes: 1_000,
+            observedAtMs: 300,
+          },
+        }),
+      ).toBe(true);
+    }
+    for (const diskSpace of [
+      { status: "unknown", availableBytes: 200, totalBytes: 1_000, observedAtMs: 300 },
+      { status: "warning", availableBytes: -1, totalBytes: 1_000, observedAtMs: 300 },
+      { status: "warning", availableBytes: 1.5, totalBytes: 1_000, observedAtMs: 300 },
+      {
+        status: "warning",
+        availableBytes: 200,
+        totalBytes: Number.MAX_SAFE_INTEGER + 1,
+        observedAtMs: 300,
+      },
+    ]) {
+      expect(
+        Value.Check(SessionPlacementSchema, {
+          state: "active",
+          ...basePlacement,
+          ...workerOwnedFields,
+          diskSpace,
+        }),
+      ).toBe(false);
+    }
+  });
+
   it("preserves optional provenance only in terminal states", () => {
     expect(Value.Check(SessionPlacementSchema, { state: "reclaimed", ...basePlacement })).toBe(
       true,

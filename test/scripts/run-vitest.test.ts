@@ -309,7 +309,7 @@ describe("scripts/run-vitest", () => {
   });
 
   it("keeps boundary tests on existing routing", () => {
-    const argv = ["run", "test/web-provider-boundary.test.ts"];
+    const argv = ["run", "test/plugin-extension-import-boundary.test.ts"];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 

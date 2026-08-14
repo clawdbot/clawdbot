@@ -2026,10 +2026,14 @@ describe("selectAgentHarness", () => {
     });
   });
 
-  it("rejects explicit Codex when agent request params cannot be reproduced", () => {
+  it("uses a harness-declared OpenClaw fallback for explicit request params", () => {
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
       ctx.modelProvider?.requestTransportOverrides === "present"
-        ? { supported: false as const, reason: "authored request params are unsupported" }
+        ? {
+            supported: false as const,
+            reason: "authored request params are unsupported",
+            fallbackRuntime: "openclaw" as const,
+          }
         : { supported: true as const },
     );
     registerAgentHarness({
@@ -2039,20 +2043,30 @@ describe("selectAgentHarness", () => {
       runAttempt: vi.fn(async () => createAttemptResult("codex")),
     });
 
-    expect(() =>
+    expect(
       selectAgentHarness({
         provider: "openai",
-        modelId: "gpt-5.5",
+        modelId: "gpt-5.6-sol",
         modelProvider: {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           requestTransportOverrides: "none",
           runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
-        config: { agents: { defaults: { params: { store: false } } } },
-        agentHarnessRuntimeOverride: "codex",
-      }),
-    ).toThrow("authored request params are unsupported");
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": {
+                  params: { responsesServerCompaction: true },
+                  agentRuntime: { id: "codex" },
+                },
+              },
+            },
+          },
+        },
+      }).id,
+    ).toBe("openclaw");
     expect(supports).toHaveBeenCalledWith(
       expect.objectContaining({
         modelProvider: expect.objectContaining({ requestTransportOverrides: "present" }),
@@ -2363,6 +2377,33 @@ describe("selectAgentHarness", () => {
         ...pin,
       }),
     ).toThrow("prepared retry route is incompatible");
+  });
+
+  it.each([
+    ["explicit", { agentHarnessRuntimeOverride: "codex" }],
+    ["pinned", { agentHarnessId: "codex" }],
+  ] as const)("uses a declared fallback for a %s harness across prepared routes", (_label, pin) => {
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(
+      selectAgentHarnessForPreparedModelProviders({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProviders: [
+          { requestTransportOverrides: "none" },
+          { requestTransportOverrides: "present" },
+        ],
+        ...pin,
+      }).id,
+    ).toBe("openclaw");
   });
 
   it.each([

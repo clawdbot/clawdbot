@@ -71,7 +71,7 @@ export function renderBackgroundTasksRail(
     <openclaw-tooltip .content=${t("chat.backgroundTasks.collapse")}>
       <button
         type="button"
-        class="nav-collapse-toggle chat-tasks-rail__collapse-toggle"
+        class="rail-header__action chat-tasks-rail__collapse-toggle"
         aria-label=${t("chat.backgroundTasks.collapse")}
         aria-expanded="true"
         @click=${backgroundTasks.onToggleCollapsed}
@@ -88,15 +88,17 @@ export function renderBackgroundTasksRail(
       class="chat-tasks-rail"
       aria-label=${t("chat.backgroundTasks.label")}
     >
-      <div class="chat-tasks-rail__header">
-        <div class="chat-tasks-rail__title">
-          <span class="chat-tasks-rail__eyebrow">${backgroundTasks.sessionKey}</span>
-          <strong>${t("chat.backgroundTasks.title")}</strong>
+      <div class="rail-header chat-tasks-rail__header">
+        <div class="rail-header__copy chat-tasks-rail__title">
+          <span class="rail-header__eyebrow chat-tasks-rail__eyebrow"
+            >${backgroundTasks.sessionKey}</span
+          >
+          <strong class="rail-header__title">${t("chat.backgroundTasks.title")}</strong>
         </div>
-        <div class="chat-tasks-rail__actions">
+        <div class="rail-header__actions chat-tasks-rail__actions">
           <openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
             <button
-              class="btn btn--ghost btn--sm chat-tasks-rail__refresh"
+              class="rail-header__action chat-tasks-rail__refresh"
               type="button"
               aria-label=${t("chat.backgroundTasks.refresh")}
               ?disabled=${backgroundTasks.loading || !backgroundTasks.connected}

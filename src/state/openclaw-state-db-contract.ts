@@ -25,6 +25,7 @@ export const FIRST_USE_STATE_INDEXES = [
 // lazy ensures run; fold them into the next natural schema-version bump.
 export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
+  "cron_run_receipts",
   "cron_store_epochs",
   "model_catalog_remote",
   "secret_store_entries",
@@ -41,6 +42,8 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
+  "idx_cron_run_receipts_active_job",
+  "idx_cron_run_receipts_job_history",
   "secret_store_entries_live_idx",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */

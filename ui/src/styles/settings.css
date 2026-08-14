@@ -455,6 +455,14 @@ select.settings-select:not([multiple]) {
   min-height: var(--settings-control-height);
   box-sizing: border-box;
   align-items: stretch;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: var(--radius-md);
+  padding: 2px;
 }
 
 .settings-segmented > .settings-segmented__btn {
@@ -494,17 +502,6 @@ wa-switch.settings-toggle {
   --wa-form-control-activated-color: var(--accent);
   --wa-color-focus: var(--ring);
   flex: none;
-}
-
-.settings-segmented {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  max-width: 100%;
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  border-radius: var(--radius-md);
-  padding: 2px;
 }
 
 wa-radio-group.settings-segmented::part(form-control-label) {

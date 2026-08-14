@@ -34,11 +34,11 @@ import {
 } from "./chat-pane-browser-annotation.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import {
+  CHAT_AUTOTYPE_EXEMPT_SELECTOR,
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   CHAT_MODAL_SELECTOR,
   CHAT_OPEN_DETAILS_SELECTOR,
   CHAT_SPACE_ACTIVATION_SELECTOR,
-  CHAT_TEXT_ENTRY_SELECTOR,
   keyboardEventPathMatches,
 } from "./chat-pane-shared.ts";
 import { subscribeChatPaneStartup } from "./chat-pane-startup-subscriptions.ts";
@@ -292,7 +292,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       !event.ctrlKey &&
       !event.altKey &&
       event.key.length === 1 &&
-      !keyboardEventPathMatches(event, CHAT_TEXT_ENTRY_SELECTOR) &&
+      !keyboardEventPathMatches(event, CHAT_AUTOTYPE_EXEMPT_SELECTOR) &&
       !(event.key === " " && keyboardEventPathMatches(event, CHAT_SPACE_ACTIVATION_SELECTOR)) &&
       !document.querySelector(CHAT_MODAL_SELECTOR)
     ) {

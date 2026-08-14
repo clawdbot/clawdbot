@@ -105,17 +105,17 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
     return html`
       <section class="cp cp--${dock}" style=${style} aria-label=${t("custodian.panel.title")}>
         ${this.dockLayout.renderResizer("cp", t("custodian.panel.resize"))}
-        <header class="cp-header">
+        <header class="rail-header cp-header">
           <div class="cp-title">
             <openclaw-mascot
               .mood=${this.store.sending ? "thinking" : "idle"}
-              .size=${26}
+              .size=${16}
             ></openclaw-mascot>
-            <strong>${t("custodian.panel.title")}</strong>
+            <strong class="rail-header__title">${t("custodian.panel.title")}</strong>
           </div>
-          <div class="cp-actions">
+          <div class="rail-header__actions cp-actions">
             <button
-              class="cp-icon"
+              class="rail-header__action cp-icon"
               type="button"
               aria-label=${dock === "bottom"
                 ? t("custodian.panel.dockRight")
@@ -125,7 +125,7 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
               ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
             </button>
             <button
-              class="cp-icon"
+              class="rail-header__action cp-icon"
               type="button"
               aria-label=${t("custodian.panel.close")}
               @click=${() => this.dockLayout.setOpen(false)}

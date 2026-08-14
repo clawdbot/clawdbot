@@ -50,6 +50,9 @@ async function fixture(platform: NodeJS.Platform = "linux") {
   await fs.writeFile(path.join(bundledDir, "modules", "runtime.test.ts"), "throw new Error();\n");
   await fs.writeFile(path.join(bundledDir, "sidepanel.html"), "must not ship\n");
   await fs.writeFile(nativeHostPath, "export {};\n", { mode: 0o600 });
+  const nodePath = path.join(root, "bin", "node");
+  await fs.mkdir(path.dirname(nodePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(nodePath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
   const deps = {
     platform,
     homeDir,
@@ -59,7 +62,10 @@ async function fixture(platform: NodeJS.Platform = "linux") {
       LOCALAPPDATA: path.join(homeDir, "AppData", "Local"),
     },
     nativeHostPath,
-    nodePath: process.execPath,
+    // A fixture-owned interpreter keeps assertOwnedPath hermetic: the host's
+    // process.execPath can be group/world-writable (GitHub hostedtoolcache),
+    // which install correctly refuses and every registration test then fails.
+    nodePath,
   };
   return { root, homeDir, stateDir, bundledDir, pluginRoot, nativeHostPath, deps };
 }
@@ -79,6 +85,7 @@ async function writeSecurePreferences(params: {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     fileModesToRestore
       .splice(0)
@@ -168,11 +175,10 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
       throw new Error("missing Chromium fixture root");
     }
     await fs.mkdir(chromium.userDataDir, { recursive: true, mode: 0o700 });
-    const userUid = 1000;
+    const userUid = process.getuid?.() ?? 1000;
     const packageRoot = path.join(value.root, "package");
     const canonicalNodePath = await fs.realpath(value.deps.nodePath);
     const realLstat = fs.lstat.bind(fs);
-    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(userUid);
     const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
       const info = await realLstat(target);
       const resolved = path.resolve(String(target));
@@ -201,7 +207,6 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
       );
     } finally {
       lstatSpy.mockRestore();
-      getuidSpy.mockRestore();
     }
   });
 });
@@ -426,6 +431,10 @@ describe("native host registration", () => {
         ...value.deps,
         stateDir,
         nativeHostPath,
+        // This test executes the launcher, so it needs the real interpreter;
+        // dev/CI node installs are never group/world-writable, unlike the
+        // hosted-toolcache binary the fixture default protects against.
+        nodePath: process.execPath,
         env: {
           ...value.deps.env,
           OPENCLAW_STATE_DIR: stateDir,
