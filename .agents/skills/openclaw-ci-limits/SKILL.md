@@ -162,10 +162,9 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   or standalone admission job. On Node-relevant canonical main pushes and
   same-repo pull requests, preflight owns the sole immutable semantic
   dependency-cache write of workspace `node_modules` plus the local pnpm store
-  before fanout; all canonical Linux Node jobs are restore-only consumers and
-  exact misses fall back to the ordinary pnpm-store cache. GitHub-mode archives
-  include the hosted image OS/version; manual and fork paths remain
-  store-cache-only.
+  before fanout; all Blacksmith Node jobs are restore-only consumers and exact
+  misses fall back to the ordinary pnpm-store cache, while hosted/fork/manual
+  paths use only that store cache.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
   and 64 on the GitHub backend, Windows and Android at 2.
 - Canonical PR Node tests use one precise changed-target job when possible;
@@ -195,14 +194,13 @@ already started.
 gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
 ```
 
-In degraded mode, `ci.yml` uses the hosted labels and non-Blacksmith paths also
-used by manual dispatches and fork pull requests. Blacksmith-only Docker and
-sticky steps stay off. Canonical Node runs use preflight's immutable dependency
-cache before fanout; misses, manual dispatches, and forks fall back to the
-ordinary Actions pnpm-store cache. Android's large build uses separate
-low-memory Gradle processes. Standard 4-core hosted runners make builds and
-test lanes slower. Blacksmith runner registration is no longer part of the
-budget, while GitHub-hosted concurrency limits apply.
+In degraded mode, `ci.yml` uses the same hosted labels and non-Blacksmith paths
+as manual dispatches and fork pull requests. Blacksmith-only Docker and sticky
+steps stay off, dependency setup uses the ordinary Actions pnpm-store cache,
+and Android's large build uses separate low-memory Gradle processes. Standard
+4-core hosted runners make builds and test lanes slower. Blacksmith runner
+registration is no longer part of the budget, while GitHub-hosted concurrency
+limits apply.
 
 Flip back after the outage by deleting the variable:
 
