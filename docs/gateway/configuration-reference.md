@@ -713,7 +713,6 @@ Gateway or node host and check `openclaw nodes pending` again.
     },
     tailscale: {
       mode: "off", // off | serve | funnel
-      resetOnExit: false,
     },
     controlUi: {
       enabled: true,

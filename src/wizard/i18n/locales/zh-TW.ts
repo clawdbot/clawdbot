@@ -91,7 +91,6 @@ export const zh_TW = {
       remotePasswordMode: "你想如何提供這個 Gateway 密碼？",
       remoteTokenMode: "你想如何提供這個 Gateway 權杖？",
       tailscaleExposure: "Tailscale 暴露方式",
-      tailscaleReset: "離開時重置 Tailscale serve/funnel？",
       tokenPlaceholder: "多機器或非 loopback 存取需要使用",
       tokenPrompt: "Gateway 權杖",
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",

@@ -1799,6 +1799,36 @@ describe("legacy diagnostics OTel protocol migrate", () => {
   });
 });
 
+describe("retired gateway Tailscale cleanup config migrate", () => {
+  it.each([
+    [true, "managed Tailscale routes now persist"],
+    [false, "Removed retired gateway.tailscale.resetOnExit"],
+  ])("removes resetOnExit=%s while preserving sibling settings", (resetOnExit, message) => {
+    const raw = {
+      gateway: {
+        bind: "loopback",
+        tailscale: {
+          mode: "serve",
+          resetOnExit,
+          serviceName: "svc:openclaw",
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+      "gateway.tailscale.resetOnExit",
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({
+      mode: "serve",
+      serviceName: "svc:openclaw",
+    });
+    expect(res.changes).toEqual([expect.stringContaining(message)]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+});
+
 describe("legacy WebChat channel config migrate", () => {
   it("removes retired WebChat channel config", () => {
     const raw = {

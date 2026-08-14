@@ -34,6 +34,13 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
   message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
+const GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE: LegacyConfigRule = {
+  path: ["gateway", "tailscale", "resetOnExit"],
+  message:
+    'gateway.tailscale.resetOnExit is retired because route cleanup cannot be ownership-safe. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "boolean",
+};
+
 const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
   path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
   message:
@@ -67,6 +74,27 @@ function escapeControlForLog(value: string): string {
 
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.tailscale.reset-on-exit-remove",
+    describe: "Remove the retired Tailscale route-cleanup preference",
+    legacyRules: [GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const tailscale = getRecord(gateway?.tailscale);
+      if (!gateway || !tailscale || !Object.hasOwn(tailscale, "resetOnExit")) {
+        return;
+      }
+      const cleanupWasEnabled = tailscale.resetOnExit === true;
+      delete tailscale.resetOnExit;
+      gateway.tailscale = tailscale;
+      raw.gateway = gateway;
+      changes.push(
+        cleanupWasEnabled
+          ? "Removed gateway.tailscale.resetOnExit; managed Tailscale routes now persist until the operator explicitly turns them off."
+          : "Removed retired gateway.tailscale.resetOnExit config.",
+      );
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.control-ui-device-auth-bypass->pairing-migration",
     describe: "Remove the retired Control UI device-auth bypass",

@@ -132,7 +132,7 @@ function extractServeGatewayUrls(raw: string, gatewayPort: number): string[] | n
   ].toSorted();
 }
 
-export type TailscaleServeGatewayInspection =
+type TailscaleServeGatewayInspection =
   | { status: "ok"; urls: string[] }
   | { status: "unavailable" }
   | { status: "invalid" };

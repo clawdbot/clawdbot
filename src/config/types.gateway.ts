@@ -254,8 +254,6 @@ export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 export type GatewayTailscaleConfig = {
   /** Tailscale exposure mode for the Gateway control UI. */
   mode?: GatewayTailscaleMode;
-  /** Legacy cleanup preference; `true` is rejected because CLI cleanup is not ownership-safe. */
-  resetOnExit?: boolean;
   /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
   serviceName?: string;
   /**

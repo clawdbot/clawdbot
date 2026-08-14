@@ -1058,8 +1058,8 @@ export function createGatewayCloseHandler(
           });
         }
       } finally {
-        // Persistent routes return to the stable port only after ordinary ingress
-        // stops accepting, even when a stuck transport makes shutdown fail.
+        // Cleanup clears process-local publication state only. Persistent Tailscale
+        // routes are operator-owned and must not be rewritten or removed here.
         if (params.tailscaleCleanup) {
           await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
         }

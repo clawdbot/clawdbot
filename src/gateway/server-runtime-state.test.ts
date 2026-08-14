@@ -15,8 +15,8 @@ const mocks = vi.hoisted(() => ({
       httpServer: { address: () => unknown };
       bindHost: string;
       port?: number;
-      ipv6Only?: boolean;
       retryEaddrinuse?: boolean;
+      serviceName?: string;
     }) => {},
   ),
   resolveGatewayListenHosts: vi.fn(async (_bindHost: string) => ["127.0.0.1"]),
@@ -69,9 +69,26 @@ async function requestPluginUpgrade(port: number, path: string): Promise<string>
 }
 
 describe("createGatewayRuntimeState", () => {
+  const mockEphemeralAddress = (params: {
+    httpServer: { address: () => unknown };
+    port?: number;
+    serviceName?: string;
+  }) => {
+    if (params.port !== 0) {
+      return;
+    }
+    vi.spyOn(params.httpServer, "address").mockReturnValue({
+      address: "127.0.0.1",
+      family: "IPv4",
+      port: params.serviceName === "Tailscale gateway ingress" ? 19_000 : 19_001,
+    });
+  };
+
   beforeEach(() => {
     mocks.listenGatewayHttpServer.mockReset();
-    mocks.listenGatewayHttpServer.mockResolvedValue(undefined);
+    mocks.listenGatewayHttpServer.mockImplementation(async (params) => {
+      mockEphemeralAddress(params);
+    });
     mocks.resolveGatewayListenHosts.mockReset();
     mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1"]);
     mocks.pluginsHttpModuleLoaded.mockClear();
@@ -392,8 +409,13 @@ describe("createGatewayRuntimeState", () => {
   it("claims managed Tailscale routing before ordinary ingress starts listening", async () => {
     const events: string[] = [];
     mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
-    mocks.listenGatewayHttpServer.mockImplementation(async ({ bindHost }) => {
-      events.push(bindHost === "::1" ? "private-listener" : "ordinary-listener");
+    mocks.listenGatewayHttpServer.mockImplementation(async (params) => {
+      mockEphemeralAddress(params);
+      events.push(
+        params.serviceName === "Tailscale gateway ingress"
+          ? "private-listener"
+          : "ordinary-listener",
+      );
     });
     const prepareManagedTailscaleIngress = vi.fn(async () => {
       events.push("tailscale-route");
@@ -406,18 +428,25 @@ describe("createGatewayRuntimeState", () => {
 
     await runtimeState.startListening();
 
-    expect(events).toEqual(["private-listener", "tailscale-route", "ordinary-listener"]);
-    expect(prepareManagedTailscaleIngress).toHaveBeenCalledWith({ host: "::1", port: 18789 });
+    expect(events).toEqual([
+      "private-listener",
+      "tailscale-route",
+      "ordinary-listener",
+      "ordinary-listener",
+    ]);
+    expect(prepareManagedTailscaleIngress).toHaveBeenCalledWith({
+      host: "127.0.0.1",
+      port: 19_000,
+    });
     expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        bindHost: "::1",
-        port: 18789,
-        ipv6Only: true,
+        bindHost: "127.0.0.1",
+        port: 0,
         retryEaddrinuse: false,
       }),
     );
-    expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1"]);
+    expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1", "::1"]);
   });
 
   it("leaves ordinary ingress closed when managed Tailscale routing fails", async () => {
@@ -434,13 +463,30 @@ describe("createGatewayRuntimeState", () => {
     expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
     expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
       expect.objectContaining({
-        bindHost: "::1",
-        port: 18789,
-        ipv6Only: true,
+        bindHost: "127.0.0.1",
+        port: 0,
         serviceName: "Tailscale gateway ingress",
       }),
     );
     expect(runtimeState.httpBindHosts).toEqual([]);
+  });
+
+  it("does not publish managed ingress when Tailscale mode is off", async () => {
+    const prepareManagedTailscaleIngress = vi.fn();
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+      tailscaleMode: "off",
+      prepareManagedTailscaleIngress,
+    });
+
+    await runtimeState.startListening();
+
+    expect(runtimeState.getTailscaleIngressEndpoint()).toBeUndefined();
+    expect(prepareManagedTailscaleIngress).not.toHaveBeenCalled();
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
+    );
   });
 
   it("starts the shared sandbox host on a dedicated adjacent-port origin", async () => {

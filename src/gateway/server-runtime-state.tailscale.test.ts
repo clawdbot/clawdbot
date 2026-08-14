@@ -93,7 +93,7 @@ describe("managed Tailscale gateway ingress", () => {
     const starting = runtime.startListening();
     await vi.waitFor(() => expect(prepareManagedTailscaleIngress).toHaveBeenCalledOnce());
 
-    expect(runtime.getTailscaleIngressEndpoint()).toMatchObject({ host: "::1" });
+    expect(runtime.getTailscaleIngressEndpoint()).toMatchObject({ host: "127.0.0.1" });
     expect(runtime.httpServer.listening).toBe(false);
 
     releaseRouteClaim();
@@ -113,7 +113,8 @@ describe("managed Tailscale gateway ingress", () => {
     if (!ordinaryAddress || typeof ordinaryAddress === "string" || !tailscaleAddress) {
       throw new Error("expected both gateway listeners");
     }
-    expect(tailscaleAddress.host).toBe("::1");
+    expect(tailscaleAddress.host).toBe("127.0.0.1");
+    expect(tailscaleAddress.port).not.toBe(ordinaryAddress.port);
 
     const headers = {
       "x-forwarded-for": "100.64.0.10",

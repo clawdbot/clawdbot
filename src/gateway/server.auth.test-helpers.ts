@@ -85,7 +85,7 @@ const openTailscaleWs = async (
   endpoint: GatewayTailscaleIngressEndpoint,
   headers?: Record<string, string>,
 ) => {
-  const ws = new WebSocket(`ws://[${endpoint.host}]:${endpoint.port}`, {
+  const ws = new WebSocket(`ws://${endpoint.host}:${endpoint.port}`, {
     headers: {
       "x-forwarded-for": "100.64.0.1",
       "x-forwarded-proto": "https",

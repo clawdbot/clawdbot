@@ -252,12 +252,12 @@ describe("tailscale helpers", () => {
   it.each([
     ["serve", enableTailscaleServe],
     ["funnel", enableTailscaleFunnel],
-  ] as const)("passes an explicit managed IPv6 backend to Tailscale %s", async (_mode, enable) => {
+  ] as const)("passes a numeric loopback backend to Tailscale %s", async (_mode, enable) => {
     const exec = vi.fn().mockResolvedValue({ stdout: "" });
 
-    await enable("http://[::1]:18789" as never, exec as never);
+    await enable(18789, exec as never);
 
-    expectExecCall(exec, 1, tailscaleBin, [_mode, "--bg", "--yes", "http://[::1]:18789"], {
+    expectExecCall(exec, 1, tailscaleBin, [_mode, "--bg", "--yes", "18789"], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });

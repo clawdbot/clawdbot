@@ -1,5 +1,5 @@
 // Commander registration for onboard setup flags and lazy onboard runtime execution.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
@@ -33,11 +33,18 @@ export function resolveInstallDaemonFlag(command: Command): boolean | undefined 
   return undefined;
 }
 
-export function resolveTailscaleResetOnExitFlag(command: Command): boolean | undefined {
-  if (command.getOptionValueSource("tailscaleResetOnExit") !== "cli") {
-    return undefined;
+export function validateTailscaleResetOnExitFlag(command: Command, runtime: RuntimeEnv): boolean {
+  if (
+    command.getOptionValueSource("tailscaleResetOnExit") === "cli" &&
+    command.getOptionValue("tailscaleResetOnExit") === true
+  ) {
+    runtime.error(
+      `--tailscale-reset-on-exit is retired because route cleanup cannot be ownership-safe. Run ${formatCliCommand("openclaw doctor --fix")} to remove the legacy setting; explicitly turn Tailscale Serve/Funnel off when needed.`,
+    );
+    runtime.exit(1);
+    return false;
   }
-  return Boolean(command.getOptionValue("tailscaleResetOnExit"));
+  return true;
 }
 
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
@@ -239,8 +246,8 @@ export function registerOnboardCommand(program: Command): void {
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
-    .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
-    .option("--no-tailscale-reset-on-exit", "Keep tailscale serve/funnel after exit")
+    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
+    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
@@ -351,8 +358,10 @@ export function registerOnboardCommand(program: Command): void {
       if (!validateOnboardAuthOptionValues(opts as Record<string, unknown>, defaultRuntime)) {
         return;
       }
+      if (!validateTailscaleResetOnExitFlag(commandRuntime, defaultRuntime)) {
+        return;
+      }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-      const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
       const gatewayPort = parseGatewayPortOption(opts.gatewayPort, "--gateway-port");
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
@@ -375,7 +384,6 @@ export function registerOnboardCommand(program: Command): void {
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
           tailscale: opts.tailscale as TailscaleMode | undefined,
-          tailscaleResetOnExit,
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,

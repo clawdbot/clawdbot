@@ -60,19 +60,19 @@ describe("mergeGatewayTailscaleConfig", () => {
   it("preserves explicit preserveFunnel overrides", () => {
     expect(
       mergeGatewayTailscaleConfig(
-        { mode: "serve", resetOnExit: false, preserveFunnel: false },
+        { mode: "serve", preserveFunnel: false },
         { preserveFunnel: true },
       ),
-    ).toEqual({ mode: "serve", resetOnExit: false, preserveFunnel: true });
+    ).toEqual({ mode: "serve", preserveFunnel: true });
   });
 
   it("preserves explicit serviceName overrides", () => {
     expect(
       mergeGatewayTailscaleConfig(
-        { mode: "serve", serviceName: "svc:old-openclaw", resetOnExit: false },
+        { mode: "serve", serviceName: "svc:old-openclaw" },
         { serviceName: "svc:openclaw" },
       ),
-    ).toEqual({ mode: "serve", serviceName: "svc:openclaw", resetOnExit: false });
+    ).toEqual({ mode: "serve", serviceName: "svc:openclaw" });
   });
 });
 

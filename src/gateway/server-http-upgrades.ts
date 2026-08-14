@@ -18,7 +18,14 @@ import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import { classifyWorkerGatewayPath } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
-import { resolveRequestClientIp } from "./net.js";
+import {
+  markGatewayIngressTransport,
+  prepareGatewayIngressAttribution,
+  PROXY_ATTRIBUTION_GUIDANCE,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
+  type GatewayIngressTransport,
+  type GatewayUnattributableProxyReporter,
+} from "./ingress-attribution.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   getCachedPluginGatewayAuthBypassPaths,
@@ -73,6 +80,25 @@ function writeUpgradeAuthFailure(
       [
         "HTTP/1.1 429 Too Many Requests",
         ...(retryAfterSeconds ? [`Retry-After: ${retryAfterSeconds}`] : []),
+        "Content-Type: application/json; charset=utf-8",
+        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
+        "Connection: close",
+        "",
+        body,
+      ].join("\r\n"),
+    );
+    return;
+  }
+  if (auth.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    const body = JSON.stringify({
+      error: {
+        message: `Proxy client attribution is required. ${PROXY_ATTRIBUTION_GUIDANCE}`,
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
+    socket.write(
+      [
+        "HTTP/1.1 403 Forbidden",
         "Content-Type: application/json; charset=utf-8",
         `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
         "Connection: close",
@@ -150,6 +176,7 @@ export function attachGatewayUpgradeHandler(opts: {
   wss: WebSocketServer;
   handlePluginUpgrade?: PluginHttpUpgradeHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
+  isPluginAuthenticatedRoute?: (pathContext: PluginRoutePathContext) => boolean;
   resolvePluginNodeCapabilityRoute?: ResolvePluginNodeCapabilityRoute;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
@@ -165,6 +192,8 @@ export function attachGatewayUpgradeHandler(opts: {
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  ingressTransport?: GatewayIngressTransport;
+  reportUnattributableProxy?: GatewayUnattributableProxyReporter;
 }) {
   const {
     httpServer,
@@ -182,15 +211,33 @@ export function attachGatewayUpgradeHandler(opts: {
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
+    markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), async () => {
       const configSnapshot = getRuntimeConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
-      const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      const ingressAttribution = prepareGatewayIngressAttribution({
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+      });
+      const requestClientIp =
+        ingressAttribution.kind === "unattributable-proxy"
+          ? ingressAttribution.remoteAddress
+          : ingressAttribution.clientIp;
       const originalRequestPath = URL.parse(req.url ?? "/", "http://localhost")?.pathname;
       const originalWorkerGatewayRoute = originalRequestPath
         ? classifyWorkerGatewayPath(originalRequestPath)
         : "outside";
+      if (
+        originalWorkerGatewayRoute !== "outside" &&
+        ingressAttribution.kind === "unattributable-proxy"
+      ) {
+        opts.reportUnattributableProxy?.(ingressAttribution);
+        writeUpgradeAuthFailure(socket, { ok: false, reason: ingressAttribution.reason });
+        socket.destroy();
+        return;
+      }
       if (originalWorkerGatewayRoute === "worker" && !workerIngressEnabled) {
         writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket ingress unavailable");
         socket.destroy();
@@ -258,6 +305,14 @@ export function attachGatewayUpgradeHandler(opts: {
         return;
       }
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
+      if (ingressAttribution.kind === "unattributable-proxy") {
+        opts.reportUnattributableProxy?.(ingressAttribution);
+        if (nodeCapability || !opts.isPluginAuthenticatedRoute?.(pathContext)) {
+          writeUpgradeAuthFailure(socket, { ok: false, reason: ingressAttribution.reason });
+          socket.destroy();
+          return;
+        }
+      }
       if (nodeCapability) {
         // Node-capability WebSocket upgrades authenticate before plugin upgrade dispatch so
         // plugin handlers never receive unauthorized scoped capability sockets.
@@ -323,6 +378,11 @@ export function attachGatewayUpgradeHandler(opts: {
         ) {
           return;
         }
+      }
+      if (ingressAttribution.kind === "unattributable-proxy") {
+        writeUpgradeAuthFailure(socket, { ok: false, reason: ingressAttribution.reason });
+        socket.destroy();
+        return;
       }
       if (requestPath === "/desktop/observe") {
         if (!opts.desktopSessionRegistry) {

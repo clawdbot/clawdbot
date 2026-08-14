@@ -1,6 +1,6 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 // Setup command registration: system-agent chat for configured systems, onboarding otherwise.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
@@ -20,7 +20,7 @@ import {
   pickOnboardAuthOptionValues,
   registerOnboardAuthOptions,
   resolveInstallDaemonFlag,
-  resolveTailscaleResetOnExitFlag,
+  validateTailscaleResetOnExitFlag,
   validateOnboardAuthOptionValues,
 } from "./register.onboard.js";
 
@@ -132,8 +132,10 @@ async function runOnboardingEntry(
   if (!validateOnboardAuthOptionValues(options, runtime)) {
     return;
   }
+  if (!validateTailscaleResetOnExitFlag(commandRuntime, runtime)) {
+    return;
+  }
   const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-  const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
   const gatewayPort = parseGatewayPortOption(options.gatewayPort, "--gateway-port");
   const { setupWizardCommand } = await import("../../commands/onboard.js");
   await setupWizardCommand(
@@ -156,7 +158,6 @@ async function runOnboardingEntry(
       gatewayTokenRefEnv: readStringValue(options.gatewayTokenRefEnv),
       gatewayPassword: readStringValue(options.gatewayPassword),
       tailscale: options.tailscale as TailscaleMode | undefined,
-      tailscaleResetOnExit,
       installDaemon,
       daemonRuntime: options.daemonRuntime as GatewayDaemonRuntime | undefined,
       skipChannels: Boolean(options.skipChannels),
@@ -243,8 +244,8 @@ export function registerSetupCommand(program: Command): void {
     )
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
-    .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
-    .option("--no-tailscale-reset-on-exit", "Keep tailscale serve/funnel after exit")
+    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
+    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")

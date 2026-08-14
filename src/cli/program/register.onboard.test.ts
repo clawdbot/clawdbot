@@ -133,7 +133,7 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard"]);
 
     expect(setupWizardOptions().installDaemon).toBeUndefined();
-    expect(setupWizardOptions().tailscaleResetOnExit).toBeUndefined();
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
@@ -182,14 +182,17 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().agentName).toBe("robby");
   });
 
-  it("forwards explicit --tailscale-reset-on-exit", async () => {
+  it("rejects retired --tailscale-reset-on-exit before onboarding", async () => {
     await runCli(["onboard", "--tailscale-reset-on-exit"]);
-    expect(setupWizardOptions().tailscaleResetOnExit).toBe(true);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("cannot be ownership-safe"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+  it("accepts retired --no-tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["onboard", "--no-tailscale-reset-on-exit"]);
-    expect(setupWizardOptions().tailscaleResetOnExit).toBe(false);
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("forwards remote seed flags to setup wizard options", async () => {

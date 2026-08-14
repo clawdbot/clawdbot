@@ -91,7 +91,6 @@ export const zh_CN = {
       remotePasswordMode: "你想如何提供这个 Gateway 密码？",
       remoteTokenMode: "你想如何提供这个 Gateway 令牌？",
       tailscaleExposure: "Tailscale 暴露方式",
-      tailscaleReset: "退出时重置 Tailscale serve/funnel？",
       tokenPlaceholder: "多机器或非 loopback 访问需要使用",
       tokenPrompt: "Gateway 令牌",
       tokenPromptGenerate: "Gateway 令牌（留空则生成）",

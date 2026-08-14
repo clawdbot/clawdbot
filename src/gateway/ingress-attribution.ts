@@ -16,7 +16,7 @@ export const PROXY_ATTRIBUTION_GUIDANCE =
 export type GatewayTailscaleIngressMode = "serve" | "funnel";
 
 export type GatewayTailscaleIngressEndpoint = {
-  host: "::1";
+  host: "127.0.0.1";
   port: number;
 };
 

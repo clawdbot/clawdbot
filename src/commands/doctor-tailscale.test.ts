@@ -43,7 +43,7 @@ describe("prepareTailscaleConfigMigration", () => {
         bind: "lan",
         port: 18789,
         auth: { mode: "token", token: "secret", allowTailscale: true },
-        tailscale: { mode: "off", resetOnExit: true, preserveFunnel: true },
+        tailscale: { mode: "off", preserveFunnel: true },
       },
     };
 
@@ -58,11 +58,10 @@ describe("prepareTailscaleConfigMigration", () => {
       bind: "loopback",
       port: 18789,
       auth: { mode: "token", token: "secret", allowTailscale: true },
-      tailscale: { mode: "serve", resetOnExit: false },
+      tailscale: { mode: "serve" },
     });
-    expect(result.changes).toHaveLength(2);
+    expect(result.changes).toHaveLength(1);
     expect(result.changes.join("\n")).toContain("managed Tailscale Serve ingress");
-    expect(result.changes.join("\n")).toContain("Disabled gateway.tailscale.resetOnExit");
     expect(result.warnings).toEqual([]);
     expect(cfg.gateway?.bind).toBe("lan");
   });
@@ -156,27 +155,5 @@ describe("prepareTailscaleConfigMigration", () => {
 
     expect(invalidResult.warnings.join("\n")).toContain("could not be parsed");
     expect(unavailableResult.warnings).toEqual([]);
-  });
-
-  it("disables unsafe managed-route cleanup without inspecting Tailscale state", async () => {
-    const runCommandWithTimeout = vi.fn();
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        tailscale: { mode: "funnel", resetOnExit: true },
-      },
-    };
-
-    const migration = await prepareTailscaleConfigMigration({ cfg, runCommandWithTimeout });
-
-    expect(migration.config.gateway?.tailscale).toEqual({
-      mode: "funnel",
-      resetOnExit: false,
-    });
-    expect(migration.changes).toEqual([
-      expect.stringContaining("Disabled gateway.tailscale.resetOnExit"),
-    ]);
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(cfg.gateway?.tailscale?.resetOnExit).toBe(true);
   });
 });

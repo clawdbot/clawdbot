@@ -138,7 +138,6 @@ export const GatewayConfigSchema = z
     tailscale: z
       .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
-        resetOnExit: z.boolean().optional(),
         serviceName: TailscaleServiceNameSchema.optional(),
         preserveFunnel: z.boolean().optional(),
       })

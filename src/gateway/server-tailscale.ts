@@ -14,7 +14,6 @@ import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
-  resetOnExit?: boolean;
   port: number;
   backend?: GatewayTailscaleIngressEndpoint;
   preserveFunnel?: boolean;
@@ -25,23 +24,16 @@ export async function startGatewayTailscaleExposure(params: {
   if (params.tailscaleMode === "off") {
     return null;
   }
-  // Each CLI `off` command reads fresh state before mutating it, so a prior
-  // ownership check cannot stop shutdown from deleting a replacement route.
-  if (params.resetOnExit) {
-    throw new Error(
-      "gateway.tailscale.resetOnExit=true is unsupported because Tailscale's CLI cannot atomically remove only this Gateway's route; run `openclaw doctor --fix` or set gateway.tailscale.resetOnExit=false before enabling Tailscale exposure",
-    );
-  }
   if (!params.backend) {
     throw new Error("Managed Tailscale ingress failed to start");
   }
-  const backendTarget = `http://[${params.backend.host}]:${params.backend.port}`;
+  const backendTarget = params.backend.port;
   const serviceName =
     params.tailscaleMode === "serve" ? params.serviceName?.trim() || undefined : undefined;
   const effectiveMode = params.tailscaleMode;
   let clearPublishedOrigin: (() => void) | undefined;
 
-  const applyRoute = async (target: string) => {
+  const applyRoute = async (target: number | string) => {
     if (params.tailscaleMode === "serve") {
       if (serviceName) {
         await enableTailscaleServe(target, undefined, serviceName);

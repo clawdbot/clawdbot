@@ -35,22 +35,7 @@ export async function prepareTailscaleConfigMigration(params: {
   env?: NodeJS.ProcessEnv;
   runCommandWithTimeout?: TailscaleStatusCommandRunner;
 }): Promise<DoctorTailscaleMigrationResult> {
-  let config = params.cfg;
-  const changes: string[] = [];
-  const configuredGateway = config.gateway;
-  if (configuredGateway?.tailscale?.resetOnExit === true) {
-    config = {
-      ...config,
-      gateway: {
-        ...configuredGateway,
-        tailscale: { ...configuredGateway.tailscale, resetOnExit: false },
-      },
-    };
-    changes.push(
-      "Disabled gateway.tailscale.resetOnExit because the Tailscale CLI cannot atomically remove only the route owned by the exiting Gateway.",
-    );
-  }
-
+  const config = params.cfg;
   const gateway = config.gateway;
   if (
     !gateway ||
@@ -58,7 +43,7 @@ export async function prepareTailscaleConfigMigration(params: {
     gateway.bind !== "lan" ||
     (gateway.tailscale?.mode ?? "off") !== "off"
   ) {
-    return result(config, changes);
+    return result(config);
   }
 
   const gatewayPort = resolveGatewayPort(config, params.env ?? process.env);
@@ -74,15 +59,19 @@ export async function prepareTailscaleConfigMigration(params: {
     runCommandWithTimeout,
   );
   if (inspection.status === "unavailable") {
-    return result(config, changes);
+    return result(config);
   }
   if (inspection.status === "invalid") {
-    return result(config, changes, [
-      "Tailscale Serve status could not be parsed, so legacy Serve configuration was not changed. Review `tailscale serve status --json`, then rerun Doctor.",
-    ]);
+    return result(
+      config,
+      [],
+      [
+        "Tailscale Serve status could not be parsed, so legacy Serve configuration was not changed. Review `tailscale serve status --json`, then rerun Doctor.",
+      ],
+    );
   }
   if (inspection.urls.length === 0) {
-    return result(config, changes);
+    return result(config);
   }
 
   // The managed startup command owns the device's default HTTPS root. Custom ports
@@ -93,9 +82,13 @@ export async function prepareTailscaleConfigMigration(params: {
     !gateway.tailscale?.serviceName &&
     gateway.auth?.mode !== "none";
   if (!migrationIsUnambiguous) {
-    return result(config, changes, [
-      `Legacy Tailscale Serve still targets Gateway port ${gatewayPort}, but its custom endpoint, Service, or disabled authentication cannot be migrated safely; configuration was not changed. Remove that route or configure gateway.bind="loopback" and gateway.tailscale.mode="serve" manually.`,
-    ]);
+    return result(
+      config,
+      [],
+      [
+        `Legacy Tailscale Serve still targets Gateway port ${gatewayPort}, but its custom endpoint, Service, or disabled authentication cannot be migrated safely; configuration was not changed. Remove that route or configure gateway.bind="loopback" and gateway.tailscale.mode="serve" manually.`,
+      ],
+    );
   }
 
   const { preserveFunnel: _preserveFunnel, ...tailscale } = gateway.tailscale ?? {};
@@ -109,7 +102,6 @@ export async function prepareTailscaleConfigMigration(params: {
       },
     },
     changes: [
-      ...changes,
       `Migrated legacy Tailscale Serve on port ${gatewayPort} to managed Tailscale Serve ingress (gateway.bind="loopback", gateway.tailscale.mode="serve"); restart the Gateway to claim the route.`,
     ],
     warnings: [],

@@ -45,15 +45,12 @@ export async function startGatewayServerCore(
   try {
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
-      // Off mode has always been a no-op in the exposure owner. Pass the cleanup
-      // preference through so the owner can reject unsupported publication safely.
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
             prepareManagedTailscaleIngress: async (backend) => {
               const { startGatewayTailscaleExposure } = await import("./server-tailscale.js");
               const cleanup = await startGatewayTailscaleExposure({
                 tailscaleMode: gatewayKernel.tailscaleMode,
-                resetOnExit: gatewayKernel.tailscaleConfig.resetOnExit ?? false,
                 serviceName: gatewayKernel.tailscaleConfig.serviceName,
                 preserveFunnel: gatewayKernel.tailscaleConfig.preserveFunnel ?? false,
                 port,
