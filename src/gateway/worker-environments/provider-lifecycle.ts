@@ -53,7 +53,7 @@ type WorkerProviderLifecycleOptions = {
   }) => Promise<WorkerSshIdentity>;
   resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
   providerCallTimeoutMs?: number;
-  tunnelManager?: WorkerTunnelManager;
+  tunnelManager?: Pick<WorkerTunnelManager, "stop">;
   credentialBroker: WorkerCredentialBroker;
   callBootstrap: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   callProvider: <T>(environmentId: string, run: () => Promise<T>, timeoutMs?: number) => Promise<T>;

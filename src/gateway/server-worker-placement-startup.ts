@@ -272,6 +272,32 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     });
     return worktree.path;
   };
+  const resolveNodeWorkspaceBinding = async (binding: {
+    environmentId: string;
+    ownerEpoch: number;
+    sessionId: string;
+  }) => {
+    const placement = params.placements.get(binding.sessionId);
+    if (
+      !placement ||
+      (placement.state !== "active" &&
+        placement.state !== "draining" &&
+        placement.state !== "reconciling") ||
+      placement.environmentId !== binding.environmentId ||
+      placement.activeOwnerEpoch !== binding.ownerEpoch
+    ) {
+      return undefined;
+    }
+    return {
+      localPath: await resolveWorkspacePath({
+        sessionId: placement.sessionId,
+        sessionKey: placement.sessionKey,
+        agentId: placement.agentId,
+      }),
+      manifestRef: placement.workspaceBaseManifestRef,
+      remoteWorkspaceDir: placement.remoteWorkspaceDir,
+    };
+  };
   const dispatchService = coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
       placements: params.placements,
@@ -675,6 +701,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     admissionProvider,
     diskSpace,
     placements: params.placements,
+    resolveNodeWorkspaceBinding,
     startRuntime,
   };
 }
