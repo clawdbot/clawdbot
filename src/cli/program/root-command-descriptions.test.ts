@@ -32,8 +32,6 @@ const JSON_NOT_APPLICABLE = {
       "backup sqlite",
       "database",
       "database ownership",
-      "delivery",
-      "delivery failures",
       "message",
       "message thread",
       "message emoji",

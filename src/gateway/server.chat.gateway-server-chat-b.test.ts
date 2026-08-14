@@ -124,6 +124,7 @@ function createChatVisionModelCatalogSnapshot(): Awaited<
   return {
     agentId: "main",
     agentDir: "/tmp/chat-attachment-vision-agent",
+    catalogComplete: false,
     workspaceDir: "/tmp/chat-attachment-vision-workspace",
     config: {},
     entries: [
@@ -1001,6 +1002,7 @@ describe("gateway server chat", () => {
           .mockResolvedValue({
             agentId: "main",
             agentDir: "/tmp/chat-history-agent",
+            catalogComplete: false,
             workspaceDir: "/tmp/chat-history-workspace",
             config,
             entries: catalog,
@@ -1216,6 +1218,7 @@ describe("gateway server chat", () => {
       loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
         agentId: "main",
         agentDir: "/tmp/chat-main-agent",
+        catalogComplete: false,
         workspaceDir: "/tmp/chat-main-workspace",
         config,
         entries: [{ id: "main-only", name: "Main only", provider: "test" }],
@@ -1567,6 +1570,7 @@ describe("gateway server chat", () => {
               .mockResolvedValue({
                 agentId: "work",
                 agentDir: "/tmp/chat-work-agent",
+                catalogComplete: false,
                 workspaceDir: "/tmp/chat-work-workspace",
                 config: persistedConfig,
                 ...catalogSnapshot,
@@ -1819,6 +1823,7 @@ describe("gateway server chat", () => {
             return {
               agentId: "work",
               agentDir: "/tmp/chat-work-agent",
+              catalogComplete: false,
               workspaceDir: "/tmp/chat-work-workspace",
               config,
               entries,

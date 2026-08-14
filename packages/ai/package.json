@@ -111,6 +111,7 @@
     "typebox": "1.3.6"
   },
   "devDependencies": {
+    "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   },
   "engines": {

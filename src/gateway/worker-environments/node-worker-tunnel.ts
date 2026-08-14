@@ -214,10 +214,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     );
   };
 
+  const isLiveEntry = (entry: NodeTunnelEntry): boolean =>
+    entries.get(entry.environmentId) === entry && !entry.abortController.signal.aborted;
+
   const isEnvironmentOwner = (entry: NodeTunnelEntry): boolean =>
-    hasDurableBinding(entry) &&
-    entries.get(entry.environmentId) === entry &&
-    !entry.abortController.signal.aborted;
+    hasDurableBinding(entry) && isLiveEntry(entry);
 
   const findNode = async (
     entry: NodeTunnelEntry,
@@ -367,7 +368,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         sessionId: entry.sessionId,
         generation: entry.ownerEpoch,
         localPath: restoredWorkspace.localPath,
-        isAuthorized: () => isEnvironmentOwner(entry as NodeTunnelEntry),
+        // The transfer service re-reads the durable environment and credential together.
+        // This closure fences the exact in-memory tunnel instance without duplicating that read.
+        isAuthorized: () => isLiveEntry(entry as NodeTunnelEntry),
         signal: entry.abortController.signal,
       });
       options.workspaceTransfer.revoke(entry.environmentId, prepared.token);
@@ -568,7 +571,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             sessionId: entry.sessionId,
             generation: entry.ownerEpoch,
             localPath: request.localPath,
-            isAuthorized: () => isEnvironmentOwner(entry as NodeTunnelEntry),
+            // Durable owner state is revalidated by the transfer service after every awaited I/O.
+            isAuthorized: () => isLiveEntry(entry as NodeTunnelEntry),
             signal: entry.abortController.signal,
           });
           try {

@@ -10,7 +10,12 @@ const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 import {
+  drainPendingSessionDeliveries,
+  recoverPendingSessionDeliveries,
+} from "./session-delivery-queue-recovery.js";
+import {
   deferSessionDelivery,
+  enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
   markSessionDeliveryAttemptStarted,
@@ -20,11 +25,6 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
-import {
-  drainPendingSessionDeliveries,
-  enqueueSessionDelivery,
-  recoverPendingSessionDeliveries,
-} from "./session-delivery-queue.js";
 
 describe("session-delivery queue recovery", () => {
   beforeEach(() => {

@@ -1273,6 +1273,8 @@ export const en: TranslationMap = {
     noCustomEntries: "No custom entries.",
     key: "Key",
     removeEntry: "Remove entry",
+    renameRedactedBlocked:
+      "This entry holds a stored secret. Add the new key with its value, then remove this one.",
     schemaUnavailable: "Schema unavailable.",
     unsupportedSchema: "Unsupported schema. Use Raw.",
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
@@ -1654,6 +1656,8 @@ export const en: TranslationMap = {
     applying: "Applying…",
     autoSaveSaving: "Saving…",
     autoSaveSaved: "Saved",
+    autoSavePaused: "Autosave paused after reconnect",
+    saveNow: "Save",
     autoSaveFailed: "Save failed",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
@@ -5409,6 +5413,7 @@ export const en: TranslationMap = {
     attachments: {
       attachedFile: "Attached file",
       readFailed: "Could not attach: {names}{more}",
+      tooLarge: "Too large to send: {names}{more}",
       showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",

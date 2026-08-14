@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * OpenAI Responses payload policy.
@@ -309,6 +310,23 @@ export function resolveOpenAIResponsesServerCompactionPlan(
       ? (parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
         resolveOpenAIResponsesCompactThreshold(model))
       : undefined,
+  };
+}
+
+/** Resolve the manual Responses compact-endpoint gate for one route. */
+export function resolveOpenAIResponsesCompactEndpointPlan(
+  model: OpenAIResponsesPayloadModel,
+  extraParams?: Record<string, unknown>,
+): { enabled: boolean } {
+  const configured = extraParams?.responsesCompactEndpoint;
+  const provider = typeof model.provider === "string" ? normalizeProviderId(model.provider) : "";
+  return {
+    enabled:
+      isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api)) &&
+      (configured === true ||
+        (configured !== false &&
+          (provider === "xai" || provider === "x-ai") &&
+          resolveBundledOpenAIResponsesEndpointClass(model.baseUrl) === "xai-native")),
   };
 }
 

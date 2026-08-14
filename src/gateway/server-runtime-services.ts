@@ -189,25 +189,20 @@ function startPendingOutboundDeliveryRecovery(params: {
   log: GatewayRuntimeServiceLogger;
 }): () => Promise<void> {
   let stopped = false;
-  let recoveryInFlight: Promise<void> | null = null;
-  let finalizationInFlight: Promise<void> | null = null;
-  let reconcileFailedDeliveries:
-    | typeof import("../infra/outbound/delivery-queue.js").reconcileOutboundFailedDeliveryFinalizations
-    | undefined;
+  let inFlight: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
   const recover = (startup: boolean): void => {
-    if (stopped || recoveryInFlight || isGatewayWorkAdmissionClosed()) {
+    if (stopped || inFlight || isGatewayWorkAdmissionClosed()) {
       return;
     }
     const recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
       if (stopped) {
         return;
       }
-      const deliveryQueue = await import("../infra/outbound/delivery-queue.js");
-      const { drainPendingDeliveriesCore, recoverPendingDeliveries } = deliveryQueue;
-      reconcileFailedDeliveries ??= deliveryQueue.reconcileOutboundFailedDeliveryFinalizations;
+      const { drainPendingDeliveriesCore, recoverPendingDeliveries } =
+        await import("../infra/outbound/delivery-queue-recovery.js");
       const { deliverOutboundPayloadsInternal } = await import("../infra/outbound/deliver.js");
       if (stopped) {
         return;
@@ -223,58 +218,26 @@ function startPendingOutboundDeliveryRecovery(params: {
       }
       // Startup migration runs once. Normal retries use fresh config so revoked
       // accounts cannot inherit the authority captured at gateway startup.
-      const cfg = getRuntimeConfig();
       await drainPendingDeliveriesCore({
         drainKey: "gateway:outbound",
         logLabel: "Outbound delivery retry",
-        cfg,
+        cfg: getRuntimeConfig(),
         log: logRecovery,
         deliver: deliverOutboundPayloadsInternal,
         selectEntry: () => ({ match: true, bypassBackoff: false }),
       });
     }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
     const settled: Promise<void> = recovery.finally(() => {
-      if (recoveryInFlight === settled) {
-        recoveryInFlight = null;
+      if (inFlight === settled) {
+        inFlight = null;
       }
     });
-    recoveryInFlight = settled;
-  };
-
-  const reconcileFailures = (): void => {
-    if (stopped || finalizationInFlight || isGatewayWorkAdmissionClosed()) {
-      return;
-    }
-    const finalization = runWithGatewayIndependentRootWorkAdmission(async () => {
-      const reconcile =
-        reconcileFailedDeliveries ??
-        (await import("../infra/outbound/delivery-queue.js"))
-          .reconcileOutboundFailedDeliveryFinalizations;
-      if (stopped) {
-        return;
-      }
-      logRecovery ??= params.log.child("delivery-recovery");
-      await reconcile({
-        cfg: getRuntimeConfig(),
-        log: logRecovery,
-      });
-    }).catch((err: unknown) =>
-      params.log.error(`Delivery failure finalization failed: ${String(err)}`),
-    );
-    const settled: Promise<void> = finalization.finally(() => {
-      if (finalizationInFlight === settled) {
-        finalizationInFlight = null;
-      }
-    });
-    finalizationInFlight = settled;
+    inFlight = settled;
   };
 
   // Match the queue's first backoff window without holding admission between
   // ticks; otherwise suspended/restarting gateways retain invisible work.
-  const retryTimer = setInterval(() => {
-    recover(false);
-    reconcileFailures();
-  }, computeBackoffMs(1));
+  const retryTimer = setInterval(() => recover(false), computeBackoffMs(1));
   retryTimer.unref?.();
   recover(true);
   return () => {
@@ -283,10 +246,8 @@ function startPendingOutboundDeliveryRecovery(params: {
     if (stopPromise) {
       return stopPromise;
     }
-    const activeWork = [recoveryInFlight, finalizationInFlight].filter(
-      (work): work is Promise<void> => work !== null,
-    );
-    if (activeWork.length === 0) {
+    const recovery = inFlight;
+    if (!recovery) {
       stopPromise = Promise.resolve();
       return stopPromise;
     }
@@ -296,13 +257,11 @@ function startPendingOutboundDeliveryRecovery(params: {
       );
     }, RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS);
     stillPendingTimer.unref?.();
-    // Provider dispatch and finalization are not generically cancellable. Keep
-    // their runtime alive until admitted work settles; the watchdog owns forced exit.
-    stopPromise = Promise.all(activeWork)
-      .then(() => undefined)
-      .finally(() => {
-        clearTimeout(stillPendingTimer);
-      });
+    // Provider dispatch is not generically cancellable. Keep its runtime alive
+    // until the admitted recovery settles; the process watchdog owns forced exit.
+    stopPromise = recovery.finally(() => {
+      clearTimeout(stillPendingTimer);
+    });
     return stopPromise;
   };
 }

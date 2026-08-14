@@ -523,7 +523,6 @@ src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/auth-choice.test.ts
 src/commands/backup-verify.test.ts
-src/commands/backup-verify.ts
 src/commands/channels.add.test.ts
 src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts

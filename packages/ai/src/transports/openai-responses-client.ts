@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
@@ -16,6 +17,10 @@ import {
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
+import {
+  claimResponsesCompactRequest,
+  type OpenAIResponsesCompactEndpointResult,
+} from "./openai-responses-compact-request.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
@@ -156,6 +161,47 @@ export function createOpenAIResponsesClient(
   });
 }
 
+async function postOpenAIResponsesCompaction(params: {
+  client: ReturnType<typeof createOpenAIResponsesClient>;
+  model: Model;
+  request: ReturnType<typeof buildOpenAIResponsesParams>;
+  options: OpenAIResponsesOptions | undefined;
+}): Promise<OpenAIResponsesCompactEndpointResult> {
+  const response = await params.client.post<unknown>("/responses/compact", {
+    ...buildOpenAISdkRequestOptions(params.model, params.options?.signal, {
+      timeoutMs: params.options?.timeoutMs,
+      maxRetries: params.options?.maxRetries,
+    }),
+    body: { model: params.request.model, input: params.request.input },
+  });
+  const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
+  const item = output[0];
+  const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
+  if (
+    !isRecord(response) ||
+    response.object !== "response.compaction" ||
+    output.length !== 1 ||
+    !isRecord(item) ||
+    item.type !== "compaction" ||
+    typeof item.encrypted_content !== "string" ||
+    item.encrypted_content.length === 0 ||
+    !usage ||
+    typeof usage.input_tokens !== "number" ||
+    typeof usage.output_tokens !== "number"
+  ) {
+    throw new Error("Responses compact endpoint did not return exactly one compaction item");
+  }
+  return {
+    item,
+    usage,
+    model: params.model,
+    replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {
+      authProfileId: params.options?.authProfileId,
+      sessionId: params.options?.sessionId,
+    }),
+  } as OpenAIResponsesCompactEndpointResult;
+}
+
 type ResponsesPricingOptions = Pick<
   NonNullable<Parameters<typeof processResponsesStream>[4]>,
   "serviceTier" | "applyServiceTierPricing"
@@ -191,6 +237,7 @@ type ResponsesTransportExecutorOptions = {
 function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
+    const compactRequest = claimResponsesCompactRequest(responsesOptions);
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
@@ -277,6 +324,25 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           return params;
         };
         const params = await buildRequest("checkpoint");
+        if (compactRequest) {
+          const compacted = await postOpenAIResponsesCompaction({
+            client,
+            model,
+            request: params,
+            options: responsesOptions,
+          });
+          output.usage.input = compacted.usage.input_tokens;
+          output.usage.output = compacted.usage.output_tokens;
+          output.usage.totalTokens = compacted.usage.input_tokens + compacted.usage.output_tokens;
+          compactRequest.resolve(compacted);
+          stream.push({
+            type: "done",
+            reason: output.stopReason as never,
+            message: output as never,
+          });
+          stream.end();
+          return;
+        }
         const sessionId = options?.sessionId;
         const httpContinuationEligible =
           config.httpContinuation &&
@@ -513,6 +579,17 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
+        if (compactRequest) {
+          compactRequest.reject(error);
+          Object.assign(output, projectProviderError(error, options?.signal));
+          stream.push({
+            type: "error",
+            reason: output.stopReason as never,
+            error: output as never,
+          });
+          stream.end();
+          return;
+        }
         if (error instanceof ResponsesStreamFailure && error.observation) {
           logResponsesFailedNoDetails(error.observation);
         }

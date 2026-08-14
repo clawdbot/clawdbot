@@ -166,7 +166,8 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   misses fall back to the ordinary pnpm-store cache, while hosted/fork/manual
   paths use only that store cache.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
-  and 64 on the GitHub backend, Windows at 3, and Android at 2.
+  and 96 with the GitHub or hybrid planner profile, Windows at 3, and Android
+  at 2.
 - Canonical PR Node tests use one precise changed-target job when possible;
   broad, deleted, unknown, or planner-failed changes fall back to the compact
   full-suite plan. Targeted plans retain the full built-artifact

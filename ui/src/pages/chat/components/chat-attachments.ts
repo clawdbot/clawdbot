@@ -26,6 +26,8 @@ const largePastedTextAttachments = new WeakSet<ChatAttachment>();
 const pastedTextPreviews = new WeakMap<ChatAttachment, string>();
 
 export type ChatAttachmentControlsProps = {
+  /** Decoded-size ceilings from hello policy; absent means no client-side cap. */
+  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments?: ChatAttachment[];
   disabled?: boolean;
   getAttachments?: () => ChatAttachment[];
@@ -290,8 +292,35 @@ function readAttachmentFile(
   });
 }
 
-async function appendAttachmentFiles(files: readonly File[], props: ChatAttachmentControlsProps) {
-  if (!props.onAttachmentsChange || files.length === 0) {
+async function appendAttachmentFiles(
+  candidates: readonly File[],
+  props: ChatAttachmentControlsProps,
+) {
+  if (!props.onAttachmentsChange || candidates.length === 0) {
+    return;
+  }
+  // Enforce the hello-advertised decoded-size ceilings up front: an oversized
+  // base64 frame would exceed the gateway's WS payload cap and hard-drop the
+  // whole connection (1009) for every pane, so it must never start encoding.
+  const limits = props.attachmentLimits;
+  const fileLimit = (file: File) =>
+    file.type.startsWith("image/") ? limits?.maxImageBytes : limits?.maxBytes;
+  const oversized = limits
+    ? candidates.filter((file) => file.size > (fileLimit(file) ?? Infinity))
+    : [];
+  if (oversized.length > 0) {
+    showToast({
+      message: t("chat.attachments.tooLarge", {
+        names: oversized
+          .slice(0, 3)
+          .map((file) => file.name)
+          .join(", "),
+        more: oversized.length > 3 ? ` +${oversized.length - 3}` : "",
+      }),
+    });
+  }
+  const files = limits ? candidates.filter((file) => !oversized.includes(file)) : [...candidates];
+  if (files.length === 0) {
     return;
   }
   props.onPendingReadsChange?.(1);

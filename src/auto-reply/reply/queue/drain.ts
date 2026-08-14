@@ -5,6 +5,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import {
+  combineChannelAdmissionEvidence,
+  compareChannelAdmissionParticipants,
+} from "../../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
@@ -163,23 +167,52 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+function hasVerifiedAdmissionParticipant(run: FollowupRun): boolean {
+  return compareChannelAdmissionParticipants([run.channelAdmissionEvidence]) === "same";
+}
+
+function resolveFollowupAuthorizationKey(run: FollowupRun): string {
+  const execution = run.run;
   return JSON.stringify([
-    run.senderId ?? "",
-    JSON.stringify(run.channelContext ?? null),
-    stableStringify(run.conversationToolPolicy ?? null),
-    run.senderE164 ?? "",
-    run.senderIsOwner === true,
-    run.execOverrides?.host ?? "",
-    run.execOverrides?.security ?? "",
-    run.execOverrides?.ask ?? "",
-    run.execOverrides?.node ?? "",
-    run.execOverrides?.nodeCwd ?? "",
-    run.bashElevated?.enabled === true,
-    run.bashElevated?.allowed === true,
-    run.bashElevated?.defaultLevel ?? "",
-    run.approvalReviewerDeviceId ?? "",
+    execution.senderId ?? "",
+    JSON.stringify(execution.channelContext ?? null),
+    stableStringify(execution.conversationToolPolicy ?? null),
+    execution.senderE164 ?? "",
+    execution.senderIsOwner === true,
+    execution.execOverrides?.host ?? "",
+    execution.execOverrides?.security ?? "",
+    execution.execOverrides?.ask ?? "",
+    execution.execOverrides?.node ?? "",
+    execution.execOverrides?.nodeCwd ?? "",
+    execution.bashElevated?.enabled === true,
+    execution.bashElevated?.allowed === true,
+    execution.bashElevated?.defaultLevel ?? "",
+    execution.approvalReviewerDeviceId ?? "",
   ]);
+}
+
+function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun["run"]) {
+  const participantComparison = compareChannelAdmissionParticipants(
+    items.map((item) => item.channelAdmissionEvidence),
+  );
+  if (
+    participantComparison === "same" ||
+    !items.every((item) => hasVerifiedAdmissionParticipant(item))
+  ) {
+    return source;
+  }
+  // Mixed or unverifiable people share no downstream sender authority. The
+  // opaque admission aggregate records unknown identity at the run boundary.
+  return {
+    ...source,
+    senderId: undefined,
+    senderName: undefined,
+    senderUsername: undefined,
+    senderE164: undefined,
+    senderIsOwner: false,
+    traceAuthorized: false,
+    ownerNumbers: [],
+  };
 }
 
 export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
@@ -196,7 +229,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
-    resolveFollowupAuthorizationKey(execution),
+    resolveFollowupAuthorizationKey(run),
     run.turnAdoptionLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
     execution.provider,
@@ -331,6 +364,9 @@ type FollowupRuntimeMetadata = Pick<
   | "currentInboundAudio"
   | "currentInboundContext"
   | "explicitSkillSelections"
+  | "channelAdmissionEvidence"
+  | "toolsAllow"
+  | "disableTools"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -561,6 +597,9 @@ function collectRuntimeMetadata(
   abortSignal?: AbortSignal,
 ): FollowupRuntimeMetadata {
   const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
+  // Delivery-key equality proves every source has the same turn authority.
+  // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
+  const authoritySource = items.at(-1);
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const admissionWaitCallbacks = new Set(
     items.flatMap((item) =>
@@ -580,6 +619,11 @@ function collectRuntimeMetadata(
     currentInboundContext: collectCurrentInboundContext(items),
     explicitSkillSelections:
       explicitSkillSelections.length > 0 ? explicitSkillSelections : undefined,
+    channelAdmissionEvidence: combineChannelAdmissionEvidence(
+      items.map((item) => item.channelAdmissionEvidence),
+    ),
+    toolsAllow: authoritySource?.toolsAllow,
+    disableTools: authoritySource?.disableTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -937,7 +981,12 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
     explicitSkillSelections: source.explicitSkillSelections,
+    toolsAllow: source.toolsAllow,
+    disableTools: source.disableTools,
+    images: source.images,
+    imageOrder: source.imageOrder,
     media: source.media,
+    channelAdmissionEvidence: source.channelAdmissionEvidence,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
@@ -1010,11 +1059,14 @@ async function runSyntheticOverflowSummary(params: {
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
     userTurnTranscriptRecorder,
-    run: params.source.run,
+    run: resolveCollectedRun(params.sources, params.source.run),
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
     onReplyAdmissionWaitChange: runtimeMetadata.onReplyAdmissionWaitChange,
     explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
+    channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
+    toolsAllow: runtimeMetadata.toolsAllow,
+    disableTools: runtimeMetadata.disableTools,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {
@@ -1295,7 +1347,9 @@ export function scheduleFollowupDrain(
             }
             assertSingleAdmissionOwner(activeGroupItems);
             const groupSource = activeGroupItems.at(-1);
-            const run = groupSource?.run ?? queue.lastRun;
+            const run = groupSource
+              ? resolveCollectedRun(activeGroupItems, groupSource.run)
+              : queue.lastRun;
             if (!run) {
               break;
             }

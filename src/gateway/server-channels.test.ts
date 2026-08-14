@@ -225,7 +225,12 @@ function firstStartAccountContext(
 
 function installTestRegistry(
   ...plugins: Array<
-    ChannelPlugin<TestAccount> | { plugin: ChannelPlugin<TestAccount>; origin: string }
+    | ChannelPlugin<TestAccount>
+    | {
+        plugin: ChannelPlugin<TestAccount>;
+        origin: string;
+        resolveChannelRuntime?: () => PluginRuntime["channel"];
+      }
   >
 ) {
   const registry = createEmptyPluginRegistry();
@@ -234,9 +239,12 @@ function installTestRegistry(
     registry.channels.push({
       pluginId: plugin.id,
       ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
+      ...(typeof candidate === "object" && "resolveChannelRuntime" in candidate
+        ? { resolveChannelRuntime: candidate.resolveChannelRuntime }
+        : {}),
       source: "test",
       plugin,
-    });
+    } as PluginRegistry["channels"][number]);
   }
   setActivePluginRegistry(registry);
 }
@@ -2362,6 +2370,35 @@ describe("server-channels auto restart", () => {
     expect(typeof (ctx?.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound.run).toBe(
       "function",
     );
+  });
+
+  it("keeps the active registration runtime after an inactive prepared load", async () => {
+    const activeRuntime = {
+      ...createRuntimeChannel(),
+      marker: "active-registration",
+    } as PluginRuntime["channel"] & { marker: string };
+    const inactivePreparedRuntime = {
+      ...createRuntimeChannel(),
+      marker: "inactive-prepared",
+    } as PluginRuntime["channel"] & { marker: string };
+    const resolveChannelRuntime = vi.fn(() => inactivePreparedRuntime);
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
+
+    installTestRegistry({
+      plugin: createTestPlugin({ startAccount }),
+      origin: "bundled",
+      resolveChannelRuntime: () => activeRuntime,
+    });
+    const manager = createManager({ resolveChannelRuntime });
+
+    await manager.startChannels();
+
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+    const ctx = firstStartAccountContext(startAccount);
+    expect((ctx.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
+      "active-registration",
+    );
+    expect(ctx.channelRuntime).not.toBe(activeRuntime);
   });
 
   it("keeps the full runtime path for non-bundled channels", async () => {

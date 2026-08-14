@@ -441,6 +441,44 @@ describe("handleCompactCommand", () => {
     );
   });
 
+  it("keeps the selected agent when compacting an ambiguous global session", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    resolveSessionAgentIdMock.mockReturnValue("marie-clawndo");
+    const cfg = {
+      agents: {
+        entries: {
+          main: {},
+          "marie-clawndo": {},
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", cfg),
+        agentId: "marie-clawndo",
+        sessionKey: "global",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "global",
+      config: cfg,
+      agentId: "marie-clawndo",
+    });
+    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget).toMatchObject({
+      agentId: "marie-clawndo",
+    });
+  });
+
   it("uses the resolved command store for compaction", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
@@ -709,6 +747,33 @@ describe("handleCompactCommand", () => {
 
     expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
     expect(result?.reply?.text).toContain("Compaction skipped");
+  });
+
+  it("reports server-side compaction with before and after tokens", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "server-endpoint",
+      result: {
+        kind: "server-endpoint",
+        tokensBefore: 8_614,
+        tokensAfter: 736,
+      },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: { sessionId: "server-session", updatedAt: Date.now() },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Server-side compaction (8614 → 736)");
+    expect(requireIncrementCompactionCountCall().compactionKind).toBe("server-endpoint");
   });
 
   it.each([

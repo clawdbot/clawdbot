@@ -1,4 +1,7 @@
-import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { WhatsAppIdentity } from "../identity.js";
 import type { DeprecatedWebInboundAdmissionTopLevelFields } from "./admission-types.js";
@@ -76,6 +79,7 @@ type AdmittedWhatsAppInboundMessage<T extends WhatsAppInboundAdmissionCarrier> =
  * publishing raw allowlist material or session-dependent post-admission state.
  */
 export type WhatsAppInboundAdmission = {
+  channelIngress?: ResolvedChannelMessageIngress;
   accountId: string;
   isSelfChat: boolean;
   account: {
@@ -101,6 +105,11 @@ export type WhatsAppInboundAdmission = {
   activationAccess: WhatsAppInboundActivationAccess;
 };
 
+type WhatsAppIngressResolver = (
+  contextBinding: ChannelIngressContextBinding,
+) => Promise<ResolvedChannelMessageIngress>;
+const ingressResolverByAdmission = new WeakMap<WhatsAppInboundAdmission, WhatsAppIngressResolver>();
+
 function copyAccount(
   account: WhatsAppInboundAdmissionPolicy["account"],
 ): WhatsAppInboundAdmission["account"] {
@@ -124,11 +133,14 @@ function copyAccount(
 export function buildWhatsAppInboundAdmission(params: {
   policy: WhatsAppInboundAdmissionPolicy;
   access: WhatsAppInboundAdmissionAccess;
+  channelIngress?: ResolvedChannelMessageIngress;
+  resolveChannelIngress?: WhatsAppIngressResolver;
   isGroup: boolean;
   conversationId: string;
   senderId: string;
 }): WhatsAppInboundAdmission {
-  return {
+  const admission: WhatsAppInboundAdmission = {
+    channelIngress: params.channelIngress,
     accountId: params.policy.account.accountId,
     isSelfChat: params.policy.isSelfChat,
     account: copyAccount(params.policy.account),
@@ -166,6 +178,17 @@ export function buildWhatsAppInboundAdmission(params: {
       reasonCode: params.access.activationAccess.reasonCode,
     },
   };
+  if (params.resolveChannelIngress) {
+    ingressResolverByAdmission.set(admission, params.resolveChannelIngress);
+  }
+  return admission;
+}
+
+export async function resolveWhatsAppAdmissionChannelIngress(
+  admission: WhatsAppInboundAdmission,
+  contextBinding: ChannelIngressContextBinding,
+): Promise<ResolvedChannelMessageIngress | undefined> {
+  return await ingressResolverByAdmission.get(admission)?.(contextBinding);
 }
 
 export function buildDeprecatedFlatWhatsAppInboundAdmission(

@@ -644,11 +644,26 @@ export async function buildTelegramInboundContextPayload(params: {
         ? groupHistoryPromptEntries
         : undefined
       : undefined;
+  const messageId = options?.messageIdOverride ?? String(msg.message_id);
+  const ingressContextBinding = Object.freeze({
+    agentId: route.agentId,
+    sessionKey: route.sessionKey,
+    messageId,
+    inboundEventKind,
+  });
+  const channelIngress = options?.channelIngressResolvers
+    ? await Promise.all(
+        options.channelIngressResolvers.map((resolveChannelIngress) =>
+          resolveChannelIngress(ingressContextBinding),
+        ),
+      )
+    : undefined;
   const ctxPayload = await sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
+    channelIngress,
     resolveSupplementalMedia: true,
     accountId: route.accountId,
-    messageId: options?.messageIdOverride ?? String(msg.message_id),
+    messageId,
     timestamp: msg.date ? msg.date * 1000 : undefined,
     from: telegramFrom,
     sender: {

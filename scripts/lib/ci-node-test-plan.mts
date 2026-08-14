@@ -168,14 +168,15 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // The group hints below are loaded-fleet CI walls. Three-way striping plus a
 // Blacksmith keeps the proven 200s/276s admission caps and 28-worker ceiling.
 // Standard 4-core GitHub runners use direct hosted wall hints below. These
-// budgets are the hosted-hint equivalent of 60/85-second admission targets,
-// leaving setup inside a roughly 220-second lane.
+// budgets target roughly 160 seconds of predicted body work, leaving the
+// measured ~70-second setup overhead inside a roughly 230-second lane.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 120;
-const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 124;
+const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 90;
+const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 95;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 210;
+const COMPACT_GITHUB_NODE_TEST_JOB_CAP = 96;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 5;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
@@ -2216,6 +2217,15 @@ function createCompactNodeTestShardBundles(
         predictedSeconds: bin.weight,
       });
     }
+  }
+
+  if (
+    usesGithubRunnerProfile(options.runnerBackend) &&
+    compactJobs.length > COMPACT_GITHUB_NODE_TEST_JOB_CAP
+  ) {
+    throw new Error(
+      `compact GitHub node test plan exceeds ${COMPACT_GITHUB_NODE_TEST_JOB_CAP} jobs`,
+    );
   }
 
   return compactJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));

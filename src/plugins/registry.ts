@@ -50,6 +50,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const rollbackPluginGlobalSideEffects = (pluginId: string, record?: RegistryPluginRecord) => {
     deactivatePluginSideEffectGuards(pluginId);
+    runtimeResolver.revokePluginRuntimeRecord(pluginId, record);
     const schedulerRecords = state.registry.sessionSchedulerJobs.filter(
       (r) => r.pluginId === pluginId,
     );
