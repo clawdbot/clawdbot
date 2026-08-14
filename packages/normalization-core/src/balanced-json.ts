@@ -19,14 +19,11 @@ export function extractBalancedJsonPrefix(
   opts: { openers?: readonly JsonOpeningDelimiter[] } = {},
 ): BalancedJsonFragment | null {
   const openers = opts.openers ?? (["{", "["] as const);
-  let start = 0;
-  while (start < raw.length && !isJsonOpeningDelimiter(raw[start], openers)) {
-    start += 1;
-  }
   const stack: JsonOpeningDelimiter[] = [];
+  let start = -1;
   let inString = false;
   let escaped = false;
-  for (let index = start; index < raw.length; index += 1) {
+  for (let index = 0; index < raw.length; index += 1) {
     const char = raw[index];
     if (inString) {
       if (escaped) {
@@ -36,9 +33,22 @@ export function extractBalancedJsonPrefix(
       } else if (char === '"') {
         inString = false;
       }
-    } else if (char === '"') {
+      continue;
+    }
+    if (char === '"') {
+      // Quoted prose before the JSON value is not itself JSON, so a
+      // delimiter inside it must not be mistaken for the real start (#122353).
       inString = true;
-    } else if (isJsonOpeningDelimiter(char, openers)) {
+      continue;
+    }
+    if (start === -1) {
+      if (isJsonOpeningDelimiter(char, openers)) {
+        start = index;
+        stack.push(char);
+      }
+      continue;
+    }
+    if (isJsonOpeningDelimiter(char, openers)) {
       stack.push(char);
     } else if (stack.length > 0 && char === (stack.at(-1) === "{" ? "}" : "]")) {
       stack.pop();
