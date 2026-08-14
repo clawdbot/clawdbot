@@ -34,7 +34,7 @@ export type ResolvedDaytonaPluginConfig = {
   autoPauseInterval?: number;
   autoArchiveInterval?: number;
   autoDeleteInterval?: number;
-  networkBlockAll?: boolean;
+  networkBlockAll: boolean;
   networkAllowList?: string;
   domainAllowList?: string;
   remoteWorkspaceDir: string;
@@ -153,6 +153,7 @@ export function createDaytonaPluginConfigSchema(): OpenClawPluginConfigSchema {
 export function resolveDaytonaPluginConfig(value: unknown): ResolvedDaytonaPluginConfig {
   if (value === undefined) {
     return {
+      networkBlockAll: true,
       remoteWorkspaceDir: DEFAULT_REMOTE_WORKSPACE_DIR,
       remoteAgentWorkspaceDir: DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
       timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -242,7 +243,11 @@ export function resolveDaytonaPluginConfig(value: unknown): ResolvedDaytonaPlugi
     autoPauseInterval: cfg.autoPauseInterval,
     autoArchiveInterval: cfg.autoArchiveInterval,
     autoDeleteInterval: cfg.autoDeleteInterval,
-    networkBlockAll: cfg.networkBlockAll,
+    // Egress is denied by default, matching the Docker backend's no-network
+    // stance. Configured allow lists are Daytona's selective-egress mode, so
+    // they imply explicit egress instead of being silently disabled by an
+    // implied blockAll (verified live: blockAll blocks allow-listed hosts too).
+    networkBlockAll: cfg.networkBlockAll ?? !(cfg.networkAllowList || cfg.domainAllowList),
     networkAllowList: cfg.networkAllowList,
     domainAllowList: cfg.domainAllowList,
     remoteWorkspaceDir,

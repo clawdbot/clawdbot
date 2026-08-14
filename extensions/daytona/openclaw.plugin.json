@@ -288,17 +288,17 @@
     },
     "networkBlockAll": {
       "label": "Block Network",
-      "help": "Block all sandbox network egress at creation. Unset uses the Daytona default, which allows outbound network access.",
+      "help": "Block all sandbox network egress. Enabled by default, matching the Docker backend's no-network default; set false for open egress.",
       "advanced": true
     },
     "networkAllowList": {
       "label": "Network Allow List",
-      "help": "Comma-separated CIDR addresses the sandbox may reach when restricting egress.",
+      "help": "Comma-separated CIDR addresses the sandbox may reach. Setting this with Block Network unset enables selective egress.",
       "advanced": true
     },
     "domainAllowList": {
       "label": "Domain Allow List",
-      "help": "Comma-separated domains the sandbox may reach when restricting egress.",
+      "help": "Comma-separated domains the sandbox may reach. Setting this with Block Network unset enables selective egress.",
       "advanced": true
     },
     "remoteWorkspaceDir": {

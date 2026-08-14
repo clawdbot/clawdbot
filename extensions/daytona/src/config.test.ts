@@ -7,10 +7,33 @@ import { createDaytonaPluginConfigSchema, resolveDaytonaPluginConfig } from "./c
 describe("resolveDaytonaPluginConfig", () => {
   it("returns defaults when config is missing", () => {
     expect(resolveDaytonaPluginConfig(undefined)).toEqual({
+      networkBlockAll: true,
       remoteWorkspaceDir: "/home/daytona/workspace",
       remoteAgentWorkspaceDir: "/home/daytona/agent",
       timeoutMs: 120_000,
     });
+  });
+
+  it.each([
+    ["denies egress by default", {}, true],
+    [
+      "treats configured allow lists as explicit selective egress",
+      { networkAllowList: "10.0.0.0/24" },
+      false,
+    ],
+    [
+      "treats domain allow lists as explicit selective egress",
+      { domainAllowList: "example.com" },
+      false,
+    ],
+    ["keeps explicit egress opt-in", { networkBlockAll: false }, false],
+    [
+      "keeps explicit blockAll over allow lists",
+      { networkBlockAll: true, networkAllowList: "10.0.0.0/24" },
+      true,
+    ],
+  ])("%s", (_name, config, expected) => {
+    expect(resolveDaytonaPluginConfig(config).networkBlockAll).toBe(expected);
   });
 
   it("resolves configured values", () => {

@@ -312,7 +312,7 @@ Use `backend: "daytona"` to sandbox tools in [Daytona](https://www.daytona.io) c
 }
 ```
 
-Idle sandboxes auto-stop on the Daytona side (default 15 minutes) and restart on next use. Current limitations: sandbox browser is not supported, and `sandbox.docker.*` settings do not apply to this backend.
+New sandboxes block all network egress by default (matching the Docker no-network default); opt in with `networkBlockAll: false` or the allow-list options. Idle sandboxes auto-stop on the Daytona side (default 15 minutes) and restart on next use. Current limitations: sandbox browser is not supported, and `sandbox.docker.*` settings do not apply to this backend.
 
 For the full prerequisites, configuration reference, cost controls, and lifecycle details, see [Daytona](/gateway/daytona).
 

@@ -64,6 +64,12 @@ openclaw sandbox list
 openclaw sandbox explain
 ```
 
+New sandboxes block all network egress by default, matching the Docker
+backend's no-network stance. If your agents need to install packages or reach
+the network from inside the sandbox, opt in explicitly with
+`networkBlockAll: false`, or grant selective egress with `networkAllowList`
+or `domainAllowList`.
+
 ## How execution works
 
 - **Sandbox per scope**: one Daytona sandbox per sandbox scope (`agent`,
@@ -110,9 +116,9 @@ All settings live under `plugins.entries.daytona.config`:
 | `autoPauseInterval`       | integer (minutes) | disabled                  | Minutes of inactivity before Daytona pauses the sandbox (VM-based runners; pause preserves memory state). At most one of auto-stop and auto-pause may be non-zero.                                   |
 | `autoArchiveInterval`     | integer (minutes) | `7` days (Daytona)        | Minutes a stopped sandbox waits before archiving to cold storage. `0` uses the Daytona maximum.                                                                                                      |
 | `autoDeleteInterval`      | integer (minutes) | disabled                  | Minutes a sandbox may stay stopped before Daytona deletes it. `0` deletes immediately on stop.                                                                                                       |
-| `networkBlockAll`         | boolean           | `false` (egress allowed)  | Block all sandbox network egress at creation. Unset means the Daytona default, which allows outbound network access.                                                                                 |
-| `networkAllowList`        | string            | unset                     | Comma-separated CIDR addresses the sandbox may reach when restricting egress.                                                                                                                        |
-| `domainAllowList`         | string            | unset                     | Comma-separated domains the sandbox may reach when restricting egress.                                                                                                                               |
+| `networkBlockAll`         | boolean           | `true` (egress blocked)   | Block all sandbox network egress, matching the Docker backend's no-network default. Set `false` for open egress; configuring an allow list implies selective egress.                                 |
+| `networkAllowList`        | string            | unset                     | Comma-separated CIDR addresses the sandbox may reach. Setting this (with `networkBlockAll` unset) enables selective egress.                                                                          |
+| `domainAllowList`         | string            | unset                     | Comma-separated domains the sandbox may reach. Setting this (with `networkBlockAll` unset) enables selective egress.                                                                                 |
 | `remoteWorkspaceDir`      | string            | `/home/daytona/workspace` | Absolute path of the session workspace inside the sandbox.                                                                                                                                           |
 | `remoteAgentWorkspaceDir` | string            | `/home/daytona/agent`     | Absolute path mirroring the real agent workspace when `workspaceAccess` is not `none`.                                                                                                               |
 | `timeoutSeconds`          | number            | `120`                     | Timeout for Daytona API operations (create, upload, filesystem commands). Image-based creates automatically get a higher floor to cover image pulls; raise this when declarative builds need longer. |

@@ -52,8 +52,31 @@ function sleep(ms) {
   });
 }
 
-async function runPtyExec(sandbox, payload) {
+/**
+ * Register signal cleanup before any remote call so a timeout or cancellation
+ * SIGTERM during startup still kills the remote session or PTY. An accepted
+ * command must never keep running after this launcher reports it stopped.
+ */
+export function registerCleanupSignals(cleanup, options = {}) {
+  const onSignal = options.onSignal ?? ((signal, handler) => process.on(signal, handler));
+  const exit = options.exit ?? ((code) => process.exit(code));
+  const state = { interrupted: null };
+  for (const signal of SIGNAL_NUMBERS.keys()) {
+    onSignal(signal, () => {
+      state.interrupted = signal;
+      void cleanup()
+        .catch(() => {})
+        .finally(() => exit(signalExitCode(signal)));
+    });
+  }
+  return state;
+}
+
+async function runPtyExec(sandbox, payload, options = {}) {
   const ptyId = `openclaw-pty-${randomBytes(6).toString("hex")}`;
+  // Cleanup is armed before the PTY exists; killing an id that was never
+  // created fails harmlessly inside the catch.
+  const signalState = registerCleanupSignals(() => sandbox.process.killPtySession(ptyId), options);
   const ptyHandle = await sandbox.process.createPty({
     id: ptyId,
     cwd: payload.cwd,
@@ -65,6 +88,9 @@ async function runPtyExec(sandbox, payload) {
     },
   });
   await ptyHandle.waitForConnection();
+  if (signalState.interrupted) {
+    return signalExitCode(signalState.interrupted);
+  }
   // `exec` replaces the interactive shell so the PTY session ends with the
   // command and reports its exit code. The command stays single quoted, which
   // keeps embedded newlines inside one shell word for the line-based PTY.
@@ -77,14 +103,6 @@ async function runPtyExec(sandbox, payload) {
   process.stdout.on("resize", () => {
     void ptyHandle.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24).catch(() => {});
   });
-  for (const signal of SIGNAL_NUMBERS.keys()) {
-    process.on(signal, () => {
-      void sandbox.process
-        .killPtySession(ptyId)
-        .catch(() => {})
-        .finally(() => process.exit(signalExitCode(signal)));
-    });
-  }
 
   const result = await ptyHandle.wait();
   await ptyHandle.disconnect().catch(() => {});
@@ -95,32 +113,29 @@ async function runPtyExec(sandbox, payload) {
   return result.exitCode ?? 0;
 }
 
-async function runSessionExec(sandbox, payload) {
+async function runSessionExec(sandbox, payload, options = {}) {
   const sessionId = `openclaw-exec-${randomBytes(6).toString("hex")}`;
-  await sandbox.process.createSession(sessionId);
-  let interrupted = null;
   const deleteSession = async () => {
     await sandbox.process.deleteSession(sessionId).catch(() => {});
   };
+  // Cleanup is armed before the session exists; deleting the session kills a
+  // remote command that was accepted while this launcher was being torn down.
+  const signalState = registerCleanupSignals(deleteSession, options);
+  await sandbox.process.createSession(sessionId);
   try {
     const execution = await sandbox.process.executeSessionCommand(sessionId, {
       command: payload.command,
       runAsync: true,
       suppressInputEcho: true,
     });
+    if (signalState.interrupted) {
+      return signalExitCode(signalState.interrupted);
+    }
     const commandId = execution.cmdId;
     if (!commandId) {
       throw new Error("Daytona did not return a command id for the exec session");
     }
 
-    for (const signal of SIGNAL_NUMBERS.keys()) {
-      process.on(signal, () => {
-        interrupted = signal;
-        // Deleting the session kills the remote command; the poll loop then
-        // exits through the interrupted path.
-        void deleteSession().finally(() => process.exit(signalExitCode(signal)));
-      });
-    }
     process.stdin.on("data", (chunk) => {
       void sandbox.process
         .sendSessionCommandInput(sessionId, commandId, chunk.toString("utf8"))
@@ -148,8 +163,8 @@ async function runSessionExec(sandbox, payload) {
     let exitCode;
     let pollFailures = 0;
     for (;;) {
-      if (interrupted) {
-        return signalExitCode(interrupted);
+      if (signalState.interrupted) {
+        return signalExitCode(signalState.interrupted);
       }
       try {
         const command = await sandbox.process.getSessionCommand(sessionId, commandId);

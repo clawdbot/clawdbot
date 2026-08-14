@@ -13,6 +13,13 @@ const loadLauncher = async () =>
   (await import(pathToFileURL(launcherPath).href)) as {
     decodePayload: (argv: string[]) => unknown;
     shellEscape: (value: string) => string;
+    registerCleanupSignals: (
+      cleanup: () => Promise<unknown>,
+      options?: {
+        onSignal?: (signal: string, handler: () => void) => void;
+        exit?: (code: number) => void;
+      },
+    ) => { interrupted: string | null };
   };
 
 describe("daytona exec launcher", () => {
@@ -40,5 +47,41 @@ describe("daytona exec launcher", () => {
     const launcher = await loadLauncher();
     expect(launcher.shellEscape("plain")).toBe("'plain'");
     expect(launcher.shellEscape("with 'quote'")).toBe(`'with '"'"'quote'"'"''`);
+  });
+
+  it("runs remote cleanup before exiting when a signal arrives", async () => {
+    const launcher = await loadLauncher();
+    const events: string[] = [];
+    const handlers = new Map<string, () => void>();
+    let resolveCleanup: (() => void) | undefined;
+    const cleanup = () => {
+      events.push("cleanup-start");
+      return new Promise<void>((resolve) => {
+        resolveCleanup = () => {
+          events.push("cleanup-done");
+          resolve();
+        };
+      });
+    };
+
+    const state = launcher.registerCleanupSignals(cleanup, {
+      onSignal: (signal, handler) => handlers.set(signal, handler),
+      exit: (code) => events.push(`exit-${code}`),
+    });
+
+    // Handlers for every forwarded signal are armed synchronously, before any
+    // remote startup call could have been awaited.
+    expect([...handlers.keys()].toSorted()).toEqual(["SIGHUP", "SIGINT", "SIGTERM"]);
+    expect(state.interrupted).toBeNull();
+
+    handlers.get("SIGTERM")?.();
+    expect(state.interrupted).toBe("SIGTERM");
+    expect(events).toEqual(["cleanup-start"]);
+    resolveCleanup?.();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    // Exit happens only after the remote cleanup settled.
+    expect(events).toEqual(["cleanup-start", "cleanup-done", "exit-143"]);
   });
 });
