@@ -31,7 +31,7 @@ export function createSessionsYieldTool(opts?: {
     // tool must stay visible even when tool search compacts the catalog.
     catalogMode: "direct-only",
     description:
-      "End turn after subagent spawn; results arrive next message. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
+      "End turn after subagent spawn; results arrive next message. Only call this in the same turn you spawned a subagent — calling it without one parks the session with no automatic wake, so do the requested work or reply instead. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

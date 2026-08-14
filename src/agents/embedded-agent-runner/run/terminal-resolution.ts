@@ -597,17 +597,27 @@ function completeEmbeddedRun(
     resolveFinalAssistantVisibleText(input.attemptAssistant) !== undefined;
   const isTruncatedPartialReply =
     stopReason === "length" && !hasAttemptTerminalState(input.attempt) && hasPartialAssistantText;
-  // Existing visible payloads already avoid the silent-park symptom. The diagnostic
-  // fills only an otherwise empty yielded turn and must not duplicate visible output.
-  // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)
+  // A narrated plan ("I'll fix this now...") is visible output too, but it is not proof
+  // the turn actually did anything: the model can yield with no continuation source right
+  // after describing its intended next action. Append the diagnostic whenever there is no
+  // continuation evidence, even when other visible text already exists, so a parked turn
+  // never reads as "in progress" with no indication it will never resume on its own.
+  // Mutually exclusive with the truncation notice above: yieldDetected forces
+  // stopReason to "end_turn" (see the stopReason derivation), never "length".
+  const yieldDiagnosticPayload =
+    input.attempt.yieldDetected && !yieldHasContinuation ? [{ text: YIELD_DIAGNOSTIC_TEXT }] : [];
+  const trailingNoticePayloads = isTruncatedPartialReply
+    ? [{ text: TRUNCATED_REPLY_NOTICE_TEXT }]
+    : yieldDiagnosticPayload;
+  // Existing visible payloads already avoid the silent-park symptom; the notices above
+  // only fill in a signal a caller would otherwise have no way to see (a truncated
+  // partial reply, or an otherwise-empty yielded turn) and must not duplicate output.
   const terminalPayloads = input.emptyAssistantReplyIsSilent
     ? [{ text: SILENT_REPLY_TOKEN }]
     : input.payloadsForTerminalPath?.length
-      ? isTruncatedPartialReply
-        ? [...input.payloadsForTerminalPath, { text: TRUNCATED_REPLY_NOTICE_TEXT }]
-        : input.payloadsForTerminalPath
-      : input.attempt.yieldDetected && !yieldHasContinuation
-        ? [{ text: YIELD_DIAGNOSTIC_TEXT }]
+      ? [...input.payloadsForTerminalPath, ...trailingNoticePayloads]
+      : trailingNoticePayloads.length
+        ? trailingNoticePayloads
         : input.payloadsForTerminalPath;
   input.setTerminalLifecycleMeta({
     replayInvalid,
