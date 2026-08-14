@@ -325,6 +325,7 @@ export async function createPrivateWindowsPlanFile(
       (existsError as NodeJS.ErrnoException).code = "EEXIST";
       throw existsError;
     }
+    // oxlint-disable-next-line preserve-caught-error -- The raw error carries the -EncodedCommand argv; only the sanitized bounded diagnostic may escape.
     throw new Error(`Unable to create private Windows plan file: ${filePath}`, {
       cause: buildPowerShellFailureCause(error),
     });
