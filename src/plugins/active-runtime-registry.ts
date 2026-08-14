@@ -1,7 +1,7 @@
 // Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 
@@ -82,7 +82,7 @@ export function registryContainsRuntimePluginIds(
 
 export function registryMatchesManifestPluginIds(
   registry: PluginRegistry,
-  manifestPlugins: PluginManifestRegistry["plugins"] | undefined,
+  manifestPlugins: readonly PluginManifestRecord[] | undefined,
   pluginIds: readonly string[],
 ): boolean {
   if (!manifestPlugins) {
