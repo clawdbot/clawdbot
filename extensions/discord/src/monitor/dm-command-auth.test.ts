@@ -71,6 +71,35 @@ describe("resolveDiscordTextCommandAccess", () => {
     expect(result.commandAccess.authorized).toBe(false);
     expect(result.commandAccess.shouldBlockControlCommand).toBe(true);
   });
+
+  it("applies the PluralKit provenance downgrade to strict group commands", async () => {
+    const ordinary = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender,
+      ownerAllowFrom: ["discord:123"],
+      memberAccessConfigured: false,
+      memberAllowed: false,
+      allowNameMatching: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
+      minIdentifierAuthentication: "verified",
+    });
+    const pluralKit = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      ownerAllowFrom: ["pk:pk-member-1"],
+      memberAccessConfigured: false,
+      memberAllowed: false,
+      allowNameMatching: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
+      minIdentifierAuthentication: "verified",
+    });
+
+    expect(ordinary.commandAccess.authorized).toBe(true);
+    expect(pluralKit.commandAccess.authorized).toBe(false);
+    expect(pluralKit.commandAccess.shouldBlockControlCommand).toBe(true);
+  });
 });
 
 describe("resolveDiscordDmCommandAccess", () => {
