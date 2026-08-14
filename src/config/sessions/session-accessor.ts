@@ -211,6 +211,7 @@ export {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
+  inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,

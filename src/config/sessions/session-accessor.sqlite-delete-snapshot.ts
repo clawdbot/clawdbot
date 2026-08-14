@@ -25,7 +25,7 @@ export function readSessionStateDeleteSnapshot(
     database,
     db
       .selectFrom("session_windows")
-      .select(["transcript_updated_at", "updated_at"])
+      .select(["session_key", "transcript_updated_at", "updated_at"])
       .where("session_id", "=", sessionId),
   );
   const rewriteWatermark = executeSqliteQueryTakeFirstSync(
@@ -64,6 +64,7 @@ export function readSessionStateDeleteSnapshot(
     acpParentStreamEventCount: normalizeOptionalSqliteNumber(acpParentStream?.event_count) ?? 0,
     generation: rewriteWatermark?.generation ?? null,
     lastSeq: lastEvent?.seq ?? null,
+    sessionKey: window?.session_key ?? null,
     sessionUpdatedAt: window?.updated_at ?? null,
     trajectoryLastSeq: lastTrajectory?.seq ?? null,
     transcriptUpdatedAt: window?.transcript_updated_at ?? null,

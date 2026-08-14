@@ -5,6 +5,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import {
   materializeSessionStateDeletePlans,
   type SessionStateDeletePlan,
@@ -292,7 +293,7 @@ async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
       return committed;
     });
     emitCommittedSessionEntryRemovals(entryRemovals);
-    return archivedTranscripts;
+    return await publishSessionStateArchives(scope, archivedTranscripts);
   } catch (error) {
     getChildLogger({ subsystem: "session-sqlite" }).warn(
       "SQLite session maintenance cleanup failed",

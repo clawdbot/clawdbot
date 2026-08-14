@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,6 +18,7 @@ export type SessionStateDeleteSnapshot = {
   acpParentStreamEventCount: number;
   generation: string | null;
   lastSeq: number | null;
+  sessionKey: string | null;
   sessionUpdatedAt: number | null;
   trajectoryLastSeq: number | null;
   transcriptUpdatedAt: number | null;
@@ -34,7 +35,16 @@ export type SessionStateDeletePlan = {
 };
 
 export type MaterializedSessionStateDeletePlan = SessionStateDeletePlan & {
+  archive: MaterializedSessionTranscriptArchive | null;
   archivedTranscript: SessionLifecycleArchivedTranscript | null;
+};
+
+type MaterializedSessionTranscriptArchive = {
+  archiveName: string;
+  bytes: Uint8Array;
+  createdAt: number;
+  encoding: "identity" | "zstd";
+  sha256: string;
 };
 
 export type TranscriptArchiveWorkerPlan = Pick<
@@ -43,13 +53,31 @@ export type TranscriptArchiveWorkerPlan = Pick<
 >;
 
 export type TranscriptArchiveWorkerResult = {
-  archivedPath: string | null;
+  archive: MaterializedSessionTranscriptArchive | null;
   sessionId: string;
 };
 
 export type TranscriptArchiveWorkerMessage = {
   type: "done";
   results: TranscriptArchiveWorkerResult[];
+};
+
+export type TranscriptArchivePublishPlan = {
+  agentId: string;
+  archiveDirectory: string;
+  databasePath: string;
+  sessionId: string;
+};
+
+export type TranscriptArchivePublishResult = {
+  archivedPath?: string;
+  error?: string;
+  sessionId: string;
+};
+
+export type TranscriptArchivePublishWorkerMessage = {
+  type: "published";
+  results: TranscriptArchivePublishResult[];
 };
 
 export function sqliteSessionStateDeleteSnapshotsEqual(
@@ -60,6 +88,7 @@ export function sqliteSessionStateDeleteSnapshotsEqual(
     left.acpParentStreamEventCount === right.acpParentStreamEventCount &&
     left.generation === right.generation &&
     left.lastSeq === right.lastSeq &&
+    left.sessionKey === right.sessionKey &&
     left.sessionUpdatedAt === right.sessionUpdatedAt &&
     left.trajectoryLastSeq === right.trajectoryLastSeq &&
     left.transcriptUpdatedAt === right.transcriptUpdatedAt
@@ -81,6 +110,30 @@ function resolveSqliteTranscriptArchivePath(params: {
     throw new Error(`Cannot archive SQLite transcript outside ${archiveDirectory}`);
   }
   return archivePath;
+}
+
+export function encodeMaterializedSessionTranscriptArchive(params: {
+  archiveDirectory: string;
+  content: string;
+  reason: SessionArchiveReason;
+  sessionId: string;
+  nowMs?: number;
+}): MaterializedSessionTranscriptArchive {
+  const encoded = encodeSessionArchiveContent(params.content);
+  const createdAt = params.nowMs ?? Date.now();
+  const archivedPath = `${resolveSqliteTranscriptArchivePath({
+    archiveDirectory: params.archiveDirectory,
+    reason: params.reason,
+    sessionId: params.sessionId,
+    nowMs: createdAt,
+  })}${encoded.suffix}`;
+  return {
+    archiveName: path.basename(archivedPath),
+    bytes: encoded.bytes,
+    createdAt,
+    encoding: encoded.suffix ? "zstd" : "identity",
+    sha256: createHash("sha256").update(encoded.bytes).digest("hex"),
+  };
 }
 
 function findMatchingSqliteTranscriptArchive(params: {
@@ -181,6 +234,51 @@ function writeDurableFileExclusive(filePath: string, content: Buffer): void {
   }
 }
 
+export function hashSessionArchiveBytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** Publishes one exact canonical archive without directory scans or replacement. */
+export function publishEncodedSessionTranscriptArchive(params: {
+  archiveDirectory: string;
+  archiveName: string;
+  bytes: Uint8Array;
+  sha256: string;
+}): string {
+  const archiveDirectory = path.resolve(params.archiveDirectory);
+  const archivePath = path.resolve(archiveDirectory, params.archiveName);
+  if (
+    path.dirname(archivePath) !== archiveDirectory ||
+    path.basename(archivePath) !== params.archiveName
+  ) {
+    throw new Error(`Cannot publish SQLite transcript archive outside ${archiveDirectory}`);
+  }
+  fs.mkdirSync(archiveDirectory, { recursive: true, mode: 0o700 });
+  if (fs.existsSync(archivePath)) {
+    if (hashSessionArchiveBytes(fs.readFileSync(archivePath)) !== params.sha256) {
+      throw new Error(`SQLite transcript archive collision for ${params.archiveName}`);
+    }
+    return archivePath;
+  }
+
+  const tempPath = `${archivePath}.${randomUUID()}.tmp`;
+  writeDurableFileExclusive(tempPath, Buffer.from(params.bytes));
+  try {
+    fs.linkSync(tempPath, archivePath);
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== "EEXIST") {
+      throw error;
+    }
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+  syncDirectoryBestEffortSync(archiveDirectory);
+  if (hashSessionArchiveBytes(fs.readFileSync(archivePath)) !== params.sha256) {
+    throw new Error(`SQLite transcript archive verification failed for ${params.archiveName}`);
+  }
+  return archivePath;
+}
+
 function resolveSqliteTranscriptArchiveWorkerUrl(currentModuleUrl = import.meta.url): URL {
   const currentPath = fileURLToPath(currentModuleUrl);
   const normalized = currentPath.replaceAll(path.sep, "/");
@@ -206,9 +304,10 @@ function resolveSourceWorkerExecArgv(): string[] {
   return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
 }
 
-function spawnSqliteTranscriptArchiveWorker(
-  plans: readonly TranscriptArchiveWorkerPlan[],
-): Promise<TranscriptArchiveWorkerResult[]> {
+function spawnSqliteTranscriptArchiveWorker<Result>(params: {
+  expectedMessageType: "done" | "published";
+  workerData: object;
+}): Promise<Result[]> {
   const workerUrl = resolveSqliteTranscriptArchiveWorkerUrl();
   let worker: Worker;
   try {
@@ -216,7 +315,7 @@ function spawnSqliteTranscriptArchiveWorker(
       ? resolveSourceWorkerExecArgv()
       : undefined;
     worker = new Worker(workerUrl, {
-      workerData: { type: "sqlite-transcript-archive-v1", plans },
+      workerData: params.workerData,
       execArgv: sourceWorkerExecArgv,
     });
   } catch (error) {
@@ -224,11 +323,16 @@ function spawnSqliteTranscriptArchiveWorker(
   }
 
   return new Promise((resolve, reject) => {
-    let results: TranscriptArchiveWorkerResult[] | undefined;
+    let results: Result[] | undefined;
     let workerError: Error | undefined;
-    worker.once("message", (message: TranscriptArchiveWorkerMessage) => {
-      results = message.results;
-    });
+    worker.once(
+      "message",
+      (message: TranscriptArchiveWorkerMessage | TranscriptArchivePublishWorkerMessage) => {
+        if (message.type === params.expectedMessageType) {
+          results = message.results as Result[];
+        }
+      },
+    );
     worker.once("error", (error) => {
       // An uncaught Worker error is followed by exit. Wait for that event so
       // callers never race the Worker's SQLite/file handles on Windows.
@@ -263,40 +367,75 @@ function runSqliteTranscriptArchiveWorker(
 ): Promise<TranscriptArchiveWorkerResult[]> {
   return sqliteTranscriptArchiveWorkerQueue.enqueue(
     SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    () => spawnSqliteTranscriptArchiveWorker(plans),
+    () =>
+      spawnSqliteTranscriptArchiveWorker<TranscriptArchiveWorkerResult>({
+        expectedMessageType: "done",
+        workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
+      }),
   );
 }
 
-// Runs duplicate probing, archive write, rename, fsync, and readback outside
-// SQLite write transactions and off the gateway event loop. The lifecycle
-// Worker queue and per-call dedupe prevent concurrent whole-buffer spikes
-// within this path.
+export function runSqliteTranscriptArchivePublishWorker(
+  plans: readonly TranscriptArchivePublishPlan[],
+): Promise<TranscriptArchivePublishResult[]> {
+  return sqliteTranscriptArchiveWorkerQueue.enqueue(
+    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
+    () =>
+      spawnSqliteTranscriptArchiveWorker<TranscriptArchivePublishResult>({
+        expectedMessageType: "published",
+        workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
+      }),
+  );
+}
+
+// Reads and encodes one consistent generation outside SQLite write transactions
+// and off the gateway event loop. The lifecycle Worker queue and per-call
+// dedupe prevent concurrent whole-buffer spikes within this path.
 export async function materializeSessionStateDeletePlans(
   plans: readonly SessionStateDeletePlan[],
 ): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
   const archivePlans = deduped.filter((plan) => plan.archiveTranscript);
-  const workerResults =
-    archivePlans.length > 0 ? await runSqliteTranscriptArchiveWorker(archivePlans) : [];
+  const workerResults: TranscriptArchiveWorkerResult[] = [];
+  let materializedBytes = 0;
+  // Archive bytes must never accumulate for an unbounded cleanup batch. One
+  // generation crosses the Worker boundary at a time, then becomes transaction input.
+  for (const archivePlan of archivePlans) {
+    const [result] = await runSqliteTranscriptArchiveWorker([archivePlan]);
+    if (result) {
+      materializedBytes += result.archive?.bytes.byteLength ?? 0;
+      if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
+        throw new Error(
+          `SQLite transcript archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; retry with fewer sessions.`,
+        );
+      }
+      workerResults.push(result);
+    }
+  }
   const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
 
   return deduped.map((plan) => {
     if (!plan.archiveTranscript) {
-      return Object.assign({}, plan, { archivedTranscript: null });
+      return Object.assign({}, plan, { archive: null, archivedTranscript: null });
     }
     const result = resultBySessionId.get(plan.sessionId);
     if (!result) {
       throw new Error(`SQLite transcript archive worker omitted ${plan.sessionId}`);
     }
-    const archivedTranscript = result.archivedPath
+    const archivedTranscript = result.archive
       ? {
-          archivedPath: result.archivedPath,
+          sessionId: plan.sessionId,
+          archivedPath: path.join(plan.archiveDirectory, result.archive.archiveName),
           sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
         }
       : null;
-    return Object.assign({}, plan, { archivedTranscript });
+    return Object.assign({}, plan, { archive: result.archive, archivedTranscript });
   });
 }
+
+// Bulk cleanup plans retain encoded bytes until one atomic lifecycle commit.
+// Bound that retained input while still allowing exceptionally large single transcripts.
+const MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES = 256 * 1024 * 1024;
 
 // Multiple removed entries can point at one transcript session. If any owner
 // asked to keep an archive, the shared row gets exported once.

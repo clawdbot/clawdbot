@@ -16,6 +16,7 @@ import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   appendTranscriptMessage,
+  deleteSessionEntryLifecycle,
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
@@ -119,6 +120,92 @@ describe("SQLite historical session disk budget", () => {
     expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
     expect(fs.existsSync(oldArchive)).toBe(false);
     expect(sessionExists("archive-history")).toBe(true);
+  });
+
+  it("prunes the canonical archive row and its derived file before searchable history", async () => {
+    const archivedSessionId = "canonical-archive";
+    const archivedSessionKey = "agent:main:canonical-archive";
+    await replaceSessionEntry(
+      { sessionKey: archivedSessionKey, storePath },
+      { sessionId: archivedSessionId, updatedAt: 1 },
+    );
+    await appendTranscriptMessage(
+      { sessionId: archivedSessionId, sessionKey: archivedSessionKey, storePath },
+      { message: { role: "user", content: "canonical archive pressure" } },
+    );
+    const deleted = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: archivedSessionKey, storeKeys: [archivedSessionKey] },
+    });
+    const archivePath = deleted.archivedTranscripts[0]?.archivedPath;
+    expect(archivePath).toBeTruthy();
+
+    await createHistoricalTranscript({
+      content: "keep searchable history",
+      nextSessionId: "canonical-live",
+      sessionId: "canonical-history",
+      sessionKey: "agent:main:canonical-pressure",
+      updatedAt: 2,
+    });
+    settlePhysicalUsage();
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: {
+        maxDiskBytes: before.totalBytes - 1,
+        highWaterBytes: before.totalBytes - 1,
+      },
+    });
+
+    expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
+    expect(fs.existsSync(archivePath ?? "")).toBe(false);
+    expect(
+      database()
+        .db.prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
+        .get(archivedSessionId),
+    ).toBeUndefined();
+    expect(sessionExists("canonical-history")).toBe(true);
+  });
+
+  it("never prunes an unpublished canonical archive under disk pressure", async () => {
+    const sessionId = "pending-pressure";
+    const sessionKey = "agent:main:pending-pressure";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    await appendTranscriptMessage(
+      { sessionId, sessionKey, storePath },
+      { message: { role: "user", content: "sole crash-recovery copy" } },
+    );
+    const deleted = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    const pendingArchivePath = deleted.archivedTranscripts[0]?.archivedPath;
+    database()
+      .db.prepare("UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ?")
+      .run(sessionId);
+    settlePhysicalUsage();
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: {
+        maxDiskBytes: before.totalBytes - 1,
+        highWaterBytes: before.totalBytes - 1,
+      },
+    });
+
+    expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });
+    expect(
+      database()
+        .db.prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+        .get(sessionId),
+    ).toEqual({ published_at: null });
+    expect(fs.existsSync(pendingArchivePath ?? "")).toBe(true);
   });
 
   it("excludes entry, route, and admitted ids while evicting trajectory-only history", async () => {
