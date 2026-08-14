@@ -181,8 +181,9 @@ stated honestly (revision 1 undersold this):
   runner identity = host + workdir + repo).
 - **Persistent-machine lifecycle.** `destroy` = logical lease release.
   Provider `inspect` is tri-state against pairing + presence: _present_,
-  _dormant_ (paired but offline, within a dormancy ceiling — must NOT be
-  driven to `orphaned` by the reconcile sweep), _gone_ (unpaired or ceiling
+  _dormant_ (paired but offline, within the config-free 14-day dormancy
+  ceiling — must NOT be driven to `orphaned` by the reconcile sweep), _gone_
+  (unpaired or ceiling
   elapsed → normal orphan/reap path). A device-environment reaper keyed on
   unpair/dormancy — not on provider teardown proof — cleans rows,
   credentials, and staged refs. Unreferenced terminal environment rows retain

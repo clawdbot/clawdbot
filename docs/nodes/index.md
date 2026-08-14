@@ -449,7 +449,12 @@ If the device is offline before a turn is dispatched, the Gateway waits up to
 10 seconds and then returns a visible retry/reconnect error while keeping the
 session placement available for a later attempt. Gateway restart likewise
 preserves an idle device placement and reconnects its tunnel lazily on the next
-turn.
+turn. A paired node remains dormant for 14 days after its exact recorded
+disconnect; at that boundary its old worker environment is treated as gone and
+the session placement reconciles normally. Pairing itself remains, so a later
+reconnect can provision a fresh environment. Legacy pairings without exact node
+disconnect history are retained fail-safe rather than expired from unrelated
+device activity.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
