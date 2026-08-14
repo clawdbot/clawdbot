@@ -680,6 +680,34 @@ describe("cron controller", () => {
     });
   });
 
+  it("sends null delivery.to in cron.update to clear a persisted destination", async () => {
+    const job = createCronJob({
+      id: "job-clear-to",
+      name: "clear to",
+      delivery: { mode: "announce", channel: "telegram", to: "12345" },
+    });
+    const { submit } = createCronSubmitHarness(job.id, {
+      method: "cron.update",
+      jobs: [job],
+      form: {
+        name: "clear to",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        wakeMode: "next-heartbeat",
+        payloadText: "run",
+        deliveryMode: "announce",
+        deliveryTo: "   ",
+      },
+    });
+
+    const { call } = await submit();
+
+    expectRecordFields(requireRecord(requestPatch(call).delivery, "delivery"), {
+      mode: "announce",
+      to: null,
+    });
+  });
+
   it("maps a cron job into editable form fields", () => {
     const state = createState();
     const job = createCronJob({

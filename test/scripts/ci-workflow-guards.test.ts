@@ -3768,10 +3768,11 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(setupNodeStep.with).toMatchObject({
       "node-compile-cache": "true",
       "node-compile-cache-scope": "test",
+      "save-vitest-fs-cache":
+        "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && matrix.save_vitest_fs_cache && 'true' || 'false' }}",
       "vitest-fs-cache": "true",
     });
     expect(setupNodeStep.with).not.toHaveProperty("save-node-compile-cache");
-    expect(setupNodeStep.with).not.toHaveProperty("save-vitest-fs-cache");
     expect(setupNodeStep.with).not.toHaveProperty("runtime-cache-sticky-disk");
     expect(action.inputs).not.toHaveProperty("runtime-cache-sticky-disk");
     expect(action.inputs["vitest-fs-cache"].default).toBe("false");
@@ -3866,9 +3867,14 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
 
     expect(warmer.concurrency["cancel-in-progress"]).toBe(false);
     expect(warmer.concurrency.group).toBe("vitest-cache-warm");
-    expect(warmer.on.workflow_dispatch).toBeUndefined();
+    // hosted-mode cache recovery needs a maintainer-operated fallback when the
+    // scheduled seed is missing or stale.
+    expect(warmer.on).toHaveProperty("workflow_dispatch");
     expect(warmer.on.repository_dispatch.types).toEqual(["vitest-cache-warm"]);
     expect(warmer.jobs.warm.if).toContain("github.repository == 'openclaw/openclaw'");
+    expect(warmer.jobs.warm["runs-on"]).toBe(
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
+    );
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
     expect(warmerSource).toContain('cron: "17 8 * * *"');
@@ -3888,8 +3894,8 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       "use-actions-cache": "true",
     });
     expect(warmerSetup.with).not.toHaveProperty("dependency-cache");
-    // CI is restore-only, so no per-PR runtime cache family or close-time
-    // cleanup workflow exists. Actions cache LRU/TTL expires old warmers.
+    // No close-time cleanup workflow is needed; Actions cache LRU/TTL expires
+    // old hosted-writer and warmer generations.
     expect(existsSync(".github/workflows/pr-cache-cleanup.yml")).toBe(false);
     expect(seedStep.if).toBeUndefined();
     expect(warmStep.if).toBeUndefined();
@@ -3981,11 +3987,29 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     const lintMount = checkShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Mount extension boundary sticky disk",
     );
+    const boundaryCache = expectDefined(
+      additionalJob.steps.find(
+        (step: WorkflowStep) => step.name === "Cache extension package boundary artifacts",
+      ),
+      "extension package boundary cache",
+    );
+    const hostedLintCache = expectDefined(
+      checkShardJob.steps.find(
+        (step: WorkflowStep) =>
+          step.name === "Cache extension package boundary artifacts for hosted lint",
+      ),
+      "hosted lint extension package boundary cache",
+    );
     expect(boundaryMount.with.key).toBe("${{ github.repository }}-ext-boundary-v2");
     expect(lintMount.with.key).toBe(boundaryMount.with.key);
     for (const gate of [boundaryMount, lintMount]) {
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
+    expect(hostedLintCache.if).toBe(
+      "matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'",
+    );
+    expect(hostedLintCache.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
+    expect(hostedLintCache.with).toEqual(boundaryCache.with);
     // Single semantic writer: protected pushes commit explicitly (not
     // on-change/if-missing, whose allocated-byte heuristic can strand a stale
     // marker); PR clones and the lint consumer stay read-only.
@@ -4806,6 +4830,14 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+
+    const macosNodeSetup = workflow.jobs["macos-node"].steps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
+    expect(macosNodeSetup.with).toMatchObject({
+      "install-bun": "false",
+      "save-actions-cache": "true",
+    });
   });
 
   it("checks native and Node state schema versions in the macOS lane", () => {
@@ -5877,6 +5909,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const uiInstall = workflow.jobs["checks-ui"].steps.find(
       (step: { name?: string }) => step.name === "Install Playwright Chromium",
     );
+    const uiBrowserCache = workflow.jobs["checks-ui"].steps.find(
+      (step: { name?: string }) => step.name === "Cache Playwright Chromium",
+    );
     const uiTest = workflow.jobs["checks-ui"].steps.find(
       (step: { name?: string }) => step.name === "Test Control UI",
     );
@@ -5895,6 +5930,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Target does not provide a supported Playwright Chromium installer.",
     );
     expect(uiInstall.run).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+    const playwrightVersion = JSON.parse(readFileSync("package.json", "utf8")).devDependencies
+      .playwright;
+    expect(playwrightVersion).toBe(
+      JSON.parse(readFileSync("ui/package.json", "utf8")).devDependencies.playwright,
+    );
+    expect(uiBrowserCache).toMatchObject({
+      if: "needs.preflight.outputs.compatibility_target != 'true'",
+      uses: "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      with: {
+        key: "${{ runner.os }}-playwright-chromium-" + playwrightVersion,
+        path: "~/.cache/ms-playwright",
+      },
+    });
     expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
     expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000 --isolate");
     expect(uiTest.run).not.toContain("--retry");
@@ -6090,6 +6138,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "node --import tsx scripts/ensure-playwright-chromium.mts",
     );
     expect(chromiumInstall.run).toContain("node scripts/ensure-playwright-chromium.mjs");
+    const chromiumCache = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Cache Playwright Chromium"),
+      "Control UI E2E Chromium cache",
+    );
     const realGatewayChromiumInstall = expectDefined(
       uiE2eRealGateway.steps.find(
         (step: WorkflowStep) => step.name === "Install Playwright Chromium",
@@ -6097,6 +6149,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "real-Gateway Control UI E2E Chromium installation",
     );
     expect(realGatewayChromiumInstall).toEqual(chromiumInstall);
+    const realGatewayChromiumCache = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Cache Playwright Chromium",
+      ),
+      "real-Gateway Control UI E2E Chromium cache",
+    );
+    expect(realGatewayChromiumCache).toEqual(chromiumCache);
 
     const scenario = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),

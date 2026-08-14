@@ -1150,7 +1150,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                     preserveLastOnUpdate: Boolean(editingJob?.delivery?.channel),
                   })
                 : undefined,
-            to: form.deliveryTo.trim() || undefined,
+            to:
+              form.deliveryTo.trim() ||
+              (selectedDeliveryMode === "announce" && editingJob?.delivery?.to ? null : undefined),
             accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
             ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
