@@ -1,10 +1,7 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
-import {
-  listAgentIds,
-  resolveSystemAgentTargetAgentId,
-} from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
