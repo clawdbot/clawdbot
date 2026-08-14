@@ -58,33 +58,62 @@ export function redactedAllowlistDiagnostics(
 function mergeResolvedAllowlists(
   allowlists: readonly ResolvedIngressAllowlist[],
 ): ResolvedIngressAllowlist {
-  const matches = allowlists.map((allowlist) => allowlist.match);
+  const scopedAllowlists: ResolvedIngressAllowlist[] = [];
+  for (const [index, allowlist] of allowlists.entries()) {
+    const prefix = `source-${index + 1}:`;
+    const normalizedEntries = [];
+    for (const entry of allowlist.normalizedEntries) {
+      normalizedEntries.push({ ...entry, opaqueEntryId: `${prefix}${entry.opaqueEntryId}` });
+    }
+    const matchedPairs = [];
+    for (const pair of allowlist.match.matchedPairs ?? []) {
+      matchedPairs.push({ ...pair, opaqueEntryId: `${prefix}${pair.opaqueEntryId}` });
+    }
+    const matchedEntryIds = allowlist.matchedEntryIds.map((id) => `${prefix}${id}`);
+    scopedAllowlists.push({
+      ...allowlist,
+      normalizedEntries,
+      matchedEntryIds,
+      match: {
+        ...allowlist.match,
+        matchedEntryIds,
+        ...(matchedPairs.length > 0 ? { matchedPairs } : {}),
+      },
+    });
+  }
+  const matches = scopedAllowlists.map((allowlist) => allowlist.match);
   const matchedEntryIds = uniqueStrings(
-    allowlists.flatMap((allowlist) => allowlist.matchedEntryIds),
+    scopedAllowlists.flatMap((allowlist) => allowlist.matchedEntryIds),
   );
+  const matchedPairs = scopedAllowlists.flatMap((allowlist) => allowlist.match.matchedPairs ?? []);
   return {
-    rawEntryCount: allowlists.reduce((sum, allowlist) => sum + allowlist.rawEntryCount, 0),
-    normalizedEntries: allowlists.flatMap((allowlist) => allowlist.normalizedEntries),
-    invalidEntries: allowlists.flatMap((allowlist) => allowlist.invalidEntries),
-    disabledEntries: allowlists.flatMap((allowlist) => allowlist.disabledEntries),
+    rawEntryCount: scopedAllowlists.reduce((sum, allowlist) => sum + allowlist.rawEntryCount, 0),
+    normalizedEntries: scopedAllowlists.flatMap((allowlist) => allowlist.normalizedEntries),
+    invalidEntries: scopedAllowlists.flatMap((allowlist) => allowlist.invalidEntries),
+    disabledEntries: scopedAllowlists.flatMap((allowlist) => allowlist.disabledEntries),
     matchedEntryIds,
-    hasConfiguredEntries: allowlists.some((allowlist) => allowlist.hasConfiguredEntries),
-    hasMatchableEntries: allowlists.some((allowlist) => allowlist.hasMatchableEntries),
-    hasWildcard: allowlists.some((allowlist) => allowlist.hasWildcard),
+    hasConfiguredEntries: scopedAllowlists.some((allowlist) => allowlist.hasConfiguredEntries),
+    hasMatchableEntries: scopedAllowlists.some((allowlist) => allowlist.hasMatchableEntries),
+    hasWildcard: scopedAllowlists.some((allowlist) => allowlist.hasWildcard),
     accessGroups: {
       referenced: uniqueStrings(
-        allowlists.flatMap((allowlist) => allowlist.accessGroups.referenced),
+        scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.referenced),
       ),
-      matched: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.matched)),
-      missing: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.missing)),
+      matched: uniqueStrings(
+        scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.matched),
+      ),
+      missing: uniqueStrings(
+        scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.missing),
+      ),
       unsupported: uniqueStrings(
-        allowlists.flatMap((allowlist) => allowlist.accessGroups.unsupported),
+        scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.unsupported),
       ),
-      failed: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.failed)),
+      failed: uniqueStrings(scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.failed)),
     },
     match: {
       matched: matches.some((match) => match.matched) || matchedEntryIds.length > 0,
       matchedEntryIds,
+      ...(matchedPairs.length > 0 ? { matchedPairs } : {}),
     },
   };
 }

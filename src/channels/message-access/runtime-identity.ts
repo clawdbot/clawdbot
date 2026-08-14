@@ -107,6 +107,7 @@ function adapterEntry(params: {
       }) ?? `entry-${params.entryIndex + 1}:${params.fallbackSuffix ?? params.field.key}`,
     kind: params.field.kind,
     value: params.value,
+    identityFieldKey: params.field.key,
     ...(params.wildcard ? { wildcard: true } : {}),
     authentication: fieldAuthentication(params.field, params.entry),
     dangerous: fieldDangerous(params.field, params.entry),
@@ -152,7 +153,10 @@ export function createIdentityAdapter(
     },
     matchSubject({ subject, entries, context }) {
       const normalizedSubjects = subject.identifiers.flatMap((identifier) => {
-        const field = fields.find((candidate) => candidate.kind === identifier.kind);
+        const field = fields.find(
+          (candidate) =>
+            candidate.key === identifier.opaqueId && candidate.kind === identifier.kind,
+        );
         if (!field) {
           return [];
         }
@@ -168,6 +172,7 @@ export function createIdentityAdapter(
           ? normalizedSubjects.filter(({ identifier }) => identifier.kind === fields[0]?.kind)
           : normalizedSubjects.filter(
               ({ identifier, value }) =>
+                identifier.opaqueId === entry.identityFieldKey &&
                 identifier.kind === entry.kind &&
                 identityMatchKey({ kind: identifier.kind, value }) === identityMatchKey(entry),
             );

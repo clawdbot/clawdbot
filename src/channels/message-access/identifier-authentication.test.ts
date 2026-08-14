@@ -81,7 +81,7 @@ describe("identifier authentication", () => {
       reasonCode: "dm_policy_not_allowlisted",
     });
     const pairs = strong.state.allowlists.dm.match.matchedPairs;
-    expect(pairs).toHaveLength(2);
+    expect(pairs).toHaveLength(1);
     expect(pairs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -93,6 +93,39 @@ describe("identifier authentication", () => {
     expect(pairs?.every((pair) => pair.opaqueSubjectId === "primary-email")).toBe(true);
     expect(JSON.stringify(strong.state)).not.toContain("strong@example.test");
     expect(JSON.stringify(weak.state)).not.toContain("weak@example.test");
+  });
+
+  it("does not cross-bind same-kind authentication between identity fields", async () => {
+    const result = await resolveStableChannelMessageIngress(
+      base({
+        identity: {
+          key: "primary-email",
+          kind: "email",
+          authentication: "asserted",
+          aliases: [{ key: "alias-email", kind: "email", authentication: "verified" }],
+        },
+        subject: {
+          stableId: "shared@example.test",
+          authentication: { "primary-email": "asserted" },
+        },
+        allowFrom: ["shared@example.test"],
+        policy: { minIdentifierAuthentication: "verified" },
+      }),
+    );
+
+    expect(result.senderAccess).toMatchObject({
+      allowed: false,
+      reasonCode: "dm_policy_not_allowlisted",
+    });
+    expect(result.state.allowlists.dm.match.matchedPairs).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          opaqueEntryId: "entry-1:alias-email",
+          opaqueSubjectId: "primary-email",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(result.state)).not.toContain("shared@example.test");
   });
 
   it("preserves the shipped dangerous and mutableIdentifierMatching mappings", async () => {
@@ -177,6 +210,104 @@ describe("identifier authentication", () => {
     };
     const result = await resolveStableChannelMessageIngress(base({ ...patch, ...common }));
     expect(check(result)).toBe(false);
+  });
+
+  it("preserves exact-pair authentication through inherited route lists", async () => {
+    const result = await resolveStableChannelMessageIngress(
+      base({
+        conversation: { kind: "group", id: "room-1" },
+        identity: { authentication: "verified" },
+        subject: {
+          stableId: "sender-1",
+          authentication: { stableId: "unverified" },
+        },
+        allowFrom: [],
+        groupAllowFrom: ["other"],
+        route: {
+          id: "route-1",
+          senderPolicy: "inherit",
+          senderAllowFrom: ["sender-1"],
+        },
+        policy: { minIdentifierAuthentication: "verified" },
+      }),
+    );
+
+    expect(result.routeAccess.allowed).toBe(true);
+    expect(result.senderAccess).toMatchObject({
+      allowed: false,
+      reasonCode: "group_policy_not_allowlisted",
+      gate: {
+        identifierAuthentication: { evaluated: true, affectedMatch: true },
+      },
+    });
+    expect(JSON.stringify(result.state)).not.toContain("sender-1");
+  });
+
+  it("namespaces exact pairs from inherited route lists", async () => {
+    const result = await resolveStableChannelMessageIngress(
+      base({
+        conversation: { kind: "group", id: "room-1" },
+        identity: {
+          authentication: (value) => (value === "sender-1" ? "verified" : "asserted"),
+        },
+        subject: {
+          stableId: "sender-1",
+          authentication: { stableId: "verified" },
+        },
+        allowFrom: [],
+        groupAllowFrom: ["other"],
+        route: {
+          id: "route-1",
+          senderPolicy: "inherit",
+          senderAllowFrom: ["sender-1"],
+        },
+        policy: { minIdentifierAuthentication: "verified" },
+      }),
+    );
+
+    expect(result.senderAccess).toMatchObject({
+      allowed: true,
+      reasonCode: "group_policy_allowed",
+    });
+    expect(result.senderAccess.gate?.match?.matchedEntryIds).toEqual(["source-2:entry-1:stableId"]);
+  });
+
+  it("does not cross-bind same-kind origin-subject fields", async () => {
+    const result = await resolveStableChannelMessageIngress(
+      base({
+        identity: {
+          key: "primary-email",
+          kind: "email",
+          aliases: [{ key: "alias-email", kind: "email" }],
+        },
+        subject: {
+          stableId: "shared@example.test",
+          authentication: { "primary-email": "verified" },
+        },
+        event: {
+          kind: "reaction",
+          authMode: "origin-subject",
+          mayPair: false,
+          originSubject: {
+            identifiers: [
+              {
+                opaqueId: "alias-email",
+                kind: "email",
+                value: "shared@example.test",
+                authentication: "verified",
+              },
+            ],
+          },
+        },
+        policy: { minIdentifierAuthentication: "verified" },
+      }),
+    );
+
+    expect(result.ingress).toMatchObject({
+      admission: "drop",
+      reasonCode: "origin_subject_not_matched",
+    });
+    expect(JSON.stringify(result.state)).not.toContain("shared@example.test");
   });
 
   it("applies the threshold to access-group and origin-subject gates", async () => {

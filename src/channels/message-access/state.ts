@@ -27,7 +27,7 @@ import type {
 } from "./types.js";
 
 function redactedEntries(entries: readonly InternalNormalizedEntry[]) {
-  return entries.map(({ value: _value, ...entry }) => entry);
+  return entries.map(({ value: _value, identityFieldKey: _identityFieldKey, ...entry }) => entry);
 }
 
 function emptyMatch(): RedactedIngressMatch {
@@ -165,11 +165,18 @@ async function normalizeSubjectIdentifiersForMatch(params: {
         entries.matchable
           // Origin subjects are identity material, not configured allowlists.
           // Do not let a subject value normalize into adapter wildcard semantics.
-          .filter((entry) => entry.kind === identifier.kind && entry.value !== "*")
+          .filter(
+            (entry) =>
+              entry.kind === identifier.kind &&
+              (entry.identityFieldKey === undefined ||
+                entry.identityFieldKey === identifier.opaqueId) &&
+              entry.value !== "*",
+          )
           .map((entry, entryIndex) => ({
             opaqueEntryId: `${params.opaquePrefix}-${identifierIndex + 1}:${entryIndex + 1}`,
             kind: entry.kind,
             value: entry.value,
+            identityFieldKey: entry.identityFieldKey,
             authentication: identifier.authentication,
             dangerous: entry.dangerous,
             sensitivity: entry.sensitivity,
@@ -230,7 +237,11 @@ async function originSubjectAuthentication(
   let strongest: IdentifierAuthentication | undefined;
   for (const originIdentifier of origin.identifiers) {
     for (const current of input.subject.identifiers) {
-      if (current.kind !== originIdentifier.kind || current.value !== originIdentifier.value) {
+      if (
+        current.opaqueId !== originIdentifier.opaqueId ||
+        current.kind !== originIdentifier.kind ||
+        current.value !== originIdentifier.value
+      ) {
         continue;
       }
       strongest = strongerAuthentication(

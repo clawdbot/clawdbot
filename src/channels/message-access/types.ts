@@ -55,6 +55,7 @@ type ChannelIngressNormalizedEntry = {
 /** Internal normalized allowlist entry with its raw comparable value retained. */
 export type InternalNormalizedEntry = ChannelIngressNormalizedEntry & {
   value: string;
+  identityFieldKey?: string;
 };
 
 /** Redacted diagnostic for an invalid, disabled, or unsupported allowlist entry. */
