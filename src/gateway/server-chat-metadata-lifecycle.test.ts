@@ -122,6 +122,19 @@ describe("gateway chat metadata lifecycle", () => {
     );
   });
 
+  it("retries subordinate changes after a published owner's catch-up build fails", async () => {
+    mocks.refresh.mockRejectedValueOnce(new Error("projection failed"));
+    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const lifecycle = await pendingLifecycle;
+
+    await lifecycle.attachContext(context, []);
+    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
+
+    authListener();
+
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
+  });
+
   it("defers subordinate changes until an invalidated model owner publishes", async () => {
     mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
     const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);

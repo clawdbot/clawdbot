@@ -120,6 +120,11 @@ export async function createGatewayChatMetadataLifecycle(params: {
           },
           (error: unknown) => {
             if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
+              // Capture reached a published owner before this later metadata build failed. Keep
+              // stable auth/skill changes able to retry unless a newer owner event says otherwise.
+              if (preparedModelRuntimeEventVersion === eventVersion) {
+                preparedModelRuntimeAvailable = true;
+              }
               params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
             }
           },
