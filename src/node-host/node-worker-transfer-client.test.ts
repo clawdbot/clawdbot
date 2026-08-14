@@ -10,6 +10,7 @@ import http, {
 import https, { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { connect as connectNet, type Socket } from "node:net";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import { installGlobalProxy } from "@openclaw/proxyline";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -391,7 +392,7 @@ describe("node worker transfer client", () => {
       },
     );
     const gatewayUrl = (await listen(target)).replace(/^ws/u, "wss");
-    const proxySockets = new Set<Socket>();
+    const proxySockets = new Set<Duplex>();
     let connectCount = 0;
     const proxy = createHttpServer();
     proxy.on("connect", (req, clientSocket, head) => {
