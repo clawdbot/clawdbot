@@ -157,15 +157,6 @@ struct MenuContentSmokeTests {
         #expect(replies == [true])
     }
 
-    @Test func `connected configured gateway stays in onboarding until live verification`() {
-        #expect(AppDelegate.shouldPresentScheduledFirstRunOnboarding(
-            expectedConnectionMode: .remote,
-            currentConnectionMode: .remote,
-            expectedRouteIdentity: "remote:id:gateway-a",
-            currentRouteIdentity: "remote:id:gateway-a",
-            onboardingSeen: false))
-    }
-
     @Test func `delayed first run presentation is cancelled by later completion`() {
         #expect(!AppDelegate.shouldPresentScheduledFirstRunOnboarding(
             expectedConnectionMode: .remote,

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 /// Route-bound check used before onboarding starts creating inference config.
 /// A superseded result must never complete onboarding for the replacement Gateway.

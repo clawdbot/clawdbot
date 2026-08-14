@@ -594,7 +594,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
             if !shouldWaitForConnection, launchPlan.allowsAutomaticPresentation {
-                self.scheduleFirstRunOnboardingIfNeeded()
+                self.scheduleFirstRunOnboardingIfNeeded(state: state)
             }
             Task { @MainActor in
                 // Validate PATH selection before local startup. Existing installs may not
@@ -606,7 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     mode: state.connectionMode,
                     paused: state.isPaused)
                 guard shouldWaitForConnection, launchPlan.allowsAutomaticPresentation else { return }
-                self.scheduleFirstRunOnboardingIfNeeded()
+                self.scheduleFirstRunOnboardingIfNeeded(state: state)
             }
         }
         TerminationSignalWatcher.shared.start()
@@ -730,20 +730,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             expectedRouteIdentity == currentRouteIdentity
     }
 
-    private func scheduleFirstRunOnboardingIfNeeded() {
-        let connectionMode = AppStateStore.shared.connectionMode
-        let expectedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
-        if connectionMode != .unconfigured, AppStateStore.shared.onboardingSeen {
+    func scheduleFirstRunOnboardingIfNeeded(
+        state: AppState = AppStateStore.shared,
+        scheduleOnboarding: @escaping @MainActor (AppState.ConnectionMode, String?) -> Void = { mode, routeIdentity in
+            AppDelegate.scheduleFirstRunOnboardingPresentation(
+                expectedConnectionMode: mode,
+                expectedRouteIdentity: routeIdentity)
+        })
+    {
+        let connectionMode = state.connectionMode
+        let expectedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: state)
+        if connectionMode != .unconfigured, state.onboardingSeen {
             // Completion flags do not own any route's activation receipt.
             OnboardingController.markComplete()
             return
         }
-        self.scheduleFirstRunOnboardingPresentation(
-            expectedConnectionMode: connectionMode,
-            expectedRouteIdentity: expectedRouteIdentity)
+        scheduleOnboarding(connectionMode, expectedRouteIdentity)
     }
 
-    private func scheduleFirstRunOnboardingPresentation(
+    private static func scheduleFirstRunOnboardingPresentation(
         expectedConnectionMode: AppState.ConnectionMode,
         expectedRouteIdentity: String?)
     {

@@ -662,6 +662,7 @@ struct OnboardingView: View {
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
+    let configuredGatewayDashboardOpener: @MainActor () -> Void
     let dashboardOnboardingOpener: @MainActor () -> Void
 
     static let windowWidth: CGFloat = 630
@@ -842,6 +843,9 @@ struct OnboardingView: View {
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
+        configuredGatewayDashboardOpener: @escaping @MainActor () -> Void = {
+            AppNavigationActions.openDashboard()
+        },
         dashboardOnboardingOpener: @escaping @MainActor () -> Void = {
             AppNavigationActions.openDashboardOnboarding()
         })
@@ -855,6 +859,7 @@ struct OnboardingView: View {
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
+        self.configuredGatewayDashboardOpener = configuredGatewayDashboardOpener
         self.dashboardOnboardingOpener = dashboardOnboardingOpener
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)

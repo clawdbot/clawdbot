@@ -775,6 +775,64 @@ private func setupAdmissionBusyResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingAISetupTests {
+    @Test func `first run verifies configured gateway before opening dashboard`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingFirstRunVerifyTests"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list": configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
+                case "openclaw.setup.detect": reauthenticationDetectedSetupResponse(id: request.id)
+                default: nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.verify"]))
+            })
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        appState.onboardingSeen = false
+        let delegate = AppDelegate()
+        var launchEvents: [String] = []
+        var probeTask: Task<Void, Never>?
+        var launchedView: OnboardingView?
+        var dashboardOpenCount = 0
+
+        delegate.scheduleFirstRunOnboardingIfNeeded(state: appState) { mode, routeIdentity in
+            launchEvents.append("onboarding")
+            let view = OnboardingView(
+                state: appState,
+                aiSetupGateway: harness.gateway,
+                systemAgentDefaults: defaults,
+                aiSetupRouteIdentityProvider: { routeIdentity },
+                gatewaySelectionPersister: { true },
+                configuredGatewayDashboardOpener: { dashboardOpenCount += 1 })
+            #expect(mode == .local)
+            launchedView = view
+            probeTask = view.onboardingDidAppear()
+        }
+
+        let firstRunProbe = try #require(probeTask)
+        await firstRunProbe.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 2)
+        await settleQueuedAISetupTasks()
+
+        #expect(launchEvents == ["onboarding"])
+        #expect(Array(requests.methods.prefix(2)) == [
+            "agents.list",
+            "openclaw.setup.verify",
+        ])
+        #expect(dashboardOpenCount == 0)
+        launchedView?.onboardingDidDisappear()
+    }
+
     @Test func `failed configured route verification exposes provider reauthentication`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredVerifyRecovery"))
         let url = try #require(URL(string: "ws://localhost:18789"))
