@@ -226,7 +226,7 @@ export async function agentsSetIdentityCommand(
   }
 
   logConfigUpdated(runtime);
-  runtime.log(`Agent: ${sanitizeTerminalText(agentId)}`);
+  runtime.log(`Agent: ${sanitizeTerminalText(resolvedAgentId)}`);
   if (nextIdentity.name) {
     runtime.log(`Name: ${sanitizeTerminalText(nextIdentity.name)}`);
   }
