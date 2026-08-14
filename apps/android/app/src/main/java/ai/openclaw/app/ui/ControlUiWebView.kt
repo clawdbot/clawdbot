@@ -36,6 +36,10 @@ internal fun ControlUiWebView(
   val context = LocalContext.current
   val darkAppearance = LocalResolvedAppearanceIsDark.current
 
+  // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
+  // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
+  // The reload is safe because both Control UI surfaces reattach to server-side state: the shell
+  // outlives the page, and the desktop session lingers on the Gateway long enough to re-observe.
   key(darkAppearance) {
     AndroidView(
       modifier = modifier,
