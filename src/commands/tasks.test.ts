@@ -162,6 +162,8 @@ describe("tasks commands", () => {
   it("keeps audit JSON stable and sorts combined findings before limiting", async () => {
     await withTaskCommandStateDir(async () => {
       const now = Date.now();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
       createTaskRecord({
         runtime: "cli",
         ownerKey: "agent:main:main",
@@ -224,8 +226,7 @@ describe("tasks commands", () => {
         token: runningFlow.flowId,
         flow: jsonRoundTrip(runningFlow),
       });
-      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
-      expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+      expect(limitedFinding?.ageMs).toBe(45 * 60_000);
     });
   });
 
