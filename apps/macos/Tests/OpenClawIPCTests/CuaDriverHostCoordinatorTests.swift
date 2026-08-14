@@ -158,6 +158,96 @@ struct CuaDriverHostCoordinatorTests {
         await coordinator.setEnabled(false)
     }
 
+    @Test func `startup terminates a live owned daemon after its host is gone`() async throws {
+        let root = self.shortTemporaryDirectory("startup-orphan")
+        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
+        let orphan = try self.startFakeDaemon(executable: executable, hostPID: Int32.max)
+        defer {
+            self.stopIfRunning(orphan)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
+        try String(orphan.processIdentifier).write(
+            to: stale.url.appendingPathComponent("cua.pid"),
+            atomically: true,
+            encoding: .utf8)
+        let launcher = CuaProcessLauncherProbe()
+        let coordinator = CuaDriverHostCoordinator(
+            artifactURL: { executable },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true })
+
+        await coordinator.setEnabled(true)
+
+        #expect(await self.waitUntilExited(orphan))
+        #expect(!FileManager.default.fileExists(atPath: stale.url.path))
+        await coordinator.setEnabled(false)
+    }
+
+    @Test func `startup refuses to signal a pid owned by another executable`() async throws {
+        let root = self.shortTemporaryDirectory("startup-pid-reuse")
+        let expectedExecutable = try self.expectedExecutable(in: root, target: "/bin/cat")
+        let unrelated = try self.startSleep(executable: URL(fileURLWithPath: "/bin/sleep"))
+        defer {
+            self.stopIfRunning(unrelated)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
+        try String(unrelated.processIdentifier).write(
+            to: stale.url.appendingPathComponent("cua.pid"),
+            atomically: true,
+            encoding: .utf8)
+        let launcher = CuaProcessLauncherProbe()
+        let coordinator = CuaDriverHostCoordinator(
+            artifactURL: { expectedExecutable },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true })
+
+        await coordinator.setEnabled(true)
+
+        #expect(unrelated.isRunning)
+        #expect(FileManager.default.fileExists(atPath: stale.url.path))
+        let launch = try #require(launcher.launches.first)
+        let pidFileArgument = try #require(launch.arguments.firstIndex(of: "--pid-file")) + 1
+        #expect(launch.arguments[pidFileArgument].hasSuffix("/cua.pid"))
+        await coordinator.setEnabled(false)
+        #expect(unrelated.isRunning)
+    }
+
+    @Test func `teardown leaves no owned directories or live owned daemons`() async throws {
+        let root = self.shortTemporaryDirectory("teardown-reap")
+        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
+        let orphan = try self.startFakeDaemon(executable: executable, hostPID: Int32.max)
+        defer {
+            self.stopIfRunning(orphan)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let live = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
+        try String(orphan.processIdentifier).write(
+            to: live.url.appendingPathComponent("cua.pid"),
+            atomically: true,
+            encoding: .utf8)
+        _ = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
+        let coordinator = CuaDriverHostCoordinator(
+            artifactURL: { executable },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" })
+
+        await coordinator.shutdown()
+
+        #expect(await self.waitUntilExited(orphan))
+        let cuaRoot = root.appendingPathComponent("OpenClaw/cua", isDirectory: true)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cuaRoot.path).isEmpty)
+    }
+
     @Test func `socket directory rejects a symlinked CUA root`() throws {
         let root = self.shortTemporaryDirectory("unsafe")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -309,6 +399,52 @@ struct CuaDriverHostCoordinatorTests {
 
     private func shortTemporaryDirectory(_ label: String) -> URL {
         URL(fileURLWithPath: "/tmp/oc-cua-\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+    }
+
+    private func expectedExecutable(in root: URL, target: String) throws -> URL {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("cua-driver")
+        try FileManager.default.createSymbolicLink(
+            at: executable,
+            withDestinationURL: URL(fileURLWithPath: target))
+        return executable
+    }
+
+    private func startFakeDaemon(executable: URL, hostPID: Int32) throws -> Process {
+        let process = self.makeSleepProcess(executable: executable)
+        var environment = ProcessInfo.processInfo.environment
+        environment["CUA_DRIVER_EMBEDDED_HOST_PID"] = String(hostPID)
+        process.environment = environment
+        try process.run()
+        return process
+    }
+
+    private func startSleep(executable: URL) throws -> Process {
+        let process = self.makeSleepProcess(executable: executable)
+        try process.run()
+        return process
+    }
+
+    private func makeSleepProcess(executable: URL) -> Process {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["60"]
+        return process
+    }
+
+    private func waitUntilExited(_ process: Process) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while process.isRunning, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return !process.isRunning
+    }
+
+    private func stopIfRunning(_ process: Process) {
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
     }
 
     private static func process(_ processIdentifier: pid_t, hasDescriptor descriptor: Int32) -> Bool {

@@ -2,23 +2,6 @@ import Darwin
 import Foundation
 import OSLog
 
-private struct CuaDriverDaemonMetadata: Decodable, Equatable {
-    let pid: Int32
-    let embedded: Bool
-    let hostBundleID: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case pid
-        case embedded
-        case hostBundleID = "host_bundle_id"
-    }
-}
-
-private struct CuaDriverDaemonMetadataResponse: Decodable {
-    let ok: Bool
-    let result: CuaDriverDaemonMetadata?
-}
-
 extension CuaDriverHostCoordinator {
     static func makeLivenessPipe() throws -> Pipe {
         let pipe = Pipe()
@@ -35,45 +18,40 @@ extension CuaDriverHostCoordinator {
 
     static func reapStaleSocketDirectories(
         in applicationSupportURL: URL,
-        hostBundleID: String?) async
+        expectedExecutableURL: URL?) async
     {
         let logger = Logger(subsystem: "ai.openclaw", category: "cua-driver-host")
         for directory in self.ownedSocketDirectories(in: applicationSupportURL) {
-            var socketStatus = stat()
-            guard lstat(directory.socketPath, &socketStatus) == 0 else {
-                if errno == ENOENT {
-                    self.cleanupSocketDirectory(directory)
-                }
+            guard let processIdentifier = self.readProcessIdentifier(in: directory) else {
+                self.cleanupSocketDirectory(directory)
                 continue
             }
-            guard socketStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFSOCK),
-                  socketStatus.st_uid == geteuid()
-            else { continue }
-
-            guard let metadata = self.daemonMetadata(at: directory.socketPath) else {
-                // A socket with no listener is crash residue. If something accepts
-                // connections but does not speak CUA, leave it untouched.
-                if !self.socketAcceptsConnections(directory.socketPath) {
-                    self.cleanupSocketDirectory(directory)
-                }
+            guard self.processIsAlive(processIdentifier) else {
+                self.cleanupSocketDirectory(directory)
                 continue
             }
-            guard let hostBundleID, !hostBundleID.isEmpty,
-                  metadata.embedded,
-                  metadata.hostBundleID == hostBundleID,
-                  metadata.pid > 1,
-                  metadata.pid != getpid(),
-                  self.isCuaDriverProcess(metadata.pid),
-                  let parentPID = self.parentProcessIdentifier(metadata.pid),
-                  parentPID <= 1 || self.parentProcessIdentifier(parentPID) == nil
+            guard let expectedExecutableURL,
+                  self.processExecutableMatches(
+                      processIdentifier,
+                      expectedExecutableURL: expectedExecutableURL)
             else { continue }
 
-            // Reconfirm the process-bound metadata after classification so a
-            // closed endpoint or recycled PID cannot redirect the reap.
-            guard self.daemonMetadata(at: directory.socketPath) == metadata else { continue }
-            logger.error(
-                "reaping orphaned embedded CUA daemon \(metadata.pid, privacy: .public) at \(directory.socketPath, privacy: .public)")
-            if await self.terminateProcess(metadata.pid) {
+            if let hostPID = self.processEnvironmentValue(
+                processIdentifier,
+                key: "CUA_DRIVER_EMBEDDED_HOST_PID").flatMap(pid_t.init),
+                !self.processIsAlive(hostPID)
+            {
+                logger.error(
+                    "reaping orphaned embedded CUA daemon \(processIdentifier, privacy: .public) whose host \(hostPID, privacy: .public) is gone")
+            } else {
+                logger.error(
+                    "reaping owned embedded CUA daemon \(processIdentifier, privacy: .public) during lifecycle cleanup")
+            }
+            if await self.terminateProcess(
+                processIdentifier,
+                directory: directory,
+                expectedExecutableURL: expectedExecutableURL)
+            {
                 self.cleanupSocketDirectory(directory)
             }
         }
@@ -116,41 +94,40 @@ extension CuaDriverHostCoordinator {
         }
     }
 
-    private static func daemonMetadata(at socketPath: String) -> CuaDriverDaemonMetadata? {
-        guard let descriptor = self.connectUnixSocket(socketPath) else { return nil }
+    private static func readProcessIdentifier(in directory: CuaDriverSocketDirectory) -> pid_t? {
+        guard self.directoryIsUnchangedAndOwned(directory) else { return nil }
+        let descriptor = Darwin.open(directory.pidFilePath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
 
-        var enabled: Int32 = 1
-        _ = setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled)))
-        var timeout = timeval(tv_sec: 0, tv_usec: 250_000)
-        _ = setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
-        _ = setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
-
-        let request = Data("{\"method\":\"metadata\"}\n".utf8)
-        let sent = request.withUnsafeBytes { bytes in
-            Darwin.send(descriptor, bytes.baseAddress, bytes.count, 0)
+        var status = stat()
+        guard fstat(descriptor, &status) == 0,
+              status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              status.st_uid == geteuid(),
+              status.st_size > 0,
+              status.st_size <= 32
+        else { return nil }
+        var buffer = [UInt8](repeating: 0, count: Int(status.st_size))
+        let count = buffer.withUnsafeMutableBytes { bytes in
+            Darwin.read(descriptor, bytes.baseAddress, bytes.count)
         }
-        guard sent == request.count else { return nil }
+        guard count == buffer.count,
+              let contents = String(bytes: buffer, encoding: .utf8),
+              let processIdentifier = pid_t(contents.trimmingCharacters(in: .whitespacesAndNewlines)),
+              processIdentifier > 1,
+              processIdentifier != getpid()
+        else { return nil }
+        return processIdentifier
+    }
 
-        var response = Data()
-        var chunk = [UInt8](repeating: 0, count: 4096)
-        while response.count < 64 * 1024 {
-            let count = chunk.withUnsafeMutableBytes { bytes in
-                Darwin.recv(descriptor, bytes.baseAddress, bytes.count, 0)
-            }
-            guard count > 0 else { return nil }
-            response.append(contentsOf: chunk.prefix(Int(count)))
-            if let newline = response.firstIndex(of: 0x0A) {
-                let line = Data(response[..<newline])
-                guard let decoded = try? JSONDecoder().decode(
-                    CuaDriverDaemonMetadataResponse.self,
-                    from: line),
-                    decoded.ok
-                else { return nil }
-                return decoded.result
-            }
-        }
-        return nil
+    private static func directoryIsUnchangedAndOwned(_ directory: CuaDriverSocketDirectory) -> Bool {
+        var status = stat()
+        return lstat(directory.url.path, &status) == 0 &&
+            status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) &&
+            status.st_uid == geteuid() &&
+            status.st_mode & 0o777 == 0o700 &&
+            UInt64(status.st_dev) == directory.device &&
+            UInt64(status.st_ino) == directory.inode
     }
 
     nonisolated static func connectUnixSocket(_ socketPath: String) -> Int32? {
@@ -183,42 +160,131 @@ extension CuaDriverHostCoordinator {
         return descriptor
     }
 
-    private static func parentProcessIdentifier(_ processIdentifier: pid_t) -> pid_t? {
-        guard processIdentifier > 0 else { return nil }
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, processIdentifier]
-        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0,
-              size > 0,
-              info.kp_proc.p_pid == processIdentifier
-        else { return nil }
-        return info.kp_eproc.e_ppid
+    private static func processIsAlive(_ processIdentifier: pid_t) -> Bool {
+        guard processIdentifier > 1 else { return false }
+        if Darwin.kill(processIdentifier, 0) == 0 { return true }
+        return errno == EPERM
     }
 
-    private static func isCuaDriverProcess(_ processIdentifier: pid_t) -> Bool {
+    private static func processExecutableURL(_ processIdentifier: pid_t) -> URL? {
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let length = proc_pidpath(processIdentifier, &buffer, UInt32(buffer.count))
-        guard length > 0 else { return false }
+        guard length > 0 else { return nil }
         let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-        guard let path = String(bytes: bytes, encoding: .utf8) else { return false }
-        return URL(fileURLWithPath: path).lastPathComponent == "cua-driver"
+        guard let path = String(bytes: bytes, encoding: .utf8) else { return nil }
+        return URL(fileURLWithPath: path)
     }
 
-    private static func terminateProcess(_ processIdentifier: pid_t) async -> Bool {
-        guard processIdentifier > 1 else { return false }
+    private static func processExecutableMatches(
+        _ processIdentifier: pid_t,
+        expectedExecutableURL: URL) -> Bool
+    {
+        guard let actualExecutableURL = self.processExecutableURL(processIdentifier) else { return false }
+        let actualPath = actualExecutableURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let expectedPath = expectedExecutableURL.resolvingSymlinksInPath().standardizedFileURL.path
+        return actualPath == expectedPath
+    }
+
+    private static func processEnvironmentValue(
+        _ processIdentifier: pid_t,
+        key: String) -> String?
+    {
+        var argumentMaximum: Int32 = 0
+        var argumentMaximumSize = MemoryLayout<Int32>.size
+        var argumentMaximumMIB: [Int32] = [CTL_KERN, KERN_ARGMAX]
+        guard sysctl(
+            &argumentMaximumMIB,
+            u_int(argumentMaximumMIB.count),
+            &argumentMaximum,
+            &argumentMaximumSize,
+            nil,
+            0) == 0,
+            argumentMaximum > 0,
+            argumentMaximum <= 4 * 1024 * 1024
+        else { return nil }
+
+        var buffer = [UInt8](repeating: 0, count: Int(argumentMaximum))
+        var bufferSize = buffer.count
+        var processMIB: [Int32] = [CTL_KERN, KERN_PROCARGS2, processIdentifier]
+        let readSucceeded = buffer.withUnsafeMutableBytes { bytes in
+            sysctl(
+                &processMIB,
+                u_int(processMIB.count),
+                bytes.baseAddress,
+                &bufferSize,
+                nil,
+                0) == 0
+        }
+        guard readSucceeded, bufferSize >= MemoryLayout<Int32>.size else { return nil }
+
+        var argumentCount: Int32 = 0
+        withUnsafeMutableBytes(of: &argumentCount) { destination in
+            destination.copyBytes(from: buffer.prefix(destination.count))
+        }
+        guard argumentCount > 0 else { return nil }
+
+        var offset = MemoryLayout<Int32>.size
+        func skipString() -> Bool {
+            guard offset < bufferSize else { return false }
+            while offset < bufferSize, buffer[offset] != 0 {
+                offset += 1
+            }
+            guard offset < bufferSize else { return false }
+            offset += 1
+            return true
+        }
+
+        guard skipString() else { return nil }
+        while offset < bufferSize, buffer[offset] == 0 {
+            offset += 1
+        }
+        for _ in 0..<argumentCount where offset < bufferSize {
+            guard skipString() else { return nil }
+        }
+
+        let prefix = Data("\(key)=".utf8)
+        while offset < bufferSize {
+            while offset < bufferSize, buffer[offset] == 0 {
+                offset += 1
+            }
+            guard offset < bufferSize else { break }
+            let start = offset
+            guard skipString() else { break }
+            let entry = Data(buffer[start..<(offset - 1)])
+            if entry.starts(with: prefix) {
+                return String(decoding: entry.dropFirst(prefix.count), as: UTF8.self)
+            }
+        }
+        return nil
+    }
+
+    private static func terminateProcess(
+        _ processIdentifier: pid_t,
+        directory: CuaDriverSocketDirectory,
+        expectedExecutableURL: URL) async -> Bool
+    {
+        guard self.readProcessIdentifier(in: directory) == processIdentifier,
+              self.processExecutableMatches(
+                  processIdentifier,
+                  expectedExecutableURL: expectedExecutableURL)
+        else { return false }
         if Darwin.kill(processIdentifier, SIGTERM) != 0, errno != ESRCH { return false }
         if await self.waitForProcessExit(processIdentifier) { return true }
+        // Recheck the executable immediately before escalation so PID reuse can
+        // never redirect SIGKILL to an unrelated process.
+        guard self.processExecutableMatches(
+            processIdentifier,
+            expectedExecutableURL: expectedExecutableURL)
+        else { return false }
         if Darwin.kill(processIdentifier, SIGKILL) != 0, errno != ESRCH { return false }
         return await self.waitForProcessExit(processIdentifier)
     }
 
     private static func waitForProcessExit(_ processIdentifier: pid_t) async -> Bool {
         let deadline = ContinuousClock.now + .seconds(1)
-        while self.parentProcessIdentifier(processIdentifier) != nil,
-              ContinuousClock.now < deadline
-        {
+        while self.processIsAlive(processIdentifier), ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(25))
         }
-        return self.parentProcessIdentifier(processIdentifier) == nil
+        return !self.processIsAlive(processIdentifier)
     }
 }

@@ -159,6 +159,10 @@ struct CuaDriverSocketDirectory: Equatable, Sendable {
     let socketPath: String
     let device: UInt64
     let inode: UInt64
+
+    var pidFilePath: String {
+        self.url.appendingPathComponent("cua.pid", isDirectory: false).path
+    }
 }
 
 enum CuaDriverHostError: LocalizedError {
@@ -203,6 +207,7 @@ final class CuaDriverHostCoordinator {
         let generation: UInt64
         let process: any CuaDriverProcessControlling
         let socketDirectory: CuaDriverSocketDirectory
+        let executableURL: URL
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "cua-driver-host")
@@ -320,10 +325,11 @@ final class CuaDriverHostCoordinator {
     private func ensureStarted() async {
         guard self.runningChild == nil else { return }
         let applicationSupportURL = self.applicationSupportURL()
+        let executableURL = self.artifactURL()
         await Self.reapStaleSocketDirectories(
             in: applicationSupportURL,
-            hostBundleID: self.bundleIdentifier())
-        guard let executableURL = self.artifactURL() else {
+            expectedExecutableURL: executableURL)
+        guard let executableURL else {
             self.logger.info("embedded CUA remains unavailable because the driver is not bundled")
             return
         }
@@ -358,7 +364,8 @@ final class CuaDriverHostCoordinator {
             self.runningChild = RunningChild(
                 generation: generation,
                 process: process,
-                socketDirectory: socketDirectory)
+                socketDirectory: socketDirectory,
+                executableURL: executableURL)
         } catch {
             Self.cleanupSocketDirectory(socketDirectory)
             self.logger.error("embedded CUA launch failed: \(error.localizedDescription, privacy: .public)")
@@ -395,11 +402,10 @@ final class CuaDriverHostCoordinator {
     private func ensureStopped() async {
         self.setReadyEndpoint(nil)
         let applicationSupportURL = self.applicationSupportURL()
-        let hostBundleID = self.bundleIdentifier()
         guard let child = self.runningChild else {
             await Self.reapStaleSocketDirectories(
                 in: applicationSupportURL,
-                hostBundleID: hostBundleID)
+                expectedExecutableURL: self.artifactURL())
             return
         }
         // The worker owns the MCP proxy. Drain it before the app closes the
@@ -420,10 +426,12 @@ final class CuaDriverHostCoordinator {
             self.runningChild = nil
         }
         self.stoppingGenerations.remove(child.generation)
-        Self.cleanupSocketDirectory(child.socketDirectory)
+        if !child.process.isRunning {
+            Self.cleanupSocketDirectory(child.socketDirectory)
+        }
         await Self.reapStaleSocketDirectories(
             in: applicationSupportURL,
-            hostBundleID: hostBundleID)
+            expectedExecutableURL: child.executableURL)
     }
 
     private func processExited(generation: UInt64, status: Int32) {
@@ -512,6 +520,10 @@ final class CuaDriverHostCoordinator {
                 "--no-permissions-gate",
                 "--socket",
                 socketPath,
+                "--pid-file",
+                URL(fileURLWithPath: socketPath)
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("cua.pid", isDirectory: false).path,
                 "--host-bundle-id",
                 hostBundleID,
                 "--permission-mode",
@@ -641,6 +653,13 @@ final class CuaDriverHostCoordinator {
            socketStatus.st_uid == geteuid()
         {
             _ = Darwin.unlink(directory.socketPath)
+        }
+        var pidStatus = stat()
+        if lstat(directory.pidFilePath, &pidStatus) == 0,
+           pidStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+           pidStatus.st_uid == geteuid()
+        {
+            _ = Darwin.unlink(directory.pidFilePath)
         }
         _ = Darwin.rmdir(directory.url.path)
     }
