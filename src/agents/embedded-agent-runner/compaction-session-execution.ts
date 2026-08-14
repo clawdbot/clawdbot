@@ -399,6 +399,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             context: { systemPrompt: systemPromptText, messages: session.messages },
             sessionManager,
             extraParams: effectiveExtraParams,
+            customInstructions: params.customInstructions,
             requestOptions: {
               apiKey: transportApiKey,
               sessionId: params.sessionId,

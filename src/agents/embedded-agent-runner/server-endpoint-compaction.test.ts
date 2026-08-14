@@ -148,4 +148,23 @@ describe("attemptServerEndpointCompaction", () => {
     await expect(result).resolves.toBeUndefined();
     expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
   });
+
+  it("preserves custom instructions by falling back to client compaction", async () => {
+    const { result } = attempt({ customInstructions: "Retain the security caveats." });
+
+    await expect(result).resolves.toBeUndefined();
+    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not compact transcript entries that remain after the checkpoint owner", async () => {
+    const messages = createSession().messages.concat({
+      role: "user",
+      content: "trailing turn",
+      timestamp: 3,
+    });
+    const { result } = attempt({ context: { systemPrompt: "system", messages } });
+
+    await expect(result).resolves.toBeUndefined();
+    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
+  });
 });

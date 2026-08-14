@@ -27,9 +27,11 @@ export async function attemptServerEndpointCompaction(params: {
   sessionManager: SessionManagerLike;
   extraParams: Record<string, unknown>;
   requestOptions: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[3];
+  customInstructions?: string;
 }): Promise<ServerEndpointCompactionResult | undefined> {
   if (
     params.trigger === "overflow" ||
+    params.customInstructions?.trim() ||
     !resolveOpenAIResponsesCompactEndpointPlan(params.model, params.extraParams).enabled
   ) {
     return undefined;
@@ -39,6 +41,9 @@ export async function attemptServerEndpointCompaction(params: {
       (message): message is Message =>
         message.role === "user" || message.role === "assistant" || message.role === "toolResult",
     );
+    if (messages.at(-1)?.role !== "assistant") {
+      return undefined;
+    }
     const owner = params.sessionManager
       .getBranch()
       .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
