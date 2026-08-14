@@ -11,7 +11,7 @@ type RecoveryEmbeddedRun = RecoveryMarker & {
   sequence: number;
 };
 
-export type DiagnosticRecoveryActivity = {
+type DiagnosticRecoveryActivity = {
   activeEmbeddedRuns: Map<string, RecoveryEmbeddedRun>;
   activeTools: Map<string, RecoveryMarker>;
   activeModelCalls: Map<string, RecoveryMarker>;
