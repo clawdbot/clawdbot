@@ -79,16 +79,19 @@ export class AcpTranslatorSessionLifecycle {
     // chat.send carries no cwd, so the requested directory only reaches a turn as the row's
     // spawnedCwd, and a routed key may have no row yet. cwdOnCreateOnly lets the Gateway settle
     // absence inside its own mutation, so an existing session keeps the cwd its owner set.
-    await this.gateway.request("sessions.create", {
-      key: sessionKey,
-      cwd: params.cwd,
-      cwdOnCreateOnly: true,
-    });
+    const created = await this.gateway.request<{ entry?: { spawnedCwd?: string } }>(
+      "sessions.create",
+      { key: sessionKey, cwd: params.cwd, cwdOnCreateOnly: true },
+    );
+    // The Gateway owns the run directory, and an adopted row keeps its owner's. Read that back
+    // instead of assuming the request won, so the prompt prefix and provenance receipt describe
+    // the directory the turn actually uses.
+    const sessionCwd = normalizeOptionalString(created?.entry?.spawnedCwd) ?? params.cwd;
 
     const session = this.sessionStore.createSession({
       sessionId,
       sessionKey,
-      cwd: params.cwd,
+      cwd: sessionCwd,
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);

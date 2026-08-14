@@ -272,12 +272,15 @@ describe("acp session UX bridge behavior", () => {
 });
 
 describe("acp bridge session cwd persistence", () => {
-  function createRecordingGateway() {
+  function createRecordingGateway(createdCwd?: string) {
     const calls: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       calls.push({ method, params });
       if (method === "sessions.list") {
         return { sessions: [] };
+      }
+      if (method === "sessions.create" && createdCwd) {
+        return { ok: true, entry: { spawnedCwd: createdCwd } };
       }
       return { ok: true };
     }) as GatewayClient["request"];
@@ -318,6 +321,24 @@ describe("acp bridge session cwd persistence", () => {
     expect(createCalls(calls)).toStrictEqual([
       { key: "agent:main:work", cwd: "/tmp/my-project", cwdOnCreateOnly: true },
     ]);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("reports the directory the Gateway kept when it adopts an existing session", async () => {
+    const sessionStore = createInMemorySessionStore();
+    // The owner's row already has its own directory, so the Gateway keeps it and reports it back.
+    const { gateway } = createRecordingGateway("/tmp/owner-project");
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    const result = await agent.newSession({
+      ...createNewSessionRequest("/tmp/my-project"),
+      _meta: { sessionKey: "agent:main:work" },
+    } as never);
+
+    // Storing the requested cwd here would make the prompt prefix and provenance receipt
+    // contradict the directory the agent actually runs in.
+    expect(sessionStore.getSession(result.sessionId)?.cwd).toBe("/tmp/owner-project");
 
     sessionStore.clearAllSessionsForTest();
   });
