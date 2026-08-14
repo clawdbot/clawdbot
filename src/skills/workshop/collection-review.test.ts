@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getAdmittedRunDelegatedAuthority,
+  resolvePreparedRunAdmission,
+  type AdmittedRunContext,
+} from "../../agents/admitted-run-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import {
   createOpenClawTestState,
@@ -57,8 +62,14 @@ describe("skill collection review", () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "useful", description: "Useful reusable procedure" },
     ]);
+    let admittedRunContext: AdmittedRunContext | undefined;
     let reviewResult: unknown;
     runEmbeddedAgent.mockImplementation(async (params) => {
+      admittedRunContext = await resolvePreparedRunAdmission({
+        runId: params.runId,
+        runtimeKind: "embedded",
+        preparedRunAdmission: params.preparedRunAdmission,
+      });
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
         config: params.config,
@@ -95,6 +106,10 @@ describe("skill collection review", () => {
       onError,
     });
     expect(onError).not.toHaveBeenCalled();
+    expect(admittedRunContext?.operationalRunInstance.runId).toBe(
+      runEmbeddedAgent.mock.calls[0]?.[0]?.runId,
+    );
+    expect(getAdmittedRunDelegatedAuthority(admittedRunContext!)).toBeUndefined();
     expect(reviewResult).toMatchObject({ kept: ["useful"], written: [], dropped: [] });
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -235,7 +250,13 @@ describe("skill collection review", () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "useful", description: "Useful reusable procedure" },
     ]);
+    let admittedRunContext: AdmittedRunContext | undefined;
     runEmbeddedAgent.mockImplementation(async (params) => {
+      admittedRunContext = await resolvePreparedRunAdmission({
+        runId: params.runId,
+        runtimeKind: "embedded",
+        preparedRunAdmission: params.preparedRunAdmission,
+      });
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
         config: params.config,
@@ -261,6 +282,7 @@ describe("skill collection review", () => {
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledOnce();
+    expect(getAdmittedRunDelegatedAuthority(admittedRunContext!)).toBeUndefined();
   });
 
   it("reviews a same-model shared workspace without hiding every agent's skills", async () => {

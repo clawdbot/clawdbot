@@ -70,17 +70,17 @@ describe("createQaSmokeCiPart", () => {
     smokeProfileMock.mode = "actual";
   });
 
-  it("balances the bounded smoke pack across four profile parts", () => {
-    const parts = ["profile-1", "profile-2", "profile-3", "profile-4"].map((partId) =>
-      createQaSmokeCiPart(partId),
+  it.each([4, 6])("balances the bounded smoke pack across %i profile parts", (partCount) => {
+    const parts = Array.from({ length: partCount }, (_, index) =>
+      createQaSmokeCiPart(`profile-${index + 1}`, partCount),
     );
-    const repeatedLast = createQaSmokeCiPart("profile-4");
+    const repeatedLast = createQaSmokeCiPart(`profile-${partCount}`, partCount);
 
-    expect(repeatedLast).toEqual(parts[3]);
-    expect(parts.slice(0, 3).some((part) => part.runs.some((run) => run.slug === "matrix"))).toBe(
+    expect(repeatedLast).toEqual(parts.at(-1));
+    expect(parts.slice(0, -1).some((part) => part.runs.some((run) => run.slug === "matrix"))).toBe(
       false,
     );
-    expect(parts[3]?.runs.some((run) => run.slug === "matrix")).toBe(true);
+    expect(parts.at(-1)?.runs.some((run) => run.slug === "matrix")).toBe(true);
 
     const scenarioIds = parts.flatMap((part) => part.runs.flatMap((run) => run.scenario_ids));
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
@@ -177,6 +177,12 @@ describe("createQaSmokeCiPart", () => {
   it("rejects undeclared profile parts", () => {
     expect(() => createQaSmokeCiPart("profile-5")).toThrow(
       "unknown QA smoke CI profile part: profile-5",
+    );
+    expect(() => createQaSmokeCiPart("profile-7", 6)).toThrow(
+      "unknown QA smoke CI profile part: profile-7",
+    );
+    expect(() => createQaSmokeCiPart("profile-1", 5)).toThrow(
+      "unsupported QA smoke CI profile part count: 5",
     );
   });
 

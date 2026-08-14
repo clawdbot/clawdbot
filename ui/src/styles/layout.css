@@ -237,6 +237,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
    (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
    shell stays in charge and the settings sidebar rides inside the drawer. */
 
+/* stylelint-disable-next-line no-duplicate-selectors -- settings navigation variable belongs with the takeover rules below */
 .shell {
   --shell-settings-nav-width: 288px;
 }
@@ -681,9 +682,6 @@ openclaw-settings-save-indicator {
 
 .settings-save-indicator__apply {
   border-radius: 999px;
-}
-
-.settings-save-indicator__apply {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
   background: var(--accent-subtle);
   color: var(--text);
@@ -3376,9 +3374,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .sidebar-hover-card__person-email {
   color: var(--muted);
   font-weight: 400;
-}
-
-.sidebar-hover-card__person-email {
   font-size: var(--control-ui-text-xs);
 }
 

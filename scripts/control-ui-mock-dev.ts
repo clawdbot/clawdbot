@@ -1494,6 +1494,7 @@ async function createChatPickerScenario(
       "sessions.patchMany",
       "sessions.catalog.list",
       "sessions.catalog.read",
+      "sessions.create",
       "system.info",
       "terminal.open",
     ],

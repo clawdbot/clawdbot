@@ -68,6 +68,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     workerEnvironmentService,
     hostDesktopService,
     workerEnvironmentStartup,
+    workerPlacementRuntime,
     workerPlacementControlAvailable,
     terminalSessions,
     agentRunSeq,
@@ -171,6 +172,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       ...(hostDesktopService ? { hostDesktopService } : {}),
       ...(workerEnvironmentStartup
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
+        : {}),
+      ...(workerPlacementRuntime
+        ? { workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }

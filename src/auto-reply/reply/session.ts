@@ -1143,7 +1143,7 @@ async function initSessionStateAttemptLocked(
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
-          cfg,
+          agentId,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
@@ -1173,7 +1173,7 @@ async function initSessionStateAttemptLocked(
       const payload = buildSessionStartHookPayload({
         sessionId: effectiveSessionId,
         sessionKey,
-        cfg,
+        agentId,
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {

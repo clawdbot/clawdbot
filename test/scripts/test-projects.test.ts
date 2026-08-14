@@ -2333,7 +2333,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "src/commands/doctor-memory-search.test.ts",
-        "packages/memory-host-sdk/src/host/embeddings.test.ts",
+        "extensions/memory-core/src/memory/embeddings.test.ts",
       ],
     );
   });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cleanupBackgroundHarnesses,
   loadBackground,
   TEST_RELAY_KEY,
   REPLACEMENT_TEST_RELAY_KEY,
@@ -22,7 +23,8 @@ describe("native extension bootstrap", () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanupBackgroundHarnesses();
     vi.unstubAllGlobals();
   });
 
@@ -347,7 +349,8 @@ describe("relay pairing and authentication", () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanupBackgroundHarnesses();
     vi.unstubAllGlobals();
   });
 
@@ -364,6 +367,23 @@ describe("relay pairing and authentication", () => {
     const harness = await loadBackground();
     expect(harness.relaySockets[0]?.protocols).toEqual(["openclaw-extension-relay.v2"]);
     expect(JSON.stringify(harness.relaySockets[0]?.protocols)).not.toContain(TEST_RELAY_KEY);
+  });
+
+  it("cancels the opening deadline when the socket-close fallback ends the relay", async () => {
+    const harness = await loadBackground({ relayNegotiatedProtocol: "unsupported" });
+    const socket = harness.relaySockets[0];
+    if (!socket) {
+      throw new Error("expected relay socket");
+    }
+    harness.clearAlarm.mockClear();
+    socket.close.mockImplementationOnce(() => {
+      throw new Error("socket close failed");
+    });
+
+    socket.open();
+
+    await vi.waitFor(() => expect(socket.close).toHaveBeenCalledTimes(2));
+    expect(harness.clearAlarm).toHaveBeenCalledOnce();
   });
 
   it("revokes synchronously while an older manual pair is stalled", async () => {

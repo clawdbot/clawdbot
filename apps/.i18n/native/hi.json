@@ -814,14 +814,14 @@
       "translated": "ClawHub Skills की जाँच करने के लिए Gateway कनेक्ट करें।"
     },
     {
-      "id": "native.android.57c31cd4bd7c5146",
-      "source": "ClawHub did not return an installable version for ${skill.slug}.",
-      "translated": "ClawHub ने ${skill.slug} के लिए इंस्टॉल करने योग्य संस्करण नहीं दिया।"
+      "id": "native.android.e5b0558c26183ff4",
+      "source": "ClawHub did not return an installable version for ${skill.reference}.",
+      "translated": "ClawHub ने ${skill.reference} के लिए इंस्टॉल करने योग्य संस्करण नहीं लौटाया।"
     },
     {
-      "id": "native.android.ecf82b1ac9d18307",
-      "source": "Could not load ClawHub details for ${skill.slug}.",
-      "translated": "${skill.slug} के लिए ClawHub विवरण लोड नहीं किया जा सका।"
+      "id": "native.android.5d4e8b19fbd1204f",
+      "source": "Could not load ClawHub details for ${skill.reference}.",
+      "translated": "${skill.reference} के लिए ClawHub विवरण लोड नहीं किए जा सके।"
     },
     {
       "id": "native.android.4154579c8cb1c995",
@@ -2027,6 +2027,26 @@
       "id": "native.android.2d809753c1f15194",
       "source": "Unknown",
       "translated": "अज्ञात"
+    },
+    {
+      "id": "native.android.dbe524469f9dabaa",
+      "source": "Back",
+      "translated": "वापस"
+    },
+    {
+      "id": "native.android.3c19f8c172f78ded",
+      "source": "Desktop",
+      "translated": "डेस्कटॉप"
+    },
+    {
+      "id": "native.android.469c6e10b238c851",
+      "source": "Desktop needs a connected gateway",
+      "translated": "डेस्कटॉप के लिए एक कनेक्टेड gateway आवश्यक है"
+    },
+    {
+      "id": "native.android.7efb67654e5a6cd0",
+      "source": "Connect to your gateway to view a machine screen.",
+      "translated": "मशीन स्क्रीन देखने के लिए अपने gateway से कनेक्ट करें।"
     },
     {
       "id": "native.android.b735fb6c7d284ecf",
@@ -3822,6 +3842,11 @@
       "id": "native.android.09fa98489fd0881b",
       "source": "Dashboard",
       "translated": "डैशबोर्ड"
+    },
+    {
+      "id": "native.android.e8f14c8f388c0264",
+      "source": "Open desktop",
+      "translated": "डेस्कटॉप खोलें"
     },
     {
       "id": "native.android.285be3399daf82ee",
@@ -6084,6 +6109,16 @@
       "translated": "टर्मिनल"
     },
     {
+      "id": "native.android.afe0cca470817261",
+      "source": "Desktop",
+      "translated": "डेस्कटॉप"
+    },
+    {
+      "id": "native.android.508d63f629607328",
+      "source": "View a machine screen",
+      "translated": "मशीन स्क्रीन देखें"
+    },
+    {
       "id": "native.android.345d2424511d2d53",
       "source": "Speaker muted",
       "translated": "स्पीकर म्यूट है"
@@ -8234,6 +8269,11 @@
       "translated": "इमेज"
     },
     {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "अटैचमेंट"
+    },
+    {
       "id": "native.android.952a88e71b4aaee4",
       "source": "Additional images hidden: ${omittedImageCount}",
       "translated": "छिपाई गई अतिरिक्त इमेज: ${omittedImageCount}"
@@ -8329,11 +8369,6 @@
       "translated": "साझा-छवि चेतावनी खारिज करें"
     },
     {
-      "id": "native.android.76d574acfac94fee",
-      "source": "Stop",
-      "translated": "रोकें"
-    },
-    {
       "id": "native.android.be42506226307680",
       "source": "Switch branch",
       "translated": "ब्रांच बदलें"
@@ -8389,34 +8424,39 @@
       "translated": "Gateway ऑफ़लाइन"
     },
     {
-      "id": "native.android.36ed01582459bc10",
-      "source": "Close thinking level selector",
-      "translated": "थिंकिंग स्तर चयनकर्ता बंद करें"
+      "id": "native.android.3fea3a91bbd7ee4e",
+      "source": "Add attachment",
+      "translated": "अटैचमेंट जोड़ें"
     },
     {
-      "id": "native.android.82d6389036a1e211",
-      "source": "Open thinking level selector",
-      "translated": "थिंकिंग स्तर चयनकर्ता खोलें"
+      "id": "native.android.9db5d4b832ddaf20",
+      "source": "Photos",
+      "translated": "फ़ोटो"
     },
     {
-      "id": "native.android.623e434c83e3c020",
-      "source": "Attach image",
-      "translated": "छवि संलग्न करें"
+      "id": "native.android.827fd291f6fd3120",
+      "source": "Videos",
+      "translated": "वीडियो"
     },
     {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "अटैचमेंट"
-    },
-    {
-      "id": "native.android.1bf18cef7a720c58",
-      "source": "Attach video",
-      "translated": "वीडियो संलग्न करें"
+      "id": "native.android.8c3f70be12db2b69",
+      "source": "Files",
+      "translated": "फ़ाइलें"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
       "source": "Message OpenClaw",
       "translated": "OpenClaw को संदेश भेजें"
+    },
+    {
+      "id": "native.android.96cbc35556fd6f2e",
+      "source": "Context ${contextPercent}% used",
+      "translated": "Context ${contextPercent}% उपयोग किया गया"
+    },
+    {
+      "id": "native.android.3332655e560cb682",
+      "source": "${contextPercent}%",
+      "translated": "${contextPercent}%"
     },
     {
       "id": "native.android.9b42791ed9da90d3",
@@ -8427,6 +8467,11 @@
       "id": "native.android.1d55fe6bab0d3f74",
       "source": "Start Talk",
       "translated": "Talk शुरू करें"
+    },
+    {
+      "id": "native.android.76d574acfac94fee",
+      "source": "Stop",
+      "translated": "रोकें"
     },
     {
       "id": "native.android.6f4dc5330b262dea",
@@ -8477,21 +8522,6 @@
       "id": "native.android.4e03ec248c0d5428",
       "source": "Gateway authentication needs attention.",
       "translated": "Gateway प्रमाणीकरण पर ध्यान देने की आवश्यकता है।"
-    },
-    {
-      "id": "native.android.4d756c15804130ff",
-      "source": "Context ${(it * 100).roundToInt()}%",
-      "translated": "संदर्भ ${(it * 100).roundToInt()}%"
-    },
-    {
-      "id": "native.android.5d9cafb38a925db9",
-      "source": "Context --",
-      "translated": "संदर्भ --"
-    },
-    {
-      "id": "native.android.4e6c67df44d588d3",
-      "source": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}",
-      "translated": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}"
     },
     {
       "id": "native.android.c83c512c569b1b14",
@@ -9987,6 +10017,11 @@
       "id": "native.apple.91108e396155b531",
       "source": "Dashboard",
       "translated": "डैशबोर्ड"
+    },
+    {
+      "id": "native.apple.bebd98273fb20c83",
+      "source": "Open Desktop",
+      "translated": "डेस्कटॉप खोलें"
     },
     {
       "id": "native.apple.8a315564807ba77d",
@@ -15639,6 +15674,31 @@
       "translated": "हो गया"
     },
     {
+      "id": "native.apple.db66c78d803f4677",
+      "source": "Desktop",
+      "translated": "डेस्कटॉप"
+    },
+    {
+      "id": "native.apple.f20de570e816a565",
+      "source": "Gateway settings",
+      "translated": "Gateway सेटिंग्स"
+    },
+    {
+      "id": "native.apple.6bb0be75b4d9c9ef",
+      "source": "Desktop needs a connected gateway",
+      "translated": "डेस्कटॉप के लिए एक कनेक्टेड gateway आवश्यक है"
+    },
+    {
+      "id": "native.apple.fb0f1f1544fe7faa",
+      "source": "Connect to your gateway to view an observable machine.",
+      "translated": "एक observable मशीन देखने के लिए अपने gateway से कनेक्ट करें।"
+    },
+    {
+      "id": "native.apple.49c60ec037c1cb4d",
+      "source": "Open Gateway Settings",
+      "translated": "Gateway सेटिंग्स खोलें"
+    },
+    {
       "id": "native.apple.c218ef5194d0ee56",
       "source": "Run OpenClaw agent?",
       "translated": "OpenClaw agent चलाएं?"
@@ -17197,6 +17257,11 @@
       "id": "native.apple.fca6a390e072ada9",
       "source": "Automations",
       "translated": "स्वचालन"
+    },
+    {
+      "id": "native.apple.a06ea85267dd561c",
+      "source": "Desktop",
+      "translated": "डेस्कटॉप"
     },
     {
       "id": "native.apple.b3b5114b91a8db8f",

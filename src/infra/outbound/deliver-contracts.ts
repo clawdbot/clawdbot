@@ -122,6 +122,8 @@ export type PlatformSendRoute = {
 
 export type ChannelHandlerParams = {
   cfg: OpenClawConfig;
+  /** Admitted run owner for agent-scoped channel runtime discovery. */
+  agentId?: string;
   channel: string;
   to: string;
   accountId?: string;

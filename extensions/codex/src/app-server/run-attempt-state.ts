@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
@@ -136,8 +137,12 @@ export function prependCurrentInboundContext(
   prompt: string,
   context: EmbeddedRunAttemptParams["currentInboundContext"],
 ): string {
+  // Inbound context carries quoted replies and room backlog, not the raw
+  // current request; Codex must not resolve explicit mentions from it.
   const text = context?.text.trim();
-  return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
+  return text
+    ? [neutralizeCodexExplicitMentionSigils(text), prompt].filter(Boolean).join("\n\n")
+    : prompt;
 }
 
 export function waitForCodexNotificationDispatchTurn(): Promise<void> {

@@ -814,14 +814,14 @@
       "translated": "連線至 Gateway 以檢視 ClawHub Skills。"
     },
     {
-      "id": "native.android.57c31cd4bd7c5146",
-      "source": "ClawHub did not return an installable version for ${skill.slug}.",
-      "translated": "ClawHub 未傳回 ${skill.slug} 的可安裝版本。"
+      "id": "native.android.e5b0558c26183ff4",
+      "source": "ClawHub did not return an installable version for ${skill.reference}.",
+      "translated": "ClawHub 未針對 ${skill.reference} 傳回可安裝的版本。"
     },
     {
-      "id": "native.android.ecf82b1ac9d18307",
-      "source": "Could not load ClawHub details for ${skill.slug}.",
-      "translated": "無法載入 ${skill.slug} 的 ClawHub 詳細資料。"
+      "id": "native.android.5d4e8b19fbd1204f",
+      "source": "Could not load ClawHub details for ${skill.reference}.",
+      "translated": "無法載入 ${skill.reference} 的 ClawHub 詳細資料。"
     },
     {
       "id": "native.android.4154579c8cb1c995",
@@ -2027,6 +2027,26 @@
       "id": "native.android.2d809753c1f15194",
       "source": "Unknown",
       "translated": "未知"
+    },
+    {
+      "id": "native.android.dbe524469f9dabaa",
+      "source": "Back",
+      "translated": "返回"
+    },
+    {
+      "id": "native.android.3c19f8c172f78ded",
+      "source": "Desktop",
+      "translated": "桌面"
+    },
+    {
+      "id": "native.android.469c6e10b238c851",
+      "source": "Desktop needs a connected gateway",
+      "translated": "桌面需要已連線的 gateway"
+    },
+    {
+      "id": "native.android.7efb67654e5a6cd0",
+      "source": "Connect to your gateway to view a machine screen.",
+      "translated": "連線至您的 gateway 以檢視機器畫面。"
     },
     {
       "id": "native.android.b735fb6c7d284ecf",
@@ -3822,6 +3842,11 @@
       "id": "native.android.09fa98489fd0881b",
       "source": "Dashboard",
       "translated": "儀表板"
+    },
+    {
+      "id": "native.android.e8f14c8f388c0264",
+      "source": "Open desktop",
+      "translated": "開啟桌面"
     },
     {
       "id": "native.android.285be3399daf82ee",
@@ -6084,6 +6109,16 @@
       "translated": "終端機"
     },
     {
+      "id": "native.android.afe0cca470817261",
+      "source": "Desktop",
+      "translated": "桌面"
+    },
+    {
+      "id": "native.android.508d63f629607328",
+      "source": "View a machine screen",
+      "translated": "檢視機器畫面"
+    },
+    {
       "id": "native.android.345d2424511d2d53",
       "source": "Speaker muted",
       "translated": "揚聲器已靜音"
@@ -8234,6 +8269,11 @@
       "translated": "圖片"
     },
     {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "附件"
+    },
+    {
       "id": "native.android.952a88e71b4aaee4",
       "source": "Additional images hidden: ${omittedImageCount}",
       "translated": "已隱藏其他圖片：${omittedImageCount}"
@@ -8329,11 +8369,6 @@
       "translated": "關閉分享圖片警告"
     },
     {
-      "id": "native.android.76d574acfac94fee",
-      "source": "Stop",
-      "translated": "停止"
-    },
-    {
       "id": "native.android.be42506226307680",
       "source": "Switch branch",
       "translated": "切換分支"
@@ -8389,34 +8424,39 @@
       "translated": "Gateway 離線"
     },
     {
-      "id": "native.android.36ed01582459bc10",
-      "source": "Close thinking level selector",
-      "translated": "關閉思考層級選擇器"
+      "id": "native.android.3fea3a91bbd7ee4e",
+      "source": "Add attachment",
+      "translated": "新增附件"
     },
     {
-      "id": "native.android.82d6389036a1e211",
-      "source": "Open thinking level selector",
-      "translated": "開啟思考層級選擇器"
+      "id": "native.android.9db5d4b832ddaf20",
+      "source": "Photos",
+      "translated": "相片"
     },
     {
-      "id": "native.android.623e434c83e3c020",
-      "source": "Attach image",
-      "translated": "附加圖片"
+      "id": "native.android.827fd291f6fd3120",
+      "source": "Videos",
+      "translated": "影片"
     },
     {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "附件"
-    },
-    {
-      "id": "native.android.1bf18cef7a720c58",
-      "source": "Attach video",
-      "translated": "附加影片"
+      "id": "native.android.8c3f70be12db2b69",
+      "source": "Files",
+      "translated": "檔案"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
       "source": "Message OpenClaw",
       "translated": "傳送訊息給 OpenClaw"
+    },
+    {
+      "id": "native.android.96cbc35556fd6f2e",
+      "source": "Context ${contextPercent}% used",
+      "translated": "已使用 ${contextPercent}% 內容"
+    },
+    {
+      "id": "native.android.3332655e560cb682",
+      "source": "${contextPercent}%",
+      "translated": "${contextPercent}%"
     },
     {
       "id": "native.android.9b42791ed9da90d3",
@@ -8427,6 +8467,11 @@
       "id": "native.android.1d55fe6bab0d3f74",
       "source": "Start Talk",
       "translated": "開始對話"
+    },
+    {
+      "id": "native.android.76d574acfac94fee",
+      "source": "Stop",
+      "translated": "停止"
     },
     {
       "id": "native.android.6f4dc5330b262dea",
@@ -8477,21 +8522,6 @@
       "id": "native.android.4e03ec248c0d5428",
       "source": "Gateway authentication needs attention.",
       "translated": "Gateway 驗證需要處理。"
-    },
-    {
-      "id": "native.android.4d756c15804130ff",
-      "source": "Context ${(it * 100).roundToInt()}%",
-      "translated": "上下文 ${(it * 100).roundToInt()}%"
-    },
-    {
-      "id": "native.android.5d9cafb38a925db9",
-      "source": "Context --",
-      "translated": "上下文 --"
-    },
-    {
-      "id": "native.android.4e6c67df44d588d3",
-      "source": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}",
-      "translated": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}"
     },
     {
       "id": "native.android.c83c512c569b1b14",
@@ -9987,6 +10017,11 @@
       "id": "native.apple.91108e396155b531",
       "source": "Dashboard",
       "translated": "儀表板"
+    },
+    {
+      "id": "native.apple.bebd98273fb20c83",
+      "source": "Open Desktop",
+      "translated": "開啟桌面"
     },
     {
       "id": "native.apple.8a315564807ba77d",
@@ -15639,6 +15674,31 @@
       "translated": "完成"
     },
     {
+      "id": "native.apple.db66c78d803f4677",
+      "source": "Desktop",
+      "translated": "桌面"
+    },
+    {
+      "id": "native.apple.f20de570e816a565",
+      "source": "Gateway settings",
+      "translated": "Gateway 設定"
+    },
+    {
+      "id": "native.apple.6bb0be75b4d9c9ef",
+      "source": "Desktop needs a connected gateway",
+      "translated": "桌面需要已連線的 gateway"
+    },
+    {
+      "id": "native.apple.fb0f1f1544fe7faa",
+      "source": "Connect to your gateway to view an observable machine.",
+      "translated": "連線至您的 gateway 以檢視可觀察的機器。"
+    },
+    {
+      "id": "native.apple.49c60ec037c1cb4d",
+      "source": "Open Gateway Settings",
+      "translated": "開啟 Gateway 設定"
+    },
+    {
       "id": "native.apple.c218ef5194d0ee56",
       "source": "Run OpenClaw agent?",
       "translated": "執行 OpenClaw agent？"
@@ -17197,6 +17257,11 @@
       "id": "native.apple.fca6a390e072ada9",
       "source": "Automations",
       "translated": "自動化"
+    },
+    {
+      "id": "native.apple.a06ea85267dd561c",
+      "source": "Desktop",
+      "translated": "桌面"
     },
     {
       "id": "native.apple.b3b5114b91a8db8f",

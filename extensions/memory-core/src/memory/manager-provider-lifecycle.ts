@@ -27,7 +27,6 @@ import {
   type EmbeddingProviderResult,
 } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
-import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
   createDegradedMemoryProviderLifecycle,
   createPendingMemoryProviderLifecycle,
@@ -342,28 +341,19 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     if (this.provider?.id !== "local") {
       return;
     }
-    const workerFailure = isLocalEmbeddingWorkerFailure(err)
-      ? err
-      : err instanceof Error && isLocalEmbeddingWorkerFailure(err.cause)
-        ? err.cause
-        : null;
-    if (!workerFailure) {
-      return;
-    }
-    const message = formatErrorMessage(workerFailure);
+    const message = formatErrorMessage(err);
     const degradedProvider = this.provider;
     void this.retireCurrentProvider();
     this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
     this.providerLifecycle = createDegradedMemoryProviderLifecycle({
       providerId: degradedProvider.id,
       reason: message,
-      code: workerFailure.code,
     });
     EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
-    log.warn("memory embeddings: local provider degraded after worker failure", {
+    log.warn("memory embeddings: local provider degraded after transport failure", {
       error: message,
     });
   }

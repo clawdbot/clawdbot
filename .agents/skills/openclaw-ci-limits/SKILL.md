@@ -175,11 +175,41 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.
+- `OPENCLAW_CI_RUNNER_BACKEND=github` routes every configurable `ci.yml` job
+  to its existing GitHub-hosted fallback label. Unset or `blacksmith` preserves
+  the normal Blacksmith-first route.
 - Vitest/test compile caches are restore-only in CI and use immutable Actions
   caches; the daily/dispatch warmer is their sole writer. Build compile cache
   writes rotate at most once per UTC day. PRs create no runtime-cache archives.
 
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
+
+## Blacksmith Outage Circuit Breaker
+
+Use the repository variable only after confirming a Blacksmith outage or
+unavailable runner capacity. Do not set it merely for a failing test that has
+already started.
+
+```bash
+gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
+```
+
+In degraded mode, `ci.yml` uses the same hosted labels and non-Blacksmith paths
+as manual dispatches and fork pull requests. Blacksmith-only Docker and sticky
+steps stay off, dependency setup uses the ordinary Actions pnpm-store cache,
+and Android's large build uses separate low-memory Gradle processes. Standard
+4-core hosted runners make builds and test lanes slower. Blacksmith runner
+registration is no longer part of the budget, while GitHub-hosted concurrency
+limits apply.
+
+Flip back after the outage by deleting the variable:
+
+```bash
+gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
+```
+
+Scheduled health detection and automatic flipping are a follow-up, not part of
+the current circuit breaker.
 
 ## Validation
 

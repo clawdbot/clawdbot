@@ -4964,6 +4964,10 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, other: {} },
+      },
       models: {
         providers: {
           openai: {
@@ -4990,6 +4994,7 @@ describe("persistSessionUsageUpdate", () => {
       storePath,
       sessionKey,
       cfg,
+      agentDir: "/tmp/openclaw-main-agent",
       usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
       lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
       providerUsed: "openai",
@@ -5009,6 +5014,7 @@ describe("persistSessionUsageUpdate", () => {
       storePath,
       sessionKey,
       cfg,
+      agentDir: "/tmp/openclaw-main-agent",
       usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
       lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
       providerUsed: "openai",
