@@ -39,6 +39,7 @@ import {
   resolveProviderEntryApiKeyProfileReferenceMock,
   resolveContextWindowInfoMock,
   resolveContextEngineMock,
+  resolveDefaultAgentDirMock,
   resolveEffectiveCompactionModeMock,
   resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
@@ -673,6 +674,40 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
       expect.objectContaining({ config: {}, workspaceDir: "/tmp/workspace" }),
+    );
+  });
+
+  it("does not require an implicit default owner for direct compaction", async () => {
+    resolveDefaultAgentDirMock.mockImplementation(() => {
+      throw new Error("ambiguous default agent");
+    });
+    resolveSessionAgentIdsMock.mockReturnValue({
+      defaultAgentId: "marie-clawndo",
+      sessionAgentId: "marie-clawndo",
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        agentId: "marie-clawndo",
+        config: {
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "main" }, { id: "marie-clawndo" }],
+          },
+        },
+        sessionKey: "agent:marie-clawndo:dashboard:session-1",
+        sessionTarget: {
+          agentId: "marie-clawndo",
+          sessionId: TEST_SESSION_ID,
+          sessionKey: "agent:marie-clawndo:dashboard:session-1",
+          storePath: "/tmp/sessions.json",
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "marie-clawndo" }),
     );
   });
 
@@ -2502,6 +2537,40 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       preparedModelRuntime: snapshot,
       skipAgentDiscovery: true,
     });
+  });
+
+  it("does not require an implicit default owner for queued compaction", async () => {
+    resolveDefaultAgentDirMock.mockImplementation(() => {
+      throw new Error("ambiguous default agent");
+    });
+    resolveSessionAgentIdsMock.mockReturnValue({
+      defaultAgentId: "marie-clawndo",
+      sessionAgentId: "marie-clawndo",
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        agentId: "marie-clawndo",
+        config: {
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "main" }, { id: "marie-clawndo" }],
+          },
+        },
+        sessionKey: "agent:marie-clawndo:dashboard:session-1",
+        sessionTarget: {
+          agentId: "marie-clawndo",
+          sessionId: TEST_SESSION_ID,
+          sessionKey: "agent:marie-clawndo:dashboard:session-1",
+          storePath: "/tmp/sessions.json",
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "marie-clawndo" }),
+    );
   });
 
   it("disposes the context engine once when route materialization rejects", async () => {

@@ -102,6 +102,7 @@ export const resolveSessionAgentIdsMock = vi.fn(() => ({
   defaultAgentId: "main",
   sessionAgentId: "main",
 }));
+export const resolveDefaultAgentDirMock = vi.fn(() => "/tmp/agents/main/agent");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 function createSelectedAgentHarnessMock(params: {
@@ -566,6 +567,8 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   acquireAgentRunPreparedModelRuntimeMock.mockClear();
+  resolveDefaultAgentDirMock.mockReset();
+  resolveDefaultAgentDirMock.mockReturnValue("/tmp/agents/main/agent");
   getCurrentPluginMetadataSnapshotMock.mockReset();
   getCurrentPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot);
 
@@ -973,7 +976,7 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveAgentConfig: vi.fn(() => undefined),
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp"),
-    resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
+    resolveDefaultAgentDir: resolveDefaultAgentDirMock,
     resolveDefaultAgentId: vi.fn(() => "main"),
     resolveAgentIdFromSessionKey: vi.fn(
       (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",

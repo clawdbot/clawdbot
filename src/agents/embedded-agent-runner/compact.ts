@@ -10,7 +10,6 @@ import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveRunModelFallbacksOverride,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
@@ -219,7 +218,6 @@ export async function compactEmbeddedAgentSessionDirect(
     config: requestedParams.config ?? {},
     agentId: requestedAgentIds.sessionAgentId,
     agentDir: requestedAgentDir,
-    inheritedAuthDir: resolveDefaultAgentDir(requestedParams.config ?? {}),
     workspaceDir: requestedWorkspaceDir,
     preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
     ...(requestedParams.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),

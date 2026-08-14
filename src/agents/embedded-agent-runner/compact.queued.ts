@@ -23,7 +23,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
-import { resolveAgentDir, resolveDefaultAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -339,7 +339,6 @@ async function compactEmbeddedAgentSessionImpl(
     config: params.config ?? {},
     agentId: agentIds.sessionAgentId,
     agentDir,
-    inheritedAuthDir: resolveDefaultAgentDir(params.config ?? {}),
     workspaceDir: resolvedWorkspaceDir,
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
     runtimePluginSelections: [
