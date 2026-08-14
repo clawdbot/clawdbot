@@ -48,6 +48,10 @@ The signed macOS app bundles the universal `cua-driver` 0.19.3 executable and of
 
 The app waits until the private socket accepts connections before advertising CUA readiness. Its TypeScript node worker starts only the unprivileged MCP proxy against that socket and maps the same typed `computer.act` v2 actions used on other platforms. Permission changes restart the daemon, and provider changes, disabling Computer Control, app shutdown, or an unexpected child exit remove the advertised CUA commands until a fresh generation is ready.
 
+#### Trust model
+
+The embedded CUA daemon runs in unrestricted mode because bounded CUA grants require exact launch-time resources and cannot represent OpenClaw's runtime-discovered windows and elements. OpenClaw command arming, pairing approval, and tool policy are the authoritative authorization gate, identical to the shipped Peekaboo fulfiller. The app owns the daemon and its macOS TCC identity, and the daemon accepts local connections only through an owner-only socket directory.
+
 The CUA descriptor advertises window and element targets, background and foreground delivery, screenshots, and accessibility observations. Peekaboo remains the default in this release and advertises the existing coordinate-action family; its v2 adapter is separate work.
 
 ### Windows and Linux (experimental, direct SDK)

@@ -123,6 +123,12 @@ struct CuaDriverHostCoordinatorTests {
 
         #expect(launch.arguments.contains("--embedded"))
         #expect(launch.arguments.contains("--parent-liveness-stdio"))
+        // The embedded host cannot predeclare arbitrary runtime-discovered targets in a bounded manifest.
+        let permissionModeIndex = launch.arguments.firstIndex(of: "--permission-mode")
+        let permissionMode = permissionModeIndex.flatMap { index in
+            launch.arguments.indices.contains(index + 1) ? launch.arguments[index + 1] : nil
+        }
+        #expect(permissionMode == "unrestricted")
         #expect(launch.arguments.contains("--dangerously-bypass-approvals"))
         #expect(launch.environment["CUA_DRIVER_EMBEDDED"] == "1")
         #expect(launch.environment["CUA_DRIVER_PERMISSION_MODE"] == "unrestricted")
@@ -132,6 +138,31 @@ struct CuaDriverHostCoordinatorTests {
         #expect(launch.environment["CUA_DRIVER_SOCKET"] == nil)
         #expect(launch.environment["CUA_TELEMETRY_ENABLED"] == nil)
         #expect(launch.environment["PATH"] == "/usr/bin:/bin")
+    }
+
+    @Test func `stderr relay replaces the raw danger banner with one managed mode notice`() async throws {
+        let probe = CuaDriverStderrProbe()
+        let relay = CuaDriverStderrRelay { probe.append($0) }
+        relay.startReading()
+        relay.reportManagedMode()
+        relay.reportManagedMode()
+
+        let driverOutput = """
+        DANGER: Cua Driver is running in unrestricted mode. Runtime approval prompts are disabled.
+        driver diagnostic
+
+        """
+        try relay.pipe.fileHandleForWriting.write(contentsOf: Data(driverOutput.utf8))
+        try relay.pipe.fileHandleForWriting.close()
+        for _ in 0..<1000 where probe.events.count < 2 {
+            await Task.yield()
+        }
+        relay.stop()
+
+        #expect(probe.events == [
+            .notice(CuaDriverStderrRelay.managedModeNotice),
+            .error("driver diagnostic"),
+        ])
     }
 
     @Test func `unexpected exits retry with a bounded budget while advertising unavailable`() async throws {
@@ -196,6 +227,19 @@ struct CuaDriverHostCoordinatorTests {
 
     private func shortTemporaryDirectory(_ label: String) -> URL {
         URL(fileURLWithPath: "/tmp/oc-cua-\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+    }
+}
+
+private final class CuaDriverStderrProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var captured: [CuaDriverStderrEvent] = []
+
+    var events: [CuaDriverStderrEvent] {
+        self.lock.withLock { self.captured }
+    }
+
+    func append(_ event: CuaDriverStderrEvent) {
+        self.lock.withLock { self.captured.append(event) }
     }
 }
 
