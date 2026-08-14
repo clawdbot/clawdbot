@@ -7,6 +7,10 @@ import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSystemBin } from "./resolve-system-bin.js";
 import { decodeWindowsOutputBuffer } from "./windows-encoding.js";
+import {
+  buildEncodedPowerShellArgs,
+  WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+} from "./windows-powershell-spawn.js";
 
 const SQLITE_DIRECTORY_MODE = 0o700;
 const WINDOWS_DIRECTORY_EXISTS_MARKER = "OPENCLAW_SQLITE_DIRECTORY_EXISTS";
@@ -129,16 +133,16 @@ function privateDirectoryError(
 function runPrivateDirectoryPowerShell(
   directoryPath: string,
   powershell: string,
-  encodedCommand: string,
+  args: string[],
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(
       powershell,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
+      args,
       {
         encoding: "buffer",
         maxBuffer: 64 * 1024,
-        timeout: 10_000,
+        timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
         windowsHide: true,
       },
       (error, stdout, stderr) => {
@@ -153,7 +157,7 @@ function runPrivateDirectoryPowerShell(
 }
 
 function resolvePrivateDirectoryPowerShell(directoryPath: string): {
-  encodedCommand: string;
+  args: string[];
   powershell: string;
 } {
   const nativeDirectoryPath = path.toNamespacedPath(path.resolve(directoryPath));
@@ -185,7 +189,7 @@ function resolvePrivateDirectoryPowerShell(directoryPath: string): {
   }
   return {
     powershell,
-    encodedCommand: Buffer.from(command, "utf16le").toString("base64"),
+    args: buildEncodedPowerShellArgs(command),
   };
 }
 
@@ -195,8 +199,8 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
     return;
   }
   // This raw Win32 call bypasses Node's automatic long-path normalization.
-  const { encodedCommand, powershell } = resolvePrivateDirectoryPowerShell(directoryPath);
-  await runPrivateDirectoryPowerShell(directoryPath, powershell, encodedCommand);
+  const { args, powershell } = resolvePrivateDirectoryPowerShell(directoryPath);
+  await runPrivateDirectoryPowerShell(directoryPath, powershell, args);
 }
 
 function createPrivateSqliteDirectorySync(directoryPath: string): void {
@@ -204,17 +208,13 @@ function createPrivateSqliteDirectorySync(directoryPath: string): void {
     fsSync.mkdirSync(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
     return;
   }
-  const { encodedCommand, powershell } = resolvePrivateDirectoryPowerShell(directoryPath);
+  const { args, powershell } = resolvePrivateDirectoryPowerShell(directoryPath);
   try {
-    execFileSync(
-      powershell,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
-      {
-        maxBuffer: 64 * 1024,
-        timeout: 10_000,
-        windowsHide: true,
-      },
-    );
+    execFileSync(powershell, args, {
+      maxBuffer: 64 * 1024,
+      timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+      windowsHide: true,
+    });
   } catch (error) {
     throw privateDirectoryError(directoryPath, error);
   }
