@@ -270,3 +270,59 @@ describe("acp session UX bridge behavior", () => {
     expect(sessionUpdatePayloads(sessionUpdate, "user_message_chunk")).toEqual([]);
   });
 });
+
+describe("acp bridge session cwd persistence", () => {
+  function createRecordingGateway() {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      calls.push({ method, params });
+      return { ok: true };
+    }) as GatewayClient["request"];
+    return { calls, gateway: createAcpGateway(request) };
+  }
+
+  it("creates the Gateway session with the requested cwd for a bridge-minted session", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    const result = await agent.newSession(createNewSessionRequest("/tmp/my-project"));
+    const sessionKey = sessionStore.getSession(result.sessionId)?.sessionKey;
+
+    // The Gateway persists this as spawnedCwd, which every later prompt turn resolves.
+    expect(calls).toContainEqual({
+      method: "sessions.create",
+      params: { key: sessionKey, cwd: "/tmp/my-project" },
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("does not reconfigure an explicitly routed session key", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await agent.newSession({
+      ...createNewSessionRequest("/tmp/my-project"),
+      _meta: { sessionKey: "agent:main:work" },
+    } as never);
+
+    expect(calls.some((call) => call.method === "sessions.create")).toBe(false);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("rejects a relative cwd instead of silently running elsewhere", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await expect(agent.newSession(createNewSessionRequest("relative/project"))).rejects.toThrow(
+      /requires an absolute cwd/i,
+    );
+    expect(calls.some((call) => call.method === "sessions.create")).toBe(false);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+});

@@ -67,6 +67,7 @@ export class AcpTranslatorSessionLifecycle {
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.assertSupportedSessionSetup(params.mcpServers);
+    assertAbsoluteCwd(params.cwd, "session/new");
     this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
@@ -75,6 +76,13 @@ export class AcpTranslatorSessionLifecycle {
       meta,
       fallbackKey: `acp-bridge:${sessionId}`,
     });
+    // A bridge-minted key has no Gateway session row yet, and chat.send carries no cwd, so the
+    // requested directory must be persisted as spawnedCwd here or every prompt turn falls back
+    // to the agent workspace. Explicitly routed keys/labels address operator-owned sessions that
+    // already own their cwd; creating over them would restate that state from the wrong owner.
+    if (!hasExplicitSessionRouting(meta, this.opts)) {
+      await this.gateway.request("sessions.create", { key: sessionKey, cwd: params.cwd });
+    }
 
     const session = this.sessionStore.createSession({
       sessionId,
