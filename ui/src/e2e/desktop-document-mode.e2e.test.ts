@@ -82,7 +82,7 @@ async function startDesktopDocument(
     expiresAtMs: 60_000,
     control: false,
   },
-  sessions?: unknown[],
+  describedSession?: unknown,
 ) {
   await page.setViewportSize({ width: 390, height: 844 });
   const gateway = await installMockGateway(page, {
@@ -90,14 +90,9 @@ async function startDesktopDocument(
     featureMethods: ["desktop.observe", "environments.list", "openclaw.setup.detect"],
     methodResponses: {
       "desktop.observe": desktopObserve,
-      ...(sessions
-        ? {
-            "sessions.list": {
-              count: sessions.length,
-              sessions,
-            },
-          }
-        : {}),
+      ...(describedSession === undefined
+        ? {}
+        : { "sessions.describe": { session: describedSession } }),
       "openclaw.setup.detect": {
         candidates: [],
         manualProviders: [],
@@ -119,9 +114,9 @@ async function openDesktopDocument(
   route: string,
   environments: unknown[],
   desktopObserve?: unknown,
-  sessions?: unknown[],
+  describedSession?: unknown,
 ) {
-  const document = await startDesktopDocument(page, route, desktopObserve, sessions);
+  const document = await startDesktopDocument(page, route, desktopObserve, describedSession);
   await document.gateway.resolveDeferred("environments.list", { environments });
   return document;
 }
@@ -190,14 +185,12 @@ suite.define(() => {
           },
         ],
         undefined,
-        [
-          {
-            key: sessionKey,
-            kind: "direct",
-            updatedAt: 1,
-            execNode: "workstation",
-          },
-        ],
+        {
+          key: sessionKey,
+          kind: "direct",
+          updatedAt: 1,
+          execNode: "workstation",
+        },
       );
 
       const request = await gateway.waitForRequest("desktop.observe");
@@ -230,26 +223,17 @@ suite.define(() => {
           },
         ],
         undefined,
-        [
-          {
-            key: sessionKey,
-            kind: "direct",
-            updatedAt: 1,
-            execNode: "workstation",
-          },
-        ],
+        {
+          key: sessionKey,
+          kind: "direct",
+          updatedAt: 1,
+          execNode: "workstation",
+        },
       );
 
       const request = await gateway.waitForRequest("desktop.observe");
       expect(request.params).toEqual({ source: { kind: "host" }, control: false });
-      expect(
-        (await gateway.getRequests("sessions.list")).filter(
-          (candidate) =>
-            typeof candidate.params === "object" &&
-            candidate.params !== null &&
-            "search" in candidate.params,
-        ),
-      ).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
     });
   });
 
@@ -260,7 +244,7 @@ suite.define(() => {
         "?view=desktop&session=agent%3Amain%3Amissing",
         [gatewayEnvironment],
         undefined,
-        [],
+        null,
       );
 
       await panel
@@ -314,7 +298,7 @@ suite.define(() => {
         page,
         `?view=desktop&session=${encodeURIComponent(sessionKey)}`,
         undefined,
-        [{ key: sessionKey, kind: "direct", updatedAt: 1, execNode: "workstation" }],
+        { key: sessionKey, kind: "direct", updatedAt: 1, execNode: "workstation" },
       );
       await gateway.rejectDeferred("environments.list", {
         code: "UNAVAILABLE",

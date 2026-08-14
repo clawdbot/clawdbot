@@ -60,9 +60,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ type: Boolean }) documentMode = false;
   @property({ attribute: false }) documentSource: string | null = null;
   @property({ attribute: false }) documentSession: string | null = null;
-  @property({ attribute: false }) resolveDocumentSession:
-    | ((sessionKey: string) => Promise<GatewaySessionRow | undefined>)
-    | null = null;
   @property({ type: Boolean }) documentControl = false;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
 
@@ -271,8 +268,14 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.documentSourceResolved = true;
     let session: GatewaySessionRow | undefined;
     if (this.documentSource === null && this.documentSession !== null) {
+      // `sessions.describe` is the exact-key lookup; a `sessions.list` search would have to
+      // page past same-agent keys that share this one's prefix before it could rule it out.
       try {
-        session = await this.resolveDocumentSession?.(this.documentSession);
+        const described = await this.client?.request<{ session?: GatewaySessionRow | null }>(
+          "sessions.describe",
+          { key: this.documentSession },
+        );
+        session = described?.session ?? undefined;
       } catch {
         session = undefined;
       }
