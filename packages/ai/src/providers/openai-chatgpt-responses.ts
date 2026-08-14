@@ -357,10 +357,12 @@ export const streamOpenAICodexResponses: StreamFunction<
               model,
               () => {
                 if (activeAttempt.kind === "compaction-stripped") {
-                  suppressOpenAIResponsesCompaction(output, model, {
-                    sessionId: options?.sessionId,
-                    authProfileId: options?.authProfileId,
-                  });
+                  suppressOpenAIResponsesCompaction(
+                    output,
+                    model,
+                    options,
+                    activeAttempt.rejectedCompaction,
+                  );
                 }
                 websocketStarted = true;
               },
@@ -560,10 +562,12 @@ export const streamOpenAICodexResponses: StreamFunction<
             throw transportAbortError(activeSignal);
           }
           if (activeAttempt.kind === "compaction-stripped") {
-            suppressOpenAIResponsesCompaction(output, model, {
-              sessionId: options?.sessionId,
-              authProfileId: options?.authProfileId,
-            });
+            suppressOpenAIResponsesCompaction(
+              output,
+              model,
+              options,
+              activeAttempt.rejectedCompaction,
+            );
           }
           break;
         }

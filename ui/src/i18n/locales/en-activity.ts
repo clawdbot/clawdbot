@@ -18,7 +18,6 @@ const enActivity = {
     clear: "Clear",
     empty: "No activity yet.",
     emptyFiltered: "No activity matches these filters.",
-    entrySummary: "{argumentSummary}",
     argumentHiddenOne: "1 argument hidden",
     argumentsHidden: "{count} arguments hidden",
     streamLabel: "Agent activity entries",

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -30,7 +31,9 @@ describe("worker turn launcher terminal results", () => {
   it("retains a cloud result when reconciliation fails after worker finishing", async () => {
     seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
-    const tunnelFailure = new Error("worker tunnel disconnected before workspace reconcile");
+    const tunnelFailure = new NodeWorkerWorkspaceTransferError(
+      "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+    );
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
@@ -39,7 +42,8 @@ describe("worker turn launcher terminal results", () => {
         resume: vi.fn(async () => {}),
       })),
       runWorkspaceCommand: vi.fn(),
-      launchTurn: vi.fn(async (): Promise<SpawnResult> => {
+      launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+        request.onDispatchReady?.();
         const completed = openSessionManager();
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
@@ -99,7 +103,7 @@ describe("worker turn launcher terminal results", () => {
       ),
     ).rejects.toMatchObject({
       message:
-        "Cloud worker finished, but its workspace result could not be reconciled: worker tunnel disconnected before workspace reconcile",
+        "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
     });
 
     expect(placements.get(SESSION_ID)).toMatchObject({
@@ -124,7 +128,8 @@ describe("worker turn launcher terminal results", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
-        launchTurn: vi.fn(async (): Promise<SpawnResult> => {
+        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+          request.onDispatchReady?.();
           const completed = openSessionManager();
           completed.appendMessage(
             makeAgentAssistantMessage({

@@ -13,6 +13,7 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogHost,
+  SessionCatalogEntrySnapshot,
   SessionCatalogProvider,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -255,6 +256,21 @@ function setCatalogCapabilities(
   return page;
 }
 
+function projectOpenCodeAdoptedSessions(
+  page: OpenCodeSessionPage,
+  adopted: ReadonlyMap<string, string>,
+): OpenCodeSessionPage {
+  return {
+    ...page,
+    sessions: page.sessions.map((session) => {
+      const sessionKey = adopted.get(
+        sessionCatalogAdoptedSourceKey(LOCAL_HOST_ID, session.threadId),
+      );
+      return sessionKey ? { ...session, sessionKey } : session;
+    }),
+  };
+}
+
 async function listOpenCodeNodeHost(
   runtime: PluginRuntime,
   query: Parameters<SessionCatalogProvider["list"]>[0],
@@ -362,6 +378,9 @@ async function listOpenCodeHosts(
     backendId: ACPX_BACKEND_ID,
     agentId: OPENCODE_ACP_AGENT_ID,
   }).available;
+  const adopted = query.sessionEntries
+    ? listAdoptedOpenCodeSessions(api, query.sessionEntries)
+    : new Map<string, string>();
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
   if (
@@ -386,7 +405,12 @@ async function listOpenCodeHosts(
             cursor: query.cursors?.[LOCAL_HOST_ID],
           },
           { configIdentity: config },
-        ).then((page) => setCatalogCapabilities(page, { canContinue, canOpenTerminal: true }))),
+        ).then((page) =>
+          projectOpenCodeAdoptedSessions(
+            setCatalogCapabilities(page, { canContinue, canOpenTerminal: true }),
+            adopted,
+          ),
+        )),
       });
     } catch {
       hosts.push({
@@ -470,11 +494,15 @@ function currentOpenCodeCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
 }
 
-function listAdoptedOpenCodeSessions(api: OpenClawPluginApi): Map<string, string> {
+function listAdoptedOpenCodeSessions(
+  api: OpenClawPluginApi,
+  sessionEntries?: SessionCatalogEntrySnapshot,
+): Map<string, string> {
   return listAdoptedSessionCatalogSessions({
     config: currentOpenCodeCatalogConfig(api),
     pluginId: api.id,
     runtime: api.runtime,
+    sessionEntries,
     sourceFromEntry: (entry) => {
       const opencode = isRecord(entry.pluginExtensions?.opencode)
         ? entry.pluginExtensions.opencode

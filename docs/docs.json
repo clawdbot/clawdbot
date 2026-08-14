@@ -1807,6 +1807,7 @@
                       "cli/backup",
                       "cli/openclaw",
                       "cli/daemon",
+                      "cli/delivery",
                       "cli/doctor",
                       "cli/fleet",
                       "cli/gateway",

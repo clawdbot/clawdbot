@@ -4,6 +4,7 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
+  type SessionCatalogLocator,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -13,6 +14,7 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -34,7 +36,17 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import {
+  filterSessionCatalogHost,
+  isSessionCatalogThreadVisible,
+  resolveSessionCatalogVisibility,
+} from "./session-catalog-visibility.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
@@ -64,6 +76,13 @@ const sessionCatalogListAdmission = new SessionCatalogListAdmission(
   MAX_CONCURRENT_SESSION_CATALOG_LISTS,
   MAX_QUEUED_SESSION_CATALOG_LISTS,
 );
+
+function listSessionCatalogProvider(
+  provider: SessionCatalogProvider,
+  params: SessionCatalogListProviderParams,
+) {
+  return sessionCatalogListAdmission.run(() => provider.list(params));
+}
 
 function createSessionCatalogRequestNodeSnapshot(): NonNullable<
   SessionCatalogListProviderParams["listNodes"]
@@ -256,6 +275,7 @@ function sessionCatalogListKey(params: {
   request: SessionsCatalogListParams;
   search?: string;
   allowProcessHomeFallback: boolean;
+  visibilityKey: string;
 }): string {
   const cursors = params.request.cursors
     ? Object.entries(params.request.cursors).toSorted(([left], [right]) =>
@@ -270,6 +290,7 @@ function sessionCatalogListKey(params: {
     params.request.hostIds ?? null,
     cursors,
     params.allowProcessHomeFallback,
+    params.visibilityKey,
   ]);
 }
 
@@ -335,6 +356,37 @@ function catalogResult(
   return result;
 }
 
+async function authorizeSessionCatalogThread(params: {
+  client: GatewayClient | null;
+  context: GatewayRequestContext;
+  provider: SessionCatalogProvider;
+  request: SessionCatalogLocator;
+  respond: RespondFn;
+}): Promise<{ allowProcessHomeFallback: boolean } | null> {
+  const config = params.context.getRuntimeConfig();
+  const allowHomeFallback = allowProcessHomeFallback(params.context.logGateway);
+  const visibility = resolveSessionCatalogVisibility(params.client);
+  const visible = await isSessionCatalogThreadVisible({
+    allowProcessHomeFallback: allowHomeFallback,
+    config,
+    fallbackAgentId: resolveDefaultAgentId(config),
+    hostId: params.request.hostId,
+    list: (request) => listSessionCatalogProvider(params.provider, request),
+    listNodes: createSessionCatalogRequestNodeSnapshot(),
+    threadId: params.request.threadId,
+    visibility,
+  });
+  if (visible) {
+    return { allowProcessHomeFallback: allowHomeFallback };
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.FORBIDDEN, "session catalog thread is not visible to this caller"),
+  );
+  return null;
+}
+
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
@@ -386,6 +438,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     const search = normalizeSessionCatalogSearch(request.search);
     const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
+    const visibility = resolveSessionCatalogVisibility(client);
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
     const listKey = sessionCatalogListKey({
@@ -393,6 +446,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       request,
       search,
       allowProcessHomeFallback: allowHomeFallback,
+      visibilityKey: visibility.cacheKey,
     });
     const cache = catalogListCache(config, catalogRegistrations);
     const cached = cache.get(listKey);
@@ -438,12 +492,11 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
               }
             : undefined;
           const onHost = (host: SessionCatalog["hosts"][number]) => {
-            const catalog = catalogResult(
-              provider,
-              [requestEntries.projectHostCreatedActors(host)],
-              undefined,
-              createSession,
+            const visibleHost = filterSessionCatalogHost(
+              requestEntries.projectHostCreatedActors(host),
+              visibility,
             );
+            const catalog = catalogResult(provider, [visibleHost], undefined, createSession);
             // Progressive frames are an optimization. The final RPC response remains
             // authoritative when a slow client drops an intermediate host update.
             for (const subscriber of progressSubscribers.values()) {
@@ -460,21 +513,21 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             }
           };
           try {
-            const hosts = await sessionCatalogListAdmission.run(() =>
-              provider.list({
-                allowProcessHomeFallback: allowHomeFallback,
-                search,
-                limitPerHost: request.limitPerHost,
-                hostIds: request.hostIds,
-                ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
-                sessionEntries: requestEntries.sessionEntries,
-                listNodes,
-                onHost,
-              }),
-            );
+            const hosts = await listSessionCatalogProvider(provider, {
+              allowProcessHomeFallback: allowHomeFallback,
+              search,
+              limitPerHost: request.limitPerHost,
+              hostIds: request.hostIds,
+              ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+              sessionEntries: requestEntries.sessionEntries,
+              listNodes,
+              onHost,
+            });
             return catalogResult(
               provider,
-              hosts.map(requestEntries.projectHostCreatedActors),
+              hosts.map((host) =>
+                filterSessionCatalogHost(requestEntries.projectHostCreatedActors(host), visibility),
+              ),
               undefined,
               createSession,
             );
@@ -507,7 +560,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.read": async ({ params, respond, context }) => {
+  "sessions.catalog.read": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -524,12 +577,22 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const authorization = await authorizeSessionCatalogThread({
+        client,
+        context,
+        provider,
+        request,
+        respond,
+      });
+      if (!authorization) {
+        return;
+      }
       const { catalogId: _catalogId, ...providerRequest } = request;
       respond(
         true,
         await provider.read({
           ...providerRequest,
-          allowProcessHomeFallback: allowProcessHomeFallback(context.logGateway),
+          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
         }),
       );
     } catch (error) {
@@ -564,13 +627,23 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const authorization = await authorizeSessionCatalogThread({
+        client,
+        context,
+        provider,
+        request,
+        respond,
+      });
+      if (!authorization) {
+        return;
+      }
       const { catalogId: _catalogId, ...providerRequest } = request;
       // Fail closed for unscoped callers: providers gate high-authority
       // continues (e.g. node-executing bindings) on these scopes.
       const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
       const result = await provider.continueSession({
         ...providerRequest,
-        allowProcessHomeFallback: allowProcessHomeFallback(context.logGateway),
+        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
         clientScopes,
       });
       if (result.conversationBinding) {
@@ -630,7 +703,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     resolveRegisteredCatalogCreateTarget,
   ),
 
-  "sessions.catalog.archive": async ({ params, respond, context }) => {
+  "sessions.catalog.archive": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -651,12 +724,22 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const authorization = await authorizeSessionCatalogThread({
+        client,
+        context,
+        provider,
+        request,
+        respond,
+      });
+      if (!authorization) {
+        return;
+      }
       const { catalogId: _catalogId, ...providerRequest } = request;
       respond(
         true,
         await provider.archive({
           ...providerRequest,
-          allowProcessHomeFallback: allowProcessHomeFallback(context.logGateway),
+          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
         }),
       );
     } catch (error) {

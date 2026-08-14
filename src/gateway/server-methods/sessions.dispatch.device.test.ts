@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
 import {
   dispatchTestSessionId,
   dispatchTestSessionKey,
@@ -53,11 +51,8 @@ describe("sessions.dispatch device targets", () => {
       updatedAtMs: 2,
       stateChangedAtMs: 2,
     } satisfies WorkerSessionPlacementRecord);
-    const workerEnvironmentService = {} as WorkerEnvironmentServiceContract;
-    bindDeviceWorkerAvailability(workerEnvironmentService, async () => true);
     const respond = await invokeSessionDispatch(
       makeDispatchTestContext({
-        workerEnvironmentService,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
@@ -86,19 +81,33 @@ describe("sessions.dispatch device targets", () => {
   });
 
   it("rejects a device target without a connected session-capable pairing", async () => {
-    const dispatch = vi.fn();
-    const workerEnvironmentService = {} as WorkerEnvironmentServiceContract;
-    bindDeviceWorkerAvailability(workerEnvironmentService, async () => false);
+    dispatchTestMocks.resolveTarget.mockReturnValue(
+      makeSessionTarget({
+        sessionId: dispatchTestSessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
+      }),
+    );
+    dispatchTestMocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: dispatchTestSessionKey,
+    });
+    const dispatch = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "device worker requires a connected current node host; reconnect or reprovision: device-1",
+        ),
+      );
     const respond = await invokeSessionDispatch(
       makeDispatchTestContext({
-        workerEnvironmentService,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
       { deviceId: "device-1" },
     );
 
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

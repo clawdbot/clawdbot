@@ -176,7 +176,7 @@ describe("route preload gateway provenance", () => {
           agents: [{ id: "main" }],
         })),
       },
-      agentSelection: { state: { selectedId: null, scopeId: null } },
+      agentSelection: { state: { selectedId: "main", scopeId: "main" } },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(replacementClient, true));

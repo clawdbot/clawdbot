@@ -3652,7 +3652,9 @@ describe("package artifact reuse", () => {
       checkTestboxSteps.indexOf(runTestboxStep) + 1,
     );
     expect(runArmTestboxStep.if).toBe("always()");
-    expect(runBuildArtifactsTestboxStep.if).toBe("always()");
+    expect(runBuildArtifactsTestboxStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && always()",
+    );
     expect(runWindowsTestboxStep.if).toBe("always()");
     expect(runTestboxStep["continue-on-error"]).toBeUndefined();
   });

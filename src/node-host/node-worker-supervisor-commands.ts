@@ -10,6 +10,10 @@ import {
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
 import {
+  NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+  NodeWorkerWorkspaceTransferError,
+} from "../worker/node-workspace-transfer-protocol.js";
+import {
   parseWorkerConnectionEndpoint,
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
@@ -30,7 +34,12 @@ type NodeWorkerSupervisorCommandResult =
       ok: true;
       payload: NodeWorkerSupervisorReceipt | NodeWorkerWorkspaceExecResult | null;
     }
-  | { handled: true; ok: false; code: "INVALID_REQUEST" | "UNAVAILABLE"; message: string };
+  | {
+      handled: true;
+      ok: false;
+      code: "INVALID_REQUEST" | "UNAVAILABLE" | typeof NODE_WORKSPACE_TRANSFER_ERROR_CODE;
+      message: string;
+    };
 
 function resolveWorkerConnectionEndpoint(params: {
   gatewayUrl?: string;
@@ -101,6 +110,14 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         payload: await params.workspace!.exec(
           parseNodeWorkerWorkspaceExecInput(params.paramsJSON),
           params.signal,
+          params.gatewayUrl
+            ? {
+                url: params.gatewayUrl,
+                ...(params.gatewayTlsFingerprint
+                  ? { tlsFingerprint: params.gatewayTlsFingerprint }
+                  : {}),
+              }
+            : undefined,
         ),
       };
     }
@@ -120,11 +137,16 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     };
   } catch (error) {
     const invalid = error instanceof Error && error.message.startsWith("INVALID_REQUEST:");
+    const transferFailure = error instanceof NodeWorkerWorkspaceTransferError;
     return {
       handled: true,
       ok: false,
-      code: invalid ? "INVALID_REQUEST" : "UNAVAILABLE",
-      message: invalid ? error.message : "node worker supervisor command failed",
+      code: invalid
+        ? "INVALID_REQUEST"
+        : transferFailure
+          ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
+          : "UNAVAILABLE",
+      message: invalid || transferFailure ? error.message : "node worker supervisor command failed",
     };
   }
 }

@@ -182,14 +182,27 @@ function spoolRelativePath(absolutePath: string, stateDir: string | undefined): 
     : null;
 }
 
-async function removeArtifact(absolutePath: string, stateDir: string | undefined): Promise<void> {
+function isMissingArtifactError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  return code === "ENOENT" || code === "not-found";
+}
+
+async function removeArtifact(
+  absolutePath: string,
+  stateDir: string | undefined,
+  strict = false,
+): Promise<void> {
   const relative = spoolRelativePath(absolutePath, stateDir);
   if (!relative) {
     return;
   }
-  await openSpoolStore(stateDir)
-    .remove(relative)
-    .catch(() => undefined);
+  try {
+    await openSpoolStore(stateDir).remove(relative);
+  } catch (error) {
+    if (strict && !isMissingArtifactError(error)) {
+      throw error;
+    }
+  }
 }
 
 /** Discards spool artifacts whose durable row is already gone. Never throws. */
@@ -199,6 +212,16 @@ export async function releaseSpoolArtifacts(
 ): Promise<void> {
   for (const artifact of artifacts) {
     await removeArtifact(artifact, stateDir);
+  }
+}
+
+/** Removes exact queue-owned artifacts and surfaces operational cleanup failures. */
+export async function releaseSpoolArtifactsStrict(
+  artifacts: readonly string[],
+  stateDir?: string,
+): Promise<void> {
+  for (const artifact of artifacts) {
+    await removeArtifact(artifact, stateDir, true);
   }
 }
 
@@ -216,6 +239,27 @@ export function collectEntrySpoolPaths(
     }
   }
   return paths;
+}
+
+export async function findUnavailableReplayMedia(
+  payloads: readonly ReplyPayload[],
+  stateDir?: string,
+): Promise<string[]> {
+  const unavailable: string[] = [];
+  for (const source of payloads.flatMap(payloadMediaSources)) {
+    if (!isSpoolableSource(source)) {
+      continue;
+    }
+    if (!path.isAbsolute(source) || !spoolRelativePath(source, stateDir)) {
+      unavailable.push(source);
+      continue;
+    }
+    const stats = await fs.stat(source).catch(() => null);
+    if (!stats?.isFile()) {
+      unavailable.push(source);
+    }
+  }
+  return unavailable;
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@openclaw/agent-core";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 /**
  * Transcript repair helpers for tool-call replay.
  *
@@ -402,7 +403,7 @@ function repairToolCallInputs(
         changed = true;
         continue;
       }
-      const nextMessage = { ...msg, content: nextContent };
+      const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
       for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
         priorToolCallIds.add(toolCall.id);
       }
@@ -411,7 +412,7 @@ function repairToolCallInputs(
     }
 
     if (messageChanged) {
-      const nextMessage = { ...msg, content: nextContent };
+      const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
       for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
         priorToolCallIds.add(toolCall.id);
       }

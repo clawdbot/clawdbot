@@ -55,8 +55,9 @@ longer package exports: `agent-runtime-test-contracts`,
 `plugin-test-runtime`, `provider-http-test-mocks`, `provider-test-contracts`,
 `reply-payload-testing`, `sqlite-runtime-testing`, `test-env`, `test-fixtures`,
 `test-live`, `test-live-auth`, `test-media-generation`,
-`test-media-understanding`, `test-node-mocks`, and `testing`. The private bundled helper surface
-`ssrf-runtime-internal` is also repo-local only.
+`test-media-understanding`, `test-node-mocks`, and `testing`.
+`ssrf-runtime-internal` is a JavaScript-only host runtime reserved for exact
+trusted local-service plugins; it is not a public plugin authoring API.
 
 ### Bundled plugin helper subpaths
 
@@ -217,6 +218,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
+    | `plugin-sdk/native-hook-relay-runtime` | Private-local bundled runtime helper for retained native direct-child hook policy; not for third-party plugins |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex helper for serializing transcript-mirror writes; not for third-party plugins |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
@@ -395,6 +397,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | --- | --- |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (default-only package export) |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex plugin helper for serializing transcript-mirror writes (default-only package export) |
+    | `plugin-sdk/ssrf-runtime-internal` | Private-local host helper for configured loopback requests owned by bundled Ollama/browser and the exact official `@openclaw/llama-cpp-provider` package (default-only package export) |
 
   </Accordion>
 </AccordionGroup>

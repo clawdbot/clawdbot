@@ -2,3 +2,12 @@
 CLAUDE.md -text
 src/gateway/server-methods/CLAUDE.md -text
 ui/src/i18n/.i18n/* linguist-generated
+apps/.i18n/** linguist-generated
+apps/android/app/src/main/res/values-*/strings.xml linguist-generated
+apps/android/app/src/main/res/values-*/assistant.xml linguist-generated
+apps/android/app/src/thirdParty/res/values-*/accessibility_strings.xml linguist-generated
+apps/android/wear/src/main/res/values-*/strings.xml linguist-generated
+apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt linguist-generated
+apps/ios/Resources/Localizable.xcstrings linguist-generated
+apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings linguist-generated
+apps/ios/**/*.lproj/InfoPlist.strings linguist-generated

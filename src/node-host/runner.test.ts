@@ -167,6 +167,7 @@ vi.mock("./mcp.js", () => ({
 vi.mock("./node-worker-build.js", () => ({
   resolveNodeWorkerInstallation: vi.fn(async () => ({
     packageRoot: "/tmp/openclaw-node-worker",
+    revalidateBuild: vi.fn(async () => true),
     build: structuredClone(mocks.nodeWorkerBuild),
   })),
 }));

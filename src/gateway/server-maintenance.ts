@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -10,6 +11,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
 import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import {
+  recordDeliveryFailureMaintenanceError,
+  sweepDeliveryFailureMaintenance,
+  type DeliveryFailureMaintenanceResult,
+} from "../infra/delivery-queue-failure-maintenance.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
@@ -91,6 +97,7 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
+  runDeliveryFailureSweep?: () => Promise<DeliveryFailureMaintenanceResult>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
   runDevicePairSetupCompletionGc?: (nowMs: number) => unknown;
   enableSkillCurator?: boolean;
@@ -170,8 +177,21 @@ export function startGatewayMaintenanceTimers(params: {
   // the general media TTL sweep is disabled.
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
+  const maintainDeliveryFailures =
+    params.runDeliveryFailureSweep ?? (() => sweepDeliveryFailureMaintenance());
   let deliveryQueueMediaGcStartedAtMs = 0;
   const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
+    try {
+      const result = await maintainDeliveryFailures();
+      if (result.errors > 0) {
+        params.logHealth.error(
+          `delivery failure maintenance completed with ${result.errors} row error${result.errors === 1 ? "" : "s"}`,
+        );
+      }
+    } catch (error) {
+      recordDeliveryFailureMaintenanceError();
+      params.logHealth.error(`delivery failure maintenance failed: ${formatError(error)}`);
+    }
     try {
       await runDeliveryQueueMediaGc();
     } catch (error) {
@@ -306,7 +326,15 @@ export function startGatewayMaintenanceTimers(params: {
     pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
 
     for (const [runId, entry] of params.chatAbortControllers) {
-      if (entry.projectSessionTerminalPending === true) {
+      // A stamped terminal observation whose async projection clear never ran
+      // (dropped claim, swallowed handler error) would otherwise pin the entry
+      // forever: phantom active run in sessions.list, pinned dedupe key,
+      // skipped media GC. Past the grace window the entry re-enters the
+      // ordinary expiry branches below, which are terminal-safe.
+      const terminalClearOverdue =
+        typeof entry.projectSessionTerminalObservedAt === "number" &&
+        now - entry.projectSessionTerminalObservedAt > AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
+      if (entry.projectSessionTerminalPending === true && !terminalClearOverdue) {
         continue;
       }
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {

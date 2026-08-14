@@ -41,6 +41,7 @@ function secretStoreSchemaSql(): string {
 /** Lazily install the additive secret store table and index on first write. */
 export function ensureSecretStoreSchema(database: DatabaseSync): void {
   database.exec(secretStoreSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+  ensureColumn(database, "secret_store_entries", "allowed_hosts TEXT");
 }
 
 /** Lazily install durable MCP OAuth callback correlation on first feature use. */

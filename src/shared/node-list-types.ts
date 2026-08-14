@@ -1,4 +1,5 @@
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 
 /** Node record returned by gateway node-list endpoints. */
 export type NodeListNode = {
@@ -18,6 +19,7 @@ export type NodeListNode = {
   pathEnv?: string;
   caps?: string[];
   commands?: string[];
+  computerUse?: ComputerUseCapabilityDescriptor;
   /** Connected node currently advertises full worker session hosting. */
   sessionHost?: boolean;
   nodePluginTools?: NodePluginToolDescriptor[];

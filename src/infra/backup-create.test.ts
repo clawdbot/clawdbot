@@ -1007,8 +1007,13 @@ describe("createBackupArchive", () => {
         db.prepare(
           `
             INSERT INTO delivery_queue_entries (
-              queue_name, id, status, retry_count, entry_json, enqueued_at, updated_at
-            ) VALUES ('outbound', 'queued-1', 'pending', 0, '{"id":"queued-1"}', 10, 10)
+              queue_name, id, status, session_key, channel, target, retry_count, last_error,
+              entry_json, enqueued_at, updated_at, failed_at
+            ) VALUES (
+              'outbound', 'failed-1', 'failed', 'agent:main:private', 'telegram', 'secret-target',
+              2, 'raw provider error',
+              '{"id":"failed-1","message":"sensitive failed delivery"}', 10, 20, 20
+            )
           `,
         ).run();
         const transientBlobMarker = `transient-diffs-blob-${"sensitive".repeat(32)}`;
@@ -2207,12 +2212,13 @@ describe("createBackupArchive", () => {
       },
       async (state) => {
         const outputDir = state.path("backups");
-        const externalDbPath = state.path("external-malformed.sqlite");
+        const backingPath = state.statePath("plugins", "backing", "malformed.bin");
         const linkedDbPath = state.statePath("plugins", "dedicated", "linked.sqlite");
+        await fs.mkdir(path.dirname(backingPath), { recursive: true });
         await fs.mkdir(path.dirname(linkedDbPath), { recursive: true });
         await fs.mkdir(outputDir, { recursive: true });
-        await fs.writeFile(externalDbPath, "not a sqlite database", "utf8");
-        await fs.symlink(externalDbPath, linkedDbPath);
+        await fs.writeFile(backingPath, "not a sqlite database", "utf8");
+        await fs.symlink(path.relative(path.dirname(linkedDbPath), backingPath), linkedDbPath);
 
         const result = await createBackupArchive({
           output: outputDir,
@@ -2226,7 +2232,7 @@ describe("createBackupArchive", () => {
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
-        ).resolves.toMatchObject({ ok: true });
+        ).resolves.toEqual(expect.objectContaining({ ok: true, symlinkCount: 1 }));
       },
     );
   });

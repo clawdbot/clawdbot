@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { summarizeDeliveryFailureQueues } from "./delivery-queue-failure-summary.js";
 import {
   claimDeliveryQueueEntryPlatformSend,
   promoteDeliveryQueueEntryPlatformSend,
@@ -12,15 +13,16 @@ import { commitStagedDeliveryQueueEntryOnceAcrossNamespaces } from "./delivery-q
 import {
   commitStagedDeliveryQueueEntry,
   completeDeliveryQueueEntry,
-  countFailedDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
+  getDeliveryQueueEntryStatuses,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
+import { unknownDeliveryTerminalPolicy } from "./delivery-queue-terminal-policy.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 describe("delivery-queue-sqlite corrupt JSON resilience", () => {
@@ -125,9 +127,14 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
     it("throws ENOENT (unrecoverable corrupt JSON)", () => {
       insertCorruptRow("bad-move", "{corrupt");
 
-      expect(() => moveDeliveryQueueEntryToFailed(QUEUE, "bad-move", stateDir)).toThrow(
-        /No pending test-q delivery queue entry bad-move/,
-      );
+      expect(() =>
+        moveDeliveryQueueEntryToFailed(
+          QUEUE,
+          "bad-move",
+          unknownDeliveryTerminalPolicy(),
+          stateDir,
+        ),
+      ).toThrow(/No pending test-q delivery queue entry bad-move/);
     });
   });
 
@@ -495,7 +502,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       }
     });
 
-    it("expires a lone bounded receipt during its own indexed replay lookup", () => {
+    it("expires a lone bounded receipt during indexed point and namespace lookups", () => {
       vi.useFakeTimers();
       try {
         vi.setSystemTime(new Date("2026-07-20T10:00:00.000Z"));
@@ -513,8 +520,13 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         completeDeliveryQueueEntry(QUEUE, id, stateDir);
 
         vi.setSystemTime(Date.now() + boundedCronRetention.maxAgeMs - 1);
-        expect(getDeliveryQueueEntryStatus(QUEUE, id, stateDir)).toBe("completed");
+        expect(getDeliveryQueueEntryStatuses([QUEUE, "session-q"], id, stateDir)).toEqual(
+          new Map([[QUEUE, "completed"]]),
+        );
         vi.setSystemTime(Date.now() + 2);
+        expect(getDeliveryQueueEntryStatuses([QUEUE, "session-q"], id, stateDir)).toEqual(
+          new Map(),
+        );
         expect(getDeliveryQueueEntryStatus(QUEUE, id, stateDir)).toBeUndefined();
       } finally {
         vi.useRealTimers();
@@ -989,7 +1001,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
   });
 });
 
-describe("countFailedDeliveryQueueEntries", () => {
+describe("summarizeDeliveryFailureQueues", () => {
   let tmpDir: string;
   let stateDir: string;
 
@@ -1011,10 +1023,13 @@ describe("countFailedDeliveryQueueEntries", () => {
     });
   }
 
+  const fail = (queueName: string, id: string) =>
+    moveDeliveryQueueEntryToFailed(queueName, id, unknownDeliveryTerminalPolicy(), stateDir);
+
   it("returns an empty list when nothing is dead-lettered", () => {
     enqueue("outbound", "pending-1", 1_000);
 
-    expect(countFailedDeliveryQueueEntries(stateDir)).toEqual([]);
+    expect(summarizeDeliveryFailureQueues(stateDir)).toEqual([]);
   });
 
   it("counts dead-lettered entries per queue with the oldest failure timestamp", () => {
@@ -1025,11 +1040,11 @@ describe("countFailedDeliveryQueueEntries", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(50_000);
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1", stateDir);
+      fail("outbound", "dead-1");
       vi.setSystemTime(60_000);
-      moveDeliveryQueueEntryToFailed("outbound", "dead-2", stateDir);
+      fail("outbound", "dead-2");
       vi.setSystemTime(70_000);
-      moveDeliveryQueueEntryToFailed("session", "dead-3", stateDir);
+      fail("session", "dead-3");
     } finally {
       vi.useRealTimers();
     }
@@ -1040,14 +1055,15 @@ describe("countFailedDeliveryQueueEntries", () => {
       "UPDATE delivery_queue_entries SET failed_at = NULL WHERE queue_name = 'session'",
     ).run();
 
-    const counts = countFailedDeliveryQueueEntries(stateDir);
+    const counts = summarizeDeliveryFailureQueues(stateDir);
 
     expect(counts).toHaveLength(2);
     const outbound = counts.find((queue) => queue.queueName === "outbound");
     expect(outbound?.count).toBe(2);
     expect(outbound?.oldestFailedAt).toBe(50_000);
     const session = counts.find((queue) => queue.queueName === "session");
-    expect(session).toEqual({ queueName: "session", count: 1 });
+    expect(session?.count).toBe(1);
+    expect(session?.oldestFailedAt).toBeNull();
     expect(loadDeliveryQueueEntries("outbound", stateDir).map((entry) => entry.id)).toEqual([
       "still-pending",
     ]);

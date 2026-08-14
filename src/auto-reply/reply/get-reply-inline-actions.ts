@@ -19,7 +19,7 @@ import {
   resolveSkillCommandInvocation,
   resolveSkillReferenceInvocations,
 } from "../../skills/discovery/chat-commands.js";
-import type { SkillCommandSpec } from "../../skills/types.js";
+import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -177,6 +177,7 @@ type InlineActionResult =
       directives: InlineDirectives;
       abortedLastRun: boolean;
       cleanedBody: string;
+      explicitSkillSelections?: ExplicitSkillSelection[];
     };
 
 function extractTextFromToolResult(result: unknown): string | null {
@@ -310,6 +311,7 @@ export async function handleInlineActions(params: {
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
+  let explicitSkillSelections: ExplicitSkillSelection[] | undefined;
   const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
@@ -550,6 +552,10 @@ export async function handleInlineActions(params: {
       };
     }
     if (referenced.skills.length > 0) {
+      const selections = referenced.skills.flatMap((skill) =>
+        skill.skillFile ? [{ name: skill.name, path: skill.skillFile }] : [],
+      );
+      explicitSkillSelections = selections.length > 0 ? selections : undefined;
       cleanedBody = referenced.body;
       ctx.Body = cleanedBody;
       ctx.agentText = cleanedBody;
@@ -682,6 +688,7 @@ export async function handleInlineActions(params: {
       directives,
       abortedLastRun,
       cleanedBody,
+      ...(explicitSkillSelections ? { explicitSkillSelections } : {}),
     };
   }
   const remainingBodyAfterInlineStatus = (() => {
@@ -722,5 +729,6 @@ export async function handleInlineActions(params: {
     directives,
     abortedLastRun,
     cleanedBody,
+    ...(explicitSkillSelections ? { explicitSkillSelections } : {}),
   };
 }

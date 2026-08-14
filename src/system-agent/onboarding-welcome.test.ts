@@ -72,11 +72,15 @@ describe("buildOnboardingWelcome", () => {
       noteAssistantMessage,
     };
 
-    const { text: welcome, question } = await buildOnboardingWelcome({ engine: engine as never });
+    const { text: welcome, question } = await buildOnboardingWelcome({
+      engine: engine as never,
+      agentName: "robby",
+    });
 
     expect(propose).toHaveBeenCalledWith({
       kind: "setup",
       workspace: "/existing/workspace",
+      agentName: "robby",
     });
     expect(question.id).toBe("onboarding-apply-setup");
     expect(question.options[0]).toMatchObject({

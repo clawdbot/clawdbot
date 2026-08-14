@@ -71,6 +71,10 @@ describe("active cron schedule ownership", () => {
 
     expect(marker?.scheduleMutated).toBe(true);
     expect(marker?.jobRemoved).toBe(true);
+    expect(marker?.cancellation).toEqual({
+      kind: "requested",
+      reason: "Cron job removed by operator.",
+    });
     expect(hasActiveCronJobs()).toBe(true);
   });
 

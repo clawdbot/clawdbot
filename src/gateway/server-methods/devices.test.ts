@@ -534,6 +534,7 @@ describe("deviceHandlers", () => {
         role: "operator",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
+        tokenDelivery: "withheld-cross-device",
       },
       undefined,
     );
@@ -697,6 +698,7 @@ describe("deviceHandlers", () => {
         token: "new-token",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
+        tokenDelivery: "in-band",
       },
       undefined,
     );
@@ -757,6 +759,7 @@ describe("deviceHandlers", () => {
         token: "rotated-token",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
+        tokenDelivery: "in-band",
       },
       undefined,
     );
@@ -796,6 +799,7 @@ describe("deviceHandlers", () => {
         role: "operator",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
+        tokenDelivery: "withheld-cross-device",
       },
       undefined,
     );

@@ -1,4 +1,4 @@
-// Prompt media carrier tests cover collect batching, deferral, and retry identity.
+// Prompt metadata carrier tests cover collect batching, deferral, and retry identity.
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -16,7 +16,7 @@ afterEach(() => {
   queueKeys.clear();
 });
 
-describe("followup prompt media carrier", () => {
+describe("followup prompt metadata carrier", () => {
   it("keeps collected prompt bytes and ordered facts stable across deferred admission", async () => {
     const key = `prompt-media-collect-${Date.now()}`;
     queueKeys.add(key);
@@ -24,12 +24,20 @@ describe("followup prompt media carrier", () => {
     const done = createDeferred();
     const calls: FollowupRun[] = [];
 
-    for (const [prompt, path, contentType] of [
-      ["[media attached: /tmp/a.png (image/png)]\nfirst", "/tmp/a.png", "image/png"],
-      ["[media attached: /tmp/b.pdf (application/pdf)]\nsecond", "/tmp/b.pdf", "application/pdf"],
+    for (const [prompt, path, contentType, skillName] of [
+      ["[media attached: /tmp/a.png (image/png)]\nfirst", "/tmp/a.png", "image/png", "a"],
+      [
+        "[media attached: /tmp/b.pdf (application/pdf)]\nsecond",
+        "/tmp/b.pdf",
+        "application/pdf",
+        "b",
+      ],
     ] as const) {
       const run = createQueueTestRun({ prompt });
       run.media = [{ path, contentType }];
+      run.explicitSkillSelections = [
+        { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
+      ];
       enqueueFollowupRun(key, run, settings);
     }
 
@@ -59,6 +67,14 @@ describe("followup prompt media carrier", () => {
         { path: "/tmp/b.pdf", contentType: "application/pdf" },
       ],
     ]);
+    const expectedSkills = [
+      { name: "a", path: "/tmp/skills/a/SKILL.md" },
+      { name: "b", path: "/tmp/skills/b/SKILL.md" },
+    ];
+    expect(calls.map((run) => run.explicitSkillSelections)).toEqual([
+      expectedSkills,
+      expectedSkills,
+    ]);
   });
 
   it("preserves facts when an overflow source is rebuilt for retry", () => {
@@ -66,10 +82,12 @@ describe("followup prompt media carrier", () => {
       prompt: "[media attached: /tmp/retry.png (image/png)]\nretry me",
     });
     source.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
+    source.explicitSkillSelections = [{ name: "retry", path: "/tmp/skills/retry/SKILL.md" }];
 
     const retry = createOverflowSummaryRetrySource(source);
 
     expect(retry.prompt).toBe(source.prompt);
     expect(retry.media).toEqual(source.media);
+    expect(retry.explicitSkillSelections).toEqual(source.explicitSkillSelections);
   });
 });

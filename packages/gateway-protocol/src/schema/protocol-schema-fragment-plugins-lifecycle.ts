@@ -45,6 +45,7 @@ export const PluginLifecycleProtocolSchemas = {
   DevicePairSetupStatusResult: devices.DevicePairSetupStatusResultSchema,
   DevicePairRenameParams: devices.DevicePairRenameParamsSchema,
   DeviceTokenRotateParams: devices.DeviceTokenRotateParamsSchema,
+  DeviceTokenRotateResult: devices.DeviceTokenRotateResultSchema,
   DeviceTokenRevokeParams: devices.DeviceTokenRevokeParamsSchema,
   ScopeUpgradeRequest: devices.ScopeUpgradeRequestSchema,
   ScopeUpgradeWait: devices.ScopeUpgradeWaitSchema,

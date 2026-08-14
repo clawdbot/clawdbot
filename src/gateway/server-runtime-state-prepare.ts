@@ -167,6 +167,7 @@ export async function prepareGatewayKernelState(params: {
     workerLiveEvents,
     bindDeviceNodeControl,
     bindNodeWorkspaceBindingResolver,
+    handleNodeWorkspaceTransferRequest,
   } = workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
@@ -455,6 +456,7 @@ export async function prepareGatewayKernelState(params: {
     getStartup,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+    handleNodeWorkspaceTransferRequest,
     workerIngressEnabled: Boolean(workerEnvironmentService),
     desktopSessionRegistry,
     nodeDesktopStreamBroker,

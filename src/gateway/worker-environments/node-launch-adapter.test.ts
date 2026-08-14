@@ -132,6 +132,30 @@ function launchRequest(input = launchInput()) {
 }
 
 describe("node worker launch adapter", () => {
+  it("fails with a typed availability result when no node dispatches within the grace", async () => {
+    vi.useFakeTimers();
+    const onDispatchReady = vi.fn();
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(vi.fn(), async () => []),
+      availabilityTimeoutMs: 100,
+      pollIntervalMs: 10,
+    });
+    try {
+      const launch = adapter
+        .launch({ ...launchRequest(), timeoutMs: 1_000, onDispatchReady })
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(await launch).toMatchObject({
+        name: "WorkerRunnerUnavailableError",
+        code: "runner-offline",
+      });
+      expect(onDispatchReady).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("launches once, polls status, and returns the exact completed receipt", async () => {
     const input = launchInput();
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) =>
@@ -488,11 +512,19 @@ describe("node worker launch adapter", () => {
       request.onDispatchReady?.("invoke-1");
       return wire(receipt(input, "running"));
     });
+    // Scheduling lag lands the clock read that sizes the RPC budget ahead of the timer wheel,
+    // so the per-RPC timer expires just before the cancellation deadline it was derived from.
+    // That must stay a terminal deadline, not a retryable RPC timeout that funds a second
+    // cancel dispatch out of the residue.
+    let cancelling = false;
+    let cancelClockReads = 0;
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () => transportWith(invoke),
       cancellationTimeoutMs: 25,
+      now: () => Date.now() + (cancelling && ++cancelClockReads === 3 ? 5 : 0),
       sleep: async () => {
         controller.abort();
+        cancelling = true;
       },
     });
 
