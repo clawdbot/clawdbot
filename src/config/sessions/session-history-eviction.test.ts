@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -90,6 +91,36 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists("live-history")).toBe(true);
     expect(readArchiveNames("oldest-history")).toHaveLength(1);
     expect(readArchiveNames("newer-history")).toHaveLength(0);
+  });
+
+  it("remeasures incompressible archive publication before declaring high water", async () => {
+    const sessionId = "incompressible-history";
+    const sessionKey = "agent:main:incompressible-history";
+    await createHistoricalTranscript({
+      content: randomBytes(192 * 1024).toString("base64"),
+      nextSessionId: "incompressible-live",
+      sessionId,
+      sessionKey,
+      updatedAt: 1,
+    });
+    settlePhysicalUsage();
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+    const highWaterBytes = before.totalBytes - 1;
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: {
+        maxDiskBytes: highWaterBytes,
+        highWaterBytes,
+      },
+    });
+    const actualAfter = await measureSessionPhysicalDiskUsage(storePath);
+
+    expect(result?.removedEntries).toBe(1);
+    expect(result?.totalBytesAfter).toBe(actualAfter.totalBytes);
+    expect(actualAfter.totalBytes).toBeLessThanOrEqual(highWaterBytes);
+    expect(sessionExists(sessionId)).toBe(false);
   });
 
   it("removes counted archives before evicting searchable history", async () => {

@@ -556,7 +556,6 @@ async function enforceSessionHistoryMaintenanceSerialized(
         }
         return {
           archivedTranscripts: committedArchives,
-          usage: await measureSessionPhysicalDiskUsage(params.storePath),
         };
       },
     });
@@ -571,7 +570,9 @@ async function enforceSessionHistoryMaintenanceSerialized(
     );
     removedEntries += 1;
     emitArchivedTranscriptUpdates(publishedArchives);
-    usage = eviction.usage;
+    // Publication adds both the derived file and SQLite status WAL after the
+    // deletion measurement. Re-read physical usage before declaring high water.
+    usage = await measureSessionPhysicalDiskUsage(params.storePath);
     if (usage.totalBytes > highWaterBytes) {
       // Reclaim archives (oldest first, including ones this pass committed)
       // before spending another session's rows: each session's data should be

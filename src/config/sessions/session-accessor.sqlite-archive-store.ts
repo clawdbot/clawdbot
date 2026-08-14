@@ -94,97 +94,98 @@ export async function publishSessionStateArchives(
   requested: readonly SessionLifecycleArchivedTranscript[],
 ): Promise<SessionLifecycleArchivedTranscript[]> {
   const requestedIds = [...new Set(requested.map((archive) => archive.sessionId))];
-  const plans = await runExclusiveSqliteSessionWrite(scope, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
-    const db = getSessionKysely(database.db);
-    if (requestedIds.length === 0) {
-      const exists = executeSqliteQueryTakeFirstSync(
+  const requestedIdSet = new Set(requestedIds);
+  let includeRequested = true;
+  while (true) {
+    const plans = await runExclusiveSqliteSessionWrite(scope, async () => {
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+      const db = getSessionKysely(database.db);
+      if (includeRequested && requestedIds.length > 0) {
+        ensureSessionTranscriptArchiveSchema(database.db);
+      } else {
+        const exists = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("sqlite_schema")
+            .select("name")
+            .where("type", "=", "table")
+            .where("name", "=", "session_transcript_archives"),
+        );
+        if (!exists) {
+          return [];
+        }
+      }
+      const pendingIds = executeSqliteQuerySync(
         database.db,
         db
-          .selectFrom("sqlite_schema")
-          .select("name")
-          .where("type", "=", "table")
-          .where("name", "=", "session_transcript_archives"),
-      );
-      if (!exists) {
-        return [];
-      }
-    } else {
-      ensureSessionTranscriptArchiveSchema(database.db);
+          .selectFrom("session_transcript_archives")
+          .select("session_id")
+          .where("published_at", "is", null)
+          .orderBy("created_at", "asc")
+          .orderBy("session_id", "asc")
+          .limit(PENDING_ARCHIVE_PUBLISH_BATCH_SIZE),
+      ).rows.map((row) => row.session_id);
+      const sessionIds = [...new Set([...(includeRequested ? requestedIds : []), ...pendingIds])];
+      const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(scope);
+      return sessionIds.map((sessionId) => ({
+        agentId: database.agentId,
+        archiveDirectory,
+        databasePath: database.path,
+        sessionId,
+      }));
+    });
+    includeRequested = false;
+    if (plans.length === 0) {
+      break;
     }
-    const pendingIds = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_transcript_archives")
-        .select("session_id")
-        .where("published_at", "is", null)
-        .orderBy("created_at", "asc")
-        .orderBy("session_id", "asc")
-        .limit(PENDING_ARCHIVE_PUBLISH_BATCH_SIZE),
-    ).rows.map((row) => row.session_id);
-    const sessionIds = [...new Set([...requestedIds, ...pendingIds])];
-    const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(scope);
-    return sessionIds.map((sessionId) => ({
-      agentId: database.agentId,
-      archiveDirectory,
-      databasePath: database.path,
-      sessionId,
-    }));
-  });
-  if (plans.length === 0) {
-    return [];
-  }
 
-  const results = await runSqliteTranscriptArchivePublishWorker(plans);
-  await runExclusiveSqliteSessionWrite(scope, async () => {
-    const now = Date.now();
-    runOpenClawAgentWriteTransaction((transactionDb) => {
-      ensureSessionTranscriptArchiveSchema(transactionDb.db);
-      const db = getSessionKysely(transactionDb.db);
-      for (const result of results) {
-        executeSqliteQuerySync(
-          transactionDb.db,
-          db
-            .updateTable("session_transcript_archives")
-            .set((eb) => ({
-              last_publish_attempt_at: now,
-              last_publish_error: result.error?.slice(0, 1024) ?? null,
-              publish_attempts: eb("publish_attempts", "+", 1),
-              ...(result.archivedPath ? { published_at: now } : {}),
-            }))
-            .where("session_id", "=", result.sessionId),
-        );
-      }
-    }, toDatabaseOptions(scope));
-  });
+    const results = await runSqliteTranscriptArchivePublishWorker(plans);
+    await runExclusiveSqliteSessionWrite(scope, async () => {
+      const now = Date.now();
+      runOpenClawAgentWriteTransaction((transactionDb) => {
+        ensureSessionTranscriptArchiveSchema(transactionDb.db);
+        const db = getSessionKysely(transactionDb.db);
+        for (const result of results) {
+          executeSqliteQuerySync(
+            transactionDb.db,
+            db
+              .updateTable("session_transcript_archives")
+              .set((eb) => ({
+                last_publish_attempt_at: now,
+                last_publish_error: result.error?.slice(0, 1024) ?? null,
+                publish_attempts: eb("publish_attempts", "+", 1),
+                ...(result.archivedPath ? { published_at: now } : {}),
+              }))
+              .where("session_id", "=", result.sessionId),
+          );
+        }
+      }, toDatabaseOptions(scope));
+    });
 
-  const resultBySessionId = new Map(results.map((result) => [result.sessionId, result]));
-  const requestedIdSet = new Set(requestedIds);
-  const planBySessionId = new Map(plans.map((plan) => [plan.sessionId, plan]));
-  emitArchivedTranscriptUpdates(
-    results.flatMap((result) => {
-      if (!result.archivedPath || requestedIdSet.has(result.sessionId)) {
-        return [];
-      }
-      const plan = planBySessionId.get(result.sessionId);
-      return plan
-        ? [
-            {
-              archivedPath: result.archivedPath,
-              sessionId: result.sessionId,
-              sourcePath: path.join(plan.archiveDirectory, `${result.sessionId}.jsonl`),
-            },
-          ]
-        : [];
-    }),
-  );
-  const failedRequestedIds = (
-    requestedIds.length > 0 ? requestedIds : results.map((result) => result.sessionId)
-  ).filter((sessionId) => !resultBySessionId.get(sessionId)?.archivedPath);
-  if (failedRequestedIds.length > 0) {
-    throw new Error(
-      `Session deletion committed, but ${failedRequestedIds.length} transcript archive file export(s) remain pending in SQLite; retry the operation to publish them.`,
+    const planBySessionId = new Map(plans.map((plan) => [plan.sessionId, plan]));
+    emitArchivedTranscriptUpdates(
+      results.flatMap((result) => {
+        if (!result.archivedPath || requestedIdSet.has(result.sessionId)) {
+          return [];
+        }
+        const plan = planBySessionId.get(result.sessionId);
+        return plan
+          ? [
+              {
+                archivedPath: result.archivedPath,
+                sessionId: result.sessionId,
+                sourcePath: path.join(plan.archiveDirectory, `${result.sessionId}.jsonl`),
+              },
+            ]
+          : [];
+      }),
     );
+    const failedIds = results.flatMap((result) => (result.archivedPath ? [] : [result.sessionId]));
+    if (failedIds.length > 0) {
+      throw new Error(
+        `Session deletion committed, but ${failedIds.length} transcript archive file export(s) remain pending in SQLite; retry the operation to publish them.`,
+      );
+    }
   }
   return [...requested];
 }
