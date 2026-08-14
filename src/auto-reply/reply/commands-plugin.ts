@@ -31,7 +31,9 @@ export const handlePluginCommand: CommandHandler = async (
   allowTextCommands,
 ): Promise<CommandHandlerResult | null> => {
   const { command, cfg } = params;
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const targetSessionEntry = structuredClone(
+    params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+  );
   const targetAgentId =
     params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
       ? (resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }) ??
@@ -113,6 +115,7 @@ export const handlePluginCommand: CommandHandler = async (
                   ...params,
                   command: { ...params.command, commandBodyNormalized: "/compact" },
                   commandInvocationSignal: invocationSignal,
+                  compactionSessionEntry: targetSessionEntry,
                   opts: {
                     ...params.opts,
                     abortSignal:

@@ -347,6 +347,53 @@ describe("handlePluginCommand", () => {
     }
   });
 
+  it("rejects session replacement before the compact capability is invoked", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-compact-rebound-"));
+    const sessionKey = "agent:main:whatsapp:direct:test-user";
+    const storePath = path.join(tempDir, "sessions.json");
+    const entry = {
+      sessionId: "session-plugin-command",
+      lifecycleRevision: "revision-1",
+      updatedAt: Date.now(),
+    };
+    const replacement = {
+      ...entry,
+      sessionId: "replacement-session",
+      lifecycleRevision: "revision-2",
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const params = buildPluginParams("/card", {
+      commands: { text: true },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = { [sessionKey]: entry };
+    registerTestCommand(undefined, {
+      handler: async (ctx) => {
+        Object.assign(
+          expectDefined(
+            expectDefined(params.sessionStore, "session store")[sessionKey],
+            "session entry",
+          ),
+          replacement,
+        );
+        await replaceSessionEntry({ storePath, sessionKey }, replacement);
+        return { text: JSON.stringify(await ctx.runtimeContext?.compactCurrent?.()) };
+      },
+    });
+
+    try {
+      const response = await handlePluginCommand(params, true);
+      expect(response?.reply?.text).toBe(
+        JSON.stringify({ compacted: false, reason: "command session changed" }),
+      );
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(replacement);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers the target session entry from sessionStore for plugin command metadata", async () => {
     const handler = registerTestCommand();
 

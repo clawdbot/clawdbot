@@ -204,7 +204,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     );
     return { shouldContinue: false };
   }
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const targetSessionEntry = params.commandInvocationSignal
+    ? params.compactionSessionEntry
+    : (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry);
   if (!targetSessionEntry?.sessionId) {
     return compactionUnavailable(
       "missing session id",

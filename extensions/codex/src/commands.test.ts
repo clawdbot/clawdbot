@@ -195,7 +195,7 @@ function supervisedTestBinding(threadId = "thread-supervised"): CodexAppServerTh
 
 async function createLockedSessionContextOverrides(
   sessionKey = "agent:main:test:locked",
-): Promise<Pick<PluginCommandContext, "config" | "sessionKey">> {
+): Promise<{ config: PluginCommandContext["config"]; sessionKey: string }> {
   const storePath = path.join(tempDir, "locked-sessions.json");
   await upsertSessionEntry({
     storePath,
@@ -210,6 +210,30 @@ async function createLockedSessionContextOverrides(
   return {
     config: { session: { store: storePath } },
     sessionKey,
+  };
+}
+
+async function createCodexRuntimeContextOverrides(
+  sessionKey = "agent:main:test:codex-compact",
+): Promise<{
+  config: PluginCommandContext["config"];
+  sessionKey: string;
+  sessionTarget: NonNullable<PluginCommandContext["sessionTarget"]>;
+}> {
+  const storePath = path.join(tempDir, "codex-runtime-sessions.json");
+  await upsertSessionEntry({
+    storePath,
+    sessionKey,
+    entry: {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+    },
+  });
+  return {
+    config: { session: { store: storePath } },
+    sessionKey,
+    sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
   };
 }
 
@@ -2735,10 +2759,12 @@ describe("codex command", () => {
 
   it("compacts the current session through the host runtime", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const runtime = await createCodexRuntimeContextOverrides();
     const identity = {
       kind: "session",
       agentId: "main",
       sessionId: "session-1",
+      sessionKey: runtime.sessionKey,
     } as const;
     await writeTestBinding(identity, {
       threadId: "thread-123",
@@ -2765,6 +2791,7 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(
         createContext("compact", sessionFile, {
+          ...runtime,
           runtimeContext: { compactCurrent },
         }),
         { deps },
@@ -2776,9 +2803,47 @@ describe("codex command", () => {
     expect(codexControlRequest).not.toHaveBeenCalled();
   });
 
-  it("rejects a conversation-bound thread that differs from the current session", async () => {
+  it("rejects a Codex binding on a non-Codex session runtime", async () => {
+    const sessionKey = "agent:main:test:mixed-runtime";
+    const storePath = path.join(tempDir, "mixed-runtime-sessions.json");
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        agentHarnessId: "openclaw",
+      },
+    });
     await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { kind: "session", agentId: "main", sessionId: "session-1", sessionKey },
+      { threadId: "thread-codex", cwd: "/repo" },
+    );
+    const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
+
+    const result = await handleCodexCommand(
+      createContext("compact", undefined, {
+        config: { session: { store: storePath } },
+        sessionKey,
+        sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+        runtimeContext: { compactCurrent },
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result.text).toContain("not using the Codex runtime");
+    expect(compactCurrent).not.toHaveBeenCalled();
+  });
+
+  it("rejects a conversation-bound thread that differs from the current session", async () => {
+    const runtime = await createCodexRuntimeContextOverrides();
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
       { threadId: "thread-session", clientId: "client-session", cwd: "/repo" },
     );
     await writeTestBinding(
@@ -2789,6 +2854,7 @@ describe("codex command", () => {
 
     const result = await handleCodexCommand(
       createContext("compact", undefined, {
+        ...runtime,
         runtimeContext: { compactCurrent },
         getCurrentConversationBinding: async () => ({
           bindingId: "binding-1",
@@ -2837,8 +2903,14 @@ describe("codex command", () => {
   });
 
   it("starts supervised compact and review actions through the native user-home connection", async () => {
+    const runtime = await createCodexRuntimeContextOverrides();
     await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
       supervisedTestBinding(),
     );
     const codexControlRequest = vi.fn(async () => undefined);
@@ -2847,13 +2919,14 @@ describe("codex command", () => {
 
     await handleCodexCommand(
       createContext("compact", undefined, {
+        ...runtime,
         runtimeContext: {
           compactCurrent: async () => ({ compacted: true, tokensAfter: 321 }),
         },
       }),
       { deps, pluginConfig },
     );
-    await handleCodexCommand(createContext("review"), { deps, pluginConfig });
+    await handleCodexCommand(createContext("review", undefined, runtime), { deps, pluginConfig });
 
     expect(codexControlRequest).toHaveBeenCalledTimes(1);
     for (let callIndex = 0; callIndex < codexControlRequest.mock.calls.length; callIndex += 1) {
@@ -2886,12 +2959,19 @@ describe("codex command", () => {
   });
 
   it("escapes compaction failure reasons before chat display", async () => {
+    const runtime = await createCodexRuntimeContextOverrides();
     await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
       { threadId: "thread-123", cwd: "/repo" },
     );
     const result = await handleCodexCommand(
       createContext("compact", undefined, {
+        ...runtime,
         runtimeContext: {
           compactCurrent: async () => ({
             compacted: false,
@@ -3119,16 +3199,36 @@ describe("codex command", () => {
 
   it("requires a Codex thread binding before host compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const runtime = await createCodexRuntimeContextOverrides();
     const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
 
     await expect(
       handleCodexCommand(
-        createContext("compact", sessionFile, { runtimeContext: { compactCurrent } }),
+        createContext("compact", sessionFile, {
+          ...runtime,
+          runtimeContext: { compactCurrent },
+        }),
         { deps: createDeps() },
       ),
     ).resolves.toEqual({
       text: "No Codex thread is attached to this OpenClaw session yet.",
     });
+    expect(compactCurrent).not.toHaveBeenCalled();
+  });
+
+  it("rejects host compaction without a complete captured session target", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-123", cwd: "/repo" },
+    );
+    const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
+
+    const result = await handleCodexCommand(
+      createContext("compact", undefined, { runtimeContext: { compactCurrent } }),
+      { deps: createDeps() },
+    );
+
+    expect(result.text).toContain("not bound to a complete session identity");
     expect(compactCurrent).not.toHaveBeenCalled();
   });
 
@@ -4759,8 +4859,14 @@ describe("codex command", () => {
 
   it("returns sanitized command failures instead of leaking app-server errors", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const runtime = await createCodexRuntimeContextOverrides();
     await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
       { threadId: "thread-123", cwd: "/repo" },
     );
     const failure = () => {
@@ -4786,11 +4892,14 @@ describe("codex command", () => {
       ["steer keep going", createDeps({ steerCodexConversationTurn: vi.fn(failure) })],
       ["model gpt-5.4", createDeps({ setCodexConversationModel: vi.fn(failure) })],
     ] as const) {
-      expectSanitizedFailure(await handleCodexCommand(createContext(args, sessionFile), { deps }));
+      expectSanitizedFailure(
+        await handleCodexCommand(createContext(args, sessionFile, runtime), { deps }),
+      );
     }
     expectSanitizedFailure(
       await handleCodexCommand(
         createContext("compact", sessionFile, {
+          ...runtime,
           runtimeContext: { compactCurrent: vi.fn(failure) },
         }),
         { deps: createDeps() },

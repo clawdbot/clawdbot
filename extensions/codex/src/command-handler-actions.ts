@@ -1,4 +1,7 @@
-import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
+import {
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  resolvePersistedSessionRuntimeId,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -436,13 +439,35 @@ export async function startThreadAction(
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
   if (kind === "compact") {
+    const sessionTarget = ctx.sessionTarget;
+    if (
+      !ctx.sessionId ||
+      !ctx.sessionKey ||
+      !sessionTarget ||
+      sessionTarget.sessionId !== ctx.sessionId ||
+      sessionTarget.sessionKey !== ctx.sessionKey
+    ) {
+      return "Codex compaction is unavailable because this command is not bound to a complete session identity.";
+    }
+    const currentSession = getSessionEntry({
+      storePath: sessionTarget.storePath,
+      sessionKey: ctx.sessionKey,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    });
+    if (
+      currentSession?.sessionId !== ctx.sessionId ||
+      resolvePersistedSessionRuntimeId(currentSession) !== "codex"
+    ) {
+      return "Codex compaction is unavailable because the current OpenClaw session is not using the Codex runtime.";
+    }
     if (target.identity.kind === "conversation") {
       const sessionBinding = ctx.sessionId
         ? await deps.bindingStore.read(
             sessionBindingIdentity({
               sessionId: ctx.sessionId,
               sessionKey: ctx.sessionKey,
-              agentId: resolveCodexConversationControlScope(ctx).agentId,
+              agentId: sessionTarget.agentId,
               config: ctx.config,
             }),
           )

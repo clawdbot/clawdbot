@@ -87,6 +87,8 @@ export type HandleCommandsParams = {
   typing?: TypingController;
   /** Invocation authority for host-bound plugin command capabilities. */
   commandInvocationSignal?: AbortSignal;
+  /** Session generation captured when a host-bound compaction capability was admitted. */
+  compactionSessionEntry?: SessionEntry;
 };
 
 /** Result returned by a command handler. */
