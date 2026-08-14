@@ -1267,6 +1267,11 @@ describe("server-channels auto restart", () => {
       preserveKnownAccount: true,
       restartPending: false,
     });
+    const thirdStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
     await flushMicrotasks();
     expect(stopAccount).toHaveBeenCalledTimes(1);
 
@@ -1275,7 +1280,7 @@ describe("server-channels auto restart", () => {
     expect(stopAccount).toHaveBeenCalledTimes(1);
 
     releaseAbortedTask.resolve();
-    await secondStop;
+    await Promise.all([secondStop, thirdStop]);
 
     expect(stopAccount).toHaveBeenCalledTimes(1);
     const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
