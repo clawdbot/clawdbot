@@ -14,7 +14,10 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
-import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
+import {
+  rejectUnsafeExecControlShellCommand,
+  rejectUnsafeExecLiveStateSqliteShellCommand,
+} from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -351,6 +354,7 @@ export function createExecTool(
       if (!params.command) {
         throw new Error("Provide a command to start.");
       }
+      await rejectUnsafeExecControlShellCommand(params.command);
       let workdir: string | undefined;
       let scriptPreflightCwd: string | null = null;
       let containerWorkdir = sandbox?.containerWorkdir;
@@ -388,10 +392,12 @@ export function createExecTool(
       } else {
         workdir = workdirResolution.remoteCwd;
       }
-      await rejectUnsafeExecControlShellCommand(
-        params.command,
-        host === "gateway" && workdir ? { stateDir: resolveStateDir(), workdir } : undefined,
-      );
+      if (host === "gateway" && workdir) {
+        await rejectUnsafeExecLiveStateSqliteShellCommand(params.command, {
+          stateDir: resolveStateDir(),
+          workdir,
+        });
+      }
       let run: ExecProcessHandle;
       let backgroundTask: BackgroundExecTaskHandle | null = null;
       let settledOutcome: ExecProcessOutcome | null = null;

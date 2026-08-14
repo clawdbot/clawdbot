@@ -249,11 +249,8 @@ export async function detectUnsafeExecControlShellCommand(
   return null;
 }
 
-export async function rejectUnsafeExecControlShellCommand(
-  command: string,
-  context: ExecControlShellCommandContext = {},
-): Promise<void> {
-  const unsafeKind = await detectUnsafeExecControlShellCommand(command, context);
+export async function rejectUnsafeExecControlShellCommand(command: string): Promise<void> {
+  const unsafeKind = await detectUnsafeExecControlShellCommand(command);
   if (unsafeKind === "approve") {
     throw new Error(
       [
@@ -270,12 +267,20 @@ export async function rejectUnsafeExecControlShellCommand(
       ].join(" "),
     );
   }
-  if (unsafeKind === "live-state-sqlite") {
-    throw new Error(
-      [
-        "external sqlite3 cannot open databases under the active OpenClaw state directory.",
-        "Use OpenClaw commands for live state, or inspect a private backup copy outside `OPENCLAW_STATE_DIR`.",
-      ].join(" "),
-    );
+}
+
+export async function rejectUnsafeExecLiveStateSqliteShellCommand(
+  command: string,
+  context: Required<ExecControlShellCommandContext>,
+): Promise<void> {
+  const unsafeKind = await detectUnsafeExecControlShellCommand(command, context);
+  if (unsafeKind !== "live-state-sqlite") {
+    return;
   }
+  throw new Error(
+    [
+      "external sqlite3 cannot open databases under the active OpenClaw state directory.",
+      "Use OpenClaw commands for live state, or inspect a private backup copy outside `OPENCLAW_STATE_DIR`.",
+    ].join(" "),
+  );
 }
