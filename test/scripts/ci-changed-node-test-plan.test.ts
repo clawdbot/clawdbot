@@ -10,6 +10,7 @@ import {
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT } from "../../scripts/lib/extension-test-plan.mts";
 import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
@@ -297,6 +298,24 @@ describe("CI changed Node test plan", () => {
 
     expect(shards).not.toBeNull();
     expect(shards?.flatMap((shard) => shard.configs)).toContain(config);
+  });
+
+  it("packs Telegram process lifetimes into bounded changed-extension jobs", () => {
+    const shards = createChangedExtensionFallbackShards(["extensions/telegram/src/channel.ts"]);
+    const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+
+    expect(shards.length).toBeGreaterThan(1);
+    expect(
+      shards.every(
+        (shard) =>
+          shard.configs[0] === "test/vitest/vitest.extension-telegram.config.ts" &&
+          (shard.includePatterns?.length ?? 0) > 0 &&
+          (shard.includePatterns?.length ?? 0) <= TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT,
+      ),
+    ).toBe(true);
+    expect(targets.length).toBeGreaterThan(TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT);
+    expect(new Set(targets).size).toBe(targets.length);
+    expect(shards).toHaveLength(Math.ceil(targets.length / TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT));
   });
 
   it("preserves Matrix process bounds in mixed package fallbacks", () => {

@@ -96,6 +96,8 @@ export type ReplyMessageInjectionTarget = {
   readonly identity: "leaf" | "run";
   readonly runId?: string;
   readonly originatingLeafEntryId: string | null | undefined;
+  /** Tool authority captured with the exact active operation. */
+  readonly toolAuthorityFingerprint?: string;
 };
 
 type ReplyMessageInjectionRejectionReason =

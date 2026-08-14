@@ -42,6 +42,8 @@ export class TerminalPanelSessionController
   private connection: TerminalConnection | null = null;
   private activeClient: TerminalGatewayClient | null = null;
   private activeAvailable = false;
+  private hadClient = false;
+  private refreshPending = false;
   private lifecycleGeneration = 0;
   private lifecycleAbortController = new AbortController();
   private lifecycleSyncToken = 0;
@@ -80,12 +82,14 @@ export class TerminalPanelSessionController
   connectHost(): void {
     this.activeClient = this.host.client;
     this.activeAvailable = this.host.available;
+    this.hadClient = this.host.client !== null;
   }
 
   disconnectHost(): void {
     this.disposeAllTabs();
     this.activeClient = null;
     this.activeAvailable = false;
+    this.hadClient = false;
   }
 
   scheduleLifecycleSync(): void {
@@ -111,8 +115,10 @@ export class TerminalPanelSessionController
     if (!clientChanged && !availabilityChanged) {
       return;
     }
+    const reconnecting = clientChanged && this.hadClient && this.host.client !== null;
     if (clientChanged) {
       this.activeClient = this.host.client;
+      this.hadClient ||= this.host.client !== null;
     }
     this.activeAvailable = this.host.available;
     const becameUnavailable = availabilityChanged && !this.host.available;
@@ -127,9 +133,32 @@ export class TerminalPanelSessionController
         shouldRestore = true;
       }
     }
-    if (shouldRestore) {
+    if (reconnecting) {
+      this.refreshBeforeReconnectRestore(shouldRestore);
+    } else if (shouldRestore) {
       void this.restoreSessions();
     }
+  }
+
+  private refreshBeforeReconnectRestore(restore: boolean): void {
+    const generation = this.lifecycleGeneration;
+    this.refreshPending = true;
+    const release = () => {
+      if (generation !== this.lifecycleGeneration || !this.host.isConnected) {
+        return;
+      }
+      this.refreshPending = false;
+      if (restore || this.host.terminalPanelOpen) {
+        void this.restoreSessions();
+      }
+    };
+    void import("../../app/sw-refresh.runtime.ts")
+      .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
+      .then((replacementActivated) => {
+        if (!replacementActivated) {
+          release();
+        }
+      }, release);
   }
 
   async restoreSessions(): Promise<void> {
@@ -625,7 +654,13 @@ export class TerminalPanelSessionController
 
   private captureTerminalOperation(): TerminalOperation | null {
     const client = this.host.client;
-    if (!client || client !== this.activeClient || !this.host.available || !this.host.isConnected) {
+    if (
+      this.refreshPending ||
+      !client ||
+      client !== this.activeClient ||
+      !this.host.available ||
+      !this.host.isConnected
+    ) {
       return null;
     }
     return {
@@ -661,6 +696,7 @@ export class TerminalPanelSessionController
 
   private disposeAllTabs(): void {
     this.lifecycleGeneration += 1;
+    this.refreshPending = false;
     this.lifecycleAbortController.abort();
     this.lifecycleAbortController = new AbortController();
     this.bootQueue.reset();

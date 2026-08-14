@@ -9,6 +9,10 @@ import {
 } from "../infra/node-commands.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+  NodeWorkerWorkspaceTransferError,
+} from "../worker/node-workspace-transfer-protocol.js";
 import { handleInvoke } from "./invoke.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
@@ -427,5 +431,35 @@ describe("node-host worker supervisor commands", () => {
     const message = result?.error?.message ?? "";
     expect(message).not.toContain("private/path");
     expect(message.length).toBeLessThan(256);
+  });
+
+  it("preserves a typed workspace transfer failure across node invoke", async () => {
+    const workspace = {
+      exec: vi.fn(async () => {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        );
+      }),
+    } as unknown as NodeWorkerWorkspaceRuntime;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      paramsJSON: JSON.stringify({
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        generation: 4,
+        argv: ["openclaw-internal-workspace-transfer"],
+      }),
+      workspace,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+        message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+      },
+    });
   });
 });

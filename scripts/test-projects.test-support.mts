@@ -89,7 +89,10 @@ import {
 } from "./changed-lanes.mts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
-import { createExtensionTestProcessTargetChunks } from "./lib/extension-test-plan.mts";
+import {
+  createExtensionTestProcessTargetChunks,
+  splitExtensionTestProcessTargets,
+} from "./lib/extension-test-plan.mts";
 import {
   GATEWAY_SERVER_TEST_PROCESS_COUNT,
   listGatewayServerTestTargets,
@@ -969,11 +972,31 @@ function createBroadToolingScriptPlans(params: VitestRunPlan & { cwd: string }) 
     : null;
 }
 
-function createBoundedExtensionPlans(plan: VitestRunPlan) {
+function createBoundedExtensionPlans(plan: VitestRunPlan, env?: NodeJS.ProcessEnv) {
   const { config, forwardedArgs, watchMode } = plan;
   const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
   if (watchMode || !roots) {
     return [plan];
+  }
+  // A CI include file already owns the test scope. Keep that file set, but
+  // still honor process lifetime so isolate:true configs cannot re-import
+  // a second heavy file in the same Vitest process.
+  const includeFilePath = env?.[INCLUDE_FILE_ENV_KEY]?.trim();
+  if (includeFilePath) {
+    if (!fs.existsSync(includeFilePath)) {
+      return [{ ...plan, includePatterns: null }];
+    }
+    const scopedTargets = loadIncludePatternsForSpecFilter(env ?? {}) ?? [];
+    const chunks = splitExtensionTestProcessTargets(config, scopedTargets);
+    if (chunks.length <= 1) {
+      return [{ ...plan, includePatterns: null }];
+    }
+    return chunks.map((includePatterns) => ({
+      config,
+      forwardedArgs,
+      includePatterns,
+      watchMode,
+    }));
   }
   const chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
   if (chunks.length <= 1) {
@@ -3609,12 +3632,15 @@ export function buildVitestRunPlans(
       );
     }
     return explicitConfigTargets.flatMap((config) =>
-      createBoundedExtensionPlans({
-        config,
-        forwardedArgs: nonTargetArgs,
-        includePatterns: null,
-        watchMode,
-      }),
+      createBoundedExtensionPlans(
+        {
+          config,
+          forwardedArgs: nonTargetArgs,
+          includePatterns: null,
+          watchMode,
+        },
+        options.env,
+      ),
     );
   }
 
@@ -3726,7 +3752,7 @@ export function buildVitestRunPlans(
           includePatterns: null,
           watchMode,
         };
-        plans.push(...createBoundedExtensionPlans(plan));
+        plans.push(...createBoundedExtensionPlans(plan, options.env));
       }
       continue;
     }
@@ -3778,12 +3804,15 @@ export function buildVitestRunPlans(
     });
     const boundedExtensionPlans =
       boundedExtensionRoots.length > 0 && boundedRootsCoverGroupedTargets
-        ? createBoundedExtensionPlans({
-            config,
-            forwardedArgs: forwardedPlanArgs,
-            includePatterns,
-            watchMode,
-          })
+        ? createBoundedExtensionPlans(
+            {
+              config,
+              forwardedArgs: forwardedPlanArgs,
+              includePatterns,
+              watchMode,
+            },
+            options.env,
+          )
         : null;
     if (boundedExtensionPlans) {
       plans.push(...boundedExtensionPlans);
@@ -4039,6 +4068,12 @@ export function applyDefaultMultiSpecVitestCachePaths<T extends WatchableVitestS
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
   if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
+    return specs;
+  }
+  // Same-config process lifetimes run one after another and must keep the
+  // restored CI seed. Isolating them would make every Telegram file pay a
+  // silent cold import.
+  if (specs.every((spec) => spec.config === specs[0]?.config)) {
     return specs;
   }
   return applyParallelVitestCachePaths(specs, params);
