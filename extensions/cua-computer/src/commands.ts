@@ -94,7 +94,9 @@ function resolveMacOsMcpEndpoint(
   try {
     const rawValue: unknown = JSON.parse(rawEndpoint);
     const parsed = CuaDriverEndpointSchema.safeParse(rawValue);
-    if (!parsed.success) return undefined;
+    if (!parsed.success) {
+      return undefined;
+    }
     const { socketPath, binaryPath } = parsed.data;
     if (
       socketPath.includes("\0") ||
