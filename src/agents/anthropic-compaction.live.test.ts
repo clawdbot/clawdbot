@@ -27,7 +27,7 @@ describeLive("Anthropic server compaction live", () => {
         name: settings.modelId,
         api: "anthropic-messages",
         provider: "anthropic",
-        baseUrl: "https://api.anthropic.com/v1",
+        baseUrl: "https://api.anthropic.com",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -97,7 +97,17 @@ describeLive("Anthropic server compaction live", () => {
           } as never),
         );
         const assistant = await stream.result();
+        if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
+          throw new Error(
+            `live turn failed (${assistant.stopReason}): ${assistant.errorMessage ?? "unknown"}`,
+          );
+        }
         messages.push(assistant);
+        console.log(
+          `[live-turn] stop=${assistant.stopReason} blocks=${assistant.content
+            .map((block) => block.type)
+            .join(",")} replay=${assistant.providerReplay?.type ?? "none"}`,
+        );
         return assistant;
       };
 
@@ -111,6 +121,8 @@ describeLive("Anthropic server compaction live", () => {
         captured = assistant.providerReplay?.type === "anthropic-compaction";
       }
 
+      expect(sawCompactionBeta).toBe(true);
+      expect(sawCompactionControls).toBe(true);
       expect(captured).toBe(true);
       const recall = await runTurn(
         "Reply with exactly the durable marker I asked you to remember.",
