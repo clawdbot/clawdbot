@@ -1924,6 +1924,40 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plan.targets).not.toContain("extensions/discord/src/channel-actions.contract.test.ts");
   });
 
+  it.each([
+    ["extensions/imessage/message-tool-api.ts", "extensions/imessage/src/message-tool-api.test.ts"],
+    ["extensions/imessage/src/actions.ts", "extensions/imessage/src/actions.test.ts"],
+    ["extensions/imessage/src/channel.ts", "extensions/imessage/src/test-plugin.test.ts"],
+    ["extensions/slack/message-tool-api.ts", "extensions/slack/message-tool-api.ts"],
+    [
+      "extensions/slack/src/channel-actions.ts",
+      "extensions/slack/src/channel-actions-setup-status.contract.test.ts",
+    ],
+    ["extensions/slack/src/channel.ts", "extensions/slack/src/channel.test.ts"],
+    ["extensions/mattermost/gateway-auth-api.ts", "extensions/mattermost/gateway-auth-api.ts"],
+    ["extensions/mattermost/src/channel.ts", "extensions/mattermost/src/channel.test.ts"],
+    ["extensions/feishu/session-key-api.ts", "extensions/feishu/session-key-api.ts"],
+    ["extensions/feishu/src/channel.ts", "extensions/feishu/src/channel.test.ts"],
+    ["extensions/telegram/session-key-api.ts", "extensions/telegram/session-key-api.ts"],
+    ["extensions/telegram/src/channel.ts", "test/telegram-question-gateway.test.ts"],
+    ["extensions/discord/session-key-api.ts", "extensions/discord/session-key-api.ts"],
+    ["extensions/discord/thread-binding-api.ts", "extensions/discord/thread-binding-api.ts"],
+    ["extensions/discord/src/channel.ts", "extensions/discord/src/channel.test.ts"],
+    ["extensions/matrix/thread-binding-api.ts", "extensions/matrix/thread-binding-api.ts"],
+    ["extensions/matrix/src/channel.ts", "extensions/matrix/src/channel.threading.test.ts"],
+  ] as const)(
+    "routes %s through its owner and the plugin-shape parity contract",
+    (changedPath, ownerTarget) => {
+      const plan = resolveChangedTestTargetPlan([changedPath]);
+
+      expect(plan.mode).toBe("targets");
+      expect(plan.targets).toContain(ownerTarget);
+      expect(plan.targets).toContain(
+        "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
+      );
+    },
+  );
+
   it("routes precise plugin contract helpers without broad-running every shard", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
