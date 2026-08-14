@@ -204,7 +204,9 @@ stated honestly (revision 1 undersold this):
   the node withdraws `workerRuns` from its live inventory while retaining the
   supervisor dialect, restores it after a durable terminal commit, and gives a
   third launch up to 10 seconds to acquire capacity before failing visibly.
-  Public inventory does not expose machine counters.
+  Public inventory does not expose machine counters. Terminal node launch
+  receipts retain a 24-hour replay window and prune in bounded batches;
+  `pending` and `running` capacity reservations never age out.
 - **Multi-gateway safety.** The worker install/workspace root on a node is
   namespaced by gateway identity so two gateways pairing one machine cannot
   corrupt each other's state.

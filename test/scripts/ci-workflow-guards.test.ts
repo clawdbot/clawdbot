@@ -6494,12 +6494,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(scenario.if).toBe("matrix.task == 'control-ui'");
     expect(scenario.env).toEqual({
+      OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
+        ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
       SHARD_INDEX: "${{ matrix.shard }}",
       VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
     });
     expect(scenario.run).toBe(
       'node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard "$SHARD_INDEX/$VITEST_SHARD_COUNT"',
     );
+    const timeoutDiagnostics = expectDefined(
+      uiE2e.steps.find(
+        (step: WorkflowStep) => step.name === "Upload Control UI E2E timeout diagnostics",
+      ),
+      "Control UI E2E timeout diagnostic upload",
+    );
+    expect(timeoutDiagnostics).toEqual({
+      name: "Upload Control UI E2E timeout diagnostics",
+      if: "failure() && matrix.task == 'control-ui'",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        name: "control-ui-e2e-timeout-${{ matrix.shard }}-${{ github.run_attempt }}",
+        path: ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
+        "if-no-files-found": "ignore",
+        "retention-days": 7,
+      },
+    });
     const browserExtension = expectDefined(
       uiE2e.steps.find(
         (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",

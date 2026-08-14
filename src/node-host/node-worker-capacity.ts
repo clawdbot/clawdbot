@@ -83,6 +83,7 @@ export class NodeWorkerCapacity {
       }
       await recoverRunning(receipt);
     }
+    this.store.pruneExpiredTerminal();
     this.refresh();
   }
 

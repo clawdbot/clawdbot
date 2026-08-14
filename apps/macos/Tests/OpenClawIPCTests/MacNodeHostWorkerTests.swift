@@ -366,6 +366,58 @@ struct MacNodeHostWorkerTests {
         await worker.stop()
     }
 
+    @Test func `stop cancels a changed launch during worker cleanup`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-worker-restart-stop-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let cleanupStartedPIDFile = directory.appendingPathComponent("cleanup-started.pid")
+        let replacementPIDFile = directory.appendingPathComponent("replacement.pid")
+        defer {
+            TestProcessSupport.killLeakedProcesses(in: [replacementPIDFile, cleanupStartedPIDFile])
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let firstScript = """
+        trap 'printf "%s\n" "$$" > "$1"; /bin/sleep 0.2; exit 0' TERM
+        printf '%s\n' '{"type":"ready","version":"first","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        while :; do /bin/sleep 1; done
+        """
+        let replacementScript = """
+        printf '%s\n' "$$" > "$1"
+        printf '%s\n' '{"type":"ready","version":"replacement","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        while :; do /bin/sleep 1; done
+        """
+
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: [
+            "/bin/sh",
+            "-c",
+            firstScript,
+            "worker",
+            cleanupStartedPIDFile.path,
+        ]))
+        let replacement = Task {
+            try await worker.start(launch: MacNodeHostWorkerLaunch(command: [
+                "/bin/sh",
+                "-c",
+                replacementScript,
+                "worker",
+                replacementPIDFile.path,
+            ]))
+        }
+        _ = try await TestProcessSupport.waitForPID(in: cleanupStartedPIDFile)
+
+        await worker.stop()
+
+        switch await replacement.result {
+        case .success:
+            Issue.record("changed launch succeeded after stop returned")
+            await worker.stop()
+        case .failure:
+            break
+        }
+        #expect(TestProcessSupport.pollPID(in: replacementPIDFile) == nil)
+    }
+
     @Test func `stop waits for the worker leader and reaps its descendants`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-worker-stop-\(UUID().uuidString)", isDirectory: true)

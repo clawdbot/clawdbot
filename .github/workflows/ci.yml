@@ -1670,6 +1670,7 @@ jobs:
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
         env:
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
         run: >-
@@ -1677,6 +1678,15 @@ jobs:
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
           --shard "$SHARD_INDEX/$VITEST_SHARD_COUNT"
+
+      - name: Upload Control UI E2E timeout diagnostics
+        if: failure() && matrix.task == 'control-ui'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-e2e-timeout-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Test browser extension bootstrap end-to-end
         if: matrix.task == 'browser-extension'
