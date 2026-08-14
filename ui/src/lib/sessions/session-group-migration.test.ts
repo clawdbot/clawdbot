@@ -228,7 +228,10 @@ describe("session group catalog loading", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const { gateway, publish } = createGatewayHarness(request, ["operator.write"]);
+    const { gateway, publish } = createGatewayHarness(
+      (method: string, params?: unknown) => request(method, params),
+      ["operator.write"],
+    );
     const sessions = createSessionCapability(gateway);
 
     const staleLoad = sessions.groupsLoad();

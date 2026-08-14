@@ -356,8 +356,11 @@ function renameCatalogEntry(from: string, to: string, env: NodeJS.ProcessEnv): v
           hasDefaults
             ? {
                 ...base,
-                cwd: typeof source.cwd === "string" ? source.cwd : null,
-                worktree: typeof source.worktree === "number" ? source.worktree : null,
+                cwd: "cwd" in source && typeof source.cwd === "string" ? source.cwd : null,
+                worktree:
+                  "worktree" in source && typeof source.worktree === "number"
+                    ? source.worktree
+                    : null,
               }
             : base,
         ),

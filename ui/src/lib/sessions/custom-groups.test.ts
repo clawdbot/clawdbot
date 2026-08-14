@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   mergeSessionGroupDefaults,
-  readSessionCustomGroupNames,
   readSessionCustomGroups,
   readSidebarSectionOrder,
 } from "./custom-groups.ts";
@@ -10,11 +9,11 @@ import {
 describe("session group catalog readers", () => {
   it("normalizes valid names and ignores malformed entries", () => {
     expect(
-      readSessionCustomGroupNames({
+      readSessionCustomGroups({
         groups: [{ name: " Alpha " }, { name: "" }, { name: 42 }, null],
       }),
-    ).toEqual(["Alpha"]);
-    expect(readSessionCustomGroupNames(null)).toEqual([]);
+    ).toEqual([{ name: "Alpha", position: 0 }]);
+    expect(readSessionCustomGroups(null)).toEqual([]);
   });
 
   it("keeps the catalog path-free and merges validated New Session defaults", () => {

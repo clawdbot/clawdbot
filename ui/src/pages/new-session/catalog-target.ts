@@ -30,11 +30,11 @@ export function isTarget(data?: NewSessionRouteData): boolean {
   return Boolean(data?.catalogId);
 }
 
-export function isResolvedTarget(data?: NewSessionRouteData): boolean {
+function isResolvedTarget(data?: NewSessionRouteData): boolean {
   return Boolean(data?.catalogId && data.model && data.catalogLabel);
 }
 
-export function isPendingRouteTarget(data?: NewSessionRouteData): boolean {
+function isPendingRouteTarget(data?: NewSessionRouteData): boolean {
   return (
     (isTarget(data) && !isResolvedTarget(data)) ||
     Boolean(data?.group && data.groupStatus !== "resolved")
@@ -51,7 +51,7 @@ export function groupDefaultsKey(data?: NewSessionRouteData): string {
   ]);
 }
 
-export function groupRouteNeedsRevalidation(
+function groupRouteNeedsRevalidation(
   data: NewSessionRouteData | undefined,
   sessions: SessionCapability,
 ): boolean {
@@ -75,7 +75,7 @@ export function groupRouteNeedsRevalidation(
     : data.groupStatus === "resolved";
 }
 
-export function groupRouteCatalogKey(
+function groupRouteCatalogKey(
   data: NewSessionRouteData | undefined,
   sessions: SessionCapability,
 ): string {

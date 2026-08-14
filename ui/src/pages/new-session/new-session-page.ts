@@ -716,3 +716,6 @@ class NewSessionPage extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-new-session-page")) {
   customElements.define("openclaw-new-session-page", NewSessionPage);
 }
+
+export const render = (data: unknown) =>
+  html`<openclaw-new-session-page .data=${data}></openclaw-new-session-page>`;

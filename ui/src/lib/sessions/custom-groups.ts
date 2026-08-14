@@ -57,10 +57,6 @@ export function mergeSessionGroupDefaults(
   return groups.map((group) => ({ ...group, ...defaults.get(group.name) }));
 }
 
-export function readSessionCustomGroupNames(payload: unknown): string[] {
-  return readSessionCustomGroups(payload).map((group) => group.name);
-}
-
 export function readSidebarSectionOrder(payload: unknown): string[] {
   return (
     normalizeSessionSectionOrderTokens(

@@ -2,7 +2,6 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
 import {
-  readSessionCustomGroupNames,
   readSessionCustomGroups,
   readSidebarSectionOrder,
   mergeSessionGroupDefaults,
@@ -32,15 +31,16 @@ const GROUPS_DEFAULTS_METHOD = "sessions.groups.defaults";
 
 function readLegacyStoredGroups(): string[] {
   try {
-    const raw = getSafeLocalStorage()?.getItem(LEGACY_GROUPS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const parsed: unknown = JSON.parse(
+      getSafeLocalStorage()?.getItem(LEGACY_GROUPS_STORAGE_KEY) ?? "[]",
+    );
     return Array.isArray(parsed)
       ? [
           ...new Set(
-            parsed.flatMap((name) => {
-              const normalized = typeof name === "string" ? name.trim() : "";
-              return normalized ? [normalized] : [];
-            }),
+            parsed
+              .filter((name): name is string => typeof name === "string")
+              .map((name) => name.trim())
+              .filter(Boolean),
           ),
         ]
       : [];
@@ -54,15 +54,12 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   let loadGeneration = 0;
   let catalogGeneration = 0;
   let defaultsStatus: SessionGroupDefaultsStatus = "idle";
-  let pendingLoad: {
-    epoch: number;
-    promise: Promise<readonly SessionGroupSettings[] | null>;
-  } | null = null;
+  let pendingLoad: Promise<readonly SessionGroupSettings[] | null> | null = null;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   const clearRetry = () => {
     if (retryTimer !== null) {
-      globalThis.clearTimeout(retryTimer);
+      clearTimeout(retryTimer);
       retryTimer = null;
     }
   };
@@ -122,20 +119,41 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  const publishUnavailable = () => {
-    if (defaultsStatus === "unavailable") {
-      return;
-    }
-    defaultsStatus = "unavailable";
-    host.publish({ ...host.readState() });
-  };
-
   const finishMutationFailure = (current: boolean, error: unknown): SessionGroupMutationResult => {
     if (!current) {
       return "stale";
     }
     host.publish({ ...host.readState(), error: String(error) }, "operation");
     throw error;
+  };
+
+  const finishLoadFailure = (
+    scope: SessionConnectionScope,
+    generation: number,
+    error: unknown,
+    retry: boolean,
+  ) => {
+    if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+      return null;
+    }
+    if (defaultsStatus !== "unavailable") {
+      defaultsStatus = "unavailable";
+      host.publish({ ...host.readState() });
+    }
+    if (!retry) {
+      return null;
+    }
+    loadedEpoch = -1;
+    const delay = host.retryDelayMs(error);
+    if (delay !== null) {
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (host.connection.isCurrent(scope) && generation === loadGeneration) {
+          void load();
+        }
+      }, delay);
+    }
+    return null;
   };
 
   const loadAttempt = async (
@@ -149,39 +167,37 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         return null;
       }
       let settings = readSessionCustomGroups(listed);
-      let names = settings.map((group) => group.name);
       let sectionOrder = readSidebarSectionOrder(listed);
       // Browser-local catalogs predate the gateway store and migrate exactly once.
       const legacy = readLegacyStoredGroups();
-      const legacyMigrationAccess = readSessionMethodAccess(host.snapshot(), {
-        method: "sessions.groups.put",
-        requiredScope: "operator.write",
-      });
-      if (names.length === 0 && legacy.length > 0 && legacyMigrationAccess.allowed) {
-        const put = await scope.client.request("sessions.groups.put", { names: legacy });
-        if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
-          return null;
+      if (
+        legacy.length > 0 &&
+        readSessionMethodAccess(host.snapshot(), {
+          method: "sessions.groups.put",
+          requiredScope: "operator.write",
+        }).allowed
+      ) {
+        if (settings.length === 0) {
+          const put = await scope.client.request("sessions.groups.put", { names: legacy });
+          if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+            return null;
+          }
+          settings = readSessionCustomGroups(put);
+          sectionOrder = readSidebarSectionOrder(put);
         }
-        names = readSessionCustomGroupNames(put);
-        settings = readSessionCustomGroups(put);
-        sectionOrder = readSidebarSectionOrder(put);
-      }
-      if (legacy.length > 0 && legacyMigrationAccess.allowed) {
         try {
           getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
         } catch {
           // The gateway catalog is canonical even when browser cleanup fails.
         }
       }
-      const defaultsAdvertised =
-        isGatewayMethodAdvertised(host.snapshot(), GROUPS_DEFAULTS_METHOD) === true;
-      const defaultsAccess = defaultsAdvertised
-        ? readSessionMethodAccess(host.snapshot(), {
-            method: GROUPS_DEFAULTS_METHOD,
-            requiredScope: "operator.write",
-          })
-        : null;
-      if (!defaultsAccess?.allowed) {
+      const defaultsAllowed =
+        isGatewayMethodAdvertised(host.snapshot(), GROUPS_DEFAULTS_METHOD) === true &&
+        readSessionMethodAccess(host.snapshot(), {
+          method: GROUPS_DEFAULTS_METHOD,
+          requiredScope: "operator.write",
+        }).allowed;
+      if (!defaultsAllowed) {
         publishCatalog(settings, sectionOrder, "ready");
         return settings;
       }
@@ -195,47 +211,13 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         }
         settings = mergeSessionGroupDefaults(settings, defaults);
       } catch (error) {
-        if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
-          return null;
-        }
-        publishUnavailable();
-        loadedEpoch = -1;
-        const delay = host.retryDelayMs(error);
-        if (delay !== null) {
-          retryTimer = globalThis.setTimeout(() => {
-            retryTimer = null;
-            if (host.connection.isCurrent(scope) && generation === loadGeneration) {
-              void load();
-            }
-          }, delay);
-        }
-        return null;
+        return finishLoadFailure(scope, generation, error, true);
       }
       publishCatalog(settings, sectionOrder, "ready");
       return settings;
     } catch (error) {
-      if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
-        return null;
-      }
-      if (advertised !== true) {
-        // Gateways without feature metadata retain the legacy one-shot probe.
-        publishUnavailable();
-        return null;
-      }
-      publishUnavailable();
-      loadedEpoch = -1;
-      const delay = host.retryDelayMs(error);
-      if (delay === null) {
-        return null;
-      }
-      // An older rejection cannot revive retries after a newer catalog load wins.
-      retryTimer = globalThis.setTimeout(() => {
-        retryTimer = null;
-        if (host.connection.isCurrent(scope) && generation === loadGeneration) {
-          void load();
-        }
-      }, delay);
-      return null;
+      // Gateways without feature metadata retain the legacy one-shot probe.
+      return finishLoadFailure(scope, generation, error, advertised === true);
     }
   };
 
@@ -246,9 +228,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       return null;
     }
     if (loadedEpoch === scope.epoch) {
-      return pendingLoad?.epoch === scope.epoch
-        ? await pendingLoad.promise
-        : host.readState().groupSettings;
+      return pendingLoad ?? host.readState().groupSettings;
     }
     const advertised = isGatewayMethodAdvertised(host.snapshot(), GROUPS_LIST_METHOD);
     clearRetry();
@@ -263,12 +243,12 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       return [];
     }
     const promise = loadAttempt(scope, generation, advertised).finally(() => {
-      if (pendingLoad?.promise === promise) {
+      if (pendingLoad === promise) {
         pendingLoad = null;
       }
     });
-    pendingLoad = { epoch: scope.epoch, promise };
-    return await promise;
+    pendingLoad = promise;
+    return promise;
   };
 
   const publishPathFreeMutation = (
