@@ -46,7 +46,10 @@ import {
 import { issueGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
 import { authorizeExistingGatewayDevice } from "./connect-existing-device.js";
 import { startGatewayNodePairingSshApproval } from "./connect-node-pairing-ssh.js";
-import { shouldAllowSilentLocalPairing } from "./handshake-auth-helpers.js";
+import {
+  isTrustedApprovalRuntimeConnect,
+  shouldAllowSilentLocalPairing,
+} from "./handshake-auth-helpers.js";
 import type {
   AuthenticatedGatewayConnect,
   DeviceAuthorizedGatewayConnect,
@@ -657,20 +660,37 @@ export async function authorizeGatewayConnectDevice(
       pairedClientId = paired.clientId;
       pairedBrowserOrigin = paired.browserOrigin;
       hasServerApprovedDeviceTokenBaseline = true;
-      const existingDevice = await authorizeExistingGatewayDevice({
-        context,
-        state: { ...state, scopes, handoffBootstrapProfile },
-        paired,
-        devicePublicKey,
-        clientAccessMetadata,
-        handoffBootstrapProfile,
-        requirePairing,
-        logUpgradeAudit,
+      // The approval runtime token is process-local proof; these connects only
+      // attach the shared device identity to bind approval records to their
+      // requester. A stale narrower paired baseline must not reject them, or
+      // local approval registration/replay dies before any approver UI sees
+      // the prompt. The paired record itself is never widened: session scopes
+      // come from gateway auth and ensureDeviceToken still caps issued tokens
+      // at the approved baseline.
+      const skipPairedBaselineForApprovalRuntime = isTrustedApprovalRuntimeConnect({
+        connectParams,
+        locality: pairingLocality,
       });
-      if (!existingDevice.ok) {
-        return undefined;
+      if (skipPairedBaselineForApprovalRuntime) {
+        logGateway.debug(
+          `approval-runtime connect exempted from paired baseline device=${device.id} conn=${connId}`,
+        );
+      } else {
+        const existingDevice = await authorizeExistingGatewayDevice({
+          context,
+          state: { ...state, scopes, handoffBootstrapProfile },
+          paired,
+          devicePublicKey,
+          clientAccessMetadata,
+          handoffBootstrapProfile,
+          requirePairing,
+          logUpgradeAudit,
+        });
+        if (!existingDevice.ok) {
+          return undefined;
+        }
+        handoffBootstrapProfile = existingDevice.handoffBootstrapProfile;
       }
-      handoffBootstrapProfile = existingDevice.handoffBootstrapProfile;
     }
   }
 

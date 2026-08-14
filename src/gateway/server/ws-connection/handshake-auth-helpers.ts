@@ -16,6 +16,7 @@ import {
   isPrivateOrLoopbackHost,
   resolveHostName,
 } from "../../net.js";
+import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
@@ -270,6 +271,23 @@ export function resolvePairingLocality(params: {
     return "shared_secret_loopback_local";
   }
   return "remote";
+}
+
+/**
+ * Identifies the gateway's own local approval runtime: a backend gateway
+ * client on a non-remote connection proving possession of the process-local
+ * operator approval runtime token.
+ */
+export function isTrustedApprovalRuntimeConnect(params: {
+  connectParams: ConnectParams;
+  locality: PairingLocalityKind;
+}): boolean {
+  return (
+    params.locality !== "remote" &&
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    isOperatorApprovalRuntimeToken(params.connectParams.auth?.approvalRuntimeToken)
+  );
 }
 
 export function shouldSkipLocalBackendSelfPairing(params: {

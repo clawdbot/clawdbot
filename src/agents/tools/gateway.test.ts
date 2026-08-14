@@ -373,6 +373,10 @@ describe("gateway tool defaults", () => {
       name: "allow-always decision",
       params: { approvalDecision: "allow-always", runId: "approval-always" },
     },
+    {
+      name: "ask-fallback source",
+      params: { approvalSource: "ask-fallback", runId: "approval-fallback" },
+    },
   ])("binds persisted device identity to node system.run with $name", async ({ params }) => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
 
@@ -380,6 +384,35 @@ describe("gateway tool defaults", () => {
       "node.invoke",
       {},
       { nodeId: "node-1", command: "system.run", params, idempotencyKey: "invoke-1" },
+      { scopes: ["operator.write", "operator.approvals"] },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
+  it("keeps approved node system.run replays token-less for remote gateways", async () => {
+    mocks.configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.run",
+        params: { approved: true, runId: "approval-remote" },
+        idempotencyKey: "invoke-1",
+      },
       { scopes: ["operator.write", "operator.approvals"] },
     );
 
@@ -421,6 +454,27 @@ describe("gateway tool defaults", () => {
     const call = capturedGatewayCall();
     expect(call).not.toHaveProperty("deviceIdentity");
     expect(call).not.toHaveProperty("approvalRuntimeToken");
+  });
+
+  it("degrades ask-fallback node system.run device-less without a persisted identity", async () => {
+    mocks.persistedDeviceIdentity = null;
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.run",
+        params: { approvalSource: "ask-fallback", runId: "approval-fallback" },
+        idempotencyKey: "invoke-1",
+      },
+      { scopes: ["operator.write", "operator.approvals"] },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call).not.toHaveProperty("deviceIdentity");
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
   });
 
   it("fails approved node system.run closed without a persisted identity", async () => {

@@ -6,7 +6,9 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/schema.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import {
+  isTrustedApprovalRuntimeConnect,
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
@@ -546,6 +548,63 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: true,
         sharedAuthOk: false,
         authMethod: "none",
+      }),
+    ).toBe(false);
+  });
+
+  it("trusts local backend approval-runtime connects only with the runtime token", () => {
+    const withApprovalRuntimeAuth = (
+      token: string | undefined,
+      client: { id?: string; mode?: string } = {},
+    ) =>
+      ({
+        client: {
+          id: client.id ?? GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          mode: client.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        auth: token === undefined ? {} : { approvalRuntimeToken: token },
+      }) as ConnectParams;
+    const runtimeToken = getOperatorApprovalRuntimeToken();
+    expect(
+      isTrustedApprovalRuntimeConnect({
+        connectParams: withApprovalRuntimeAuth(runtimeToken),
+        locality: "direct_local",
+      }),
+    ).toBe(true);
+    expect(
+      isTrustedApprovalRuntimeConnect({
+        connectParams: withApprovalRuntimeAuth(runtimeToken),
+        locality: "shared_secret_loopback_local",
+      }),
+    ).toBe(true);
+    expect(
+      isTrustedApprovalRuntimeConnect({
+        connectParams: withApprovalRuntimeAuth(runtimeToken),
+        locality: "remote",
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedApprovalRuntimeConnect({
+        connectParams: withApprovalRuntimeAuth("wrong-token"),
+        locality: "direct_local",
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedApprovalRuntimeConnect({
+        connectParams: withApprovalRuntimeAuth(undefined),
+        locality: "direct_local",
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedApprovalRuntimeConnect({
+        connectParams: withApprovalRuntimeAuth(runtimeToken, { id: GATEWAY_CLIENT_IDS.CLI }),
+        locality: "direct_local",
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedApprovalRuntimeConnect({
+        connectParams: withApprovalRuntimeAuth(runtimeToken, { mode: GATEWAY_CLIENT_MODES.CLI }),
+        locality: "direct_local",
       }),
     ).toBe(false);
   });

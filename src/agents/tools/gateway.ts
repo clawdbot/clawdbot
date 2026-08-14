@@ -231,10 +231,19 @@ const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>(["node.inv
 
 function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
+  callParams: unknown;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
 }): string | undefined {
-  if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
+  // Approved and ask-fallback node command replays carry the token too: they
+  // attach the shared device identity for approval matching, and the token
+  // keeps a stale narrower paired baseline from rejecting the replay connect
+  // at the local gateway.
+  const isApprovalRuntimeCall =
+    APPROVAL_RUNTIME_METHODS.has(params.method) ||
+    isApprovalReplayNodeSystemRun(params.method, params.callParams) ||
+    isAskFallbackNodeSystemRun(params.method, params.callParams);
+  if (!isApprovalRuntimeCall) {
     return undefined;
   }
   if (trimToUndefined(params.opts.gatewayUrl) !== undefined) {
@@ -248,11 +257,20 @@ function resolveApprovalRuntimeTokenForGatewayTool(params: {
   return getOperatorApprovalRuntimeToken();
 }
 
-function isApprovalReplayNodeSystemRun(method: string, callParams: unknown): boolean {
+function resolveNodeSystemRunParams(method: string, callParams: unknown) {
   const invoke = method === "node.invoke" ? asNullableRecord(callParams) : null;
-  const run = invoke?.command === "system.run" ? asNullableRecord(invoke.params) : null;
+  return invoke?.command === "system.run" ? asNullableRecord(invoke.params) : null;
+}
+
+function isApprovalReplayNodeSystemRun(method: string, callParams: unknown): boolean {
+  const run = resolveNodeSystemRunParams(method, callParams);
   const decision = normalizeOptionalString(run?.approvalDecision);
   return run?.approved === true || decision === "allow-once" || decision === "allow-always";
+}
+
+function isAskFallbackNodeSystemRun(method: string, callParams: unknown): boolean {
+  const run = resolveNodeSystemRunParams(method, callParams);
+  return normalizeOptionalString(run?.approvalSource) === "ask-fallback";
 }
 
 function attachNodeInvokeTurnSource(method: string, params: unknown): unknown {
@@ -298,6 +316,16 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   const isApprovalRuntimeMethod = APPROVAL_RUNTIME_METHODS.has(params.method);
   const isNodeApprovalReplay = isApprovalReplayNodeSystemRun(params.method, params.callParams);
   if (!isApprovalRuntimeMethod && !isNodeApprovalReplay) {
+    if (isAskFallbackNodeSystemRun(params.method, params.callParams)) {
+      // Ask-fallback replays a timed-out record. When registration ran without
+      // a persisted identity the record is unbound and the no-device backend
+      // bridge authorizes the replay, so degrade instead of failing closed.
+      try {
+        return loadDeviceIdentityIfPresent() ?? undefined;
+      } catch {
+        return undefined;
+      }
+    }
     return undefined;
   }
   if (isApprovalRuntimeMethod && trimToUndefined(params.opts.gatewayUrl) !== undefined) {
@@ -547,6 +575,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     : resolveLeastPrivilegeOperatorScopesForMethod(method, callParams);
   const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
     method,
+    callParams,
     opts,
     target: gateway.target,
   });

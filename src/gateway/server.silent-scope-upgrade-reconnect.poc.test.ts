@@ -19,6 +19,7 @@ import {
   loadDeviceIdentity,
   openTrackedWs,
 } from "./device-authz.test-helpers.js";
+import { getOperatorApprovalRuntimeToken } from "./operator-approval-runtime-token.js";
 import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import {
   connectOk,
@@ -331,6 +332,90 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
       const pending = await devicePairingModule.listDevicePairing();
       expect(pending.pending).toHaveLength(0);
+      await expectReadScopedPairing(identity.deviceId);
+    } finally {
+      await closeStartedGateway(started);
+    }
+  });
+
+  test("keeps local approval-runtime requester calls off stale paired baseline", async () => {
+    const started = await startServerWithClient("secret");
+    const paired = await issueReadScopedOperatorToken({
+      name: "approval-runtime-requester-baseline",
+      clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientMode: GATEWAY_CLIENT_MODES.BACKEND,
+    });
+    const loaded = loadDeviceIdentity("approval-runtime-requester-baseline");
+
+    try {
+      // Mirror callGatewayTool("plugin.approval.request", ...): local backend
+      // client with shared auth, the process-local approval runtime token, and
+      // the persisted requester device identity attached for record binding.
+      const result = await callGateway<{ id?: string; decision?: unknown }>({
+        url: `ws://127.0.0.1:${started.port}`,
+        token: "secret",
+        method: "plugin.approval.request",
+        params: {
+          title: "tool approval",
+          description: "approve tool run",
+          timeoutMs: 1_500,
+          twoPhase: true,
+        },
+        expectFinal: false,
+        approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+        deviceIdentity: loaded.identity,
+        scopes: ["operator.approvals"],
+        timeoutMs: 3_000,
+      });
+      // No approval route is connected, so the request resolves immediately;
+      // reaching the handler at all proves the handshake was admitted.
+      expect(result.id).toBeTypeOf("string");
+      expect(result.decision).toBeNull();
+
+      const pending = await devicePairingModule.listDevicePairing();
+      expect(pending.pending).toHaveLength(0);
+      // The exemption never widens persisted authority: the paired baseline
+      // and the stored operator device token keep their read-only scopes.
+      const pairedAfter = await expectReadScopedPairing(paired.deviceId);
+      expect(pairedAfter?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+      expect(pairedAfter?.tokens?.operator?.token).toBe(paired.token);
+    } finally {
+      await closeStartedGateway(started);
+    }
+  });
+
+  test("keeps local approved node command replays off stale paired baseline", async () => {
+    const started = await startServerWithClient("secret");
+    const identity = await approveReadScopedDevice({
+      clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientMode: GATEWAY_CLIENT_MODES.BACKEND,
+    });
+
+    try {
+      // Mirror callGatewayTool("node.invoke", ...) replaying an approved
+      // system.run decision: device identity attached for approval matching.
+      const replay = callGateway({
+        url: `ws://127.0.0.1:${started.port}`,
+        token: "secret",
+        method: "node.invoke",
+        params: {
+          nodeId: "missing-node",
+          command: "system.run",
+          idempotencyKey: "replay-stale-baseline",
+          params: { command: ["echo", "ok"], approved: true, runId: "exec:none" },
+        },
+        approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+        deviceIdentity: loadOrCreateDeviceIdentity(),
+        scopes: ["operator.write"],
+        timeoutMs: 3_000,
+      });
+      // The replay must reach the node.invoke handler (the unknown node fails
+      // at method level), not die at the handshake with a NOT_PAIRED close.
+      await expect(replay).rejects.toMatchObject({
+        name: "GatewayClientRequestError",
+        gatewayCode: "UNAVAILABLE",
+        message: expect.stringContaining("node pairing changed"),
+      });
       await expectReadScopedPairing(identity.deviceId);
     } finally {
       await closeStartedGateway(started);

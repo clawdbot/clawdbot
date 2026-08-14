@@ -39,7 +39,6 @@ import {
 } from "../../local-user-ingress.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
-import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   indexPluginNodeCapabilitySurfaces,
@@ -57,6 +56,7 @@ import type { GatewayWsClient } from "../ws-types.js";
 import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
+import { isTrustedApprovalRuntimeConnect } from "./handshake-auth-helpers.js";
 import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -272,11 +272,8 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
   const isTrustedApprovalRuntime =
-    pairingLocality !== "remote" &&
     scopes.includes(APPROVALS_SCOPE) &&
-    connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-    connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
-    isOperatorApprovalRuntimeToken(connectParams.auth?.approvalRuntimeToken);
+    isTrustedApprovalRuntimeConnect({ connectParams, locality: pairingLocality });
   const agentRuntimeIdentityProof = connectParams.auth?.agentRuntimeIdentityToken;
   const canAcceptAgentRuntimeIdentity =
     pairingLocality !== "remote" &&
