@@ -363,6 +363,18 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
+  it("writes JSON when another Doctor machine mode rejects lint selectors", async () => {
+    const message = "doctor lint options require --lint. Use `openclaw doctor --lint ...`.";
+
+    await runMaintenanceCli(["doctor", "--post-upgrade", "--json", "--only", "core/example"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith({ error: message });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("rejects --all outside doctor lint mode", async () => {
     await runMaintenanceCli(["doctor", "--all"]);
 

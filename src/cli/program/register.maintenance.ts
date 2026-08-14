@@ -162,7 +162,7 @@ export function registerMaintenanceCommands(program: Command) {
       if (hasLintOnlyDoctorOptions(opts)) {
         return exitDoctorError(
           "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-          false,
+          opts.json === true,
         );
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
