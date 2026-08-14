@@ -73,7 +73,7 @@ struct ExecApprovalsUIRollbackTests {
         }
     }
 
-    @Test
+    @Test(.appStateStoreIsolated)
     func `settings recover after initial approvals read is unavailable`() async throws {
         try await self.withTempStateDir { stateDir in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { agent in
@@ -112,7 +112,7 @@ struct ExecApprovalsUIRollbackTests {
         }
     }
 
-    @Test
+    @Test(.appStateStoreIsolated)
     func `defaults mutation refreshes quick mode through app state owner`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateDefaults { defaults in

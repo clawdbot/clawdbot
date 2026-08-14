@@ -815,7 +815,8 @@ private func setupAdmissionBusyResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingAISetupTests {
-    @Test func `nix first run presenter opens a dashboard outcome`() async {
+    @Test(.appStateStoreIsolated)
+    func `nix first run presenter opens a dashboard outcome`() async {
         let defaults = AppDefaults.standard
         let nixModeKey = "openclaw.nixMode"
         let previousDefaults: [(String, Any?)] = [

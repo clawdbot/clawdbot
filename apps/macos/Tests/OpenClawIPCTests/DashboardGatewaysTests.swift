@@ -217,7 +217,8 @@ struct DashboardManagerGatewayTargetTests {
         #expect(catalogReads == 1)
     }
 
-    @Test func `primary window configuration retains resolved TLS policy`() async throws {
+    @Test(.appStateStoreIsolated)
+    func `primary window configuration retains resolved TLS policy`() async throws {
         let state = AppStateStore.shared
         let originalMode = state.connectionMode
         state.connectionMode = .remote
@@ -288,7 +289,8 @@ struct DashboardManagerGatewayTargetTests {
         #expect(!DashboardManager._testTargetIsAvailable(.profile("removed"), in: [primary]))
     }
 
-    @Test func `opening primary creates isolated auxiliary window`() async throws {
+    @Test(.appStateStoreIsolated)
+    func `opening primary creates isolated auxiliary window`() async throws {
         let state = AppStateStore.shared
         let originalMode = state.connectionMode
         state.connectionMode = .local

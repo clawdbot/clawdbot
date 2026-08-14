@@ -133,3 +133,26 @@ extension Trait where Self == ExecApprovalsStateIsolationTrait {
         Self()
     }
 }
+
+struct AppStateStoreIsolationTrait: TestTrait, TestScoping {
+    func provideScope(
+        for test: Test,
+        testCase: Test.Case?,
+        performing function: @Sendable () async throws -> Void) async throws
+    {
+        await TestIsolationLock.shared.acquire()
+        do {
+            try await function()
+            await TestIsolationLock.shared.release()
+        } catch {
+            await TestIsolationLock.shared.release()
+            throw error
+        }
+    }
+}
+
+extension Trait where Self == AppStateStoreIsolationTrait {
+    static var appStateStoreIsolated: Self {
+        Self()
+    }
+}

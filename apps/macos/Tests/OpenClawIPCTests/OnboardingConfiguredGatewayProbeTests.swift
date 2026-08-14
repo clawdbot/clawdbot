@@ -622,7 +622,8 @@ struct OnboardingConfiguredGatewayProbeTests {
         }())
     }
 
-    @Test func `paused local first-run probe does not recover the gateway`() async throws {
+    @Test(.appStateStoreIsolated)
+    func `paused local first-run probe does not recover the gateway`() async throws {
         let url = try #require(URL(string: "ws://127.0.0.1:18789"))
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-onboarding-probe-\(UUID().uuidString)", isDirectory: true)
@@ -657,7 +658,9 @@ struct OnboardingConfiguredGatewayProbeTests {
         let probe = OnboardingConfiguredGatewayProbe(gateway: gateway, timeoutMs: 1)
 
         let outcome = try await DeviceIdentityStore.withStateDirectory(stateDir) {
-            await runOnboardingProbe(probe, connectionMode: .local)
+            let outcome = await runOnboardingProbe(probe, connectionMode: .local)
+            await gateway.shutdown()
+            return outcome
         }
 
         #expect({
