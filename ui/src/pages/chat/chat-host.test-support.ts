@@ -130,6 +130,7 @@ export function makeChatHost(
     sessionsLoading: false,
     sessionsResult: null,
     sessionsResultAgentId: null,
+    retainedSelectedSession: null,
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,

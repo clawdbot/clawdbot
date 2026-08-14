@@ -1,6 +1,6 @@
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { SessionsListResult } from "../../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
@@ -86,6 +86,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
+  /** Open session resolved by the pane; survives a disconnect, unlike `sessions`. */
+  activeSession: GatewaySessionRow | undefined;
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: CapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;

@@ -174,6 +174,8 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
     sessions: SessionsListResult | null;
+    /** Open session resolved by the pane; survives a disconnect, unlike `sessions`. */
+    activeSession: GatewaySessionRow | undefined;
     toolOverrides?: SessionToolOverrides;
     capabilityMenu?: CapabilityMenuProps;
     swarmSessions?: readonly GatewaySessionRow[];
@@ -395,6 +397,7 @@ export function renderChat(props: ChatProps) {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
     currentAgentId: props.currentAgentId,
+    activeSession: props.activeSession,
     connected: props.connected,
     offline: props.offline,
     queuedOutboxCount: props.queuedOutboxCount,

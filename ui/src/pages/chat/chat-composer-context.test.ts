@@ -9,6 +9,11 @@ type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
 function renderComposer(overrides: Partial<ComposerProps> = {}) {
   const container = document.createElement("div");
+  // The pane resolves the open session and hands it down; mirror that here so
+  // fixtures keep describing the roster instead of restating the active row.
+  const activeSession =
+    overrides.activeSession ??
+    overrides.sessions?.sessions?.find((row) => row.key === (overrides.sessionKey ?? "main"));
   render(
     renderChatComposer({
       paneId: crypto.randomUUID(),
@@ -29,6 +34,7 @@ function renderComposer(overrides: Partial<ComposerProps> = {}) {
       onQueueRemove: vi.fn(),
       onNewSession: vi.fn(),
       ...overrides,
+      activeSession,
     }),
     container,
   );

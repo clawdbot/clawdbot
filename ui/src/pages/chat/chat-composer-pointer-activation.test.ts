@@ -21,6 +21,7 @@ function props(overrides: Partial<ComposerProps> = {}): ComposerProps {
     queue: [],
     draft: "",
     sessions: null,
+    activeSession: undefined,
     assistantName: "OpenClaw",
     onDraftChange: vi.fn(),
     onSend: vi.fn(),

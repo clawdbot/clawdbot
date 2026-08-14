@@ -24,6 +24,25 @@ export function canCreateChatSession(state: ChatPageHost) {
 }
 
 export function selectedChatSessionRow(state: ChatPageHost) {
+  const live = resolveLiveChatSessionRow(state);
+  if (live) {
+    state.retainedSelectedSession = { sessionKey: state.sessionKey, row: live };
+    return live;
+  }
+  // Disconnecting clears the roster (the sessions store publishes result: null),
+  // but the open session's identity — incognito above all — is not in doubt just
+  // because it cannot be re-listed. Only an absent roster may fall back: a roster
+  // that is present and lacks the row means archived or deleted, never retained.
+  if (state.sessionsResult !== null) {
+    return undefined;
+  }
+  const retained = state.retainedSelectedSession;
+  return retained && areUiSessionKeysEquivalent(retained.sessionKey, state.sessionKey)
+    ? retained.row
+    : undefined;
+}
+
+function resolveLiveChatSessionRow(state: ChatPageHost) {
   const rows = state.sessionsResult?.sessions ?? [];
   const exact = rows.find((candidate) =>
     areUiSessionKeysEquivalent(candidate.key, state.sessionKey),

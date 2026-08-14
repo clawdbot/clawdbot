@@ -208,6 +208,7 @@ export function createPageState(
     modelAuthStatusError: null,
     sessionsResult: null,
     sessionsResultAgentId: null,
+    retainedSelectedSession: null,
     sessionsLoading: false,
     sessionsError: null,
     sessionsArchivedFilter: "active",

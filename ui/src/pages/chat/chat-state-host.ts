@@ -1,6 +1,7 @@
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   AgentsListResult,
+  GatewaySessionRow,
   ModelAuthStatusResult,
   ModelCatalogEntry,
   SessionsListResult,
@@ -68,6 +69,8 @@ export type ChatPageHost = ChatHost &
     modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
     sessionsResultAgentId: string | null;
+    /** Identity of the open session, kept while the roster is unavailable. */
+    retainedSelectedSession: { sessionKey: string; row: GatewaySessionRow } | null;
     sessionsError: string | null;
     sessionsArchivedFilter: "active" | "archived" | "all";
     selectedChatSessionArchived: boolean;

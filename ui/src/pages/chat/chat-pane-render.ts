@@ -411,6 +411,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
             }
           : undefined,
       sessions: state.sessionsResult,
+      activeSession: selectedSession,
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
