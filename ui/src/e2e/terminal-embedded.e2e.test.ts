@@ -47,13 +47,26 @@ suite.define(() => {
         const panel = document.querySelector("openclaw-terminal-panel") as
           | (HTMLElement & { available: boolean })
           | null;
-        return customElements.get("openclaw-terminal-panel") !== undefined && panel?.available;
+        const shell = document.querySelector("openclaw-app-shell") as
+          | (HTMLElement & {
+              runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
+            })
+          | null;
+        return (
+          customElements.get("openclaw-terminal-panel") !== undefined &&
+          panel?.available &&
+          typeof shell?.runtime?.context?.agentSelection?.set === "function"
+        );
       });
       await page.evaluate(() => {
         const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
           runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
         };
-        shell.runtime?.context?.agentSelection?.set("research");
+        const setAgent = shell.runtime?.context?.agentSelection?.set;
+        if (!setAgent) {
+          throw new Error("Agent selection is not ready");
+        }
+        setAgent("research");
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
             detail: { agentId: "research", open: true },

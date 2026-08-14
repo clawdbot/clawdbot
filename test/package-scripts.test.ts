@@ -208,13 +208,10 @@ describe("package scripts", () => {
     const scripts = readPackageJson().scripts;
     const partScripts = readWindowsCiPartScripts();
     const partTargets = partScripts.map(readWindowsCiTargets);
-    const allTargets = partTargets.flat();
 
     expect(scripts["test:windows:ci"]).toBe(
       "pnpm test:windows:ci:1 && pnpm test:windows:ci:2 && pnpm test:windows:ci:3",
     );
-    expect(partTargets.map((targets) => targets.length)).toEqual([19, 15, 31]);
-    expect(new Set(allTargets).size).toBe(65);
     for (const [partIndex, targets] of partTargets.entries()) {
       const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
       expect(

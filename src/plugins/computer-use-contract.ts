@@ -217,8 +217,7 @@ export const ComputerActParamsSchema = Type.Union([
   }),
 ]);
 
-// Hard result ceilings live inline on the schema (elements maxItems, details
-// maxProperties); tests read them from the schema so there is one source of truth.
+// Bound provider-controlled result collections before they cross the node-host wire contract.
 const COMPUTER_ACT_RESULT_MAX_ELEMENTS = 2_000;
 const COMPUTER_ACT_RESULT_MAX_DETAIL_KEYS = 64;
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -12,12 +13,94 @@ import {
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
-import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
+import {
+  runNodeWorkerWorkspaceTransfer,
+  serializeNodeWorkerWorkspace,
+} from "./node-worker-transfer-client.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const WORKSPACE_GENERATION_PRUNE_LIMIT = 256;
+const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const ENVIRONMENT_HASH_PATTERN = /^[a-f0-9]{16}$/u;
+const SESSION_HASH_PATTERN = /^[a-f0-9]{32}$/u;
+
+type NodeWorkerWorkspaceLaunchReference = {
+  gatewayNamespace: string;
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
+};
+
+type WorkspaceGeneration = {
+  gatewayNamespace: string;
+  environmentHash: string;
+  sessionHash: string;
+  workspacesRoot: string;
+  generation: number;
+  generationPath: string;
+};
 
 function hashPathComponent(value: string, length: number): string {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
+}
+
+function generationKey(generation: WorkspaceGeneration): string {
+  return [
+    generation.gatewayNamespace,
+    generation.environmentHash,
+    generation.sessionHash,
+    generation.generation,
+  ].join("/");
+}
+
+function launchGenerationKey(reference: NodeWorkerWorkspaceLaunchReference): string {
+  return [
+    reference.gatewayNamespace,
+    hashPathComponent(reference.environmentId, 16),
+    hashPathComponent(reference.sessionId, 32),
+    reference.ownerEpoch,
+  ].join("/");
+}
+
+function parseGenerationName(name: string): number | undefined {
+  const generation = Number(name);
+  return Number.isSafeInteger(generation) && generation >= 0 && String(generation) === name
+    ? generation
+    : undefined;
+}
+
+async function listOwnedDirectories(parent: string): Promise<string[]> {
+  try {
+    return (await fsp.readdir(parent, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => entry.name)
+      .toSorted();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function latestSessionGeneration(
+  workspacesRoot: string,
+  sessionHash: string,
+): Promise<number | undefined> {
+  let latest: number | undefined;
+  for (const environmentHash of await listOwnedDirectories(workspacesRoot)) {
+    if (!ENVIRONMENT_HASH_PATTERN.test(environmentHash)) {
+      continue;
+    }
+    const sessionRoot = path.join(workspacesRoot, environmentHash, sessionHash);
+    for (const name of await listOwnedDirectories(sessionRoot)) {
+      const generation = parseGenerationName(name);
+      if (generation !== undefined) {
+        latest = Math.max(latest ?? generation, generation);
+      }
+    }
+  }
+  return latest;
 }
 
 function ensureContainedDirectory(parent: string, name: string): string {
@@ -122,6 +205,108 @@ export class NodeWorkerWorkspaceRuntime {
       GIT_TERMINAL_PROMPT: "0",
       SSH_ASKPASS: "",
     };
+  }
+
+  async pruneSupersededGenerations(
+    listNonterminal: () => readonly NodeWorkerWorkspaceLaunchReference[],
+  ): Promise<{ deleted: number; hasMore: boolean }> {
+    const generations: WorkspaceGeneration[] = [];
+    const latestBySession = new Map<string, number>();
+    for (const gatewayNamespace of await listOwnedDirectories(this.root)) {
+      if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
+        continue;
+      }
+      const workspacesRoot = path.join(this.root, gatewayNamespace, "workspaces");
+      for (const environmentHash of await listOwnedDirectories(workspacesRoot)) {
+        if (!ENVIRONMENT_HASH_PATTERN.test(environmentHash)) {
+          continue;
+        }
+        const environmentRoot = path.join(workspacesRoot, environmentHash);
+        for (const sessionHash of await listOwnedDirectories(environmentRoot)) {
+          if (!SESSION_HASH_PATTERN.test(sessionHash)) {
+            continue;
+          }
+          const sessionRoot = path.join(environmentRoot, sessionHash);
+          for (const generationName of await listOwnedDirectories(sessionRoot)) {
+            const generation = parseGenerationName(generationName);
+            if (generation === undefined) {
+              continue;
+            }
+            generations.push({
+              gatewayNamespace,
+              environmentHash,
+              sessionHash,
+              workspacesRoot,
+              generation,
+              generationPath: path.join(sessionRoot, generationName),
+            });
+            const sessionKey = `${gatewayNamespace}/${sessionHash}`;
+            latestBySession.set(
+              sessionKey,
+              Math.max(latestBySession.get(sessionKey) ?? generation, generation),
+            );
+          }
+        }
+      }
+    }
+    const initiallyProtected = new Set(listNonterminal().map(launchGenerationKey));
+    const staleGenerations = generations
+      .filter(
+        (generation) =>
+          !initiallyProtected.has(generationKey(generation)) &&
+          generation.generation <
+            (latestBySession.get(`${generation.gatewayNamespace}/${generation.sessionHash}`) ??
+              generation.generation),
+      )
+      .toSorted(
+        (left, right) =>
+          left.generation - right.generation ||
+          left.generationPath.localeCompare(right.generationPath),
+      );
+    const candidates = staleGenerations.slice(0, WORKSPACE_GENERATION_PRUNE_LIMIT);
+    let deleted = 0;
+    for (const candidate of candidates) {
+      await serializeNodeWorkerWorkspace(candidate.generationPath, async () => {
+        const currentLatest = await latestSessionGeneration(
+          candidate.workspacesRoot,
+          candidate.sessionHash,
+        );
+        if (currentLatest === undefined || candidate.generation >= currentLatest) {
+          return;
+        }
+        let stats: fs.Stats;
+        let sessionRoot: string;
+        let generationPath: string;
+        try {
+          [stats, sessionRoot, generationPath] = await Promise.all([
+            fsp.lstat(candidate.generationPath),
+            fsp.realpath(path.dirname(candidate.generationPath)),
+            fsp.realpath(candidate.generationPath),
+          ]);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return;
+          }
+          throw error;
+        }
+        if (
+          stats.isSymbolicLink() ||
+          !stats.isDirectory() ||
+          path.dirname(generationPath) !== sessionRoot ||
+          !isPathInside(this.root, generationPath)
+        ) {
+          return;
+        }
+        // A launch can claim an older prepared generation while filesystem checks await.
+        // Re-read the durable reservations immediately before removing node-owned bytes.
+        if (new Set(listNonterminal().map(launchGenerationKey)).has(generationKey(candidate))) {
+          return;
+        }
+        await fsp.rm(generationPath, { recursive: true, force: true });
+        deleted += 1;
+      });
+    }
+    return { deleted, hasMore: staleGenerations.length > candidates.length };
   }
 
   async exec(
