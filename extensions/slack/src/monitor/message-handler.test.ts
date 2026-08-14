@@ -19,6 +19,7 @@ const onFlushCallbacks: Array<
 > = [];
 const prepareSlackMessageMock = vi.fn(
   async (_params?: {
+    ctx: Parameters<typeof createSlackMessageHandler>[0]["ctx"];
     opts: { onVisibleDrop?: () => void };
   }): Promise<{ ctxPayload: Record<string, unknown> } | null> => ({ ctxPayload: {} }),
 );
