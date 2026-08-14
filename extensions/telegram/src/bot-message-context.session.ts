@@ -372,37 +372,42 @@ export async function buildTelegramInboundContextPayload(params: {
   const visibleReplyTargetEntry = visibleReplyTarget
     ? replyTargetToChainEntry(visibleReplyTarget)
     : undefined;
-  // A batch carries one reply target per buffered message, but the synthetic
-  // message inherits only the first one, so collect each buffered message's own
-  // target here.
-  const directBatchReplyEntries = hasMultiMessageDebounceBatch
-    ? (options?.inboundDebounceMessages ?? []).flatMap((debouncedMessage) => {
-        const visible = resolveVisibleReplyTarget(describeReplyTarget(debouncedMessage));
-        const entry = visible ? replyTargetToChainEntry(visible) : undefined;
-        // Needs an id to dedupe against the inherited chain below.
-        return entry?.messageId === undefined ? [] : [entry];
-      })
-    : [];
   const inheritedReplyChain =
     replyChain.length > 0 ? replyChain : visibleReplyTargetEntry ? [visibleReplyTargetEntry] : [];
-  // One bounded pass owns the whole chain. Direct targets from this batch are
-  // nearer than the first message's inherited ancestry, so they claim slots
-  // first: otherwise a deep ancestry on the first message would fill the cap and
-  // suppress exactly the later quote this path exists to recover. The cap itself
-  // is required because a debounce window has no per-item limit of its own.
   const seenReplyMessageIds = new Set<string>();
   const rawReplyChain: TelegramReplyChainEntry[] = [];
-  for (const entry of [...directBatchReplyEntries, ...inheritedReplyChain]) {
-    if (rawReplyChain.length >= TELEGRAM_REPLY_CHAIN_MAX_DEPTH) {
-      break;
+  const appendReplyChainEntry = (entry: TelegramReplyChainEntry | undefined) => {
+    if (!entry || rawReplyChain.length >= TELEGRAM_REPLY_CHAIN_MAX_DEPTH) {
+      return;
     }
     if (entry.messageId !== undefined) {
       if (seenReplyMessageIds.has(entry.messageId)) {
-        continue;
+        return;
       }
       seenReplyMessageIds.add(entry.messageId);
     }
     rawReplyChain.push(entry);
+  };
+  const debouncedMessages = options?.inboundDebounceMessages ?? [];
+  // The synthetic message already owns the first entry's cached ancestry.
+  // Recover only its erased tail; newest direct targets outrank older ancestry.
+  for (
+    let index = debouncedMessages.length - 1;
+    index >= 1 && rawReplyChain.length < TELEGRAM_REPLY_CHAIN_MAX_DEPTH;
+    index -= 1
+  ) {
+    const debouncedMessage = debouncedMessages[index];
+    if (!debouncedMessage) {
+      continue;
+    }
+    const visible = resolveVisibleReplyTarget(describeReplyTarget(debouncedMessage));
+    appendReplyChainEntry(visible ? replyTargetToChainEntry(visible) : undefined);
+  }
+  for (const entry of inheritedReplyChain) {
+    if (rawReplyChain.length >= TELEGRAM_REPLY_CHAIN_MAX_DEPTH) {
+      break;
+    }
+    appendReplyChainEntry(entry);
   }
   const visibleReplyChain = rawReplyChain.flatMap((entry) => {
     const selectedReplyEntry =

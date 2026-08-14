@@ -67,17 +67,41 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
     expect(context?.ctxPayload.Body).toContain(QUOTED_LINE);
   });
 
-  // Control: the identical quote on the FIRST buffered entry must be visible.
-  // Without this, a failure above could just mean "quotes never reach Body".
-  it("CONTROL: preserves the same quote when it is on the first buffered message", async () => {
+  it("keeps cached first-message ancestry after a quote-only follow-up", async () => {
+    const first = quotingMessage(1, "first ask");
     const context = await buildTelegramMessageContextForTest({
-      message: quotingMessage(2, "quoting note\nplain note"),
+      message: { ...first, text: "first ask\nfollow-up" },
+      replyChain: [
+        {
+          messageId: "90",
+          replyToId: "89",
+          sender: "Cached Bob",
+          senderId: "7",
+          body: QUOTED_LINE,
+          timestamp: 1_699_999_000_000,
+        },
+      ],
       options: {
-        inboundDebounceMessages: [quotingMessage(1, "quoting note"), plainMessage(2, "plain note")],
+        inboundDebounceMessages: [
+          first,
+          {
+            ...plainMessage(2, "follow-up"),
+            quote: { text: "quote-only follow-up", position: 0 },
+          },
+        ],
       },
     });
 
-    expect(context?.ctxPayload.Body).toContain(QUOTED_LINE);
+    expect(context?.ctxPayload.ReplyChain).toMatchObject([
+      { sender: "unknown sender", body: "quote-only follow-up", isQuote: true },
+      {
+        messageId: "90",
+        replyToId: "89",
+        sender: "Cached Bob",
+        senderId: "7",
+        timestamp: 1_699_999_000_000,
+      },
+    ]);
   });
 
   it("lists a source re-quoted by two buffered messages only once", async () => {
@@ -114,9 +138,9 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
     expect(countReplyChainEntries(body)).toBeLessThanOrEqual(TELEGRAM_REPLY_CHAIN_MAX_DEPTH);
   });
 
-  // A debounce window has no per-item cap of its own, so without a bound here a
-  // burst of distinct quote-replies would grow model-visible context without limit.
-  it("caps batch-derived reply targets at the canonical chain depth", async () => {
+  // A debounce window has no per-item cap of its own. Keep the nearest targets,
+  // not the oldest messages that happened to enter the window first.
+  it("keeps the newest batch reply targets in nearest-first order", async () => {
     const burst = Array.from({ length: TELEGRAM_REPLY_CHAIN_MAX_DEPTH * 2 + 2 }, (_, i) =>
       quotingDistinctSource(i + 1),
     );
@@ -125,8 +149,12 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
       options: { inboundDebounceMessages: burst },
     });
 
-    const entries = countReplyChainEntries(context?.ctxPayload.Body ?? "");
-    expect(entries).toBeGreaterThan(0);
-    expect(entries).toBeLessThanOrEqual(TELEGRAM_REPLY_CHAIN_MAX_DEPTH);
+    const body = context?.ctxPayload.Body ?? "";
+    expect(Array.from(body.matchAll(/"distinct source \d+"/g), ([source]) => source)).toEqual([
+      '"distinct source 10"',
+      '"distinct source 9"',
+      '"distinct source 8"',
+      '"distinct source 7"',
+    ]);
   });
 });
