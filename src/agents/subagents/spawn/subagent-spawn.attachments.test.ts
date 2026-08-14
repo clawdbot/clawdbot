@@ -134,6 +134,7 @@ describe("spawnSubagentDirect filename validation", () => {
     const result = await spawnWithName("foo\nbar");
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_invalid_name/);
+    expect(result.error).not.toContain("foo\nbar");
   });
 
   it.each([
@@ -146,6 +147,8 @@ describe("spawnSubagentDirect filename validation", () => {
     const result = await spawnWithName(name);
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_invalid_name/);
+    expect(result.error).not.toContain(name);
+    expect(result.error).not.toMatch(/[\u0085\u009B\u2028\u2029\u202E]/);
   });
 
   it("rejects attachment path lists that exceed the child prompt budget", async () => {
@@ -165,7 +168,7 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toContain(`maxChars=${SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS}`);
   });
 
-  it.each(["receipt<final>.jpg", "a>b.jpg", "a&b.jpg"])(
+  it.each(["receipt<final>.jpg", "a>b.jpg"])(
     "native name %s cannot be rendered losslessly and is rejected",
     async (name) => {
       const result = await spawnWithName(name);
@@ -263,6 +266,52 @@ describe("spawnSubagentDirect filename validation", () => {
       "",
     );
     expect(outsideUntrusted).not.toContain(instructionName);
+  });
+
+  it("stages an ampersand filename and prompts the exact path", async () => {
+    const name = "a&b.jpg";
+    const result = await spawnWithName(name);
+    expect(result.status).toBe("accepted");
+    expect(result.attachments?.files[0]?.name).toBe(name);
+
+    const relDir = result.attachments?.relDir ?? "";
+    const relFile = path.posix.join(relDir, name);
+    const stagedFile = path.join(workspaceDirOverride, relDir, name);
+    expect(fs.statSync(stagedFile).isFile()).toBe(true);
+
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    )?.[0] as { params?: { extraSystemPrompt?: string } } | undefined;
+    const childSystemPrompt = agentCall?.params?.extraSystemPrompt ?? "";
+    expect(childSystemPrompt).toContain(relFile);
+    expect(childSystemPrompt).not.toContain("a&amp;b.jpg");
+
+    const loaded = await loadWebMediaRaw(relFile, {
+      maxBytes: 1024 * 1024,
+      workspaceDir: workspaceDirOverride,
+      localRoots: [workspaceDirOverride],
+    });
+    expect(loaded.buffer.byteLength).toBeGreaterThan(0);
+  });
+
+  it("puts the mountPath hint on its own line after the untrusted path block", async () => {
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachMountPath: "inputs",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+    expect(result.status).toBe("accepted");
+
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    )?.[0] as { params?: { extraSystemPrompt?: string } } | undefined;
+    const childSystemPrompt = agentCall?.params?.extraSystemPrompt ?? "";
+    expect(childSystemPrompt).toContain("</untrusted-text>\nRequested mountPath hint: inputs.");
+    expect(childSystemPrompt).not.toContain("</untrusted-text>Requested mountPath hint:");
   });
 
   it("materializes attachments under explicit cwd when native subagent cwd is provided", async () => {
