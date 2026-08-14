@@ -14,7 +14,6 @@ import {
   resolveTranscriptsConfig,
 } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
-import { TRANSCRIPT_OWNER_BINDING_VERSION } from "../../transcripts/ownership-metadata.js";
 import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
@@ -97,8 +96,8 @@ function ownsTranscriptSession(
       return false;
     }
     if (providerUsesAccountOwnership) {
-      // Historical source locators are not authorization facts. Doctor must
-      // persist provider-attested ownership before any remote surface can act.
+      // Historical source locators are not authorization facts. Without complete
+      // persisted ownership, only the recorded agent's local surface may act.
       return !channel;
     }
     return true;
@@ -210,69 +209,105 @@ async function stopTranscripts(params: {
     throw new Error(`transcripts session not found: ${sessionSelector}`);
   }
   const sessionId = session.sessionId;
+  if (selectedActive?.stopToken) {
+    return toolText(`Transcripts session stop already in progress: ${sessionId}`, {
+      sessionId,
+      skipped: true,
+    });
+  }
+  const stopToken = selectedActive ? Symbol("transcripts-stop") : undefined;
+  if (selectedActive && stopToken) {
+    selectedActive.stopToken = stopToken;
+  }
   const providerId = selectedActive?.providerId ?? session.source.providerId;
   const provider = resolveSourceProvider(providerId, params.ctx);
-  let providerStopError: string | undefined;
-  if (selectedActive?.cleanupPending) {
-    providerStopError = await stopPendingTranscriptCapture({
-      ctx: params.ctx,
-      provider,
-      session,
-      reason: "tool-stop",
-    });
-    if (providerStopError) {
-      throw new Error(`transcripts provider cleanup failed: ${providerStopError}`);
+  try {
+    let providerStopError: string | undefined;
+    if (selectedActive?.cleanupPending) {
+      providerStopError = await stopPendingTranscriptCapture({
+        ctx: params.ctx,
+        provider,
+        session,
+        reason: "tool-stop",
+      });
+      if (providerStopError) {
+        throw new Error(`transcripts provider cleanup failed: ${providerStopError}`);
+      }
+    } else if (selectedActive && provider?.stop) {
+      const result = await provider.stop({
+        cfg: params.ctx.config,
+        sessionId,
+        source: session.source,
+        reason: "tool-stop",
+      });
+      if (!result.ok) {
+        providerStopError = result.error;
+      }
     }
-  } else if (selectedActive && provider?.stop) {
-    const result = await provider.stop({
-      cfg: params.ctx.config,
-      sessionId,
-      source: session.source,
-      reason: "tool-stop",
-    });
-    if (!result.ok) {
-      providerStopError = result.error;
+    if (
+      selectedActive &&
+      (activeSessions.get(sessionId) !== selectedActive || selectedActive.stopToken !== stopToken)
+    ) {
+      return toolText(`Transcripts session no longer active: ${sessionId}`, {
+        sessionId,
+        skipped: true,
+      });
+    }
+    const stoppedAt = new Date().toISOString();
+    const stoppedSession: TranscriptSessionDescriptor = {
+      ...session,
+      stoppedAt,
+      ...(providerStopError
+        ? {
+            metadata: {
+              ...session.metadata,
+              providerStopError,
+              providerStopFailedAt: stoppedAt,
+            },
+          }
+        : {}),
+    };
+    if (selectedActive) {
+      await params.store.writeSession(stoppedSession);
+      if (
+        activeSessions.get(sessionId) !== selectedActive ||
+        selectedActive.stopToken !== stopToken
+      ) {
+        return toolText(`Transcripts session no longer active: ${sessionId}`, {
+          sessionId,
+          skipped: true,
+        });
+      }
+      activeSessions.delete(sessionId);
+    } else {
+      await params.store.updateStopped(sessionSelector, stoppedAt);
+    }
+    const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
+      await summarizeAndPersist({
+        config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
+        store: params.store,
+        session: stoppedSession,
+      });
+    return toolText(
+      `Transcripts stopped: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
+      {
+        sessionId,
+        ...(providerStopError ? { providerStopError } : {}),
+        ...(summaryExportError ? { summaryExportError } : {}),
+        ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
+        summary,
+        ...(summaryPath ? { summaryPath } : {}),
+      },
+    );
+  } finally {
+    if (
+      selectedActive &&
+      activeSessions.get(sessionId) === selectedActive &&
+      selectedActive.stopToken === stopToken
+    ) {
+      delete selectedActive.stopToken;
     }
   }
-  const stoppedAt = new Date().toISOString();
-  if (selectedActive) {
-    activeSessions.delete(sessionId);
-  }
-  const stoppedSession: TranscriptSessionDescriptor = {
-    ...session,
-    stoppedAt,
-    ...(providerStopError
-      ? {
-          metadata: {
-            ...session.metadata,
-            providerStopError,
-            providerStopFailedAt: stoppedAt,
-          },
-        }
-      : {}),
-  };
-  if (selectedActive) {
-    await params.store.writeSession(stoppedSession);
-  } else {
-    await params.store.updateStopped(sessionSelector, stoppedAt);
-  }
-  const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
-    await summarizeAndPersist({
-      config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
-      store: params.store,
-      session: stoppedSession,
-    });
-  return toolText(
-    `Transcripts stopped: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
-    {
-      sessionId,
-      ...(providerStopError ? { providerStopError } : {}),
-      ...(summaryExportError ? { summaryExportError } : {}),
-      ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
-      summary,
-      ...(summaryPath ? { summaryPath } : {}),
-    },
-  );
 }
 
 async function importTranscripts(params: {
@@ -304,9 +339,6 @@ async function importTranscripts(params: {
     startedAt: new Date().toISOString(),
     stoppedAt: new Date().toISOString(),
     metadata: {
-      // Imports are current writes too; without this marker Doctor could
-      // mistake an intentional local-only import for a historical row.
-      ownerBindingVersion: TRANSCRIPT_OWNER_BINDING_VERSION,
       ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
       ...resolvedSource.owner,
     },

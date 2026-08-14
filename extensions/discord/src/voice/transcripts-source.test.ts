@@ -99,7 +99,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     expect(workJoin).toHaveBeenCalledOnce();
   });
 
-  it("uses the configured default when multiple accounts can provide voice", () => {
+  it("uses the configured or canonical default when multiple accounts can provide voice", () => {
     const source = {
       providerId: "discord-voice",
       guildId: "g1",
@@ -129,6 +129,22 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
         source: { ...source, accountId: "work" },
       }),
     ).toEqual({ ok: true, value: "work" });
+
+    expect(
+      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                default: { token: "a", voice: { enabled: true } },
+                work: { token: "b", voice: { enabled: true } },
+              },
+            },
+          },
+        },
+        source,
+      }),
+    ).toEqual({ ok: true, value: "default" });
   });
 
   it("rejects omitted and explicit accounts that cannot provide voice", () => {

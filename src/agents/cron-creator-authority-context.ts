@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
@@ -27,9 +28,12 @@ export type CronCreatorAuthorityCapability = CronCreatorAuthorityRunScope;
 
 export function createCronCreatorAuthorityCapability(
   runId: string,
+  callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
 ): CronCreatorAuthorityCapability | undefined {
   const normalizedRunId = runId.trim();
-  return normalizedRunId ? createCronCreatorAuthorityRunScope(normalizedRunId) : undefined;
+  return normalizedRunId
+    ? createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin)
+    : undefined;
 }
 
 const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRunScope>();

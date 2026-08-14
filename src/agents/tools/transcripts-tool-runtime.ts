@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
-import { TRANSCRIPT_OWNER_BINDING_VERSION } from "../../transcripts/ownership-metadata.js";
 import { getTranscriptSourceProvider } from "../../transcripts/provider-registry.js";
 import type {
   TranscriptSessionDescriptor,
@@ -37,6 +36,8 @@ type ActiveTranscriptsSession = {
   providerId: string;
   // Durable timestamps can collide; lifecycle cleanup must match this exact process-owned capture.
   lifecycleToken?: symbol;
+  // Keep the capture reserved until provider and durable stop work both finish.
+  stopToken?: symbol;
   // Aborted starts stay active until a later stop confirms provider cleanup.
   cleanupPending?: true;
 };
@@ -296,9 +297,6 @@ export async function startTranscripts(params: {
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     metadata: {
-      // A missing marker means Doctor is looking at a pre-binding row; a
-      // current local-only start must never be reclassified as remote-owned.
-      ownerBindingVersion: TRANSCRIPT_OWNER_BINDING_VERSION,
       ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
       ...owner,
     },

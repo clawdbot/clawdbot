@@ -519,8 +519,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     : undefined;
   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
   const createdCronCreatorAuthorityCapability =
-    !inheritedCronCreatorAuthorityCapability && authorityRunId
-      ? createCronCreatorAuthorityCapability(authorityRunId)
+    !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
+      ? createCronCreatorAuthorityCapability(authorityRunId, {
+          kind: "external",
+          channel: messageProvider,
+        })
       : undefined;
   const cronCreatorAuthorityCapability =
     inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;

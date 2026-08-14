@@ -907,6 +907,86 @@ describe("transcripts tool", () => {
     );
   });
 
+  it("keeps a session reserved while an overlapping stop is in flight", async () => {
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    let resolveFirstStop: ((result: { ok: true; sessionId: string }) => void) | undefined;
+    const firstStop = new Promise<{ ok: true; sessionId: string }>((resolve) => {
+      resolveFirstStop = resolve;
+    });
+    let stopCount = 0;
+    const stop = vi.fn(async (request: TranscriptStopRequest) => {
+      stopCount += 1;
+      return stopCount === 1
+        ? await firstStop
+        : { ok: true as const, sessionId: request.sessionId };
+    });
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(tempDirs.make("openclaw-transcripts-"));
+
+    await tool.execute(
+      "start-original",
+      { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
+      undefined,
+      vi.fn(),
+    );
+    const firstStopCall = tool.execute(
+      "stop-original",
+      { action: "stop", sessionId: "reused-id" },
+      undefined,
+      vi.fn(),
+    );
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+    try {
+      await expect(
+        tool.execute(
+          "stop-overlap",
+          { action: "stop", sessionId: "reused-id" },
+          undefined,
+          vi.fn(),
+        ),
+      ).resolves.toMatchObject({ details: { sessionId: "reused-id", skipped: true } });
+      expect(stop).toHaveBeenCalledOnce();
+      await expect(
+        tool.execute(
+          "start-replacement-too-early",
+          { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
+          undefined,
+          vi.fn(),
+        ),
+      ).rejects.toThrow("transcripts session already active: reused-id");
+    } finally {
+      resolveFirstStop?.({ ok: true, sessionId: "reused-id" });
+      await firstStopCall;
+    }
+
+    const { tool: replacementTool } = await createHarness(
+      tempDirs.make("openclaw-transcripts-replacement-"),
+    );
+    await replacementTool.execute(
+      "start-replacement",
+      { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
+      undefined,
+      vi.fn(),
+    );
+    await expect(
+      replacementTool.execute("replacement-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "reused-id" })] },
+    });
+    await replacementTool.execute(
+      "stop-replacement",
+      { action: "stop", sessionId: "reused-id" },
+      undefined,
+      vi.fn(),
+    );
+  });
+
   it("aborts pending auto-starts when the service stops", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const stop = vi.fn(async () => ({ ok: true, sessionId: "standup" }));

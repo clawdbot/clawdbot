@@ -214,6 +214,7 @@ describe("createPersistCronSessionEntry", () => {
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "work",
       },
+      scheduledToolCallerOrigin: { kind: "local" },
       persistSessionEntry,
     });
 
@@ -231,6 +232,9 @@ describe("createPersistCronSessionEntry", () => {
       mode: "account",
       ownerSessionKey: "agent:main:discord:group:ops",
       ownerAccountId: "work",
+    });
+    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolCallerOrigin).toEqual({
+      kind: "local",
     });
     expect(store[runSessionKey]).toMatchObject({
       createdVia: "cron",

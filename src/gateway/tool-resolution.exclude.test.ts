@@ -36,7 +36,7 @@ type CreateOpenClawCodingToolsArg = {
     mode: "account";
     ownerSessionKey: string;
     ownerAccountId: string;
-    ownerChannel?: string;
+    ownerOrigin: { kind: "external"; channel: string } | { kind: "local" } | { kind: "unknown" };
   };
 };
 
@@ -204,7 +204,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         mode: "account",
         ownerSessionKey: "agent:main:qa-channel:group:ops",
         ownerAccountId: "default",
-        ownerChannel: "qa-channel",
+        ownerOrigin: { kind: "external", channel: "qa-channel" },
       },
     });
 
@@ -222,7 +222,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
           mode: "account",
           ownerSessionKey: "agent:main:qa-channel:group:ops",
           ownerAccountId: "default",
-          ownerChannel: "qa-channel",
+          ownerOrigin: { kind: "external", channel: "qa-channel" },
         },
       }),
     );

@@ -286,6 +286,7 @@ export function resolveGatewayScopedTools(params: {
     agentAccountId: params.accountId,
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
+    gatewayCallerLocal: gatewayCaller.local,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
     sourceReplyOnly: params.sourceReplyOnly,

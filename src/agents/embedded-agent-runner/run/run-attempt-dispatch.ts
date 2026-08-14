@@ -480,6 +480,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     sessionKey: runtime.sessionKey,
     turnSourceChannel: params.messageChannel ?? params.messageProvider,
+    turnSourceLocal:
+      !params.messageChannel &&
+      !params.messageProvider &&
+      params.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
+        ? true
+        : undefined,
     turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
     turnSourceAccountId: params.agentAccountId,
     turnSourceThreadId: params.currentThreadTs,

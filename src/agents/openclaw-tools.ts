@@ -41,6 +41,7 @@ import {
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
+import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -89,7 +90,6 @@ import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-f
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
-import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
@@ -114,6 +114,8 @@ export function createOpenClawTools(
     /** Trusted account used for authorization; delivery keeps agentAccountId. */
     gatewayCallerAccountId?: string;
     gatewayCallerChannel?: string | null;
+    /** True only for explicit server-authored local scheduled provenance. */
+    gatewayCallerLocal?: boolean;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
@@ -455,6 +457,7 @@ export function createOpenClawTools(
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     pluginToolDenylist: options?.pluginToolDenylist,
   });
+  const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const tools: AnyAgentTool[] = [
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -543,11 +546,7 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...collectPresentOpenClawTools([
-      // Keep the trusted caller fields explicit at this authorization boundary.
-      // prettier-ignore
-      options?.gatewayCallerChannel === null || resolvedConfig?.transcripts?.enabled === false ? undefined : createTranscriptsTool({ agentId: sessionAgentId, agentChannel: options?.gatewayCallerChannel ?? options?.agentChannel, agentAccountId: gatewayCallerAccountId, config: resolvedConfig }),
-    ]),
+    ...collectPresentOpenClawTools([transcriptsTool]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []

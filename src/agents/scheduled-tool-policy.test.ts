@@ -37,17 +37,39 @@ describe("resolveScheduledToolPolicyContext", () => {
           ownerSessionKey: " agent:main:discord:group:ops ",
           ownerAccountId: " work ",
         },
+        callerOrigin: { kind: "external", channel: " Discord " },
       }),
     ).toEqual({
       version: 1,
       mode: "account",
       ownerSessionKey: "agent:main:discord:group:ops",
       ownerAccountId: "work",
-      ownerChannel: "discord",
+      ownerOrigin: { kind: "external", channel: "discord" },
     });
   });
 
-  it("preserves account provenance without a canonical owner channel", () => {
+  it("preserves explicit local account provenance without inventing a channel", () => {
+    expect(
+      resolveScheduledToolPolicyContext({
+        toolsAllow: [],
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:main",
+          ownerAccountId: "work",
+        },
+        callerOrigin: { kind: "local" },
+      }),
+    ).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:main",
+      ownerAccountId: "work",
+      ownerOrigin: { kind: "local" },
+    });
+  });
+
+  it("keeps missing account provenance explicitly unknown", () => {
     expect(
       resolveScheduledToolPolicyContext({
         toolsAllow: [],
@@ -63,6 +85,7 @@ describe("resolveScheduledToolPolicyContext", () => {
       mode: "account",
       ownerSessionKey: "agent:main:main",
       ownerAccountId: "work",
+      ownerOrigin: { kind: "unknown" },
     });
   });
 });
@@ -76,7 +99,7 @@ describe("resolveScheduledToolCallerContext", () => {
           mode: "account",
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "creator",
-          ownerChannel: "discord",
+          ownerOrigin: { kind: "external", channel: "discord" },
         },
         accountId: "delivery",
         channel: "telegram",
@@ -92,10 +115,27 @@ describe("resolveScheduledToolCallerContext", () => {
           mode: "account",
           ownerSessionKey: "agent:main:main",
           ownerAccountId: "creator",
+          ownerOrigin: { kind: "unknown" },
         },
         accountId: "delivery",
         channel: "telegram",
       }),
     ).toEqual({ accountId: "creator", channel: null });
+  });
+
+  it("keeps explicitly local scheduled authority on the local tool surface", () => {
+    expect(
+      resolveScheduledToolCallerContext({
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:main",
+          ownerAccountId: "creator",
+          ownerOrigin: { kind: "local" },
+        },
+        accountId: "delivery",
+        channel: "discord",
+      }),
+    ).toEqual({ accountId: "creator", channel: undefined, local: true });
   });
 });
