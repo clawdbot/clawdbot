@@ -60,22 +60,6 @@ async function inspectConfiguredProvider(params: {
   }
 }
 
-const deps = { inspectConfiguredProvider };
-const testing = {
-  setInspectConfiguredProviderForTest(inspect: typeof inspectConfiguredProvider): void {
-    deps.inspectConfiguredProvider = inspect;
-  },
-  reset(): void {
-    deps.inspectConfiguredProvider = inspectConfiguredProvider;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.memoryCoreVectorIndexProviderDiagnosticTestApi")
-  ] = testing;
-}
-
 function listConfiguredAgentIds(config: OpenClawConfig): string[] {
   const ids = new Set(Object.keys(config.agents?.entries ?? {}));
   for (const entry of config.agents?.list ?? []) {
@@ -152,7 +136,7 @@ async function collectVectorProviderFindings(params: {
     if (hasConfiguredMemorySecretRef(params.config, agentId)) {
       continue;
     }
-    const failure = await deps.inspectConfiguredProvider({
+    const failure = await inspectConfiguredProvider({
       config: params.config,
       agentId,
       env: params.env,

@@ -16,14 +16,6 @@ const EXPECTED_STATIC_MODEL_IDS = [
   "Qwen/Qwen3.5-397B-A17B-TEE",
 ];
 
-function restoreEnvVar(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-  } else {
-    process.env[name] = value;
-  }
-}
-
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -37,10 +29,6 @@ async function withLiveChutesDiscovery<T>(
   run: () => Promise<T>,
   options?: { now?: string },
 ): Promise<T> {
-  const oldNodeEnv = process.env.NODE_ENV;
-  const oldVitest = process.env.VITEST;
-  delete process.env.NODE_ENV;
-  delete process.env.VITEST;
   if (options?.now) {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(options.now));
@@ -50,8 +38,6 @@ async function withLiveChutesDiscovery<T>(
   try {
     return await run();
   } finally {
-    restoreEnvVar("NODE_ENV", oldNodeEnv);
-    restoreEnvVar("VITEST", oldVitest);
     vi.unstubAllGlobals();
     if (options?.now) {
       vi.useRealTimers();
@@ -171,18 +157,6 @@ describe("chutes-models", () => {
         runtimeIds.includes(modelRef.slice("chutes/".length)),
       ),
     ).toBe(true);
-  });
-
-  it("discoverChutesModels returns static catalog when accessToken is empty", async () => {
-    const models = await discoverChutesModels("");
-    expect(models).toHaveLength(CHUTES_MODEL_CATALOG.length);
-    expect(models.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
-  });
-
-  it("discoverChutesModels returns static catalog in test env by default", async () => {
-    const models = await discoverChutesModels("test-token");
-    expect(models).toHaveLength(CHUTES_MODEL_CATALOG.length);
-    expect(requireChutesModel(models, 0).id).toBe("deepseek-ai/DeepSeek-V3.2-TEE");
   });
 
   it("discoverChutesModels correctly maps API response when not in test env", async () => {

@@ -4,24 +4,33 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { createEmbeddingProviderMock } = vi.hoisted(() => ({
+  createEmbeddingProviderMock: vi.fn(),
+}));
+
+vi.mock("../memory/embeddings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../memory/embeddings.js")>()),
+  createEmbeddingProvider: createEmbeddingProviderMock,
+}));
+
 import { vectorIndexProviderDiagnostic } from "./doctor-vector-index-provider.js";
-import { vectorIndexProviderDiagnosticTesting } from "./doctor-vector-index-provider.test-support.js";
 
 const roots = new Set<string>();
 
 afterEach(async () => {
-  vectorIndexProviderDiagnosticTesting.reset();
+  createEmbeddingProviderMock.mockReset();
   await Promise.all([...roots].map((root) => fs.rm(root, { recursive: true, force: true })));
   roots.clear();
 });
 
 describe("memory vector index provider doctor diagnostic", () => {
   it("reports a protected semantic index when the configured provider cannot bootstrap", async () => {
-    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderForTest(async () => ({
-      provider: "openai",
-      reason: "OpenAI API key missing",
-    }));
+    createEmbeddingProviderMock.mockResolvedValue({
+      provider: null,
+      providerUnavailableReason: "OpenAI API key missing",
+    });
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-doctor-"));
     roots.add(stateDir);
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
