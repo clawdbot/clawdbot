@@ -342,9 +342,9 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
             return
         }
-        var environment = ProcessInfo.processInfo.environment
-        environment.removeValue(forKey: CuaDriverWorkerEnvironment.socketPath)
-        environment.removeValue(forKey: CuaDriverWorkerEnvironment.binaryPath)
+        var environment = ProcessInfo.processInfo.environment.filter { key, _ in
+            !CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.contains { key.hasPrefix($0) }
+        }
         environment.merge(launch.environment, uniquingKeysWith: { _, explicit in explicit })
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"

@@ -47,4 +47,19 @@ struct ComputerControlSettingsTests {
         try FileManager.default.createSymbolicLink(at: binary, withDestinationURL: target)
         #expect(CuaDriverArtifact.executableURL(in: root) == nil)
     }
+
+    @Test func `CUA worker endpoint uses versioned JSON with escaped paths`() throws {
+        let endpoint = CuaDriverWorkerEndpoint(
+            socketPath: #"/tmp/openclaw-"quoted"/cua.sock"#,
+            binaryPath: #"/Applications/OpenClaw\Test.app/Contents/Resources/cua-driver"#)
+
+        let value = try endpoint.environmentValue()
+        let decoded = try #require(
+            JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
+
+        #expect(decoded.count == 3)
+        #expect(decoded["v"] as? Int == 1)
+        #expect(decoded["socketPath"] as? String == endpoint.socketPath)
+        #expect(decoded["binaryPath"] as? String == endpoint.binaryPath)
+    }
 }

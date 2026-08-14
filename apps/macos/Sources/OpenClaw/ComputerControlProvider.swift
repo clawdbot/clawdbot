@@ -69,14 +69,19 @@ enum ComputerControlProvider: String, CaseIterable, Sendable {
     }
 }
 
-struct CuaDriverWorkerEndpoint: Equatable, Sendable {
+struct CuaDriverWorkerEndpoint: Encodable, Equatable, Sendable {
+    private let v = 1
     let socketPath: String
     let binaryPath: String
+
+    func environmentValue() throws -> String {
+        try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
+    }
 }
 
 enum CuaDriverWorkerEnvironment {
-    static let socketPath = "CUA_DRIVER_SOCKET_PATH"
-    static let binaryPath = "CUA_DRIVER_BINARY_PATH"
+    static let endpoint = "OPENCLAW_CUA_DRIVER_ENDPOINT"
+    static let inheritedFamilyPrefixes = [String(endpoint.dropLast("ENDPOINT".count)), "CUA_DRIVER_"]
 }
 
 enum CuaDriverArtifact {
