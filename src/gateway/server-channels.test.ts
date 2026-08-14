@@ -3776,6 +3776,89 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("defers include-known retry when a stop queues during an existing start wait", async () => {
+    let runtimeMeasureCalls = 0;
+    const replacementRuntimeGate = createDeferred();
+    const releaseQueuedStopAccount = createDeferred();
+    const startupTrace = {
+      measure: async <T>(name: string, run: () => T | Promise<T>): Promise<T> => {
+        if (name === "channels.discord.runtime") {
+          runtimeMeasureCalls += 1;
+          if (runtimeMeasureCalls === 2) {
+            await replacementRuntimeGate.promise;
+          }
+        }
+        return await run();
+      },
+    };
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const stopAccount = vi.fn(async () => {
+      if (stopAccount.mock.calls.length === 2) {
+        await releaseQueuedStopAccount.promise;
+      }
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager({ startupTrace });
+
+    await manager.startChannel("discord");
+    await waitForImmediate();
+    await flushMicrotasks();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 1,
+      "expected the initial account task to start",
+    );
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+    });
+    const replacementStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID, {
+      preserveManualStop: true,
+    });
+    await waitForMicrotaskCondition(
+      () => runtimeMeasureCalls === 2,
+      "expected replacement startup to pause at the manager boundary",
+    );
+
+    const includeKnownStart = manager.startChannel("discord", undefined, {
+      includeKnownAccounts: true,
+    });
+    await flushMicrotasks();
+    const queuedStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length === 2,
+      "expected queued stop to own teardown while include-known waits",
+    );
+
+    replacementRuntimeGate.resolve();
+    await Promise.all([replacementStart, includeKnownStart]);
+    await flushMicrotasks();
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    releaseQueuedStopAccount.resolve();
+    await queuedStop;
+    expect(stopAccount).toHaveBeenCalledTimes(2);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+  });
+
   it("waits for aborted private handoff tasks before retrying rollback starts", async () => {
     let accountIds = ["account-a"];
     let accountAStarts = 0;

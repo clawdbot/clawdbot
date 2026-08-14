@@ -848,6 +848,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           await existingStart;
           if (
             !shouldRetryAfterDeferredStart ||
+            // A stop can queue while this caller waits for the manager boundary of
+            // an existing start. Let that stop finish teardown before any retry.
+            store.stops.has(id) ||
             store.tasks.has(id) ||
             store.starting.has(id) ||
             manuallyStopped.has(rKey)
