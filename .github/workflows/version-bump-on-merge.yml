@@ -2,6 +2,8 @@ name: version-bump-on-merge
 
 # Bumps package.json (and therefore the Control UI version chip, which embeds
 # the package version at build time) once per merged PR on main.
+# main is branch-protected (no direct pushes), so the bump lands via an
+# auto-merged PR. The workflow skips its own bump PRs to avoid a loop.
 on:
   pull_request:
     types: [closed]
@@ -9,28 +11,40 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   bump:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged == true &&
-       github.event.pull_request.base.ref == 'main')
+       github.event.pull_request.base.ref == 'main' &&
+       !startsWith(github.event.pull_request.title, 'chore: bump version'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Bump package version
         id: bump
         run: echo "version=$(node .github/scripts/bump-version.mjs)" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push
+      - name: Open auto-merged bump PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          VERSION="${{ steps.bump.outputs.version }}"
+          BRANCH="version-bump-${VERSION}"
           git config user.name "opencrustacean-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
           git add package.json
-          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}"
-          git push origin main
+          git commit -m "chore: bump version to ${VERSION}"
+          git push origin "${BRANCH}"
+          gh pr create --base main --head "${BRANCH}" \
+            --title "chore: bump version to ${VERSION}" \
+            --body "Automated version bump (one per merged PR). The header version chip shows this after the next rebuild."
+          gh pr merge --auto --squash --delete-branch
