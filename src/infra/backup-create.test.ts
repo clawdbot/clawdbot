@@ -2199,6 +2199,35 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("rejects absolute symlink targets before publishing the archive", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-absolute-symlink-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputPath = state.path("absolute-symlink.tar.gz");
+        const outsideTarget = state.path("outside-target.txt");
+        await fs.writeFile(outsideTarget, "outside\n", "utf8");
+        await fs.symlink(outsideTarget, state.statePath("ordinary-link"));
+
+        await expect(
+          createBackupArchive({
+            output: outputPath,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
+          }),
+        ).rejects.toThrow(/Archive symbolic link target must be relative/iu);
+        await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+  });
+
   it("preserves noncanonical symlinked SQLite paths without dereferencing them", async () => {
     if (process.platform === "win32") {
       return;
