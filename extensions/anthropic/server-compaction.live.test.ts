@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildAnthropicCompactionContextChunk,
   resolveAnthropicCompactionLiveSettings,
-} from "../../test/helpers/anthropic-compaction-live.js";
-import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+} from "./server-compaction-live.test-support.js";
+import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const settings = resolveAnthropicCompactionLiveSettings(
   process.env,
@@ -70,10 +70,7 @@ describeLive("Anthropic server compaction live", () => {
           },
         });
       };
-      const anthropicApi = await loadBundledPluginFacade<{
-        wrapAnthropicProviderStream: (context: unknown) => StreamFn | undefined;
-      }>({ pluginId: "anthropic", artifactBasename: "api.js" });
-      const wrapped = anthropicApi.wrapAnthropicProviderStream({
+      const wrapped = wrapAnthropicProviderStream({
         streamFn: observingBase,
         modelId: model.id,
         extraParams: {

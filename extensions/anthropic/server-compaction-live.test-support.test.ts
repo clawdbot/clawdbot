@@ -3,7 +3,7 @@ import {
   ANTHROPIC_COMPACTION_LIVE_ENV,
   buildAnthropicCompactionContextChunk,
   resolveAnthropicCompactionLiveSettings,
-} from "./anthropic-compaction-live.js";
+} from "./server-compaction-live.test-support.js";
 
 describe("Anthropic compaction live settings", () => {
   it("stays disabled unless the dedicated spend gate is enabled", () => {
