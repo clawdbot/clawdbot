@@ -299,4 +299,3 @@ describe("Google Meet OAuth", () => {
     ).rejects.toThrow("Google OAuth token response was missing access_token");
   });
 });
-
