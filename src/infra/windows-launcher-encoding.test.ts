@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("encodeWindowsLauncherScript", () => {
   it("writes vbs scripts as UTF-16 LE with BOM including CJK paths", () => {
-    const content = `CreateObject("WScript.Shell").Run """${CJK_SCRIPT_PATH}""", 0, False\r\n`;
+    const content = `CreateObject("WScript.Shell").Run """${CJK_SCRIPT_PATH}""", 0, True\r\n`;
     const encoded = encodeWindowsLauncherScript({ format: "vbs", content });
 
     expect(encoded.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
@@ -50,7 +50,7 @@ describe("encodeWindowsLauncherScript", () => {
   });
 
   it("writes vbs scripts as UTF-16 LE even for pure-ASCII content", () => {
-    const content = 'CreateObject("WScript.Shell").Run """C:\\gw.cmd""", 0, False\r\n';
+    const content = 'CreateObject("WScript.Shell").Run """C:\\gw.cmd""", 0, True\r\n';
     const encoded = encodeWindowsLauncherScript({ format: "vbs", content });
 
     expect(encoded.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
@@ -198,7 +198,7 @@ describe("encodeWindowsLauncherScript", () => {
 
 describe("decodeWindowsLauncherScript", () => {
   it("strips the UTF-16 LE BOM and decodes vbs scripts", () => {
-    const content = `CreateObject("WScript.Shell").Run """${CJK_SCRIPT_PATH}""", 0, False\r\n`;
+    const content = `CreateObject("WScript.Shell").Run """${CJK_SCRIPT_PATH}""", 0, True\r\n`;
     const buffer = encodeWindowsLauncherScript({ format: "vbs", content });
 
     expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
