@@ -218,7 +218,7 @@ export function registerGatewayPreflightCoreProcessTests(): void {
       expect(await snapshotTree(fixture.root)).toEqual(before);
     });
 
-    it("does not execute a login shell when fallback could change startup inputs", async () => {
+    it("does not invoke a login shell when fallback could change startup inputs", async () => {
       const fixture = await createFixture({
         config: {
           gateway: { mode: "local" },
@@ -227,16 +227,27 @@ export function registerGatewayPreflightCoreProcessTests(): void {
         },
       });
       const shellSentinel = path.join(fixture.root, "shell-ran");
+      const shellObserver = path.join(fixture.root, "observe-shell.cjs");
       await fs.writeFile(
-        path.join(fixture.root, ".profile"),
+        shellObserver,
         [
-          'export OPENCLAW_GATEWAY_TOKEN="validator-shell-token"',
-          'printf shell-ran > "$OPENCLAW_SHELL_SENTINEL"',
+          'const fs = require("node:fs");',
+          'const childProcess = require("node:child_process");',
+          'const { syncBuiltinESMExports } = require("node:module");',
+          "const originalExecFileSync = childProcess.execFileSync;",
+          "childProcess.execFileSync = function (file, args, options) {",
+          '  if (Array.isArray(args) && args.join("\\0") === "-l\\0-c\\0env -0") {',
+          '    fs.writeFileSync(process.env.OPENCLAW_SHELL_SENTINEL, "shell-ran");',
+          "  }",
+          "  return originalExecFileSync.call(this, file, args, options);",
+          "};",
+          "syncBuiltinESMExports();",
           "",
         ].join("\n"),
       );
       const before = await snapshotTree(fixture.root);
       const env = {
+        NODE_OPTIONS: `--require=${shellObserver}`,
         OPENCLAW_SHELL_SENTINEL: shellSentinel,
         SHELL: "/bin/sh",
       };
