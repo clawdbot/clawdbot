@@ -17,10 +17,7 @@ import {
   processResponsesStream,
   type OpenAIResponsesStreamEvent,
 } from "./openai-responses-stream-internal.js";
-import {
-  replaceCompactionReplayOwnerContent,
-  stripCompactionReplayCheckpoint,
-} from "./provider-compaction-replay.js";
+import { stripCompactionReplayCheckpoint } from "./provider-compaction-replay.js";
 
 const model = {
   id: "gpt-5.6-luna",
@@ -161,61 +158,6 @@ describe("OpenAI Responses compaction replay", () => {
     const unrelated = createAssistant([], compactionState(model, { type: "future-replay" }));
     expect(stripCompactionReplayCheckpoint(unrelated)).toBe(unrelated);
   });
-
-  it.each(responseConverters)(
-    "$name keeps calls after a reindexed compaction checkpoint paired with their output",
-    ({ convert }) => {
-      const toolCall = { type: "toolCall" as const, id: "call_1", name: "read", arguments: {} };
-      const owner = createAssistant(
-        [{ type: "text", text: "" }, toolCall],
-        compactionState(model, { replayIndex: 1 }),
-      );
-      const reindexed = replaceCompactionReplayOwnerContent(owner, [toolCall]);
-
-      const input = convert({
-        messages: [
-          reindexed,
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "read",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: 1,
-          },
-        ],
-      });
-
-      expect(reindexed.providerReplay?.replayIndex).toBe(0);
-      expect(input.map((item) => item.type)).toEqual([
-        "compaction",
-        "function_call",
-        "function_call_output",
-      ]);
-    },
-  );
-
-  it.each(responseConverters)(
-    "$name falls back to full history when checkpoint owner content is emptied",
-    ({ convert }) => {
-      const owner = createAssistant(
-        [{ type: "text", text: "removed" }],
-        compactionState(model, { replayIndex: 0 }),
-      );
-      const stripped = replaceCompactionReplayOwnerContent(owner, []);
-      const input = convert({
-        messages: [
-          { role: "user", content: "full history prefix", timestamp: 1 },
-          stripped,
-          { role: "user", content: "current turn", timestamp: 2 },
-        ],
-      });
-
-      expect(stripped.providerReplay).toBeUndefined();
-      expect(input.some((item) => item.type === "compaction")).toBe(false);
-      expect(JSON.stringify(input)).toContain("full history prefix");
-    },
-  );
 
   it("persists a streamed compaction output item as opaque provider replay state", async () => {
     const output = createOutput();

@@ -59,7 +59,7 @@ type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
   onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
 };
 
-export function wrapStreamFnWithCompactionReplayRepair(
+function wrapStreamFnWithCompactionReplayRepair(
   streamFn: StreamFn,
   onRejected: (checkpoint: OpenAIResponsesCompactionRejection) => void,
 ): StreamFn {

@@ -1,4 +1,5 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseCompactionItemParam,
   ResponseOutputItem,
@@ -48,19 +49,16 @@ export function buildOpenAIResponsesReplayContext(
 export function isOpenAIResponsesReplayContext(
   value: unknown,
 ): value is OpenAIResponsesReplayContext {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const state = value as Record<string, unknown>;
-  const optionalString = (field: string) =>
-    state[field] === undefined || typeof state[field] === "string";
   return (
-    typeof state.provider === "string" &&
-    typeof state.api === "string" &&
-    typeof state.model === "string" &&
-    optionalString("baseUrlHash") &&
-    optionalString("sessionHash") &&
-    optionalString("authProfileHash")
+    typeof value.provider === "string" &&
+    typeof value.api === "string" &&
+    typeof value.model === "string" &&
+    (value.baseUrlHash === undefined || typeof value.baseUrlHash === "string") &&
+    (value.sessionHash === undefined || typeof value.sessionHash === "string") &&
+    (value.authProfileHash === undefined || typeof value.authProfileHash === "string")
   );
 }
 

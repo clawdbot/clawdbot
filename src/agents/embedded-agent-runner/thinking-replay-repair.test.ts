@@ -11,6 +11,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { testing } from "../openai-transport-stream.test-support.js";
+import { convertToLlm } from "../sessions/messages.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -221,6 +222,14 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
       } satisfies Model<"openai-responses">;
       const identity = { sessionId, authProfileId: "profile-a" };
       const replayContext = testing.buildOpenAIResponsesReasoningReplayMetadata(model, identity);
+      const checkpointContext = {
+        provider: replayContext.provider,
+        api: replayContext.api,
+        model: replayContext.model,
+        baseUrlHash: replayContext.baseUrlHash,
+        sessionHash: replayContext.sessionHash,
+        authProfileHash: replayContext.authProfileHash,
+      };
       const sessionManager = SessionManager.open(target, dir);
       sessionManager.appendMessage(
         asAppendMessage({ role: "user", content: "full history prefix", timestamp: 1 }),
@@ -240,8 +249,7 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
             id: "cmp_rejected",
             data: "rejected-compaction-ciphertext",
             replayIndex: 0,
-            ...replayContext,
-            baseUrlHash: replayContext.baseUrlHash,
+            ...checkpointContext,
           },
         }),
       );
@@ -263,8 +271,12 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
         code: "invalid_encrypted_content",
       });
       const retryStream = {
-        async *[Symbol.asyncIterator]() {
-          throw new Error("retry stream failed");
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => {
+              throw new Error("retry stream failed");
+            },
+          };
         },
       };
       const create = vi
@@ -276,7 +288,9 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
             response: new Response(null, { status: 200 }),
           }),
         });
-      let repairResult: ReturnType<typeof repairRejectedCompactionReplayInSessionManager>;
+      let repairResult:
+        | ReturnType<typeof repairRejectedCompactionReplayInSessionManager>
+        | undefined;
       const recovery = await testing.createResponsesStreamWithEncryptedContentRetry({
         client: { responses: { create } } as never,
         request: {
@@ -299,12 +313,10 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
           });
         },
       });
-      await expect(async () => {
-        for await (const _event of recovery.stream) {
-          // The retry fails before producing an event.
-        }
-      }).rejects.toThrow("retry stream failed");
-      expect(repairResult!).toMatchObject({ repaired: true, repairedCount: 1 });
+      await expect(recovery.stream[Symbol.asyncIterator]().next()).rejects.toThrow(
+        "retry stream failed",
+      );
+      expect(repairResult).toMatchObject({ repaired: true, repairedCount: 1 });
 
       const reopened = SessionManager.open(target, dir);
       const messages = reopened.buildSessionContext().messages;
@@ -313,7 +325,7 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
       ).toBeUndefined();
       const request = testing.buildOpenAIResponsesParams(
         model,
-        { systemPrompt: "system", messages },
+        { systemPrompt: "system", messages: convertToLlm(messages) },
         identity,
       );
       expect(request.input.some((item) => item.type === "compaction")).toBe(false);

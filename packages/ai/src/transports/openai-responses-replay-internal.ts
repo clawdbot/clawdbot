@@ -157,7 +157,7 @@ function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedCont
   return input.length === request.input.length ? request : { ...request, input };
 }
 
-export function readOpenAIResponsesCompactionRejection(
+function readOpenAIResponsesCompactionRejection(
   request: ResponsesEncryptedContentRequest,
 ): OpenAIResponsesCompactionRejection | undefined {
   if (!Array.isArray(request.input)) {
