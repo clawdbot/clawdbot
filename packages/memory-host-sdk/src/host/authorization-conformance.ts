@@ -215,7 +215,7 @@ function hasExactlyTheSameUniqueSet<T>(
     actualKeys.length === actualSet.size &&
     expectedKeys.length === expectedSet.size &&
     actualSet.size === expectedSet.size &&
-    [...actualSet].every((key) => expectedSet.has(key))
+    [...actualSet].every((candidateKey) => expectedSet.has(candidateKey))
   );
 }
 
@@ -224,7 +224,7 @@ function mountKey(mount: MemoryAuthorizationConformanceMount): string {
     mount.storeId,
     mount.agentId,
     mount.audienceRevision,
-    [...mount.capabilities].sort(),
+    mount.capabilities.toSorted(),
   ]);
 }
 
