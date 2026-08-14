@@ -3,7 +3,10 @@ import { toStringifiedError } from "@openclaw/normalization-core/error-coercion"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
-import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
+import {
+  acquirePreparedModelRuntimeLeaseFromOwners,
+  resolveWorkspacePluginRootPresence,
+} from "./prepared-model-runtime-lease.js";
 import { registerPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -431,6 +434,10 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const knownKeys = new Set<string>();
   for (const rawInput of listConfiguredOwnerInputs(config, workspace, bindings)) {
     let input = normalizePreparedModelRuntimeInput(rawInput);
+    const workspacePluginRootPresent = await resolveWorkspacePluginRootPresence(input);
+    if (workspacePluginRootPresent !== undefined) {
+      input = normalizePreparedModelRuntimeInput({ ...input, workspacePluginRootPresent });
+    }
     const preservedOwner = [...owners.values()].find(
       (owner) =>
         owner.provenance === "configured" &&

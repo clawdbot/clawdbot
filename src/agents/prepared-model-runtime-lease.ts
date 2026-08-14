@@ -35,15 +35,14 @@ type PreparedModelRuntimeLeaseContext = {
   ): Promise<PreparedModelRuntimeSnapshot>;
 };
 
-async function detectWorkspacePluginRoot(
-  rawInput: PreparedModelRuntimeInput,
-  provenance: "run" | "ephemeral",
+export async function resolveWorkspacePluginRootPresence(
+  input: PreparedModelRuntimeInput,
 ): Promise<boolean | undefined> {
-  if (provenance !== "run" || !rawInput.workspaceDir) {
-    return rawInput.workspacePluginRootPresent;
+  if (input.workspacePluginRootPresent !== undefined || !input.workspaceDir) {
+    return input.workspacePluginRootPresent;
   }
   return await fsp
-    .stat(path.join(rawInput.workspaceDir, ".openclaw", "extensions"))
+    .stat(path.join(input.workspaceDir, ".openclaw", "extensions"))
     .then(() => true)
     .catch((error: unknown) => {
       const code = (error as NodeJS.ErrnoException).code;
@@ -63,12 +62,33 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     catalogMode?: PreparedModelRuntimeCatalogMode;
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
-  const workspacePluginRootPresent = await detectWorkspacePluginRoot(rawInput, provenance);
-  let input = normalizePreparedModelRuntimeInput({
+  let normalizedInput = normalizePreparedModelRuntimeInput({
     ...rawInput,
-    ...(workspacePluginRootPresent === undefined ? {} : { workspacePluginRootPresent }),
     preserveWorkspaceDirOnRefresh:
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
+  });
+  if (
+    provenance === "run" &&
+    context.getGatewayLifecycleActive() &&
+    !context.getPendingReplacement()
+  ) {
+    try {
+      normalizedInput = rebindInputToCommittedConfiguredOwner(context.owners, normalizedInput);
+    } catch (error) {
+      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+        throw error;
+      }
+    }
+  }
+  const retainedWorkspacePluginRootPresent = context.owners.get(ownerKey(normalizedInput))?.input
+    .workspacePluginRootPresent;
+  const workspacePluginRootPresent =
+    rawInput.workspacePluginRootPresent ??
+    retainedWorkspacePluginRootPresent ??
+    (provenance === "run" ? await resolveWorkspacePluginRootPresence(normalizedInput) : undefined);
+  let input = normalizePreparedModelRuntimeInput({
+    ...normalizedInput,
+    ...(workspacePluginRootPresent === undefined ? {} : { workspacePluginRootPresent }),
   });
   let key = ownerKey(input);
   let owner: PreparedModelRuntimeOwner;
