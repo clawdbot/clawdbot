@@ -35,6 +35,7 @@ import {
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from "./policy.js";
 import {
+  resolveAgentHarnessNativeToolPolicyRestricted,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
   type AgentHarnessPreparedModelProvider,
@@ -403,7 +404,7 @@ export async function maybeCompactAgentHarnessSession(
       !params.model ||
       !agentRuntimeAuthPlanMatchesTarget(runtimeAuthPlan, {
         provider: params.provider,
-        modelId: params.model,
+        modelId: params.model ?? "",
       }))
   ) {
     throw new Error(
@@ -465,7 +466,17 @@ export async function maybeCompactAgentHarnessSession(
   }
   const compactIdentity = resolveHarnessCompactIdentity(params);
   let resolvedRuntimeAuthPlan = runtimeAuthPlan;
-  const compactParams = {
+  const resolveNativeToolPolicyRestricted = (targetHarness: AgentHarness) =>
+    resolveAgentHarnessNativeToolPolicyRestricted(
+      {
+        ...params,
+        agentId: compactIdentity.agentId,
+        provider: params.provider ?? "",
+        modelId: params.model ?? "",
+      },
+      targetHarness,
+    );
+  const compactParams: CompactEmbeddedAgentSessionParams = {
     ...params,
     agentDir: compactIdentity.agentDir,
     agentId: compactIdentity.agentId,
@@ -487,6 +498,8 @@ export async function maybeCompactAgentHarnessSession(
     pinnedHarnessId,
   });
   harness = resolved.harness;
+  const nativeToolPolicyRestricted = resolveNativeToolPolicyRestricted(harness);
+  compactParams.nativeToolSurface = nativeToolPolicyRestricted ? "host-isolated" : "unrestricted";
   resolvedRuntimeAuthPlan = resolved.runtimeAuthPlan ?? resolvedRuntimeAuthPlan;
   const internalHarness = harness as InternalAgentHarness;
   const shouldCompactAfterContextEngine =
@@ -504,6 +517,15 @@ export async function maybeCompactAgentHarnessSession(
       };
     }
     return undefined;
+  }
+  if (
+    nativeToolPolicyRestricted &&
+    harness.id !== "openclaw" &&
+    harness.conversationToolPolicySupport !== "exact"
+  ) {
+    throw new Error(
+      `Agent harness ${harness.id} cannot enforce the host-isolated tool policy required for compaction`,
+    );
   }
   // Native runtimes own subscription login, but a provider-locked Platform
   // route must receive the exact host-prepared key selected for this attempt.

@@ -18,6 +18,11 @@ import type {
   DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
 import {
+  compactDeliveryTerminalEntry,
+  FAILED_TERMINAL_RECOVERY_STATE,
+  parseDeliveryQueueTerminalPolicy,
+} from "./delivery-queue-terminal-policy.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -32,6 +37,13 @@ export type {
 // Generic durable delivery queue storage shared by session and outbound queues.
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
 type QueueStatus = "pending" | "failed" | "completed";
+type DeliveryQueueStatusRow = {
+  queue_name: string;
+  status?: QueueStatus;
+  entry_json: string;
+  enqueued_at: number | bigint;
+  recovery_state: string | null;
+};
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
 const BOUNDED_COMPLETION_RECOVERY_STATE = "completed_bounded";
@@ -243,29 +255,13 @@ export function loadDeliveryQueueEntryAnyStatus(
   return loadDeliveryQueueEntryInDatabase(openStateDatabase(stateDir), queueName, id);
 }
 
-/** Read row status without hiding dead-lettered entries. */
-export function getDeliveryQueueEntryStatus(
-  queueName: string,
+function resolveDeliveryQueueEntryStatus(
+  database: ReturnType<typeof openStateDatabase>,
+  queueDb: ReturnType<typeof getNodeSqliteKysely<DeliveryQueueDatabase>>,
+  row: DeliveryQueueStatusRow | undefined,
   id: string,
-  stateDir?: string,
+  now: number,
 ): QueueStatus | undefined {
-  const database = openStateDatabase(stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    queueDb
-      .selectFrom("delivery_queue_entries")
-      .select(["status", "entry_json", "enqueued_at", "recovery_state"])
-      .where("queue_name", "=", queueName)
-      .where("id", "=", id),
-  ) as
-    | {
-        status?: QueueStatus;
-        entry_json: string;
-        enqueued_at: number | bigint;
-        recovery_state: string | null;
-      }
-    | undefined;
   if (row?.status === "completed" && row.recovery_state === BOUNDED_COMPLETION_RECOVERY_STATE) {
     let retention: DeliveryQueueCompletionRetention | undefined;
     try {
@@ -280,17 +276,17 @@ export function getDeliveryQueueEntryStatus(
       id.startsWith(retention.idPrefix) &&
       Number.isSafeInteger(retention.maxAgeMs) &&
       retention.maxAgeMs > 0 &&
-      Number(row.enqueued_at) < Date.now() - retention.maxAgeMs
+      Number(row.enqueued_at) < now - retention.maxAgeMs
     ) {
       const expired = executeSqliteQuerySync(
         database.db,
         queueDb
           .deleteFrom("delivery_queue_entries")
-          .where("queue_name", "=", queueName)
+          .where("queue_name", "=", row.queue_name)
           .where("id", "=", id)
           .where("status", "=", "completed")
           .where("recovery_state", "=", BOUNDED_COMPLETION_RECOVERY_STATE)
-          .where("enqueued_at", "<", Date.now() - retention.maxAgeMs),
+          .where("enqueued_at", "<", now - retention.maxAgeMs),
       );
       if (expired.numAffectedRows === 1n) {
         return undefined;
@@ -298,6 +294,55 @@ export function getDeliveryQueueEntryStatus(
     }
   }
   return row?.status;
+}
+
+/** Read row status without hiding dead-lettered entries. */
+export function getDeliveryQueueEntryStatus(
+  queueName: string,
+  id: string,
+  stateDir?: string,
+): QueueStatus | undefined {
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select(["queue_name", "status", "entry_json", "enqueued_at", "recovery_state"])
+      .where("queue_name", "=", queueName)
+      .where("id", "=", id),
+  ) as DeliveryQueueStatusRow | undefined;
+  return resolveDeliveryQueueEntryStatus(database, queueDb, row, id, Date.now());
+}
+
+/** Read one exact ID across several physical namespaces in one query. */
+export function getDeliveryQueueEntryStatuses(
+  queueNames: readonly string[],
+  id: string,
+  stateDir?: string,
+): Map<string, QueueStatus> {
+  if (queueNames.length === 0) {
+    return new Map();
+  }
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select(["queue_name", "status", "entry_json", "enqueued_at", "recovery_state"])
+      .where("queue_name", "in", queueNames)
+      .where("id", "=", id),
+  ).rows as DeliveryQueueStatusRow[];
+  const now = Date.now();
+  const statuses = new Map<string, QueueStatus>();
+  for (const row of rows) {
+    const status = resolveDeliveryQueueEntryStatus(database, queueDb, row, id, now);
+    if (status) {
+      statuses.set(row.queue_name, status);
+    }
+  }
+  return statuses;
 }
 
 /** Load all pending entries for a queue namespace in database order. */
@@ -537,46 +582,29 @@ export function reserveDeliveryQueueEntryAttempt(params: {
   );
 }
 
-/** Dead-lettered entry counts for one queue namespace. */
-type FailedDeliveryQueueCount = {
-  queueName: string;
-  count: number;
-  oldestFailedAt?: number;
-};
-
-/** Count dead-lettered (failed) entries per queue namespace for health reporting. */
-export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDeliveryQueueCount[] {
-  const database = openStateDatabase(stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    queueDb
-      .selectFrom("delivery_queue_entries")
-      .select((eb) => [
-        "queue_name as queueName",
-        eb.fn.countAll<number>().as("count"),
-        eb.fn.min<number>("failed_at").as("oldestFailedAt"),
-      ])
-      .where("status", "=", "failed")
-      .groupBy("queue_name")
-      .orderBy("queue_name", "asc"),
-  ).rows;
-  return rows.map(({ oldestFailedAt, ...row }) =>
-    oldestFailedAt == null ? row : Object.assign(row, { oldestFailedAt }),
-  );
-}
-
 /** Mark a pending delivery queue entry as failed for later diagnostics. */
 export function moveDeliveryQueueEntryToFailed(
   queueName: string,
   id: string,
+  terminalPolicy: NonNullable<DeliveryQueueEntryState["terminalPolicy"]>,
   stateDir?: string,
 ): void {
   const current = loadDeliveryQueueEntry(queueName, id, stateDir);
   if (!current) {
     throw enoent(queueName, id);
   }
-  upsertDeliveryQueueEntry({ queueName, entry: current, status: "failed", stateDir });
+  const result = failPendingDeliveryQueueEntry({
+    queueName,
+    id,
+    expectedStatus: "pending",
+    lastError: current.lastError,
+    entry: current,
+    failedEntry: { ...current, terminalPolicy },
+    stateDir,
+  });
+  if (result.status !== "failed") {
+    throw enoent(queueName, id);
+  }
 }
 
 /** Atomically fail a queue row only while its pending value is unchanged. */
@@ -584,7 +612,7 @@ export function failPendingDeliveryQueueEntry(params: {
   queueName: string;
   id: string;
   expectedStatus: "pending";
-  lastError: string;
+  lastError?: string;
   entry: DeliveryQueueEntryState;
   failedEntry?: DeliveryQueueEntryState;
   stateDir?: string;
@@ -598,7 +626,29 @@ export function failPendingDeliveryQueueEntry(params: {
     );
   }
   const now = Date.now();
-  const failedEntry = { ...(params.failedEntry ?? params.entry), lastError: params.lastError };
+  const sourceFailedEntry = params.failedEntry ?? params.entry;
+  const terminalPolicy = parseDeliveryQueueTerminalPolicy(sourceFailedEntry.terminalPolicy);
+  if (!terminalPolicy) {
+    throw new Error(
+      `Failed delivery queue entry lacks terminal policy: ${params.queueName}/${params.id}`,
+    );
+  }
+  const compacted = terminalPolicy.detail === "compacted";
+  const failedEntry = compacted
+    ? compactDeliveryTerminalEntry({
+        id: params.id,
+        enqueuedAt: sourceFailedEntry.enqueuedAt,
+        retryCount: sourceFailedEntry.retryCount,
+        ...(sourceFailedEntry.attemptCount === undefined
+          ? {}
+          : { attemptCount: sourceFailedEntry.attemptCount }),
+        terminalPolicy,
+      })
+    : {
+        ...sourceFailedEntry,
+        ...(params.lastError === undefined ? {} : { lastError: params.lastError }),
+        terminalPolicy,
+      };
   const database = openStateDatabase(params.stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const result = executeSqliteQuerySync(
@@ -607,7 +657,17 @@ export function failPendingDeliveryQueueEntry(params: {
       .updateTable("delivery_queue_entries")
       .set({
         status: "failed",
-        last_error: params.lastError,
+        ...(compacted
+          ? {
+              session_key: null,
+              channel: null,
+              target: null,
+              account_id: null,
+              last_error: null,
+              platform_send_started_at: null,
+              recovery_state: FAILED_TERMINAL_RECOVERY_STATE,
+            }
+          : { last_error: params.lastError ?? null }),
         entry_json: JSON.stringify(failedEntry),
         updated_at: now,
         failed_at: now,

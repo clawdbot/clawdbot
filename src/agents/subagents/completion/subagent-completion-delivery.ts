@@ -101,6 +101,7 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
   payload: Extract<QueuedSessionDeliveryPayload, { kind: "agentTurn" }>;
   /** Pre-commit redrive projection; never publish it before admission succeeds. */
   source?: SubagentRunRecord;
+  retireFailed?: QueuedSessionDelivery;
 }): { id: string; claimed: boolean; status: "pending" | "failed" | "completed" } {
   const current = params.source ?? subagentRuns.get(params.runId);
   if (!current) {
@@ -148,6 +149,9 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
     queueEntry,
     subagent,
     task: projectedTask,
+    ...(params.retireFailed
+      ? { retireFailed: { entry: params.retireFailed, reason: "owner_settled" as const } }
+      : {}),
   });
   publishCommittedRecords(subagent, projectedTask);
   const status = getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueEntry.id);
@@ -306,7 +310,11 @@ export async function retrySubagentCompletionDelivery(
     runId: redrive.runId,
     payload,
     source: redrive,
+    retireFailed: failed,
   });
+  if (admitted.status !== "pending") {
+    return { ok: false, reason: `replacement delivery is ${admitted.status}` };
+  }
   if (admitted.claimed) {
     await releaseSessionDeliveryClaim(admitted.id);
   }
@@ -327,6 +335,12 @@ export async function dismissSubagentCompletionDelivery(
     return { ok: false, reason: "completion delivery is not blocked" };
   }
   const now = Date.now();
+  const retainedFailure = current.delivery.queueId
+    ? (loadDeliveryQueueEntryAnyStatus(
+        SESSION_DELIVERY_QUEUE_NAME,
+        current.delivery.queueId,
+      ) as QueuedSessionDelivery | null)
+    : null;
   const subagent = structuredClone(current);
   const projectedTask: TaskRecord = {
     ...task,
@@ -342,6 +356,10 @@ export async function dismissSubagentCompletionDelivery(
     task: projectedTask,
     databaseOptions: options.databaseOptions,
     mutateSubagent: (entry) => options.discardTerminalDelivery(entry, now),
+    ...(retainedFailure?.kind === "agentTurn" &&
+    retainedFailure.owner?.kind === "subagent_completion"
+      ? { retireFailed: { entry: retainedFailure, reason: "owner_dismissed" as const } }
+      : {}),
   });
   publishCommittedRecords(subagent, projectedTask);
   if (subagent.cleanup === "delete" || !subagent.retainAttachmentsOnKeep) {

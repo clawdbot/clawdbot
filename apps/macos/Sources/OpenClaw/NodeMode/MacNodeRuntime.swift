@@ -760,6 +760,10 @@ extension MacNodeRuntime {
         await self.cachedMainActorServices?.releaseHeldInput(
             lifecycleGeneration: lifecycleGeneration)
     }
+
+    func shutdown() async {
+        await self.codexThreadCatalogClient.shutdown()
+    }
 }
 
 // MARK: - A2UI host

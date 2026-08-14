@@ -33,6 +33,12 @@ In the macOS app: **Settings -> Enable Peekaboo Bridge**. The toggle requires **
 
 When enabled (and Computer Control is on), OpenClaw starts a local UNIX socket server at `~/Library/Application Support/OpenClaw/<socket-name>`. If disabled, the host stops and `peekaboo` falls back to other available hosts. The coordinator also maintains legacy socket symlinks (`clawdbot`, `clawdis`, `moltbot` under Application Support) pointing at the current socket for older `peekaboo` installs.
 
+For an unattended elevation host, launch OpenClaw with `--attach-only --background-only`. Background-only mode does
+not preload dashboard, onboarding, or saved Gateway-profile Keychain state, so a signer or Keychain ACL transition
+cannot interrupt automation with SecurityAgent prompts. The Bridge still starts on its local socket; the control
+channel and Mac-node runtime continue using the primary Gateway route supplied through the normal environment/config
+path.
+
 ## Client discovery order
 
 Peekaboo clients typically try hosts in this order:
@@ -49,7 +55,10 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Security and permissions
 
-- The bridge validates **caller code signatures**; an allowlist of TeamIDs is enforced (Peekaboo host TeamID plus the running app's own TeamID).
+- The bridge validates **caller code signatures**. The production OpenClaw host accepts only the exact Peekaboo CLI
+  bundle (`boo.peekaboo.peekaboo`) signed by Peekaboo's canonical current/legacy release signer set (`FWJYW4S8P8`
+  and `Y5PE65HELJ`); sharing the app's UID or using another client signed by the app's development team is not
+  sufficient.
 - Prefer the signed bridge/app identity over a generic `node` runtime for Accessibility. Granting Accessibility to `node` lets any package launched by that Node executable inherit GUI automation access; see [macOS permissions](/platforms/mac/permissions#accessibility-grants-for-node-and-cli-runtimes).
 - Requests time out after 10 seconds (`requestTimeoutSec: 10`).
 - If required permissions are missing, the bridge returns a clear error message rather than launching System Settings.

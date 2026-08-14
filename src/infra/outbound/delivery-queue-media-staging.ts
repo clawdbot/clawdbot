@@ -1,5 +1,6 @@
 // Coordinates queue-media filesystem staging with durable SQLite ownership.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { loadRetainedFailedDeliveryEntries } from "../delivery-queue-failures.js";
 import {
   deleteDeliveryQueueEntry,
   expireStagingAndLoadDeliveryQueueEntries,
@@ -108,8 +109,14 @@ export function loadDeliveryQueueMediaRetentionSnapshot(params: {
     expireBeforeMs: params.expireBeforeMs,
     stateDir: params.stateDir,
   });
+  const failedEntries = loadRetainedFailedDeliveryEntries(
+    [OUTBOUND_DELIVERY_QUEUE_NAME],
+    params.stateDir,
+  );
   return {
-    payloads: snapshot.entries.map((entry) => entryPayloads(entry as OutboundMediaEntry)),
+    payloads: snapshot.entries
+      .concat(failedEntries)
+      .map((entry) => entryPayloads(entry as OutboundMediaEntry)),
     stagedArtifacts: snapshot.stagingEntries.flatMap((entry) => {
       const artifacts = (entry as MediaStageEntry).artifacts;
       return Array.isArray(artifacts)
