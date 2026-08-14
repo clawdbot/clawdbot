@@ -61,7 +61,7 @@ describe("agent selection", () => {
   });
 
   it("clears system page scopes when the typed roster becomes known", () => {
-    const gateway = createGateway("OpenCrustacean");
+    const gateway = createGateway("OpenClaw");
     const roster = createRoster();
     const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
 
