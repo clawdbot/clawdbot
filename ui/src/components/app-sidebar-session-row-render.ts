@@ -242,7 +242,7 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
-  // Empty 16/20px lead columns indent titles past section labels and siblings.
+  // Leading state occupies the shared icon rail without owning text alignment.
   const showLead = leadingIndicator !== nothing || session.visibility === "draft";
   const row = html`
     <div

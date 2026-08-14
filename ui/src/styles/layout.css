@@ -910,18 +910,31 @@ openclaw-settings-save-indicator {
   display: flex;
   min-height: 100%;
   overflow: visible;
-  border-right: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-inline-end: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
-/* 1px overlay on the nav border edge; the divider paints its own centered
-   line, so the host needs no background here. */
+/* The shell border owns the resting boundary. The wider resize target stays
+   transparent until interaction, when it temporarily takes over that line. */
 .sidebar-resizer {
   grid-area: nav;
   align-self: stretch;
   justify-self: end;
   z-index: 20;
-  width: 1px;
+  width: 6px;
+  --accent: var(--sidebar-divider-active, var(--text));
+  --rail-divider-active-size: 1px;
+  --rail-divider-color: transparent;
+}
+
+/* The active hairline is the focus indicator; the divider component's outer
+   outline would paint a second boundary beside the shell. */
+.sidebar-resizer:focus-visible {
+  outline: none;
+}
+
+.shell:has(.sidebar-resizer:is(:hover, :focus-visible, .dragging)) .shell-nav {
+  border-inline-end-color: transparent;
 }
 
 .shell:has(.sidebar-resizer.dragging) {
@@ -932,10 +945,17 @@ openclaw-settings-save-indicator {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
-  /* One rhythm for every group boundary in the sidebar (Pages and each
-     session section) so the column reads as separate shelves, not one list. */
-  --sidebar-group-gap: var(--space-4);
-  --scrollbar-size: 6px;
+  --sidebar-section-gap: var(--space-3);
+  --sidebar-heading-row-gap: 2px;
+  --sidebar-row-gap: 1px;
+  --sidebar-row-surface: transparent;
+  --sidebar-row-surface-hover: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  --sidebar-row-surface-selected: color-mix(in srgb, var(--text) 10%, transparent);
+  --sidebar-row-surface-pressed: color-mix(in srgb, var(--text) 14%, transparent);
+  --sidebar-focus-visible: color-mix(in srgb, var(--text) 34%, transparent);
+  --sidebar-divider-active: color-mix(in srgb, var(--text) 42%, transparent);
+  --focus-ring: 0 0 0 2px var(--sidebar-focus-visible);
+  --scrollbar-size: 10px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -952,6 +972,11 @@ openclaw-settings-save-indicator {
 
 .sidebar-shell {
   --sidebar-pad-x: 10px;
+  --sidebar-row-inset: var(--sidebar-pad-x);
+  --sidebar-text-start: 34px;
+  --sidebar-tree-depth: 16px;
+  --sidebar-trailing-slot: 20px;
+  --sidebar-scrollbar-gutter: 8px;
   --sidebar-lucide-icon-size: 16px;
   --sidebar-lucide-stroke-width: 1.5px;
   display: flex;
@@ -1066,12 +1091,10 @@ openclaw-settings-save-indicator {
      horizontal scrollbar beside the divider. */
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
+  padding-inline-end: var(--sidebar-scrollbar-gutter);
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
-  /* Cancel the shell's horizontal padding so the thumb hugs its right edge;
-     both values share --sidebar-pad-x so they cannot drift. */
-  margin-right: calc(-1 * var(--sidebar-pad-x));
-  padding-right: var(--sidebar-pad-x);
 }
 
 .sidebar-shell__body::-webkit-scrollbar,
@@ -1079,9 +1102,29 @@ openclaw-settings-save-indicator {
   background: transparent;
 }
 
+.sidebar-shell__body::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  background-clip: content-box;
+}
+
+.sidebar:hover .sidebar-shell__body,
+.sidebar-shell__body:focus-within,
+.sidebar-shell__body--scrolling {
+  scrollbar-color: color-mix(in srgb, currentColor 22%, transparent) transparent;
+}
+
+.sidebar:hover .sidebar-shell__body::-webkit-scrollbar-thumb,
+.sidebar-shell__body:focus-within::-webkit-scrollbar-thumb,
+.sidebar-shell__body--scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, currentColor 22%, transparent);
+}
+
 .sidebar-shell__footer {
   flex-shrink: 0;
-  padding: 4px 0 0;
+  padding-block-start: 4px;
+  padding-inline-end: calc(var(--sidebar-scrollbar-gutter) + var(--scrollbar-size));
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
@@ -1434,9 +1477,9 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-sessions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 0 8px;
-  margin-top: var(--sidebar-group-gap);
+  gap: var(--sidebar-heading-row-gap);
+  padding: 0;
+  margin-top: var(--sidebar-section-gap);
   border-radius: var(--radius-md);
   transition:
     background var(--duration-fast) ease,
@@ -1471,8 +1514,8 @@ body.update-dialog-open .sidebar-update-card__status {
 
   display: flex;
   flex-direction: column;
-  gap: var(--sidebar-group-gap);
-  margin: 0 -8px;
+  gap: var(--sidebar-section-gap);
+  margin: 0;
   /* Sessions are app chrome, not hyperlinks: the whole region follows the
      base.css cursor policy so it tracks the window it is running in. */
   cursor: var(--cursor-action);
@@ -1511,7 +1554,7 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-recent-sessions__group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sidebar-heading-row-gap);
   min-height: 28px;
   border-radius: var(--radius-md);
   transition:
@@ -1542,7 +1585,7 @@ body.update-dialog-open .sidebar-update-card__status {
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  padding: 0 10px 0 0;
+  padding: 0;
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
@@ -1552,7 +1595,8 @@ body.update-dialog-open .sidebar-update-card__status {
   gap: 0;
   min-width: 0;
   flex: 1 1 auto;
-  padding: 2px 0;
+  padding-block: 2px;
+  padding-inline-start: calc(var(--sidebar-text-start) - var(--sidebar-lead));
   border: none;
   background: transparent;
   color: inherit;
@@ -1709,7 +1753,7 @@ body.update-dialog-open .sidebar-update-card__status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  width: var(--sidebar-trailing-slot);
   height: 28px;
   flex: 0 0 auto;
   border: none;
@@ -1734,6 +1778,7 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-session-sort:hover,
+.sidebar-session-sort:focus-visible,
 .sidebar-session-sort[aria-expanded="true"],
 .sidebar-session-sort[aria-pressed="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
@@ -1756,7 +1801,7 @@ body.update-dialog-open .sidebar-update-card__status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  width: var(--sidebar-trailing-slot);
   height: 22px;
   flex: 0 0 auto;
   border: none;
@@ -1780,6 +1825,7 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-session-group-actions:hover,
+.sidebar-session-group-actions:focus-visible,
 .sidebar-session-group-actions[aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
@@ -1796,7 +1842,7 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-session-group-actions.sidebar-session-sort {
-  width: 28px;
+  width: var(--sidebar-trailing-slot);
   height: 28px;
 }
 
@@ -1852,7 +1898,7 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-catalog-project__sessions {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sidebar-row-gap);
   min-width: 0;
 }
 
@@ -1861,8 +1907,8 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-session-tree__children {
-  margin-left: var(--sidebar-lead);
-  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--border-strong) 52%, transparent);
+  margin-inline-start: calc(var(--sidebar-tree-depth) - 1px);
+  border-inline-start: 1px solid color-mix(in srgb, var(--border-strong) 52%, transparent);
 }
 
 .sidebar-session-tree__loading {
@@ -1889,7 +1935,7 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
-  gap: 8px;
+  gap: var(--sidebar-section-gap);
 }
 
 .sidebar-session-catalog-host {
@@ -2068,18 +2114,21 @@ body.update-dialog-open .sidebar-update-card__status {
   display: flex;
   align-items: center;
   min-width: 0;
-  min-height: 30px;
-  padding-right: 4px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-md);
+  background: var(--sidebar-row-surface);
   color: var(--muted);
   cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
 
 .sidebar-recent-session:hover {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  background: var(--sidebar-row-surface-hover);
   color: var(--text);
 }
 
@@ -2089,24 +2138,41 @@ body.update-dialog-open .sidebar-update-card__status {
    Doubled class outranks .sidebar-recent-session:hover so the selection fill
    does not degrade to the weaker hover fill while the row is under pointer. */
 .sidebar-recent-session.sidebar-recent-session--active {
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--sidebar-row-surface-selected);
   color: var(--text-strong);
 }
 
-/* Multi-select is an accent wash so it stays distinguishable by hue from the
-   neutral --active fill when a selection includes the active row. */
+/* Multi-select stays neutral but slightly stronger than the active fill, so
+   selection never borrows the danger-leaning accent color. */
 .sidebar-recent-session.sidebar-recent-session--selected {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--sidebar-row-surface-pressed);
   color: var(--text-strong);
+}
+
+.sidebar-recent-session:has(> .sidebar-recent-session__link:focus-visible) {
+  box-shadow: inset 0 0 0 1px var(--sidebar-focus-visible);
+}
+
+.sidebar-recent-session:not(.sidebar-recent-session--active):not(
+  .sidebar-recent-session--selected
+):has(> .sidebar-recent-session__link:focus-visible) {
+  background: var(--sidebar-row-surface-hover);
+}
+
+.sidebar-recent-session__link:focus-visible {
+  outline: none;
 }
 
 .sidebar-recent-session__link {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 3px 4px 3px 0;
+  min-height: 30px;
+  padding-block: 3px;
+  padding-inline: var(--sidebar-text-start) 4px;
   color: inherit;
   cursor: var(--cursor-action);
   text-decoration: none;
@@ -2116,6 +2182,11 @@ body.update-dialog-open .sidebar-update-card__status {
   .sidebar-recent-session__link
   > :not(.sidebar-session-indicator):not(.sidebar-recent-session__text) {
   margin-left: 8px;
+}
+
+.sidebar-recent-session__link > .sidebar-session-indicator {
+  position: absolute;
+  inset-inline-start: var(--sidebar-row-inset);
 }
 
 .sidebar-child-session-toggle {
@@ -2388,7 +2459,7 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-session__aside {
-  padding-right: 2px;
+  padding-inline-end: 0;
 }
 
 /* The trailing aside overlays the row so action-only rows retain the full
@@ -2398,7 +2469,7 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
   top: 50%;
-  right: 2px;
+  inset-inline-end: 0;
   transform: translateY(-50%);
   pointer-events: none;
 }
@@ -2408,7 +2479,7 @@ body.update-dialog-open .sidebar-update-card__status {
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+  inset-inline-end: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
 /* State-bearing rows reserve the larger state/action maximum throughout the
@@ -2497,7 +2568,7 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .nav-section__items {
   display: grid;
-  gap: 2px;
+  gap: var(--sidebar-row-gap);
 }
 
 .sidebar-zone-entry {
@@ -2833,6 +2904,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .session-menu__check {
+  width: var(--sidebar-trailing-slot, 20px);
   color: var(--accent);
 }
 
@@ -2913,16 +2985,16 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   justify-content: flex-start;
   gap: 8px;
   min-height: 32px;
-  padding: 0 9px;
+  padding-inline-start: var(--sidebar-row-inset);
   border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  background: transparent;
+  border: 0;
+  background: var(--sidebar-row-surface);
   color: var(--muted);
   cursor: var(--cursor-action);
   text-decoration: none;
   transition:
-    border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
 }
@@ -2991,8 +3063,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .nav-item:hover {
   color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--sidebar-row-surface-hover);
+  border-color: transparent;
   text-decoration: none;
 }
 
@@ -3001,25 +3073,35 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .nav-item.active,
-.nav-item--active {
+.nav-item.nav-item--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--sidebar-row-surface-selected);
+  border-color: transparent;
 }
 
 .nav-item.active .nav-item__icon,
-.nav-item--active .nav-item__icon {
+.nav-item.nav-item--active .nav-item__icon {
   opacity: 1;
-  color: var(--accent);
+  color: var(--text-strong);
+}
+
+.nav-item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--sidebar-focus-visible);
+}
+
+.nav-item:not(.active):not(.nav-item--active):focus-visible {
+  background: var(--sidebar-row-surface-hover);
+  color: var(--text);
 }
 
 /* Pinned sessions share the page-nav visual contract while retaining session actions. */
 .sidebar-zone-entry .sidebar-recent-session {
   position: relative;
   min-height: 32px;
-  padding: 0 9px;
-  border: 1px solid transparent;
-  background: transparent;
+  padding: 0;
+  border: 0;
+  background: var(--sidebar-row-surface);
   color: var(--muted);
   transition:
     border-color var(--duration-fast) ease,
@@ -3029,9 +3111,10 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .sidebar-zone-entry .sidebar-recent-session__link {
-  gap: 8px;
+  gap: 0;
   min-height: 30px;
-  padding: 0;
+  padding-block: 3px;
+  padding-inline: var(--sidebar-text-start) 4px;
 }
 
 .sidebar-zone-entry .sidebar-recent-session__name {
@@ -3040,14 +3123,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-zone-entry .sidebar-recent-session:hover {
   color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--sidebar-row-surface-hover);
+  border-color: transparent;
 }
 
 .sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--sidebar-row-surface-selected);
+  border-color: transparent;
 }
 
 .sidebar-zone-entry .sidebar-recent-session__aside {
@@ -3085,8 +3168,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .sidebar-agent-card__main:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--sidebar-focus-visible);
 }
 
 .sidebar-agent-card__avatar {
@@ -3188,7 +3271,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-nav__head {
   display: flex;
   align-items: center;
-  padding: 2px 8px 2px 12px;
+  padding-block: 2px;
+  padding-inline-start: var(--sidebar-text-start);
 }
 
 .sidebar-nav__head .sidebar-recent-sessions__label-text {
@@ -3199,7 +3283,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  width: var(--sidebar-trailing-slot);
   height: 22px;
   flex: none;
   border: none;
@@ -3215,7 +3299,15 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-nav__head-action:hover,
 .sidebar-nav__head-action:focus-visible {
   color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--sidebar-row-surface-hover);
+}
+
+.sidebar-nav__head-action:focus-visible,
+.sidebar-session-sort:focus-visible,
+.sidebar-session-group-actions:focus-visible,
+.sidebar-child-session-toggle:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--sidebar-focus-visible);
 }
 
 .sidebar-nav__head-action svg {
@@ -3230,8 +3322,13 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 /* Home keeps run state plus outbox/draft counts together at the row edge. */
 .nav-item__state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sidebar-trailing-slot);
+  height: var(--sidebar-trailing-slot);
   flex: none;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 
 .sidebar-home-session-states {
@@ -3245,16 +3342,19 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
-  padding: 6px 12px;
+  padding: 6px 0;
 }
 
 .sidebar-identity-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) var(--sidebar-trailing-slot);
   align-items: center;
   gap: 8px;
   width: 100%;
   min-width: 0;
-  padding: 5px 6px;
+  padding-block: 5px;
+  padding-inline-start: var(--sidebar-row-inset);
+  padding-inline-end: 0;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -3272,14 +3372,15 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .sidebar-identity-card:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--sidebar-focus-visible);
 }
 
 .sidebar-identity-card .viewer-avatar--footer {
   width: 26px;
   height: 26px;
   flex: none;
+  justify-self: center;
   font-size: 10px;
 }
 
@@ -3359,6 +3460,10 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-identity-card__chevron {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sidebar-trailing-slot);
+  height: var(--sidebar-trailing-slot);
   flex: none;
   color: var(--muted);
 }

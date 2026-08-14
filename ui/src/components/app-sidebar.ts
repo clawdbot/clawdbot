@@ -71,6 +71,7 @@ const sidebarChromeImport = createIdleImport(() =>
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
+  @state() private sidebarScrolling = false;
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
@@ -81,6 +82,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   // dropped because the controller aligns from cumulative snapshots.
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
+  private sidebarScrollIdleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
@@ -163,7 +165,25 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
+    if (this.sidebarScrollIdleTimer) {
+      globalThis.clearTimeout(this.sidebarScrollIdleTimer);
+      this.sidebarScrollIdleTimer = null;
+    }
     super.disconnectedCallback();
+  }
+
+  private handleSidebarScroll(element: HTMLElement) {
+    this.sessionData.updateSessionsScrollState(element);
+    this.sidebarScrolling = true;
+    if (this.sidebarScrollIdleTimer) {
+      globalThis.clearTimeout(this.sidebarScrollIdleTimer);
+    }
+    // Keep the otherwise-hidden thumb visible through a scroll gesture, then
+    // return it to rest without leaving a permanent rail beside the divider.
+    this.sidebarScrollIdleTimer = globalThis.setTimeout(() => {
+      this.sidebarScrollIdleTimer = null;
+      this.sidebarScrolling = false;
+    }, 500);
   }
 
   protected override willUpdate(changed: PropertyValues<this>) {
@@ -467,9 +487,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           ${renderAppSidebarBrand(this)}
           <div
             class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData
-              .sessionsScrollState}"
+              .sessionsScrollState} ${this.sidebarScrolling
+              ? "sidebar-shell__body--scrolling"
+              : ""}"
             @scroll=${(event: Event) =>
-              this.sessionData.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+              this.handleSidebarScroll(event.currentTarget as HTMLElement)}
           >
             <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
               ${renderAppSidebarPagesHead(this)}

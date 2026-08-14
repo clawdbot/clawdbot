@@ -215,6 +215,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .shell--mobile-nav .sidebar-shell {
   --sidebar-pad-x: 16px;
+  --sidebar-row-inset: 12px;
+  --sidebar-text-start: 36px;
   padding: 18px var(--sidebar-pad-x) 14px;
   border-radius: 0;
 }
@@ -222,7 +224,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav .nav-item {
   margin: 0;
   min-height: 40px;
-  padding: 0 12px;
+  padding-inline-start: var(--sidebar-row-inset);
   font-size: calc(13px * var(--control-ui-text-scale));
   border-radius: var(--radius-md);
   white-space: nowrap;
