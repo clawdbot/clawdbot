@@ -176,6 +176,10 @@ export class GatewayClient {
     return this.#client.request<T>(method, params, opts);
   }
 
+  hasServerCapability(capability: string): boolean {
+    return this.#client.hasServerCapability(capability);
+  }
+
   getConnectionMetadata(): GatewayClientConnectionMetadata {
     return this.#client.getConnectionMetadata();
   }

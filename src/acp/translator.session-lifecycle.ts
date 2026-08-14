@@ -22,6 +22,7 @@ import type {
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import type { FixedWindowRateLimiter } from "../infra/fixed-window-rate-limit.js";
@@ -77,11 +78,23 @@ export class AcpTranslatorSessionLifecycle {
       fallbackKey: `acp-bridge:${sessionId}`,
     });
     // chat.send carries no cwd, so the requested directory only reaches a turn as the row's
-    // spawnedCwd, and a routed key may have no row yet. cwdOnCreateOnly lets the Gateway settle
-    // absence inside its own mutation, so an existing session keeps the cwd its owner set.
+    // spawnedCwd. cwdOnCreateOnly lets the Gateway settle absence inside its own mutation; a
+    // Gateway without it would apply the directory to a row it merely adopts, so against those
+    // only bridge-minted keys are provisioned - a fresh id cannot collide with an owned session.
+    const scopesCwdToNewSessions = this.gateway.hasServerCapability(
+      GATEWAY_SERVER_CAPS.SESSIONS_CREATE_CWD_ON_CREATE_ONLY,
+    );
+    if (!scopesCwdToNewSessions && hasExplicitSessionRouting(meta, this.opts)) {
+      return await this.startBridgeSession({ sessionId, sessionKey, cwd: params.cwd });
+    }
+
     const created = await this.gateway.request<{ entry?: { spawnedCwd?: string } }>(
       "sessions.create",
-      { key: sessionKey, cwd: params.cwd, cwdOnCreateOnly: true },
+      {
+        key: sessionKey,
+        cwd: params.cwd,
+        ...(scopesCwdToNewSessions ? { cwdOnCreateOnly: true } : {}),
+      },
     );
     // The Gateway owns the run directory, so read back what it kept rather than assuming the
     // request won. A create that passed a cwd always returns one for a new row, so its absence
@@ -94,11 +107,16 @@ export class AcpTranslatorSessionLifecycle {
       );
     }
 
-    const session = this.sessionStore.createSession({
-      sessionId,
-      sessionKey,
-      cwd: sessionCwd,
-    });
+    return await this.startBridgeSession({ sessionId, sessionKey, cwd: sessionCwd });
+  }
+
+  /** Registers the bridge session and emits its opening ACP updates. */
+  private async startBridgeSession(params: {
+    sessionId: string;
+    sessionKey: string;
+    cwd: string;
+  }): Promise<NewSessionResponse> {
+    const session = this.sessionStore.createSession(params);
     await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.sessionState.getSnapshot(session.sessionKey);

@@ -16,6 +16,7 @@ export const GATEWAY_SERVER_CAPS = {
   SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
+  SESSIONS_CREATE_CWD_ON_CREATE_ONLY: "sessions.create.cwdOnCreateOnly",
 } as const;
 
 /**

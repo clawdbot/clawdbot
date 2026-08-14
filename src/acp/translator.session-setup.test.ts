@@ -274,7 +274,9 @@ describe("acp session UX bridge behavior", () => {
 describe("acp bridge session cwd persistence", () => {
   // adoptedCwd: undefined = new row (Gateway echoes the requested cwd back);
   // a string = adopted row that owns that directory; null = adopted row with no directory.
-  function createRecordingGateway(options: { adoptedCwd?: string | null } = {}) {
+  function createRecordingGateway(
+    options: { adoptedCwd?: string | null; serverCapabilities?: readonly string[] } = {},
+  ) {
     const calls: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       calls.push({ method, params });
@@ -289,7 +291,13 @@ describe("acp bridge session cwd persistence", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    return { calls, gateway: createAcpGateway(request) };
+    return {
+      calls,
+      gateway: createAcpGateway(
+        request,
+        options.serverCapabilities ? { serverCapabilities: options.serverCapabilities } : {},
+      ),
+    };
   }
 
   const createCalls = (calls: Array<{ method: string; params: unknown }>) =>
@@ -361,6 +369,40 @@ describe("acp bridge session cwd persistence", () => {
         _meta: { sessionKey: "agent:main:work" },
       } as never),
     ).rejects.toThrow(/already exists without a working directory/i);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("still provisions a bridge-minted session against a Gateway without the capability", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway({ serverCapabilities: [] });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await agent.newSession(createNewSessionRequest("/tmp/my-project"));
+
+    // A freshly minted key cannot collide with an operator-owned row, so the reported bug stays
+    // fixed on older Gateways; the field is omitted because their closed schema would reject it.
+    expect(createCalls(calls)).toStrictEqual([
+      { key: expect.stringMatching(/^acp-bridge:/) as unknown as string, cwd: "/tmp/my-project" },
+    ]);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("does not provision an explicitly routed key against a Gateway without the capability", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway({ serverCapabilities: [] });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    // Such a Gateway would apply the directory to a row it merely adopts, so creating here could
+    // overwrite an operator's cwd. session/new still succeeds rather than failing on a schema.
+    await expect(
+      agent.newSession({
+        ...createNewSessionRequest("/tmp/my-project"),
+        _meta: { sessionKey: "agent:main:work" },
+      } as never),
+    ).resolves.toBeDefined();
+    expect(createCalls(calls)).toStrictEqual([]);
 
     sessionStore.clearAllSessionsForTest();
   });
