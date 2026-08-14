@@ -107,6 +107,107 @@ describe("canonical session message recovery", () => {
     });
   });
 
+  it("keeps a previous run final before a newer active user turn", () => {
+    const previousUser = {
+      role: "user",
+      content: [{ type: "text", text: "What are groups?" }],
+      __openclaw: { id: "previous-user", idempotencyKey: "previous-run:user", seq: 1 },
+    };
+    const currentUser = {
+      role: "user",
+      content: [{ type: "text", text: "Why were my sessions missing?" }],
+      __openclaw: { id: "current-user", idempotencyKey: "current-run:user", seq: 3 },
+    };
+    const persistedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: "Groups organize conversations." }],
+      __openclaw: { id: "previous-final", seq: 2 },
+    };
+    const { state } = createSessionEventState({
+      chatMessages: [previousUser, currentUser],
+      chatRunId: "current-run",
+      chatStream: "Checking external sessions...",
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: "previous-run",
+        hasActiveRun: true,
+        messageId: "previous-final",
+        messageSeq: 2,
+        message: persistedFinal,
+      },
+    });
+
+    expect(state.chatMessages.map((message) => (message as { role?: string }).role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(state.chatMessages[1]).toMatchObject({
+      content: persistedFinal.content,
+      __openclaw: { id: "previous-final", seq: 2 },
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "previous-run",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Groups organize conversations." }],
+        },
+      },
+    });
+
+    expect(state.chatMessages.map((message) => (message as { role?: string }).role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(state.chatRunId).toBe("current-run");
+    expect(state.chatStream).toBe("Checking external sessions...");
+  });
+
+  it("leaves the active run assistant message on the terminal stream path", () => {
+    const currentUser = {
+      role: "user",
+      content: [{ type: "text", text: "Current prompt" }],
+      __openclaw: { id: "current-user", idempotencyKey: "current-run:user", seq: 1 },
+    };
+    const { state } = createSessionEventState({
+      chatMessages: [currentUser],
+      chatRunId: "current-run",
+      chatStream: "Current partial reply",
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: "current-run",
+        hasActiveRun: true,
+        messageId: "current-final",
+        messageSeq: 2,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Current final reply" }],
+          __openclaw: { id: "current-final", seq: 2 },
+        },
+      },
+    });
+
+    expect(state.chatMessages).toEqual([currentUser]);
+    expect(state.chatStream).toBe("Current partial reply");
+  });
+
   it("renders distinct live peers immediately and coalesces their stale history", async () => {
     let resolveHistory!: (result: {
       messages: unknown[];

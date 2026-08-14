@@ -489,19 +489,19 @@ export async function startControlUiE2eServer(
   };
 }
 
-function controlUiE2ePreviewConfigPlugin(): Plugin {
+function controlUiE2ePreviewConfigPlugin(
+  bootstrapConfig: Record<string, unknown> = {
+    basePath: "/",
+    assistantName: "",
+    assistantAvatar: "",
+  },
+): Plugin {
   return {
     name: "control-ui-e2e-preview-config",
     configurePreviewServer(server) {
       server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
         res.setHeader("Content-Type", "application/json");
-        res.end(
-          JSON.stringify({
-            basePath: "/",
-            assistantName: "",
-            assistantAvatar: "",
-          }),
-        );
+        res.end(JSON.stringify(bootstrapConfig));
       });
     },
   };
@@ -573,7 +573,10 @@ async function runProductionControlUiBuild(outDir: string): Promise<void> {
   });
 }
 
-async function startBuiltControlUiE2eServer(outDir: string): Promise<ControlUiE2eServer> {
+async function startBuiltControlUiE2eServer(
+  outDir: string,
+  bootstrapConfig?: Record<string, unknown>,
+): Promise<ControlUiE2eServer> {
   const [{ preview }, { default: controlUiViteConfig }] = await Promise.all([
     import("vite"),
     import("../../vite.config.ts"),
@@ -582,7 +585,7 @@ async function startBuiltControlUiE2eServer(outDir: string): Promise<ControlUiE2
   const sharedConfig = createBundledControlUiE2eConfig(controlUiViteConfig, outDir);
   const server = await preview({
     ...sharedConfig,
-    plugins: [...(sharedConfig.plugins ?? []), controlUiE2ePreviewConfigPlugin()],
+    plugins: [...(sharedConfig.plugins ?? []), controlUiE2ePreviewConfigPlugin(bootstrapConfig)],
     preview: {
       host: "127.0.0.1",
       port,
@@ -612,9 +615,10 @@ export async function startBundledControlUiE2eServer(outDir: string): Promise<Co
 export async function startProductionControlUiE2eServer(
   outDir: string,
   buildId: string,
+  bootstrapConfig?: Record<string, unknown>,
 ): Promise<ControlUiE2eServer> {
   await buildProductionControlUiE2e(outDir, buildId);
-  return startBuiltControlUiE2eServer(outDir);
+  return startBuiltControlUiE2eServer(outDir, bootstrapConfig);
 }
 
 async function resolveAvailableLoopbackPort(): Promise<number> {

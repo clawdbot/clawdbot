@@ -325,6 +325,21 @@ openclaw config set secrets.egressProxy.enabled true --strict-json
 openclaw gateway restart
 ```
 
+For example, bind an OpenAI key to its API host and enable the proxy:
+
+```bash
+openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
+openclaw config set secrets.egressProxy.enabled true --strict-json
+```
+
+After restarting the Gateway, a Gateway-hosted agent can run:
+
+```bash
+curl -sS https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY"
+```
+
+In the agent environment, `$OPENAI_API_KEY` is an `oc-sent-v2...end` sentinel. The proxy replaces it with the stored value only for `api.openai.com`. A request to an unbound host is refused with `Secret "OPENAI_API_KEY" is not allowed for host "<host>". Run: openclaw secrets store set OPENAI_API_KEY --allow-host <host>`.
+
 Equivalent config:
 
 ```json5
@@ -338,7 +353,7 @@ Equivalent config:
 }
 ```
 
-When enabled, OpenClaw adds these values to Gateway and sandbox exec environments:
+When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 
 - `HTTPS_PROXY` and `HTTP_PROXY`, with per-run credentials embedded in the loopback proxy URL
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `REQUESTS_CA_BUNDLE`, pointing at the ephemeral CA certificate
@@ -364,8 +379,7 @@ Current limits:
 - Identity-scoped secrets are not supported; only the team store participates.
 - Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.
 - Plain HTTP is refused; it is not upgraded or substituted.
-- Sandbox/container reachability is not implemented. Local container sandboxes default to `network: "none"`, and their loopback address is not the Gateway host. The variables are present, but the proxy is normally unreachable.
-- Remote `node` exec and provider-native harness subprocesses do not use this proxy.
+- Secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy.
 - Background subprocesses lose proxy authorization when their owning agent run ends, even if the process itself is still alive.
 
 ## File-backed API keys
