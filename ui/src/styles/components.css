@@ -5630,18 +5630,10 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--approval,
-.session-approval-badge {
+.session-row-badge--approval {
   display: inline-flex;
   align-items: center;
   color: var(--warn);
-}
-
-.session-approval-badge svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .session-row-badge--cloud[data-placement-state="failed"] {

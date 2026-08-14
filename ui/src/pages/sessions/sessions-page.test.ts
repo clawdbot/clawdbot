@@ -281,6 +281,35 @@ describe("sessions page lifecycle", () => {
     expect(page.transcriptSearch).toEqual({ status: "idle" });
   });
 
+  it("reports a connection error instead of silently dropping a patch", async () => {
+    const patch = vi.fn();
+    const sessions = createSessions({ patch });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    // Gateway drops while a rename dialog is open; submit lands afterwards.
+    mutableGateway.emit({ phase: "reconnecting", client: null });
+
+    const result = await page.patchSession("agent:main:main", { label: "renamed" });
+
+    expect(result).toBe("failed");
+    expect(patch).not.toHaveBeenCalled();
+    expect(page.error).toBe("Connect to the Gateway to change sessions.");
+  });
+
+  it("shows a connection error in the checkpoints drawer while disconnected", async () => {
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
+    mutableGateway.emit({ phase: "reconnecting", client: null });
+
+    await page.loadCheckpoint("agent:main:main");
+
+    // Without the recorded error the drawer would render "No checkpoints"
+    // beside a nonzero checkpoint badge.
+    expect(page.checkpointErrorByKey["agent:main:main"]).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+  });
+
   it("drops a transcript result after the query changes while it is pending", async () => {
     const response = deferred<SessionsSearchResult>();
     const request = vi.fn(() => response.promise);

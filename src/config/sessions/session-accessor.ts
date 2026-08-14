@@ -241,7 +241,7 @@ export {
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveLeafEvents,
+  readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
