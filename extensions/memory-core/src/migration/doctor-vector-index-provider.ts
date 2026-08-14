@@ -113,11 +113,14 @@ function hasConfiguredMemorySecretRef(config: OpenClawConfig, agentId: string): 
   return apiKey !== null && typeof apiKey === "object";
 }
 
-async function collectVectorProviderFindings(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-}): Promise<VectorProviderFinding[]> {
+async function collectVectorProviderFindings(
+  params: {
+    config: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    stateDir: string;
+  },
+  inspectProvider: typeof inspectConfiguredProvider,
+): Promise<VectorProviderFinding[]> {
   const findings: VectorProviderFinding[] = [];
   for (const agentId of listConfiguredAgentIds(params.config)) {
     // Memory indexes always live in the canonical per-agent state DB; a custom
@@ -138,7 +141,7 @@ async function collectVectorProviderFindings(params: {
     if (hasConfiguredMemorySecretRef(params.config, agentId)) {
       continue;
     }
-    const failure = await inspectConfiguredProvider({
+    const failure = await inspectProvider({
       config: params.config,
       agentId,
       env: params.env,
@@ -165,17 +168,23 @@ function formatFinding(finding: VectorProviderFinding): string {
   );
 }
 
-export const vectorIndexProviderDiagnostic: PluginDoctorStateMigration = {
-  id: "memory-core-vector-index-provider-diagnostic",
-  label: "Memory Core vector index provider readiness",
-  async detectLegacyState(params) {
-    const findings = await collectVectorProviderFindings(params);
-    return findings.length > 0
-      ? { preview: findings.map((finding) => `- ${formatFinding(finding)}`) }
-      : null;
-  },
-  async migrateLegacyState(params) {
-    const findings = await collectVectorProviderFindings(params);
-    return { changes: [], warnings: findings.map(formatFinding) };
-  },
-};
+export function createVectorIndexProviderDiagnostic(
+  inspectProvider: typeof inspectConfiguredProvider = inspectConfiguredProvider,
+): PluginDoctorStateMigration {
+  return {
+    id: "memory-core-vector-index-provider-diagnostic",
+    label: "Memory Core vector index provider readiness",
+    async detectLegacyState(params) {
+      const findings = await collectVectorProviderFindings(params, inspectProvider);
+      return findings.length > 0
+        ? { preview: findings.map((finding) => `- ${formatFinding(finding)}`) }
+        : null;
+    },
+    async migrateLegacyState(params) {
+      const findings = await collectVectorProviderFindings(params, inspectProvider);
+      return { changes: [], warnings: findings.map(formatFinding) };
+    },
+  };
+}
+
+export const vectorIndexProviderDiagnostic = createVectorIndexProviderDiagnostic();

@@ -5,7 +5,12 @@ import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, describe, expect, it } from "vitest";
-import { vectorIndexProviderDiagnostic } from "./doctor-vector-index-provider.js";
+import { createVectorIndexProviderDiagnostic } from "./doctor-vector-index-provider.js";
+
+const vectorIndexProviderDiagnostic = createVectorIndexProviderDiagnostic(async () => ({
+  provider: "openai",
+  reason: "OpenAI API key missing",
+}));
 
 const roots = new Set<string>();
 
@@ -28,13 +33,7 @@ describe("memory vector index provider doctor diagnostic", () => {
     );
     db.close();
     const config = {
-      memory: {
-        search: {
-          provider: "openai",
-          fallback: "ollama",
-          multimodal: { enabled: true, modalities: ["image"] },
-        },
-      },
+      memory: {},
       agents: { entries: {} },
     } satisfies OpenClawConfig;
     const params = {
