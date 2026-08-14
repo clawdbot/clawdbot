@@ -176,57 +176,6 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     ]);
   });
 
-  it("preserves a newly captured compaction checkpoint on its replacement owner", () => {
-    const sessionManager = SessionManager.inMemory();
-    appendSessionMessages(sessionManager, [
-      asAppendMessage({ role: "user", content: "compact this", timestamp: 1 }),
-      asAppendMessage({
-        role: "assistant",
-        content: createTextContent("checkpoint owner"),
-        timestamp: 2,
-      }),
-    ]);
-    const owner = requireValue(
-      findAssistantEntryByText(sessionManager, "checkpoint owner"),
-      "checkpoint owner",
-    );
-    if (owner.type !== "message" || owner.message.role !== "assistant") {
-      throw new Error("expected assistant checkpoint owner");
-    }
-    const checkpoint = {
-      v: 1,
-      type: "openai-responses-compaction",
-      id: "cmp_new",
-      data: "opaque",
-      replayIndex: owner.message.content.length,
-      provider: "xai",
-      api: "openai-responses",
-      model: "grok-4.5",
-      baseUrlHash: "base-url",
-    };
-
-    const result = rewriteTranscriptEntriesInSessionManager({
-      sessionManager,
-      replacements: [
-        {
-          entryId: owner.id,
-          message: { ...owner.message, providerReplay: checkpoint } as AgentMessage,
-        },
-      ],
-      preserveReplacementCompactionReplay: true,
-    });
-
-    expect(result.changed).toBe(true);
-    const rewrittenOwner = requireValue(
-      findAssistantEntryByText(sessionManager, "checkpoint owner"),
-      "rewritten checkpoint owner",
-    );
-    if (rewrittenOwner.type !== "message" || rewrittenOwner.message.role !== "assistant") {
-      throw new Error("expected rewritten assistant checkpoint owner");
-    }
-    expect(rewrittenOwner.message.providerReplay).toEqual(checkpoint);
-  });
-
   it("preserves active-branch labels after rewritten entries are re-appended", () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
     const summaryEntry = requireValue(

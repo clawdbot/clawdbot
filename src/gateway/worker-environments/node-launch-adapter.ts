@@ -59,7 +59,6 @@ type NodeWorkerLaunchAdapterOptions = {
   rpcTimeoutMs?: number;
   pollIntervalMs?: number;
   cancellationTimeoutMs?: number;
-  availabilityTimeoutMs?: number;
 };
 
 type OperationDeadline = {
@@ -208,7 +207,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const cancellationTimeoutMs = options.cancellationTimeoutMs ?? DEFAULT_CANCELLATION_TIMEOUT_MS;
-  const availabilityTimeoutMs = options.availabilityTimeoutMs ?? DEFAULT_AVAILABILITY_TIMEOUT_MS;
 
   const findNode = async (params: {
     transport: NodeWorkerSupervisorTransport;
@@ -419,7 +417,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     });
     const availabilityDeadline = createDeadline({
       now,
-      timeoutMs: availabilityTimeoutMs,
+      timeoutMs: DEFAULT_AVAILABILITY_TIMEOUT_MS,
       signal: deadline.signal,
       label: "node worker availability",
     });
