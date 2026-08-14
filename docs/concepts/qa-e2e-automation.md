@@ -1121,6 +1121,13 @@ Seed assets live in `qa/`:
 - `qa/scenarios/index.yaml`
 - `qa/scenarios/<theme>/*.yaml`
 
+Identity-sensitive channel changes use the isolated
+`channel-participant-identity-inspection` QA Channel flow. It drives a real
+ephemeral Gateway and mock provider, then inspects admitted runs with the same
+`openclaw audit --run ... --explain` JSON and human surfaces operators use.
+The flow includes lifecycle-owned restart and a row-count check for rejected
+pre-run ingress.
+
 These are intentionally in git so the QA plan is visible to both humans and
 the agent.
 

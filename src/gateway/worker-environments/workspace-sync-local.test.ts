@@ -76,6 +76,22 @@ describe("runLocalCommandToFile", () => {
     }
   });
 
+  it("stops a pack producer before it can exceed its output budget", async () => {
+    const root = tempDirs.make("openclaw-workspace-pack-limit-");
+    const outputPath = path.join(root, "pack");
+
+    await expect(
+      runLocalCommandToFile({
+        argv: [process.execPath, "-e", 'process.stdout.write("x".repeat(1024))'],
+        outputPath,
+        signal: new AbortController().signal,
+        timeoutMs: 10_000,
+        maxOutputBytes: 16,
+      }),
+    ).rejects.toThrow("pack exceeds the 16 byte limit");
+    await expect(fs.stat(outputPath)).resolves.toMatchObject({ size: 0 });
+  });
+
   it("omits derived artifacts from outbound Git file lists", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-files-"));
     const files = [

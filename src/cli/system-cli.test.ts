@@ -76,14 +76,51 @@ describe("system-cli", () => {
 
     expect(runtimeLogs).toEqual([]);
     expect(runtimeErrors[0]).toContain("unwakeable-session-key");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("handles invalid wake mode as runtime error", async () => {
     await runCli(["system", "event", "--text", "hello", "--mode", "later"]);
 
     expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(runtimeLogs).toEqual([]);
     expect(runtimeErrors[0]).toContain("--mode must be now or next-heartbeat");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
+
+  it.each([
+    {
+      name: "invalid wake mode",
+      args: ["system", "event", "--text", "hello", "--mode", "later", "--json"],
+      gatewayResult: undefined,
+      expectedError: "Error: --mode must be now or next-heartbeat",
+      gatewayCalls: 0,
+    },
+    {
+      name: "rejected Gateway call",
+      args: ["system", "event", "--text", "hello", "--json"],
+      gatewayResult: { ok: false, reason: "unwakeable-session-key" },
+      expectedError: "Error: unwakeable-session-key",
+      gatewayCalls: 1,
+    },
+  ])(
+    "writes JSON when $name fails",
+    async ({ args, gatewayResult, expectedError, gatewayCalls }) => {
+      if (gatewayResult) {
+        callGatewayFromCli.mockResolvedValueOnce(gatewayResult);
+      }
+
+      await runCli(args);
+
+      expect(runtimeLogs).toEqual([JSON.stringify({ error: expectedError }, null, 2)]);
+      expect(runtimeErrors).toEqual([]);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(gatewayCalls);
+    },
+  );
 
   it("forwards --session-key on system event", async () => {
     await runCli([
@@ -121,6 +158,24 @@ describe("system-cli", () => {
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     const params = gatewayCall()[2];
     expect(params).not.toHaveProperty("sessionKey");
+  });
+
+  it("writes JSON when an implicit machine-output command fails", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(new Error("Gateway unavailable"));
+
+    await runCli(["system", "heartbeat", "last"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    const [method, gatewayOptions, params, requestOptions] = gatewayCall();
+    expect(method).toBe("last-heartbeat");
+    expect(typeof gatewayOptions).toBe("object");
+    expect(params).toBeUndefined();
+    expect(requestOptions).toEqual({ expectFinal: false });
+    const expectedError = "Error: Gateway unavailable";
+    expect(runtimeLogs).toEqual([JSON.stringify({ error: expectedError }, null, 2)]);
+    expect(runtimeErrors).toEqual([]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it.each([

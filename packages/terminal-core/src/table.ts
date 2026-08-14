@@ -3,6 +3,7 @@
 import { splitAnsiSegments } from "./ansi-sequences.js";
 import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { displayString } from "./display-string.js";
+import { sanitizeTerminalText } from "./safe-text.js";
 
 type Align = "left" | "right" | "center";
 
@@ -536,6 +537,22 @@ function normalizeWidth(n: number | undefined): number | undefined {
 
 export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): number {
   return Math.max(minWidth, process.stdout.columns ?? fallbackWidth);
+}
+
+/** Render untrusted single-line values without changing renderTable's trusted ANSI contract. */
+export function renderTerminalSafeTable(opts: RenderTableOptions): string {
+  return renderTable({
+    ...opts,
+    columns: opts.columns.map((column) => ({
+      ...column,
+      header: sanitizeTerminalText(column.header),
+    })),
+    rows: opts.rows.map((row) =>
+      Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, sanitizeTerminalText(value)]),
+      ),
+    ),
+  });
 }
 
 export function renderTable(opts: RenderTableOptions): string {

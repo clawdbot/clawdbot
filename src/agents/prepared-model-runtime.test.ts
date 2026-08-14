@@ -2,7 +2,9 @@ import "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
+import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
@@ -90,6 +92,7 @@ describe("prepared model runtime snapshots", () => {
       config: stagedConfig,
       agentDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
+      pluginRegistry: expect.any(Object),
     });
     expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
       "codex",
@@ -100,6 +103,23 @@ describe("prepared model runtime snapshots", () => {
       }),
     );
     lease.release();
+  });
+
+  it("loads provider runtime for an isolated native-harness probe", () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
+
+    expect(
+      prepareWorkspacePluginRegistries({
+        config: {},
+        agentDir: "/tmp/native-provider-probe",
+        readOnly: true,
+        loadRuntimePlugins: true,
+      }).runtimePluginRegistry,
+    ).toBe(pluginRegistry);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({ selections: undefined }),
+    );
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {
@@ -584,11 +604,8 @@ describe("prepared model runtime snapshots", () => {
     });
 
     expect(credentialFree).not.toBe(await prepareModelRuntimeSnapshot({ config, agentDir }));
-    expect(mocks.discoverAuthStorage).toHaveBeenNthCalledWith(
-      2,
-      agentDir,
-      expect.objectContaining({ readOnly: true, skipCredentials: true }),
-    );
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
+    expect(getPreparedModelRuntimeAuthStore(credentialFree)).toEqual({ version: 1, profiles: {} });
   });
 
   it("reuses one lifecycle-owned snapshot without rediscovering files", async () => {
@@ -879,7 +896,7 @@ describe("prepared model runtime snapshots", () => {
     const skippedConfig = { agents: { defaults: { model: "openai/gpt-5.4" } } };
     const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(initialConfig);
-    let finishLatestBuild!: () => void;
+    let finishLatestBuild: (() => void) | undefined;
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(
       async () =>
         await new Promise<{ agentDir: string; wrote: boolean }>((resolve) => {
@@ -910,7 +927,8 @@ describe("prepared model runtime snapshots", () => {
         Promise.resolve("pending"),
       ]),
     ).resolves.toBe("pending");
-    finishLatestBuild();
+    await vi.waitFor(() => expect(finishLatestBuild).toEqual(expect.any(Function)));
+    finishLatestBuild?.();
     await latest;
     await expect(read).resolves.toMatchObject({ config: latestConfig });
   });

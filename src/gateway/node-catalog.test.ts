@@ -2,7 +2,7 @@
  * Gateway node catalog regression tests.
  */
 import { describe, expect, it } from "vitest";
-import { NODE_WORKER_SUPERVISOR_COMMANDS } from "../infra/node-commands.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "./node-catalog.js";
 
 type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
@@ -62,9 +62,9 @@ describe("gateway/node-catalog", () => {
   it("never projects private worker controls from persisted or pending state", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [pairedDevice()],
-      pairedNodes: [pairedNode({ commands: ["system.run", ...NODE_WORKER_SUPERVISOR_COMMANDS] })],
+      pairedNodes: [pairedNode({ commands: ["system.run", ...NODE_WORKER_PRIVATE_COMMANDS] })],
       pendingNodes: [
-        pendingNode({ commands: ["screen.snapshot", ...NODE_WORKER_SUPERVISOR_COMMANDS] }),
+        pendingNode({ commands: ["screen.snapshot", ...NODE_WORKER_PRIVATE_COMMANDS] }),
       ],
       connectedNodes: [],
     });
@@ -133,6 +133,15 @@ describe("gateway/node-catalog", () => {
           caps: ["camera", "screen"],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: ["screen.snapshot", "system.run"],
+          computerUse: {
+            contractVersion: 2,
+            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+            actions: ["screenshot"],
+            targets: ["screen"],
+            deliveryModes: ["foreground"],
+            observations: ["image"],
+            features: { recording: false, agentCursor: false, multiDisplay: false },
+          },
           declaredNodePluginTools: [],
           nodePluginTools: [],
           nodeSkills: [],
@@ -154,6 +163,11 @@ describe("gateway/node-catalog", () => {
       remoteIp: "100.0.0.11",
       caps: ["camera", "screen"],
       commands: ["screen.snapshot", "system.run"],
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", generation: "generation-1" },
+        actions: ["screenshot"],
+      },
       pathEnv: "/usr/bin:/bin",
       approvedAtMs: 100,
       connectedAtMs,
@@ -262,6 +276,7 @@ describe("gateway/node-catalog", () => {
       paired: true,
       connected: false,
     });
+    expect(getKnownNode(catalog, "mac-1")?.lastConnectedAtMs).toBeUndefined();
   });
 
   it("uses the newest durable last-seen source for offline nodes", () => {
@@ -282,6 +297,7 @@ describe("gateway/node-catalog", () => {
           caps: [],
           commands: [],
           lastConnectedAtMs: 200,
+          lastDisconnectedAtMs: 250,
           lastSeenAtMs: 100,
           lastSeenReason: "bg_app_refresh",
           approvedAtMs: 11,
@@ -291,6 +307,8 @@ describe("gateway/node-catalog", () => {
     });
 
     const node = getKnownNode(catalog, "ios-1");
+    expect(node?.lastConnectedAtMs).toBe(200);
+    expect(node?.lastDisconnectedAtMs).toBe(250);
     expect(node?.lastSeenAtMs).toBe(300);
     expect(node?.lastSeenReason).toBe("silent_push");
   });
@@ -302,6 +320,8 @@ describe("gateway/node-catalog", () => {
         pairedNode({
           caps: ["system"],
           approvedAtMs: 123,
+          lastConnectedAtMs: 0,
+          lastDisconnectedAtMs: 500,
         }),
       ],
       connectedNodes: [
@@ -326,6 +346,8 @@ describe("gateway/node-catalog", () => {
     const node = getKnownNode(catalog, "mac-1");
     expect(node?.caps).toEqual(["canvas"]);
     expect(node?.commands).toEqual(["canvas.snapshot"]);
+    expect(node?.lastConnectedAtMs).toBe(1);
+    expect(node?.lastDisconnectedAtMs).toBeUndefined();
     expect(node?.connected).toBe(true);
   });
 

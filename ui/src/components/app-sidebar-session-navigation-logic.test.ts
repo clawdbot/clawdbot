@@ -75,6 +75,34 @@ describe("sidebar session live-run projection", () => {
   ] as const)("normalizes %s before publishing sidebar state", (_name, row, expected) => {
     expect(projectSidebarSession(row).hasActiveRun).toBe(expected);
   });
+
+  it("carries active cloud disk pressure into the existing sidebar badge model", () => {
+    const projected = projectSidebarSession({
+      placement: {
+        state: "active",
+        environmentId: "environment-disk",
+        generation: 1,
+        activeOwnerEpoch: 2,
+        workspaceBaseManifestRef: "manifest-disk",
+        remoteWorkspaceDir: "/workspace/disk",
+        workerBundleHash: "a".repeat(64),
+        createdAtMs: 10,
+        updatedAtMs: 20,
+        stateChangedAtMs: 15,
+        diskSpace: {
+          status: "critical",
+          availableBytes: 50,
+          totalBytes: 1_000,
+          observedAtMs: 25,
+        },
+      },
+    });
+
+    expect(projected).toMatchObject({
+      placementState: "active",
+      diskSpaceStatus: "critical",
+    });
+  });
 });
 
 describe("sidebar draft ownership presentation", () => {

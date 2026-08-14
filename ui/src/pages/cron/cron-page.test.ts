@@ -66,9 +66,13 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
   } as unknown as TestGateway;
 }
 
-function createContext(gateway: TestGateway, scopeId: string | null = "main"): ApplicationContext {
+function createContext(
+  gateway: TestGateway,
+  scopeId: string | null = "main",
+  selectedId: string | null = scopeId,
+): ApplicationContext {
   const subscribe = () => () => undefined;
-  let selectionState = { selectedId: scopeId, scopeId };
+  let selectionState = { selectedId, scopeId };
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
@@ -262,13 +266,24 @@ describe("CronPage editor state sync", () => {
     {
       scenario: "a new task from the all-agents view",
       scopeId: null,
+      selectedId: "writer",
       suggested: false,
-      expectedAgentId: undefined,
+      expectedAgentId: "writer",
     },
   ])("creates $scenario with its intended agent ownership", async (scenario) => {
     const request = createRequest();
     const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, scenario.scopeId), { render: true });
+    const page = createPage(
+      createContext(gateway, scenario.scopeId, scenario.selectedId ?? scenario.scopeId),
+      { render: true },
+    );
+    await waitForCronPage(() => {
+      expect(request).toHaveBeenCalledWith("models.list", {
+        agentId: scenario.expectedAgentId,
+        view: "configured",
+        preparedOnly: true,
+      });
+    });
 
     const createSelector = scenario.suggested
       ? '[data-suggestion="repoPulse"]'

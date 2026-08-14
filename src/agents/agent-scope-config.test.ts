@@ -10,6 +10,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSoleAgentId,
+  resolveSystemAgentTargetAgentId,
   tryResolveDefaultAgentId,
   tryResolveSoleAgentId,
 } from "./agent-scope-config.js";
@@ -54,6 +55,23 @@ describe("agent roster resolution", () => {
     expect(tryResolveDefaultAgentId(duplicateDefaults)).toBeUndefined();
   });
 
+  it("requires an explicit system owner when a roster has multiple agents", () => {
+    expect(
+      resolveSystemAgentTargetAgentId({
+        agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { main: { default: true }, ops: {} },
+        },
+      }),
+    ).toBe("ops");
+    expect(resolveSystemAgentTargetAgentId({ agents: { entries: { ops: {} } } })).toBe("ops");
+    expect(() =>
+      resolveSystemAgentTargetAgentId({
+        agents: { entries: { main: { default: true }, ops: {} } },
+      }),
+    ).toThrow("Set agents.defaults.systemAgent.agentId");
+  });
+
   it("resolves defaults only for the rosterless implicit main agent", () => {
     const defaults = { fastModeDefault: "auto" as const };
 
@@ -87,6 +105,17 @@ describe("agent roster resolution", () => {
 
     expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe("/srv/ops");
     expect(resolveAgentWorkspaceDir(cfg, "research")).toBe("/srv/ops/research");
+  });
+
+  it("keeps the implicit default workspace inside an overridden state directory", () => {
+    const stateDir = "/srv/openclaw-scratch";
+
+    expect(
+      resolveAgentWorkspaceDir({}, "main", {
+        HOME: "/home/operator",
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    ).toBe(`${stateDir}/workspace`);
   });
 
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {

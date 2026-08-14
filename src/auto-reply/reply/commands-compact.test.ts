@@ -441,6 +441,44 @@ describe("handleCompactCommand", () => {
     );
   });
 
+  it("keeps the selected agent when compacting an ambiguous global session", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    resolveSessionAgentIdMock.mockReturnValue("marie-clawndo");
+    const cfg = {
+      agents: {
+        entries: {
+          main: {},
+          "marie-clawndo": {},
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", cfg),
+        agentId: "marie-clawndo",
+        sessionKey: "global",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "global",
+      config: cfg,
+      agentId: "marie-clawndo",
+    });
+    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget).toMatchObject({
+      agentId: "marie-clawndo",
+    });
+  });
+
   it("uses the resolved command store for compaction", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
@@ -646,6 +684,7 @@ describe("handleCompactCommand", () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
       compacted: true,
+      compactionKind: "context-engine",
       result: {
         summary: "compacted",
         firstKeptEntryId: "first-kept",
@@ -680,6 +719,7 @@ describe("handleCompactCommand", () => {
       throw new Error("incrementCompactionCount sessionEntry missing");
     }
     expect(call.sessionEntry.sessionId).toBe("target-session");
+    expect(call.compactionKind).toBe("context-engine");
     expect(call.tokensAfter).toBe(321);
   });
 
@@ -709,9 +749,37 @@ describe("handleCompactCommand", () => {
     expect(result?.reply?.text).toContain("Compaction skipped");
   });
 
+  it("reports server-side compaction with before and after tokens", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "server-endpoint",
+      result: {
+        kind: "server-endpoint",
+        tokensBefore: 8_614,
+        tokensAfter: 736,
+      },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: { sessionId: "server-session", updatedAt: Date.now() },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Server-side compaction (8614 → 736)");
+    expect(requireIncrementCompactionCountCall().compactionKind).toBe("server-endpoint");
+  });
+
   it.each([
     {
       owner: "Codex",
+      compactionKind: "native-harness" as const,
       details: {
         backend: "codex-app-server",
         threadId: "thread-1",
@@ -722,14 +790,21 @@ describe("handleCompactCommand", () => {
     },
     {
       owner: "Copilot",
+      compactionKind: "native-harness" as const,
       details: { success: true, tokensRemoved: 45, messagesRemoved: 2 },
     },
-    { owner: "context engine", details: undefined, successor: "successor-session" },
+    {
+      owner: "context engine",
+      compactionKind: "context-engine" as const,
+      details: undefined,
+      successor: "successor-session",
+    },
   ])("counts confirmed $owner compaction without a post-compaction count", async (testCase) => {
     const { details } = testCase;
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
       compacted: true,
+      compactionKind: testCase.compactionKind,
       result: {
         summary: "",
         firstKeptEntryId: "",
@@ -756,6 +831,7 @@ describe("handleCompactCommand", () => {
     );
 
     expect(vi.mocked(incrementCompactionCount)).toHaveBeenCalledOnce();
+    expect(requireIncrementCompactionCountCall().compactionKind).toBe(testCase.compactionKind);
     expect(requireIncrementCompactionCountCall().tokensAfter).toBeUndefined();
     if ("successor" in testCase) {
       expect(requireIncrementCompactionCountCall().newSessionId).toBe("successor-session");

@@ -237,6 +237,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
    (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
    shell stays in charge and the settings sidebar rides inside the drawer. */
 
+/* stylelint-disable-next-line no-duplicate-selectors -- settings navigation variable belongs with the takeover rules below */
 .shell {
   --shell-settings-nav-width: 288px;
 }
@@ -681,9 +682,6 @@ openclaw-settings-save-indicator {
 
 .settings-save-indicator__apply {
   border-radius: 999px;
-}
-
-.settings-save-indicator__apply {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
   background: var(--accent-subtle);
   color: var(--text);
@@ -914,7 +912,7 @@ openclaw-settings-save-indicator {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
-  /* One rhythm for every group boundary in the sidebar (Pages, Pinned, and each
+  /* One rhythm for every group boundary in the sidebar (Pages and each
      session section) so the column reads as separate shelves, not one list. */
   --sidebar-group-gap: var(--space-4);
   --scrollbar-size: 6px;
@@ -3120,12 +3118,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   flex: 1 1 auto;
 }
 
-/* Pinned sessions are their own group, so they take the sidebar's inter-group
-   rhythm instead of butting against the Pages list. */
-.sidebar-nav__head--pinned {
-  margin-top: var(--sidebar-group-gap);
-}
-
 .sidebar-nav__head-action {
   display: inline-flex;
   align-items: center;
@@ -3376,9 +3368,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .sidebar-hover-card__person-email {
   color: var(--muted);
   font-weight: 400;
-}
-
-.sidebar-hover-card__person-email {
   font-size: var(--control-ui-text-xs);
 }
 

@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
+  advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
@@ -304,8 +305,8 @@ function visibleAssistantStreamParts(
         toolCallId: explicitToolCallId ?? indexedToolRef?.id,
       });
     }
-    if (usesAccumulatedText && segment.text.trim()) {
-      previousText = segment.text;
+    if (usesAccumulatedText) {
+      previousText = advanceAccumulatedStreamText(previousText, segment.text);
     }
   }
   if (opts.includeCurrent !== false && typeof state.chatStream === "string") {
@@ -338,12 +339,8 @@ export function visibleCurrentAssistantStreamTail(
     : [];
   let previousText: string | null = null;
   for (const segment of segments) {
-    if (
-      streamSegmentUsesAccumulatedText(segment) &&
-      typeof segment.text === "string" &&
-      segment.text.trim()
-    ) {
-      previousText = segment.text;
+    if (streamSegmentUsesAccumulatedText(segment) && typeof segment.text === "string") {
+      previousText = advanceAccumulatedStreamText(previousText, segment.text);
     }
   }
   return visibleAssistantStreamText(
@@ -651,8 +648,8 @@ export function prunePersistedToolStreamMessages(
       : indexedToolRef?.identity;
     const text = typeof segment.text === "string" ? segment.text : "";
     if (toolIdentity && persistedToolIds.has(toolIdentity)) {
-      if (streamSegmentUsesAccumulatedText(segment) && text.trim()) {
-        lastPrunedAccumulatedText = text;
+      if (streamSegmentUsesAccumulatedText(segment)) {
+        lastPrunedAccumulatedText = advanceAccumulatedStreamText(lastPrunedAccumulatedText, text);
       }
       return [];
     }

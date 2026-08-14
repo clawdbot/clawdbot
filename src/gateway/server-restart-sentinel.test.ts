@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -28,9 +29,13 @@ type InProcessDispatchMock = (
   options?: Record<string, unknown>,
 ) => Promise<Record<string, unknown>>;
 type AdvanceSessionDeliveryAgentRunMock =
-  typeof import("../infra/session-delivery-queue.js").advanceSessionDeliveryAgentRun;
+  typeof import("../infra/session-delivery-queue-storage.js").advanceSessionDeliveryAgentRun;
+type DeferSessionDeliveryMock =
+  typeof import("../infra/session-delivery-queue-storage.js").deferSessionDelivery;
+type FailSessionDeliveryMock =
+  typeof import("../infra/session-delivery-queue-storage.js").failSessionDelivery;
 type RecoverPendingSessionDeliveriesMock =
-  typeof import("../infra/session-delivery-queue.js").recoverPendingSessionDeliveries;
+  typeof import("../infra/session-delivery-queue-recovery.js").recoverPendingSessionDeliveries;
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -75,28 +80,29 @@ const mocks = vi.hoisted(() => {
     clearRestartSentinelIfRevision: vi.fn(async () => true),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
     summarizeRestartSentinel: vi.fn(() => "restart summary"),
-    resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
+    resolveSystemMainSessionTarget: vi.fn(() => ({
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+    })),
     parseSessionThreadInfo: vi.fn(
       (): { baseSessionKey: string | null | undefined; threadId: string | undefined } => ({
         baseSessionKey: null,
         threadId: undefined,
       }),
     ),
-    loadSessionEntry: vi.fn(
-      (): LoadedSessionEntry => ({
-        cfg: {},
-        agentId: "main",
-        entry: {
-          sessionId: "agent:main:main",
-          updatedAt: 0,
-        },
-        store: {},
-        storePath: "/tmp/sessions.json",
-        canonicalKey: "agent:main:main",
-        storeKeys: ["agent:main:main"],
-        legacyKey: undefined,
-      }),
-    ),
+    loadSessionEntry: vi.fn<(sessionKey: string) => LoadedSessionEntry>((sessionKey) => ({
+      cfg: {},
+      agentId: "main",
+      entry: {
+        sessionId: sessionKey,
+        updatedAt: 0,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: sessionKey,
+      storeKeys: [sessionKey],
+      legacyKey: undefined,
+    })),
     deliveryContextFromSession: vi.fn(
       ():
         | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
@@ -142,8 +148,8 @@ const mocks = vi.hoisted(() => {
     requestHeartbeat: vi.fn(),
     enqueueSessionDelivery: vi.fn(),
     advanceSessionDeliveryAgentRun: vi.fn<AdvanceSessionDeliveryAgentRunMock>(async () => {}),
-    deferSessionDelivery: vi.fn(async () => {}),
-    failSessionDelivery: vi.fn(async () => {}),
+    deferSessionDelivery: vi.fn<DeferSessionDeliveryMock>(async () => {}),
+    failSessionDelivery: vi.fn<FailSessionDeliveryMock>(async () => {}),
     markSessionDeliveryAttemptStarted: vi.fn(async () => {}),
     markSessionDeliverySettlement: vi.fn(async () => {}),
     appendAssistantMessageToSessionTranscript: vi.fn(async () => ({
@@ -203,12 +209,21 @@ vi.mock("../infra/restart-sentinel.js", () => ({
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
 }));
 
-vi.mock("../infra/session-delivery-queue.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/session-delivery-queue.js")>();
+vi.mock("../infra/session-delivery-queue-storage.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../infra/session-delivery-queue-storage.js")>();
   mocks.enqueueSessionDelivery.mockImplementation(actual.enqueueSessionDelivery);
+  mocks.deferSessionDelivery.mockImplementation(async (id, delayMs, stateDir) => {
+    if (await actual.loadPendingSessionDelivery(id, stateDir)) {
+      await actual.deferSessionDelivery(id, delayMs, stateDir);
+    }
+  });
+  mocks.failSessionDelivery.mockImplementation(async (id, error, stateDir, options) => {
+    if (await actual.loadPendingSessionDelivery(id, stateDir)) {
+      await actual.failSessionDelivery(id, error, stateDir, options);
+    }
+  });
   mocks.loadPendingSessionDelivery.mockImplementation(actual.loadPendingSessionDelivery);
-  mocks.drainPendingSessionDeliveries.mockImplementation(actual.drainPendingSessionDeliveries);
-  mocks.recoverPendingSessionDeliveries.mockImplementation(actual.recoverPendingSessionDeliveries);
   return {
     ...actual,
     advanceSessionDeliveryAgentRun: mocks.advanceSessionDeliveryAgentRun,
@@ -218,6 +233,16 @@ vi.mock("../infra/session-delivery-queue.js", async (importOriginal) => {
     loadPendingSessionDelivery: mocks.loadPendingSessionDelivery,
     markSessionDeliveryAttemptStarted: mocks.markSessionDeliveryAttemptStarted,
     markSessionDeliverySettlement: mocks.markSessionDeliverySettlement,
+  };
+});
+
+vi.mock("../infra/session-delivery-queue-recovery.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../infra/session-delivery-queue-recovery.js")>();
+  mocks.drainPendingSessionDeliveries.mockImplementation(actual.drainPendingSessionDeliveries);
+  mocks.recoverPendingSessionDeliveries.mockImplementation(actual.recoverPendingSessionDeliveries);
+  return {
+    ...actual,
     drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
     recoverPendingSessionDeliveries: mocks.recoverPendingSessionDeliveries,
   };
@@ -232,9 +257,11 @@ vi.mock("../config/sessions/transcript.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
+  resolveSystemMainSessionTarget: mocks.resolveSystemMainSessionTarget,
   resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
 }));
+
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
 
 vi.mock("../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfoFast: mocks.parseSessionThreadInfo,
@@ -306,22 +333,20 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
-vi.mock("../infra/outbound/delivery-queue.js", () => ({
-  enqueueDeliveryOnce: mocks.enqueueDeliveryOnce,
+vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
   ackDelivery: mocks.ackDelivery,
   failDelivery: mocks.failDelivery,
   failDeliveryAfterPlatformSend: mocks.failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend: mocks.failDeliveryBeforePlatformSend,
-  drainPendingDeliveriesCore: mocks.drainPendingDeliveries,
-  withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
-}));
-
-vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
   failPendingDelivery: mocks.failPendingDelivery,
   findDeliveryIntentOwner: mocks.findDeliveryIntentOwner,
   loadPendingDelivery: async () =>
     mocks.takeInitialOutboundDelivery() ?? (await mocks.loadPendingDelivery()),
   reserveDeliveryAttempt: mocks.reserveDeliveryAttempt,
+}));
+vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
+  drainPendingDeliveriesCore: mocks.drainPendingDeliveries,
+  withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
 }));
 
 vi.mock("../infra/outbound/delivery-queue-preparation.js", () => ({
@@ -573,18 +598,15 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.parseSessionThreadInfo.mockReset();
     mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
     mocks.loadSessionEntry.mockReset();
-    mocks.loadSessionEntry.mockReturnValue({
+    mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       cfg: {},
-      entry: {
-        sessionId: "agent:main:main",
-        updatedAt: 0,
-      },
+      entry: { sessionId: sessionKey, updatedAt: 0 },
       store: {},
       storePath: "/tmp/sessions.json",
-      canonicalKey: "agent:main:main",
-      storeKeys: ["agent:main:main"],
+      canonicalKey: sessionKey,
+      storeKeys: [sessionKey],
       legacyKey: undefined,
-    });
+    }));
     mocks.deliveryContextFromSession.mockReset();
     mocks.deliveryContextFromSession.mockReturnValue(undefined);
     mocks.getChannelPlugin.mockReset();
@@ -648,6 +670,11 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.clearRestartSentinelIfRevision.mockResolvedValue(true);
     mocks.formatRestartSentinelMessage.mockClear();
     mocks.summarizeRestartSentinel.mockClear();
+    mocks.resolveSystemMainSessionTarget.mockReset();
+    mocks.resolveSystemMainSessionTarget.mockReturnValue({
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+    });
     mocks.recordInboundSessionAndDispatchReply.mockReset();
     mocks.recordInboundSessionAndDispatchReply.mockResolvedValue(undefined);
     mocks.logInfo.mockClear();
@@ -2680,18 +2707,20 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
-      sessionKey: "agent:main:main",
-    });
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "restart message",
+      expect.objectContaining({ sessionKey: "agent:ops:main" }),
+    );
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
       intent: "immediate",
       reason: "wake",
-      sessionKey: "agent:main:main",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
     });
   });
 
-  it("durably wakes the main session when the sentinel has no sessionKey", async () => {
+  it("durably wakes the configured system-agent session when the sentinel has no sessionKey", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         message: "restart message",
@@ -2700,16 +2729,67 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
-      sessionKey: "agent:main:main",
-    });
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "restart message",
+      expect.objectContaining({ sessionKey: "agent:ops:main" }),
+    );
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
       intent: "immediate",
       reason: "wake",
-      sessionKey: "agent:main:main",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
     });
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("preserves system-agent ownership for a targetless global wake", async () => {
+    mocks.resolveSystemMainSessionTarget.mockReturnValue({
+      agentId: "ops",
+      sessionKey: "global",
+    });
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      revision: 123,
+      payload: { kind: "restart", status: "ok", ts: 123, message: "restart message" },
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
+    expect(eventOptions).toMatchObject({ sessionKey: "global" });
+    expect(resolveSystemEventOptionsOwnerAgentId(eventOptions as object)).toBe("ops");
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      agentId: "ops",
+      sessionKey: "global",
+    });
+  });
+
+  it("records targetless non-delivery when system-agent ownership is missing", async () => {
+    mocks.resolveSystemMainSessionTarget.mockImplementation(() => {
+      throw new Error(
+        "Multiple agents are configured, but system-agent consult routing has no explicit owner. Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
+      );
+    });
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      revision: 123,
+      payload: { kind: "restart", status: "ok", ts: 123, message: "restart message" },
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    expect(mocks.logWarn).toHaveBeenCalledWith("startup task failed", {
+      source: "restart-sentinel",
+      reason: expect.stringContaining("Set agents.defaults.systemAgent.agentId"),
+    });
   });
 
   it("warns when continuation cannot run because the restart sentinel has no sessionKey", async () => {
@@ -2725,15 +2805,16 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
-      sessionKey: "agent:main:main",
-    });
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "restart message",
+      expect.objectContaining({ sessionKey: "agent:ops:main" }),
+    );
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn.mock.calls).toEqual([
       [
         "restart summary: continuation skipped: restart sentinel sessionKey unavailable",
         {
-          sessionKey: "agent:main:main",
+          sessionKey: "agent:ops:main",
           continuationKind: "agentTurn",
         },
       ],

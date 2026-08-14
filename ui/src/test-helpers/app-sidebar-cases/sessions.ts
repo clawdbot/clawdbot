@@ -298,9 +298,7 @@ describe("AppSidebar session accessibility", () => {
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
     expect(link?.getAttribute("aria-current")).toBe("page");
-    const lead = link?.querySelector(".sidebar-session-indicator");
-    expect(lead).not.toBeNull();
-    expect(lead?.childElementCount).toBe(0);
+    expect(link?.querySelector(".sidebar-session-indicator")).toBeNull();
     expect(link?.querySelector(".sidebar-recent-session__text")).not.toBeNull();
     const rowState = row?.querySelector(".session-row-state");
     expect(rowState?.getAttribute("role")).toBe("img");

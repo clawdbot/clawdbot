@@ -197,6 +197,8 @@ export function buildSidebarSessionNavigationState(input: {
       acpSession: isAcpSessionKey(row.key),
       worktreeId: row.worktree?.id,
       placementState: row.placement?.state,
+      diskSpaceStatus:
+        row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
       workspaceConflictCount:
         row.placement && "workspaceResultConflict" in row.placement
           ? Math.max(
@@ -579,4 +581,29 @@ export function applySidebarSessionCreatorFilter(input: {
     ownershipVisible,
     activeCreatorId,
   };
+}
+
+/** Merge adopted catalog sessions into the visible PR-indicator rows so an
+    adopted session hidden from the regular list still surfaces its PR state. */
+export function mergeAdoptedSessionPullRequestRows(input: {
+  rows: SidebarRecentSession[];
+  adopted: ReadonlySet<string>;
+  sessionsResult: SessionsListResult | null;
+  sessionRowsByAgent: Record<string, GatewaySessionRow[]>;
+  navigationState: SidebarSessionNavigationState;
+}): SidebarRecentSession[] {
+  if (input.adopted.size === 0) {
+    return input.rows;
+  }
+  const byKey = new Map(input.rows.map((row) => [row.key, row]));
+  const liveRows = [
+    ...(input.sessionsResult?.sessions ?? []),
+    ...Object.values(input.sessionRowsByAgent).flat(),
+  ];
+  for (const row of liveRows) {
+    if (input.adopted.has(row.key) && !byKey.has(row.key)) {
+      byKey.set(row.key, input.navigationState.toSidebarSession(row));
+    }
+  }
+  return [...byKey.values()];
 }

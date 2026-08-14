@@ -3,10 +3,6 @@ import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  resolveAgentWorkspaceDir,
-  resolveSystemAgentTargetAgentId,
-} from "../agents/agent-scope-config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
@@ -31,6 +27,10 @@ import {
   type ClawHubPluginInstallRecordFields,
 } from "./clawhub-install-records.js";
 import { installPluginFromClawHub } from "./clawhub.js";
+import {
+  appendPluginControlPlaneWorkspaceDiagnostic,
+  resolvePluginControlPlaneWorkspace,
+} from "./control-plane-workspace.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
@@ -653,10 +653,11 @@ function resolvePluginIconUrlFromCatalogFacts(params: {
 }
 
 function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  const workspace = resolvePluginControlPlaneWorkspace({ config, env });
   return {
     config,
     env,
-    workspaceDir: resolveAgentWorkspaceDir(config, resolveSystemAgentTargetAgentId(config), env),
+    ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
   };
 }
 
@@ -727,9 +728,12 @@ export async function listManagedPlugins(params: {
   officialCatalog?: OfficialCatalogResult;
 }): Promise<ManagedPluginCatalog> {
   const env = params.env ?? process.env;
-  const metadata = resolvePluginMetadataSnapshot(
-    resolveManagedPluginMetadataParams(params.config, env),
-  );
+  const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
+  const metadata = resolvePluginMetadataSnapshot({
+    config: params.config,
+    env,
+    ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
+  });
   const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
   const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
@@ -865,7 +869,10 @@ export async function listManagedPlugins(params: {
       ...(install ? { install } : {}),
     });
   }
-  const diagnostics: unknown[] = [...metadata.diagnostics];
+  const diagnostics: unknown[] = appendPluginControlPlaneWorkspaceDiagnostic(
+    metadata.diagnostics,
+    workspace,
+  );
   if (officialCatalog.error) {
     diagnostics.push({
       level: "warn",
@@ -1449,6 +1456,10 @@ export async function installManagedPlugin(params: {
     });
     if (!installed.ok) {
       return throwInstallFailure(installed);
+    }
+    const workspace = resolvePluginControlPlaneWorkspace({ config: installed.config, env });
+    if (workspace.diagnostic) {
+      warnings.push(workspace.diagnostic.message);
     }
     const catalog = await listManagedPlugins({
       config: installed.config,

@@ -21441,8 +21441,8 @@
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Chat"
+            "state": "translated",
+            "value": "Obrolan"
           }
         },
         "pl": {
@@ -37547,8 +37547,8 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Cron"
+            "state": "translated",
+            "value": "定时任务"
           }
         },
         "zh-TW": {
@@ -42479,8 +42479,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Direct"
+            "state": "translated",
+            "value": "직접"
           }
         },
         "fr": {
@@ -42491,8 +42491,8 @@
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Direct"
+            "state": "translated",
+            "value": "सीधा"
           }
         },
         "ar": {
@@ -42515,8 +42515,8 @@
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Direct"
+            "state": "translated",
+            "value": "Прямо"
           }
         },
         "id": {
@@ -42533,8 +42533,8 @@
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Direct"
+            "state": "translated",
+            "value": "โดยตรง"
           }
         },
         "vi": {
@@ -42557,8 +42557,8 @@
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Direct"
+            "state": "translated",
+            "value": "Напрямую"
           }
         },
         "sv": {
@@ -44259,8 +44259,8 @@
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Docs"
+            "state": "translated",
+            "value": "दस्तावेज़"
           }
         },
         "ar": {
@@ -69147,8 +69147,8 @@
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Location"
+            "state": "translated",
+            "value": "स्थान"
           }
         },
         "ar": {
@@ -70329,8 +70329,8 @@
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Main"
+            "state": "translated",
+            "value": "主要"
           }
         },
         "pt-BR": {
@@ -70341,8 +70341,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Main"
+            "state": "translated",
+            "value": "Hauptagent"
           }
         },
         "es": {
@@ -70365,8 +70365,8 @@
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Main"
+            "state": "translated",
+            "value": "Principal"
           }
         },
         "hi": {
@@ -70395,8 +70395,8 @@
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Main"
+            "state": "translated",
+            "value": "Головний"
           }
         },
         "id": {
@@ -70437,14 +70437,14 @@
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Main"
+            "state": "translated",
+            "value": "Главная"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Main"
+            "state": "translated",
+            "value": "Huvudagent"
           }
         }
       }
@@ -81169,8 +81169,8 @@
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Node"
+            "state": "translated",
+            "value": "Knooppunt"
           }
         },
         "fa": {
@@ -92355,20 +92355,20 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "操作员"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "操作員"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Operador"
           }
         },
         "de": {
@@ -92379,56 +92379,56 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Operador"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "オペレーター"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "운영자"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Opérateur"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "ऑपरेटर"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "المشغّل"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Operatore"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Operatör"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Оператор"
           }
         },
         "id": {
@@ -92445,14 +92445,14 @@
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "ผู้ควบคุม"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Người vận hành"
           }
         },
         "nl": {
@@ -92463,20 +92463,20 @@
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "اپراتور"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Оператор"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Operator"
+            "state": "translated",
+            "value": "Operatör"
           }
         }
       }
@@ -95773,8 +95773,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Pause"
+            "state": "translated",
+            "value": "Pausieren"
           }
         },
         "es": {
@@ -95797,8 +95797,8 @@
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Pause"
+            "state": "translated",
+            "value": "Mettre en pause"
           }
         },
         "hi": {
@@ -98635,8 +98635,8 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Plugin"
+            "state": "translated",
+            "value": "Complemento"
           }
         },
         "ja-JP": {
@@ -98707,14 +98707,14 @@
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Plugin"
+            "state": "translated",
+            "value": "Phần bổ trợ"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Plugin"
+            "state": "translated",
+            "value": "Plug-in"
           }
         },
         "fa": {
@@ -98731,8 +98731,8 @@
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Plugin"
+            "state": "translated",
+            "value": "Insticksprogram"
           }
         }
       }
@@ -102147,128 +102147,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "正在读取 Gateway Skills 目录。"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "正在讀取 Gateway Skills 目錄。"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Lendo o catálogo de Skills do Gateway."
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Der Skill-Katalog des Gateways wird gelesen."
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Leyendo el catálogo de Skills del Gateway."
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "GatewayのSkillsカタログを読み込んでいます。"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Gateway Skills 카탈로그를 읽는 중입니다."
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Lecture du catalogue de Skills du Gateway."
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Gateway की Skills कैटलॉग पढ़ी जा रही है।"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "جارٍ قراءة كتالوج Skills في Gateway."
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Lettura del catalogo delle Skills del Gateway."
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Gateway skill kataloğu okunuyor."
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Зчитування каталогу навичок Gateway."
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Membaca katalog Skills Gateway."
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Odczytywanie katalogu Skills w Gateway."
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "กำลังอ่านแค็ตตาล็อก Skills ของ Gateway"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Đang đọc danh mục Skills của Gateway."
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "De Gateway-skillcatalogus lezen."
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "در حال خواندن فهرست Skills در Gateway."
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Чтение каталога навыков Gateway."
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reading the Gateway skill catalog."
+            "state": "translated",
+            "value": "Läser katalogen med Gateway-Skills."
           }
         }
       }
@@ -149493,8 +149493,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Tool"
+            "state": "translated",
+            "value": "Werkzeug"
           }
         },
         "es": {
@@ -149577,8 +149577,8 @@
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Tool"
+            "state": "translated",
+            "value": "Hulpmiddel"
           }
         },
         "fa": {
@@ -157381,8 +157381,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Voice & Talk"
+            "state": "translated",
+            "value": "Sprache & Sprechen"
           }
         },
         "es": {
@@ -166883,8 +166883,8 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "now"
+            "state": "translated",
+            "value": "刚刚"
           }
         },
         "zh-TW": {
@@ -166901,8 +166901,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "now"
+            "state": "translated",
+            "value": "jetzt"
           }
         },
         "es": {
@@ -166913,8 +166913,8 @@
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "now"
+            "state": "translated",
+            "value": "たった今"
           }
         },
         "ko": {
@@ -169249,8 +169249,8 @@
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — ترخيص MIT."
           }
         },
         "it": {

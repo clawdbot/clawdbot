@@ -19,6 +19,10 @@ import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
+import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
   type NormalizedNodePluginTool,
@@ -69,6 +73,7 @@ export type NodeSession = {
   declaredCommands: string[];
   sessionCommandsCeiling?: string[];
   commands: string[];
+  computerUse?: ComputerUseCapabilityDescriptor;
   /** Exact node-local build admitted for worker session hosting. */
   workerRuns?: WorkerAdmissionHandshake;
   declaredNodePluginTools: NodePluginToolDescriptor[];
@@ -458,6 +463,10 @@ export class NodeRegistry {
     )
       ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
       : commands;
+    const computerUse =
+      connect.computerUse === undefined
+        ? undefined
+        : parseComputerUseCapabilityDescriptor(connect.computerUse);
     // Session ceilings preserve protocol compatibility across later pairing
     // approvals while declared* retains the durable approval surface.
     const sessionCapsCeiling = Array.isArray(
@@ -510,6 +519,7 @@ export class NodeRegistry {
       declaredCommands,
       sessionCommandsCeiling,
       commands,
+      ...(computerUse ? { computerUse } : {}),
       ...(workerRuns ? { workerRuns } : {}),
       declaredNodePluginTools,
       nodePluginTools,

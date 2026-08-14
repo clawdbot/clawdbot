@@ -38,6 +38,8 @@ import {
 } from "./openai-transport-params.js";
 
 export { createAzureOpenAIResponsesTransportStreamFn, createOpenAIResponsesTransportStreamFn };
+export { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-compact-request.js";
+export { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 
 const responsesTesting = {
   getCompat,

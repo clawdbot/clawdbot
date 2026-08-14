@@ -27,6 +27,7 @@ struct GeneralSettings: View {
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
     @State private var computerControlPermissions = ComputerControlPermissionSnapshot.probe()
+    @State private var cookieSyncManager = CookieSyncManager.shared
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -189,6 +190,56 @@ struct GeneralSettings: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(self.state.connectionMode != .local)
+                }
+            }
+
+            SettingsCardGroup("Cookie sync") {
+                SettingsCardToggleRow(
+                    title: "Sync cookies to the remote computer",
+                    subtitle: """
+                    Continuously copy this Mac's logged-in cookies for the domains below into the remote OpenClaw \
+                    browser profile. Off by default.
+                    """,
+                    binding: self.$state.cookieSyncEnabled)
+                    .disabled(self.state.connectionMode != .remote)
+
+                SettingsCardRow(
+                    title: "Domains",
+                    subtitle: "Cookies are only synced for these domains; an empty list means nothing is synced.")
+                {
+                    DomainAllowlistEditor(domains: self.$state.cookieSyncDomains)
+                        .frame(width: 320)
+                }
+                .disabled(self.state.connectionMode != .remote)
+
+                SettingsCardRow(
+                    title: "Target profile",
+                    subtitle: "Managed profile on the remote computer that receives the cookies.")
+                {
+                    TextField("imported", text: self.$state.cookieSyncIntoProfile)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                .disabled(self.state.connectionMode != .remote)
+
+                SettingsCardRow(
+                    title: "Status",
+                    subtitle: .verbatim(self.cookieSyncStatusDetail),
+                    showsDivider: self.state.connectionMode != .remote)
+                {
+                    Label(self.cookieSyncStatusTitle, systemImage: self.cookieSyncStatusIcon)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(self.cookieSyncStatusColor)
+                }
+
+                if self.state.connectionMode != .remote {
+                    SettingsCardRow(
+                        title: "Remote mode required",
+                        subtitle: "Cookie sync applies when OpenClaw runs on another computer (remote mode).",
+                        showsDivider: false)
+                    {
+                        EmptyView()
+                    }
                 }
             }
 
@@ -819,6 +870,89 @@ struct GeneralSettings: View {
         case .checking: return .secondary
         case .missingNode, .missingGateway, .incompatible, .error: return .orange
         }
+    }
+}
+
+extension GeneralSettings {
+    private var cookieSyncStatusTitle: String {
+        switch self.cookieSyncManager.state {
+        case .stopped: "Stopped"
+        case .running: "Running"
+        case .error: "Error"
+        }
+    }
+
+    private var cookieSyncStatusDetail: String {
+        switch self.cookieSyncManager.state {
+        case .stopped:
+            self.cookieSyncManager.lastSummary.map { "Last sync: \($0)" } ?? "Cookie sync is not active."
+        case .running:
+            self.cookieSyncManager.lastSummary ?? "Watching this Mac's browser cookie store for changes."
+        case let .error(message):
+            message
+        }
+    }
+
+    private var cookieSyncStatusIcon: String {
+        switch self.cookieSyncManager.state {
+        case .stopped: "stop.circle"
+        case .running: "checkmark.circle.fill"
+        case .error: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var cookieSyncStatusColor: Color {
+        switch self.cookieSyncManager.state {
+        case .stopped: .secondary
+        case .running: .green
+        case .error: .orange
+        }
+    }
+}
+
+private struct DomainAllowlistEditor: View {
+    @Binding var domains: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(self.domains.indices, id: \.self) { index in
+                HStack(spacing: 8) {
+                    TextField("example.com", text: self.binding(for: index))
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { self.normalizeEntries() }
+
+                    Button("Remove") {
+                        self.domains.remove(at: index)
+                        self.normalizeEntries()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            Button("Add domain") {
+                guard !self.domains.contains(where: {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }) else { return }
+                self.domains.append("")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .onDisappear { self.normalizeEntries() }
+    }
+
+    private func binding(for index: Int) -> Binding<String> {
+        Binding(
+            get: { self.domains.indices.contains(index) ? self.domains[index] : "" },
+            set: { value in
+                guard self.domains.indices.contains(index) else { return }
+                self.domains[index] = value
+            })
+    }
+
+    private func normalizeEntries() {
+        self.domains = CookieSyncManager.normalizedDomains(self.domains)
     }
 }
 

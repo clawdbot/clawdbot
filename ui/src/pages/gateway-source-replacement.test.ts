@@ -464,6 +464,24 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("loads initial skills for the roster's selected agent", async () => {
+    const request = vi.fn(async () => ({ skills: [] }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const agentsList = {
+      defaultId: "main",
+      agents: [{ id: "main" }, { id: "research" }],
+    };
+    const page = createPage(
+      "openclaw-skills-page",
+      contextWithClient(client, { connected: true, agentsList }),
+    );
+
+    document.body.append(page);
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" }),
+    );
+  });
+
   it("rejects skills route data from an earlier same-client gateway epoch", async () => {
     const freshReport = { skills: [{ skillKey: "fresh" }] } as unknown as SkillsRouteData["report"];
     const request = vi.fn(async (method: string) =>
@@ -644,7 +662,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     page.debugStatus = null;
 
     const load = page.diagnosticsTask.run();
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
     await replaceContext(page, client);
     pending.resolve({ models: [{ id: "stale" }], stale: true });
     await load;

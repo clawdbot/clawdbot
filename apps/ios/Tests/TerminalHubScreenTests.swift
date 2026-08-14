@@ -1,5 +1,7 @@
 import Foundation
+import SwiftUI
 import Testing
+import WebKit
 @testable import OpenClaw
 @testable import OpenClawKit
 
@@ -236,4 +238,59 @@ struct TerminalHubScreenTests {
         #expect(
             TerminalHubScreen.terminalAuthUserScript(config: nil, storedOperatorToken: nil) == nil)
     }
+
+    @Test func `authenticated Control UI follows the resolved app appearance`() async throws {
+        let cases: [(AppAppearancePreference, UIUserInterfaceStyle, UIUserInterfaceStyle)] = [
+            (.dark, .light, .dark),
+            (.light, .dark, .light),
+            (.system, .light, .light),
+            (.system, .dark, .dark),
+        ]
+
+        for (preference, systemStyle, expectedStyle) in cases {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            window.overrideUserInterfaceStyle = systemStyle
+            window.rootViewController = UIHostingController(rootView: Self.controlUIView(preference: preference))
+            window.makeKeyAndVisible()
+            window.rootViewController?.view.setNeedsLayout()
+            window.rootViewController?.view.layoutIfNeeded()
+
+            let webView = try await Self.webView(in: window)
+            #expect(webView.overrideUserInterfaceStyle == expectedStyle)
+            webView.stopLoading()
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+    }
+
+    private static func controlUIView(preference: AppAppearancePreference) -> AnyView {
+        AnyView(
+            AuthenticatedControlUIWebView(
+                url: URL(fileURLWithPath: "/"),
+                authScript: nil,
+                tls: nil)
+                .preferredColorScheme(preference.colorScheme))
+    }
+
+    private static func webView(in window: UIWindow) async throws -> WKWebView {
+        for _ in 0..<50 {
+            if let webView = self.findWebView(in: window) {
+                return webView
+            }
+            try await Task.sleep(for: .milliseconds(10))
+            window.rootViewController?.view.layoutIfNeeded()
+        }
+        throw ControlUIAppearanceTestError.webViewNotMounted
+    }
+
+    private static func findWebView(in view: UIView) -> WKWebView? {
+        if let webView = view as? WKWebView {
+            return webView
+        }
+        return view.subviews.lazy.compactMap { self.findWebView(in: $0) }.first
+    }
+}
+
+private enum ControlUIAppearanceTestError: Error {
+    case webViewNotMounted
 }

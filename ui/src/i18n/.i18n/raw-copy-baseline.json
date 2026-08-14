@@ -457,13 +457,6 @@
       "text": "NIP-05"
     },
     {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-bubble.ts",
-      "text": "JSON"
-    },
-    {
       "count": 1,
       "kind": "html-text",
       "name": "text",

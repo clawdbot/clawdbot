@@ -24,7 +24,7 @@ const localPrepareOptions = [
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "llama.cpp",
-    hint: "Run one private GGUF model directly inside this Gateway",
+    hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
     actionLabel: "Set up model",
   },
   {
@@ -108,9 +108,13 @@ suite.define(() => {
         await candidate.getByRole("button", { name: "Test & use" }).click();
 
         const detect = await gateway.waitForRequest("openclaw.setup.detect");
-        expect(detect.params).toEqual({});
+        expect(detect.params).toEqual({ agentId: "main" });
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
-        expect(activate.params).toEqual({ kind: "codex-cli", modelRef: "openai/gpt-5" });
+        expect(activate.params).toEqual({
+          kind: "codex-cli",
+          agentId: "main",
+          modelRef: "openai/gpt-5",
+        });
 
         await page.getByRole("heading", { name: "Connection verified" }).waitFor();
         await expect
@@ -512,6 +516,7 @@ suite.define(() => {
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
           kind: "provider-auto:ollama",
+          agentId: "main",
           modelRef: "ollama/qwen3:0.6b",
         });
 
@@ -802,6 +807,7 @@ suite.define(() => {
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
           kind: "api-key",
+          agentId: "main",
           authChoice: "qwen-cn",
           apiKey: "qwen-test-secret",
         });
@@ -939,7 +945,7 @@ suite.define(() => {
         }
         await page.getByRole("button", { name: "Check model" }).click();
         const verify = await gateway.waitForRequest("openclaw.setup.verify");
-        expect(verify.params).toEqual({});
+        expect(verify.params).toEqual({ agentId: "main" });
         await page.getByText("Ready · 1234 ms").waitFor();
         const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect"))
           .length;

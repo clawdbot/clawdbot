@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
@@ -22,6 +22,7 @@ describe("chat pane composer controls", () => {
       sessionsResult: null,
       chatStream: null,
     } as unknown as ChatPageHost;
+    const onModelSetup = vi.fn();
 
     render(
       renderChatPaneComposerControls({
@@ -30,6 +31,7 @@ describe("chat pane composer controls", () => {
         agentDefaultModel: undefined,
         modelAccess: { allowed: true, requiredScope: "operator.write" },
         effortAccess: { allowed: true, requiredScope: "operator.write" },
+        onModelSetup,
       }),
       container,
     );
@@ -38,5 +40,7 @@ describe("chat pane composer controls", () => {
       "chat-composer-model-control",
     ]);
     expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
+    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
   });
 });

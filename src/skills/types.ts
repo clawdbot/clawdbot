@@ -60,6 +60,11 @@ export type SkillUsagePath = {
   skillSource: SkillTelemetrySource;
 };
 
+export type ExplicitSkillSelection = {
+  name: string;
+  path: string;
+};
+
 export type SkillCommandSpec = {
   name: string;
   /** Canonical SKILL.md path for file-scoped usage accounting. */

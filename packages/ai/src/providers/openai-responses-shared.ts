@@ -178,7 +178,7 @@ type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
   "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse" | "sessionId"
 > &
-  Pick<BaseOpenAIStreamOptions, "authProfileId"> &
+  Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
   FirstStreamEventInternalOptions;
 
 type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
@@ -633,11 +633,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         },
         model,
         buildFullHistoryRequest: () => buildRequest("full-history"),
-        onCompactionRejected: () =>
-          suppressOpenAIResponsesCompaction(output, model, {
-            sessionId: options?.sessionId,
-            authProfileId: options?.authProfileId,
-          }),
+        onCompactionRejected: (checkpoint) =>
+          suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
       },
     );
     const hookedOpenAIStream = withProviderResponseHook({
