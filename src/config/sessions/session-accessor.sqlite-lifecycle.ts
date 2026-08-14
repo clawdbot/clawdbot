@@ -300,6 +300,9 @@ async function deleteSqliteSessionEntryLifecycleLocked(
     if (!current) {
       return null;
     }
+    if (!shouldDeleteSqliteSessionEntryLifecycle(database, current.entry, params)) {
+      return null;
+    }
     if (current.entry.modelSelectionLocked === true && !allowLockedEntryRemoval) {
       throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
     }
@@ -314,9 +317,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       )
     ) {
       throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
-    }
-    if (!shouldDeleteSqliteSessionEntryLifecycle(database, current.entry, params)) {
-      return null;
     }
     const referencedAfterDelete = readReferencedSessionIdsAfterTargetMutation(
       database,

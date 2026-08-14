@@ -81,7 +81,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it("preserves both claims when the source transcript changes before atomic cleanup", async () => {
+async function runCleanupRace(mutateSource: (mainPath: string) => void) {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-legacy-main-race-"));
   const stateDir = path.join(root, "state");
   fs.mkdirSync(stateDir, { recursive: true });
@@ -89,24 +89,7 @@ it("preserves both claims when the source transcript changes before atomic clean
   const opsPath = databasePath(stateDir, "ops");
   const env = { ...process.env, OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir };
   seedClaim("main", mainPath, "agent:main:chat");
-  race.beforeDelete = () => {
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        appendTranscriptEventInTransaction(
-          database,
-          {
-            agentId: "main",
-            path: mainPath,
-            sessionId: "race-session",
-            sessionKey: "agent:main:chat",
-          },
-          { id: "event-2", type: "message" },
-          { allowStoredAlias: true },
-        );
-      },
-      { agentId: "main", path: mainPath },
-    );
-  };
+  race.beforeDelete = () => mutateSource(mainPath);
 
   const result = await migrateLegacyMainSessionKeys({
     cfg: { agents: { entries: { ops: {} } } },
@@ -114,8 +97,59 @@ it("preserves both claims when the source transcript changes before atomic clean
     mode: "automatic",
   });
 
+  return { mainPath, opsPath, result };
+}
+
+it("preserves both claims when the source transcript changes before atomic cleanup", async () => {
+  const { mainPath, opsPath, result } = await runCleanupRace((sourcePath) => {
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        appendTranscriptEventInTransaction(
+          database,
+          {
+            agentId: "main",
+            path: sourcePath,
+            sessionId: "race-session",
+            sessionKey: "agent:main:chat",
+          },
+          { id: "event-2", type: "message" },
+          { allowStoredAlias: true },
+        );
+      },
+      { agentId: "main", path: sourcePath },
+    );
+  });
+
   expect(result.complete).toBe(false);
   expect(result.outcomes.map((outcome) => outcome.kind)).toContain("divergent-canonical");
   expect(readClaim("main", mainPath, "agent:main:chat")?.events).toHaveLength(2);
+  expect(readClaim("ops", opsPath, "agent:ops:chat")?.events).toHaveLength(1);
+});
+
+it("preserves both claims when the source entry becomes locked before cleanup", async () => {
+  const { mainPath, opsPath, result } = await runCleanupRace((sourcePath) => {
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        const current = readExactSessionEntryRowForCanonicalRepair(
+          database,
+          "agent:main:chat",
+        )?.entry;
+        if (!current) {
+          throw new Error("missing race source entry");
+        }
+        writeSessionEntry(
+          database,
+          "agent:main:chat",
+          { ...current, modelSelectionLocked: true },
+          { allowStoredAliases: true, previousEntry: current },
+        );
+      },
+      { agentId: "main", path: sourcePath },
+    );
+  });
+
+  expect(result.complete).toBe(false);
+  expect(result.outcomes.map((outcome) => outcome.kind)).toContain("divergent-canonical");
+  expect(readClaim("main", mainPath, "agent:main:chat")?.entry.modelSelectionLocked).toBe(true);
   expect(readClaim("ops", opsPath, "agent:ops:chat")?.events).toHaveLength(1);
 });
