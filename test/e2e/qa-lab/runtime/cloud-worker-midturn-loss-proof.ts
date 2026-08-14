@@ -445,10 +445,14 @@ async function runProof(options: ProducerOptions) {
       );
     }
 
+    const qaOperator = operator;
+    if (!qaOperator) {
+      throw new Error("operator was unavailable after recovery");
+    }
     const activeDiskSpace = await waitFor(
       "real static-SSH worker disk-space projection",
       async () =>
-        readActiveWorkerDiskSpace(await operator.request<SessionsList>("sessions.list", {})),
+        readActiveWorkerDiskSpace(await qaOperator.request<SessionsList>("sessions.list", {})),
     );
     const reclaimed = requireRecord(
       await operator.request("sessions.reclaim", { key: SESSION_KEY }),
@@ -458,7 +462,7 @@ async function runProof(options: ProducerOptions) {
       throw new Error(`sessions.reclaim did not reclaim the worker: ${JSON.stringify(reclaimed)}`);
     }
     await waitFor("retired worker disk-space projection eviction", async () => {
-      const listed = await operator.request<SessionsList>("sessions.list", {});
+      const listed = await qaOperator.request<SessionsList>("sessions.list", {});
       return isReclaimedWithoutDiskSpace(listed) ? true : undefined;
     });
 
