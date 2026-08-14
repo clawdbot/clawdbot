@@ -308,6 +308,10 @@ describe("handleCompactCommand", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
+      sessionCompaction: {
+        compacted: false,
+        reason: "the previous run is still stopping",
+      },
       reply: {
         text: "⚙️ Compaction unavailable: the previous run is still stopping.",
         isStatusNotice: true,
