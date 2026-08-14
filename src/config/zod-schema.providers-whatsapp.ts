@@ -10,9 +10,15 @@ import {
 } from "./zod-schema.channel-messaging-common.js";
 import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
 
-const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
-  omit: ["skills", "enabled", "allowFrom"],
-}).optional();
+const WhatsAppGroupEntrySchema = buildGroupEntrySchema(
+  {
+    listenAfterMentionMs: z.number().int().nonnegative().optional(),
+    listenAfterMentionMaxMs: z.number().int().nonnegative().optional(),
+  },
+  {
+    omit: ["skills", "enabled", "allowFrom"],
+  },
+).optional();
 
 const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
 

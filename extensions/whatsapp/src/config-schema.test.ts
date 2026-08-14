@@ -53,6 +53,32 @@ describe("whatsapp config schema", () => {
     }
   });
 
+  it("accepts listen-after-mention windows per group", () => {
+    const res = expectWhatsAppConfigValid({
+      groups: {
+        "1203630@g.us": {
+          requireMention: true,
+          listenAfterMentionMs: 600_000,
+          listenAfterMentionMaxMs: 1_800_000,
+        },
+      },
+      accounts: {
+        work: {
+          groups: {
+            "*": {
+              listenAfterMentionMs: 300_000,
+            },
+          },
+        },
+      },
+    });
+
+    if (res.success) {
+      expect(res.data.groups?.["1203630@g.us"]?.listenAfterMentionMs).toBe(600_000);
+      expect(res.data.accounts?.work?.groups?.["*"]?.listenAfterMentionMs).toBe(300_000);
+    }
+  });
+
   it("accepts textChunkLimit", () => {
     const res = expectWhatsAppConfigValid({
       allowFrom: ["+15555550123"],
