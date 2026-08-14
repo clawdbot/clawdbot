@@ -164,9 +164,21 @@ describe("cron task run terminal records", () => {
         tryFinishCronTaskRunWithoutHistory(state, {
           taskRunId: runIds[0],
           status: "skipped",
+          error: "cron run skipped before execution",
           endedAt: 1_501,
         });
         expect(childSessionKey(systemEventJob)).toBeUndefined();
+        expect(
+          listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+            runtime: "cron",
+            sourceId: systemEventJob.id,
+          }),
+        ).toEqual([
+          expect.objectContaining({
+            status: "failed",
+            error: "cron run skipped before execution",
+          }),
+        ]);
       },
     );
   });
@@ -446,7 +458,7 @@ describe("cron task run terminal records", () => {
           runtime: "cron",
           sourceId: job.id,
           agentId: "finn",
-          status: "succeeded",
+          status: "failed",
           startedAt,
           endedAt: startedAt,
           error: "trigger condition not met",
