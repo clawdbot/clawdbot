@@ -45,35 +45,12 @@ jobs:
 
       - name: Prepare and verify signed Android APK
         env:
-          GIT_COMMIT: ${{ inputs.release_target_sha }}
-          GH_TOKEN: ${{ github.token }}
-          OPENCLAW_BUILD_TIMESTAMP: ${{ steps.release_approval.outputs.build_timestamp }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          if [[ -n "${FALLBACK_ANDROID_BASE_TAG}" ]]; then
             base_dir="${RUNNER_TEMP}/fallback-android-release"
             mkdir -p "${base_dir}"
-            gh release download "${FALLBACK_ANDROID_BASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
-              --pattern OpenClaw-Android.apk \
-              --pattern OpenClaw-Android-SHA256SUMS.txt \
-              --dir "${base_dir}"
-            (
-              cd "${base_dir}"
-              sha256sum --strict --check OpenClaw-Android-SHA256SUMS.txt
-            )
-            gh attestation verify "${base_dir}/OpenClaw-Android.apk" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/android-release.yml" \
-              --source-ref "refs/tags/${FALLBACK_ANDROID_BASE_TAG}" \
-              --source-digest "${FALLBACK_ANDROID_BASE_SHA}" \
-              --deny-self-hosted-runners
-            bun apps/android/scripts/build-release-artifacts.ts \
-              --verify-apk "${base_dir}/OpenClaw-Android.apk"
-            cp "${base_dir}/OpenClaw-Android.apk" dist/OpenClaw-Android.apk
-            cp "${base_dir}/OpenClaw-Android-SHA256SUMS.txt" dist/OpenClaw-Android-SHA256SUMS.txt
-          else
             node --input-type=module <<'NODE'
           import { readFileSync } from "node:fs";
           import { spawnSync } from "node:child_process";
@@ -116,7 +93,7 @@ jobs:
               cd dist
               sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
             )
-          fi
+          
 
           expected_version_name="${RELEASE_TAG#v}"
           expected_version_name="${expected_version_name%%-*}"
@@ -133,59 +110,7 @@ jobs:
             exit 1
           fi
 
-          if [[ -n "${FALLBACK_ANDROID_BASE_TAG}" ]]; then
-            echo "Reusing verified Android APK from ${FALLBACK_ANDROID_BASE_TAG} for same-commit fallback correction ${RELEASE_TAG}."
-          elif [[ "${RELEASE_TAG}" =~ -([1-9][0-9]*)$ ]]; then
-            correction_number="${BASH_REMATCH[1]}"
-            releases_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
-            previous_tag="$(printf '%s' "${releases_json}" | jq -r \
-              --arg base_tag "v${expected_version_name}" \
-              --argjson correction_number "${correction_number}" '
-                [
-                  .[][]
-                  | select(.draft == false and .prerelease == false)
-                  | select(any(.assets[]?; .name == "OpenClaw-Android.apk"))
-                  | select(any(.assets[]?; .name == "OpenClaw-Android-SHA256SUMS.txt"))
-                  | if .tag_name == $base_tag then
-                      { tag: .tag_name, number: 0 }
-                    elif (.tag_name | startswith($base_tag + "-")) then
-                      (.tag_name | ltrimstr($base_tag + "-")) as $suffix
-                      | select($suffix | test("^[1-9][0-9]*$"))
-                      | { tag: .tag_name, number: ($suffix | tonumber) }
-                    else empty end
-                  | select(.number < $correction_number)
-                ]
-                | sort_by(.number)
-                | last
-                | .tag // empty
-              ')"
-            if [[ -n "${previous_tag}" ]]; then
-              previous_dir="${RUNNER_TEMP}/previous-android-release"
-              mkdir -p "${previous_dir}"
-              gh release download "${previous_tag}" --repo "${GITHUB_REPOSITORY}" \
-                --pattern OpenClaw-Android.apk \
-                --pattern OpenClaw-Android-SHA256SUMS.txt \
-                --dir "${previous_dir}"
-              (
-                cd "${previous_dir}"
-                sha256sum --strict --check OpenClaw-Android-SHA256SUMS.txt
-              )
-              gh attestation verify "${previous_dir}/OpenClaw-Android.apk" \
-                --repo "${GITHUB_REPOSITORY}" \
-                --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/android-release.yml" \
-                --source-ref "refs/tags/${previous_tag}" \
-                --deny-self-hosted-runners
-              bun apps/android/scripts/build-release-artifacts.ts \
-                --verify-apk "${previous_dir}/OpenClaw-Android.apk"
-              previous_version_code="$(apkanalyzer manifest version-code "${previous_dir}/OpenClaw-Android.apk")"
-              if (( actual_version_code <= previous_version_code )); then
-                echo "Android correction versionCode ${actual_version_code} must exceed ${previous_tag} versionCode ${previous_version_code}." >&2
-                exit 1
-              fi
-            else
-              echo "No earlier verified standalone APK exists for ${expected_version_name}; accepting this correction as the standalone channel bootstrap."
-            fi
-          fi
+
 
 
       - name: Remove materialized signing files
