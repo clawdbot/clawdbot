@@ -2444,42 +2444,52 @@ function createMockGatewayControls(
       }, policy);
     },
     async waitForRequest(method) {
-      try {
-        await page.waitForFunction(
-          (targetMethod) => {
-            const gateway = (
-              window as Window & {
-                openclawControlUiE2eGateway?: {
-                  requests: MockGatewayRequest[];
-                };
-              }
-            ).openclawControlUiE2eGateway;
-            return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
-          },
-          method,
-          // Request capture is non-rendering state. Interval polling avoids background-page
-          // requestAnimationFrame throttling when CI runs several headless pages concurrently.
-          { polling: 25, timeout: controlUiE2eWaitTimeoutMs },
-        );
-      } catch (error) {
-        if (error instanceof Error && error.name === "TimeoutError") {
-          try {
-            await captureControlUiE2eRequestTimeout(page, method, error, diagnosticEvents);
-          } catch (captureError) {
-            console.error("[control-ui-e2e] failed to capture request-timeout diagnostics", {
-              captureError,
-              method,
-            });
+      const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await page.waitForFunction(
+            (targetMethod) => {
+              const gateway = (
+                window as Window & {
+                  openclawControlUiE2eGateway?: {
+                    requests: MockGatewayRequest[];
+                  };
+                }
+              ).openclawControlUiE2eGateway;
+              return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
+            },
+            method,
+            // Request capture is non-rendering state. Interval polling avoids background-page
+            // requestAnimationFrame throttling when CI runs several headless pages concurrently.
+            { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
+          );
+          const request = (await getRequests(method)).at(-1);
+          if (request) {
+            return request;
           }
+        } catch (error) {
+          const contextReset =
+            error instanceof Error &&
+            (error.message.includes("Execution context was destroyed") ||
+              error.message.includes("Cannot find context with specified id"));
+          // Intentional stale-build reloads replace the page context once while connecting.
+          if (contextReset && attempt === 0 && !page.isClosed()) {
+            continue;
+          }
+          if (error instanceof Error && error.name === "TimeoutError") {
+            try {
+              await captureControlUiE2eRequestTimeout(page, method, error, diagnosticEvents);
+            } catch (captureError) {
+              console.error("[control-ui-e2e] failed to capture request-timeout diagnostics", {
+                captureError,
+                method,
+              });
+            }
+          }
+          throw error;
         }
-        throw error;
       }
-      const requests = await getRequests(method);
-      const request = requests.at(-1);
-      if (!request) {
-        throw new Error(`No mock Gateway request found for ${method}`);
-      }
-      return request;
+      throw new Error(`No mock Gateway request found for ${method}`);
     },
   };
 }
