@@ -1,6 +1,5 @@
 // Synology Chat tests cover guarded outbound attachment staging and same-route capability serving.
 import fs from "node:fs";
-import path from "node:path";
 import type { HostedOutboundMediaChunkRecord } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
@@ -12,6 +11,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
@@ -47,9 +47,16 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
 }));
 
-// openclaw-temp-dir: each test gets clean SQLite state; reopen cases retain it within that test.
-const testStateDir = fs.mkdtempSync(
-  path.join(resolvePreferredOpenClawTmpDir(), "openclaw-synology-media-"),
+const testStateDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(() => {
+    resetPluginStateStoreForTests();
+    cleanup();
+  });
+});
+// Each test gets clean SQLite state; reopen cases retain it within that test.
+const testStateDir = testStateDirs.make(
+  "openclaw-synology-media-",
+  resolvePreferredOpenClawTmpDir(),
 );
 const testStateEnv: NodeJS.ProcessEnv = {
   ...process.env,
@@ -96,11 +103,6 @@ function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology
 }
 
 describe("Synology Chat hosted outbound media", () => {
-  afterAll(() => {
-    resetPluginStateStoreForTests();
-    fs.rmSync(testStateDir, { recursive: true, force: true });
-  });
-
   beforeEach(() => {
     resetPluginStateStoreForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
@@ -582,54 +584,61 @@ describe("Synology Chat hosted outbound media", () => {
     {
       name: "SVG",
       contentType: "image/svg+xml",
+      servedContentType: "image/svg+xml",
       fileName: "diagram.svg",
       body: '<svg xmlns="http://www.w3.org/2000/svg"><text>report</text></svg>',
     },
     {
       name: "HTML",
       contentType: "text/html",
+      servedContentType: "text/html",
       fileName: "report.html",
       body: "<!doctype html><html><body>report</body></html>",
     },
     {
       name: "XHTML",
       contentType: "application/xhtml+xml",
+      servedContentType: "application/xhtml+xml",
       fileName: "report.xhtml",
       body: '<html xmlns="http://www.w3.org/1999/xhtml"><body>report</body></html>',
     },
     {
       name: "XML",
       contentType: "application/xml",
+      servedContentType: "text/xml",
       fileName: "report.xml",
       body: '<?xml version="1.0"?><report>ready</report>',
     },
-  ])("preserves supported $name attachments", async ({ body, contentType, fileName }) => {
-    const buffer = Buffer.from(body);
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer,
-      kind: undefined,
-      contentType,
-      fileName,
-    });
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: `https://files.example.com/${fileName}`,
-    });
-    const response = makeRes();
+  ])(
+    "preserves supported $name attachments",
+    async ({ body, contentType, fileName, servedContentType }) => {
+      const buffer = Buffer.from(body);
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer,
+        kind: undefined,
+        contentType,
+        fileName,
+      });
+      const account = createAccount();
+      const prepared = await prepareSynologyHostedMedia({
+        account,
+        mediaUrl: `https://files.example.com/${fileName}`,
+      });
+      const response = makeRes();
 
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-      response,
-      account,
-    );
+      await tryHandleSynologyHostedMediaRequest(
+        makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
+        response,
+        account,
+      );
 
-    expect(response.statusCode).toBe(200);
-    expect(Buffer.from(response.body)).toEqual(buffer);
-    expect(response.headers["content-type"]).toBe(contentType);
-    expect(response.headers["content-disposition"]).toContain("attachment");
-    expect(response.headers["content-disposition"]).toContain(fileName);
-  });
+      expect(response.statusCode).toBe(200);
+      expect(Buffer.from(response.body)).toEqual(buffer);
+      expect(response.headers["content-type"]).toBe(servedContentType);
+      expect(response.headers["content-disposition"]).toContain("attachment");
+      expect(response.headers["content-disposition"]).toContain(fileName);
+    },
+  );
 
   it("sanitizes response filenames before constructing headers", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
