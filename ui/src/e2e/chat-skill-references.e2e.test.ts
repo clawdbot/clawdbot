@@ -39,6 +39,15 @@ suite.define(() => {
             textAliases: ["/technical_documentation"],
           },
           {
+            acceptsArgs: true,
+            description: "Publish a temporary remote preview.",
+            name: "openclaw_stg_test",
+            scope: "both",
+            source: "skill",
+            skillModelVisible: true,
+            textAliases: ["/openclaw_stg_test"],
+          },
+          {
             acceptsArgs: false,
             description: "Show gateway status.",
             name: "status",
@@ -80,12 +89,24 @@ suite.define(() => {
         await composer.press("Enter");
         await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
 
+        await composer.fill(`${await composer.inputValue()}and $stg`);
+        await expect.poll(() => picker.getByRole("option").count()).toBe(1);
+        await expect
+          .poll(() => picker.getByRole("option").first().textContent())
+          .toContain("$openclaw_stg_test");
+        await composer.press("Tab");
+        await expect
+          .poll(() => composer.inputValue())
+          .toBe("Review this with $autoreview and $openclaw_stg_test ");
+
         await composer.fill(`${await composer.inputValue()}and $technical`);
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await composer.press("Tab");
         await expect
           .poll(() => composer.inputValue())
-          .toBe("Review this with $autoreview and $technical_documentation ");
+          .toBe(
+            "Review this with $autoreview and $openclaw_stg_test and $technical_documentation ",
+          );
 
         if (artifactDir) {
           await page.screenshot({
@@ -97,7 +118,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Send message" }).click();
         const request = await gateway.waitForRequest("chat.send");
         expect((request.params as { message?: unknown }).message).toBe(
-          "Review this with $autoreview and $technical_documentation",
+          "Review this with $autoreview and $openclaw_stg_test and $technical_documentation",
         );
 
         await composer.fill("Print $HOME");

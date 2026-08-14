@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
@@ -328,7 +328,7 @@ describe("parseSlashCommand", () => {
     expect(getSkillCommandCompletions("pro").map((command) => command.name)).toEqual(["prose"]);
   });
 
-  it("normalizes hyphenated skill reference queries", () => {
+  it("matches skill reference queries across normalized name segments", () => {
     applyRemoteEntries([
       {
         name: "release_notes",
@@ -339,11 +339,131 @@ describe("parseSlashCommand", () => {
         scope: "both",
         acceptsArgs: true,
       },
+      {
+        name: "openclaw_stg_test",
+        textAliases: ["/openclaw_stg_test"],
+        description: "Publish a temporary remote preview.",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "both",
+        acceptsArgs: true,
+      },
     ]);
 
     expect(getSkillCommandCompletions("release-n").map((command) => command.name)).toEqual([
       "release_notes",
     ]);
+    expect(getSkillCommandCompletions("stg").map((command) => command.name)).toEqual([
+      "openclaw_stg_test",
+    ]);
+  });
+
+  it("ranks skill name matches ahead of description-only matches", () => {
+    applyRemoteEntries([
+      {
+        name: "skill_search",
+        textAliases: ["/skill_search"],
+        description: "Search skills.",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "both",
+        acceptsArgs: true,
+      },
+      {
+        name: "skill_search_alpha",
+        textAliases: ["/skill_search_alpha"],
+        description: "Search alpha skills.",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "both",
+        acceptsArgs: true,
+      },
+      {
+        name: "skill_search_beta",
+        textAliases: ["/skill_search_beta"],
+        description: "Search beta skills.",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "both",
+        acceptsArgs: true,
+      },
+      {
+        name: "workspace_skill_search_helper",
+        textAliases: ["/workspace_skill_search_helper"],
+        description: "Search a workspace.",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "both",
+        acceptsArgs: true,
+      },
+      {
+        name: "alpha_description",
+        textAliases: ["/alpha_description"],
+        description: "Use skill-search for alpha tasks.",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "both",
+        acceptsArgs: true,
+      },
+      {
+        name: "beta_description",
+        textAliases: ["/beta_description"],
+        description: "Use skill-search for beta tasks.",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "both",
+        acceptsArgs: true,
+      },
+    ]);
+
+    expect(getSkillCommandCompletions("skill-search").map((command) => command.name)).toEqual([
+      "skill_search",
+      "skill_search_alpha",
+      "skill_search_beta",
+      "workspace_skill_search_helper",
+      "alpha_description",
+      "beta_description",
+    ]);
+  });
+
+  it("keeps equal-rank skill names ordered independently of the browser locale", () => {
+    const localeCompare = vi
+      .spyOn(String.prototype, "localeCompare")
+      .mockImplementation(function (this: string, compareString, locales, options) {
+        if (locales === undefined) {
+          return new Intl.Collator("da").compare(this, compareString);
+        }
+        return Intl.Collator(locales, options).compare(this, compareString);
+      });
+    try {
+      applyRemoteEntries([
+        {
+          name: "skill_z",
+          textAliases: ["/skill_z"],
+          description: "Search z skills.",
+          source: "skill",
+          skillModelVisible: true,
+          scope: "both",
+          acceptsArgs: true,
+        },
+        {
+          name: "skill_aa",
+          textAliases: ["/skill_aa"],
+          description: "Search aa skills.",
+          source: "skill",
+          skillModelVisible: true,
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ]);
+
+      expect(getSkillCommandCompletions("skill").map((command) => command.name)).toEqual([
+        "skill_aa",
+        "skill_z",
+      ]);
+    } finally {
+      localeCompare.mockRestore();
+    }
   });
 
   it("keeps model-hidden skills in slash commands but out of $ completions", () => {
