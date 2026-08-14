@@ -2614,29 +2614,26 @@ jobs:
           esac
 
   # The github/hybrid planner profile splits the serial core oxlint path across
-  # three runners. Hybrid attempt 1 uses 8-vCPU Blacksmith stripes; github mode
-  # and hybrid retries use hosted runners. All-Blacksmith mode keeps one lint job.
+  # five deterministic hosted jobs. All-Blacksmith mode keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
       contents: read
     name: check-lint-core-${{ matrix.stripe }}
     needs: [preflight]
     if: ${{ needs.preflight.outputs.run_check == 'true' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 5
       matrix:
-        stripe: [1, 2, 3]
+        stripe: [1, 2, 3, 4, 5]
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Hybrid attempt 1 still uses the hosted planner profile, so its
-          # Blacksmith stripes consume the same backend-neutral Actions cache.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
@@ -2645,7 +2642,7 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
         run: >-
           node --import tsx scripts/run-oxlint-shards.mts
-          --only=core --split-core --core-stripe=${{ matrix.stripe }}/3 --threads=1
+          --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
 
   check-additional-shard:
     permissions:
