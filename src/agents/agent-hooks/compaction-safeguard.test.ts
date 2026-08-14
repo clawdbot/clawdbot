@@ -82,6 +82,7 @@ const {
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
+  formatSplitTurnContextSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   prependPreviousSummaryForRedistill,
@@ -102,6 +103,9 @@ const {
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
+  CONTEXT_TRUNCATED_MARKER,
+  MAX_SPLIT_TURN_CONTEXT_CHARS,
+  SPLIT_TURN_TRUNCATED_MARKER,
 } = testing;
 
 function auditSummaryQuality(
@@ -494,6 +498,43 @@ describe("compaction-safeguard tool failures", () => {
 });
 
 describe("compaction-safeguard summary budgets", () => {
+  it.each([
+    { bodyLength: 60, suffixLength: 0, maxChars: 100, overflows: false },
+    { bodyLength: 60, suffixLength: 40, maxChars: 100, overflows: false },
+    { bodyLength: 80, suffixLength: 10, maxChars: 100, overflows: false },
+    { bodyLength: 80, suffixLength: 21, maxChars: 100, overflows: true },
+    { bodyLength: 20, suffixLength: 100, maxChars: 100, overflows: true },
+  ])(
+    "uses the slack-aware body allocation at body=$bodyLength suffix=$suffixLength cap=$maxChars",
+    ({ bodyLength, suffixLength, maxChars, overflows }) => {
+      const body = "b".repeat(bodyLength);
+      const suffix = "s".repeat(suffixLength);
+
+      const capped = capCompactionSummaryPreservingSuffix(body, suffix, maxChars);
+
+      expect(capped.length).toBeLessThanOrEqual(maxChars);
+      if (!overflows) {
+        expect(capped).toBe(`${body}${suffix}`);
+        return;
+      }
+      const bodyFloor = Math.min(bodyLength, Math.max(1, Math.ceil(maxChars / 2)));
+      const bodySlot = Math.min(
+        bodyLength,
+        Math.max(bodyFloor, maxChars - Math.min(suffixLength, maxChars)),
+      );
+      if (bodyLength > bodySlot && bodySlot >= SUMMARY_TRUNCATED_MARKER.length) {
+        expect(capped).toContain(SUMMARY_TRUNCATED_MARKER);
+      }
+      if (suffixLength > maxChars - Math.min(bodyLength, bodySlot)) {
+        expect(capped).toContain(
+          maxChars - Math.min(bodyLength, bodySlot) > CONTEXT_TRUNCATED_MARKER.length
+            ? CONTEXT_TRUNCATED_MARKER
+            : "s",
+        );
+      }
+    },
+  );
+
   it("caps file operations summary and reports omitted entries", () => {
     const readFiles = Array.from(
       { length: 200 },
@@ -584,6 +625,19 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).not.toContain("[Compaction summary truncated");
   });
 
+  it("uses truncation markers when the budget exactly fits only the marker", () => {
+    expect(capCompactionSummary("oversized".repeat(10), SUMMARY_TRUNCATED_MARKER.length)).toBe(
+      SUMMARY_TRUNCATED_MARKER,
+    );
+    expect(
+      capCompactionSummaryPreservingSuffix(
+        "",
+        "oversized suffix".repeat(10),
+        CONTEXT_TRUNCATED_MARKER.length,
+      ),
+    ).toBe(CONTEXT_TRUNCATED_MARKER);
+  });
+
   it("preserves tail sections when suffix exceeds cap (workspace rules, diagnostics over preserved turns)", () => {
     const criticalTail =
       "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
@@ -602,8 +656,38 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("## Session Startup");
   });
 
+  it("keeps generated summary content when an oversized suffix exhausts the artifact budget", () => {
+    const body = "BODY-START\nBODY-MIDDLE\nBODY-END";
+    const oversizedSuffix = `${"old context\n".repeat(MAX_COMPACTION_SUMMARY_CHARS)}CRITICAL-TAIL`;
+
+    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("BODY-START");
+    expect(capped).toContain("BODY-MIDDLE");
+    expect(capped).toContain("BODY-END");
+    expect(capped).toContain("CRITICAL-TAIL");
+    expect(capped).toContain("truncated");
+  });
+
   it("keeps an oversized preserved suffix UTF-16 safe at its leading edge", () => {
-    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("tail");
+    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("bodil");
+  });
+
+  it("bounds raw split-turn context on whole-message boundaries and retains the newest end", () => {
+    const messages = Array.from({ length: 20 }, (_, index) => ({
+      role: "user" as const,
+      content: `message-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
+      timestamp: index,
+    }));
+
+    const section = formatSplitTurnContextSection(messages) as string;
+
+    expect(section.length).toBeLessThanOrEqual(MAX_SPLIT_TURN_CONTEXT_CHARS);
+    expect(section).toContain(SPLIT_TURN_TRUNCATED_MARKER.trim());
+    expect(section).not.toContain("message-00-");
+    expect(section).toContain("message-19-");
+    expect(section.split("\n").some((line) => line.startsWith("x"))).toBe(false);
   });
 });
 
@@ -1937,6 +2021,58 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves an above-half built-in body byte-for-byte when it fits the final artifact", async () => {
+    const body = `BUILTIN-START${"b".repeat(4_480)}BUILTIN-MIDDLE${"b".repeat(4_480)}BUILTIN-END`;
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult(body));
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+    });
+    const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_500 });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(expectCompactionResult(result).summary).toBe(body);
+    expect(compactionLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it("marks a trimmed built-in body and emits one redacted tail-loss warning", async () => {
+    const sensitiveSentinel = "body-secret-never-log";
+    const body = `${sensitiveSentinel}-${"b".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult(body));
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+    });
+    const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_500 });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(expectCompactionResult(result).summary).toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    expect(compactionLogger.warn).toHaveBeenCalledOnce();
+    const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
+    expect(warning).toBe("Compaction safeguard: finalized artifact truncated; loss=summary-tail");
+    expect(warning).not.toContain(sensitiveSentinel);
+  });
+
   it("rejects a summary whose finalized bytes fail the quality audit", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "preserve the pending deployment status";
@@ -2757,6 +2893,99 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(compaction.summary).toContain("## Recent turns preserved verbatim");
     expect(compaction.summary).toContain("latest ask status");
     expect(compaction.summary).toContain("latest assistant reply");
+  });
+
+  it("preserves an above-half provider body byte-for-byte when the joined artifact fits", async () => {
+    const providerBody = `BODY-START${"b".repeat(4_480)}BODY-MIDDLE${"b".repeat(4_480)}BODY-END`;
+    const providerSummarize = vi.fn().mockResolvedValue(providerBody);
+    registerCompactionProvider({
+      id: "within-budget-provider",
+      label: "Within Budget Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "within-budget-provider",
+      recentTurnsPreserve: 0,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "summarize the active work", timestamp: 1 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: "small split-turn suffix", timestamp: 2 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.startsWith(providerBody)).toBe(true);
+    expect(summary).toContain("small split-turn suffix");
+    expect(compactionLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it("retains provider body sentinels and emits one redacted warning when suffixes overflow", async () => {
+    const sensitiveSentinel = "credential-sentinel-never-log";
+    const providerBody = `BODY-START${"b".repeat(3_400)}BODY-MIDDLE${"b".repeat(3_400)}BODY-END`;
+    const providerSummarize = vi.fn().mockResolvedValue(providerBody);
+    registerCompactionProvider({
+      id: "overflow-provider",
+      label: "Overflow Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "overflow-provider",
+      recentTurnsPreserve: 12,
+    });
+    const messagesToSummarize = Array.from({ length: 24 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `preserved-${index}-${"p".repeat(700)}`,
+      timestamp: index + 1,
+    })) as AgentMessage[];
+    const turnPrefixMessages = Array.from({ length: 20 }, (_, index) => ({
+      role: "user" as const,
+      content: `raw-prefix-${index}-${sensitiveSentinel}-${"r".repeat(700)}`,
+      timestamp: index + 100,
+    }));
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 20_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain("BODY-START");
+    expect(summary).toContain("BODY-MIDDLE");
+    expect(summary).toContain("BODY-END");
+    expect(summary).toContain(CONTEXT_TRUNCATED_MARKER.trim());
+    expect(compactionLogger.warn).toHaveBeenCalledOnce();
+    const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
+    expect(warning).toBe(
+      "Compaction safeguard: finalized artifact truncated; loss=split-turn-head,suffix-head",
+    );
+    expect(warning).not.toContain(sensitiveSentinel);
   });
 });
 
