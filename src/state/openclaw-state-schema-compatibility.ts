@@ -29,6 +29,7 @@ const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
   "worker_session_placements.terminal_at_ms",
   "worktrees.run_end_cleanup_json",
   "installed_plugin_index.workspace_dir",
+  "secret_store_entries.allowed_hosts",
 ] as const;
 
 const CLAW_LAZY_ADDITIVE_STATE_COLUMN_SET = new Set<string>(CLAW_LAZY_ADDITIVE_STATE_COLUMNS);

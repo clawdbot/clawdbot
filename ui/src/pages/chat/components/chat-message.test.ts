@@ -1332,6 +1332,18 @@ describe("grouped chat rendering", () => {
       10_000,
     );
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+
+    // Cost is nested under usage.cost in the canonical AssistantMessage
+    // shape; the popover must surface it (it was dead reading message.cost).
+    const withCost = renderUsage(
+      {
+        input: 1_000,
+        output: 500,
+        cost: { total: 0.1234 } as unknown as number,
+      } as Record<string, number>,
+      10_000,
+    );
+    expect(withCost.querySelector(".msg-meta__cost")?.textContent).toContain("$0.12");
   });
 
   it("previews message context from the timestamp and pins it on click", () => {

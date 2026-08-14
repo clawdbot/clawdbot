@@ -214,6 +214,7 @@ type SecretsReloadHarnessParams = {
   logChannelsInfo?: GatewayAuxHandlerParams["logChannels"]["info"];
   respond?: ReturnType<typeof vi.fn>;
   onApprovalLifecycle?: GatewayAuxHandlerParams["onApprovalLifecycle"];
+  onAgentRunAuthorityClosed?: GatewayAuxHandlerParams["onAgentRunAuthorityClosed"];
   validateAgentRuntimeDelegatedAuthority?: GatewayAuxHandlerParams["validateAgentRuntimeDelegatedAuthority"];
   registerWorkerTurnClaimClosedHandler?: GatewayAuxHandlerParams["registerWorkerTurnClaimClosedHandler"];
 };
@@ -236,6 +237,7 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
     onApprovalLifecycle: params.onApprovalLifecycle,
+    onAgentRunAuthorityClosed: params.onAgentRunAuthorityClosed,
     validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
     registerWorkerTurnClaimClosedHandler: params.registerWorkerTurnClaimClosedHandler,
   });
@@ -300,6 +302,27 @@ describe("gateway aux handlers", () => {
     expect(first.execApprovalManager.runtimeEpoch).not.toBe(
       second.execApprovalManager.runtimeEpoch,
     );
+  });
+
+  it("fans exact run closure out to Gateway-owned capability cleanup", () => {
+    const onAgentRunAuthorityClosed = vi.fn();
+    const gatewayAux = createSecretsReloadHarness({
+      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+      onAgentRunAuthorityClosed,
+    });
+    const operationalRunInstance = Object.freeze({
+      instanceId: "egress-proxy-instance",
+      runId: "egress-proxy-run",
+    });
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+
+    releaseAgentRunDelegatedAuthority(authority);
+
+    expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
+    expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
+      expect.objectContaining({ operationalRunInstance }),
+    );
+    gatewayAux.unregisterApprovalAuthorityObserver();
   });
 
   it("settles and publishes both approval kinds from the production worker-claim observer", async () => {

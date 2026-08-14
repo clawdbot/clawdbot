@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -283,7 +284,15 @@ export function startGatewayMaintenanceTimers(params: {
     pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
 
     for (const [runId, entry] of params.chatAbortControllers) {
-      if (entry.projectSessionTerminalPending === true) {
+      // A stamped terminal observation whose async projection clear never ran
+      // (dropped claim, swallowed handler error) would otherwise pin the entry
+      // forever: phantom active run in sessions.list, pinned dedupe key,
+      // skipped media GC. Past the grace window the entry re-enters the
+      // ordinary expiry branches below, which are terminal-safe.
+      const terminalClearOverdue =
+        typeof entry.projectSessionTerminalObservedAt === "number" &&
+        now - entry.projectSessionTerminalObservedAt > AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
+      if (entry.projectSessionTerminalPending === true && !terminalClearOverdue) {
         continue;
       }
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {

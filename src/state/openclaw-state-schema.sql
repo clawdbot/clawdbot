@@ -2443,6 +2443,7 @@ CREATE TABLE IF NOT EXISTS secret_store_entries (
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
   updated_by TEXT,
   deleted_at_ms INTEGER,
+  allowed_hosts TEXT,
   CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
   PRIMARY KEY (scope_kind, scope_id, name)
 ) STRICT;

@@ -3408,6 +3408,29 @@ describe("chat composer IME composition", () => {
     expect(onHistoryKeydown).not.toHaveBeenCalled();
   });
 
+  it("recovers Enter-send after a composition is abandoned via blur", () => {
+    // Browsers can drop compositionend (detach/blur mid-IME). The composing
+    // flag persists across renders, so without the blur reset Enter, history
+    // keys, and command menus stay dead until the Send button is clicked.
+    const onSend = vi.fn();
+    const container = renderChatView({ onSend, draft: "hello" });
+    const textarea = getComposerTextarea(container);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "hello";
+    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+
+    const enterEvent = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(enterEvent);
+
+    expect(enterEvent.defaultPrevented).toBe(true);
+    expect(onSend).toHaveBeenCalledOnce();
+  });
+
   it("invalidates after handled input history navigation", () => {
     const onRequestUpdate = vi.fn();
     const onHistoryKeydown = vi.fn(() => ({
