@@ -1559,7 +1559,9 @@ describe("loadGatewayPlugins", () => {
 
   test("lets model-only subagent policy take precedence over additive tools", async () => {
     const runtime = await createSubagentRuntime(serverPluginsModule);
-    serverPluginsModule.setFallbackGatewayContext(createTestContext("disable-tools-tools-also-allow"));
+    serverPluginsModule.setFallbackGatewayContext(
+      createTestContext("disable-tools-tools-also-allow"),
+    );
     registerActivePluginToolOwnership("workboard", ["workboard_complete"]);
     registerActivePluginToolOwnership("other-plugin", ["other_plugin_tool"]);
 

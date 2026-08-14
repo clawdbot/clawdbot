@@ -1266,9 +1266,7 @@ export function createAgentEventHandler({
     }
   };
 
-  const resolveAgentTextThrottleStream = (
-    evt: AgentEventPayload,
-  ): AgentTextThrottleStream | null =>
+  const resolveAgentTextThrottleStream = (evt: AgentEventPayload): AgentTextThrottleStream | null =>
     evt.stream === "assistant" ? "assistant" : evt.stream === "thinking" ? "thinking" : null;
 
   const shouldCoalesceAgentTextEvent = (evt: AgentEventPayload) =>
