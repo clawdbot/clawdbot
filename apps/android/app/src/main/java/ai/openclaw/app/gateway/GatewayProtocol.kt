@@ -406,6 +406,7 @@ enum class GatewayMethod(
   SessionsDelete("sessions.delete"),
   SessionsCompact("sessions.compact"),
   SessionsGroupsList("sessions.groups.list"),
+  SessionsGroupsDefaults("sessions.groups.defaults"),
   SessionsGroupsPut("sessions.groups.put"),
   SessionsGroupsRename("sessions.groups.rename"),
   SessionsGroupsUpdate("sessions.groups.update"),

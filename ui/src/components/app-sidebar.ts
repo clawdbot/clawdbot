@@ -78,18 +78,20 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override readonly sidebarMenus = new SidebarMenusController(this);
 
   sessionGroupDefaults(name: string) {
+    if (this.context?.sessions.groupsStatus() !== "ready") {
+      return null;
+    }
     const group = this.context?.sessions.state.groupSettings.find((entry) => entry.name === name);
-    return { cwd: group?.cwd ?? "", worktree: group?.worktree === true };
+    return group ? { cwd: group.cwd ?? "", worktree: group.worktree === true } : null;
   }
 
   async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
-    const gateway = this.context?.gateway.snapshot;
-    const client = gateway?.client;
-    if (gateway?.phase !== "connected" || !client) {
+    const scope = this.sessionData.beginSessionMutation();
+    if (!scope) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
-    const result = await client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
-    if (this.context?.gateway.snapshot.client !== client) {
+    const result = await scope.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
+    if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     return result;

@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
+  validateSessionsGroupsDefaultsParams,
   validateSessionsGroupsDeleteParams,
   validateSessionsGroupsListParams,
   validateSessionsGroupsPutParams,
@@ -12,10 +13,12 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   deleteSessionGroup,
+  listSessionGroupDefaults,
   listSidebarSectionOrder,
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  SessionGroupNotFoundError,
   updateSessionGroupDefaults,
 } from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -35,6 +38,19 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       { groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
       undefined,
     );
+  },
+  "sessions.groups.defaults": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsGroupsDefaultsParams,
+        "sessions.groups.defaults",
+        respond,
+      )
+    ) {
+      return;
+    }
+    respond(true, { defaults: listSessionGroupDefaults() }, undefined);
   },
   "sessions.groups.put": async ({ params, respond, context }) => {
     if (
@@ -72,6 +88,10 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
+      if (error instanceof SessionGroupNotFoundError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
@@ -94,11 +114,19 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const groups = updateSessionGroupDefaults(params.name, {
+    const defaults = updateSessionGroupDefaults(params.name, {
       cwd: params.cwd,
       worktree: params.worktree,
     });
-    respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
+    if (!defaults) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session group: ${params.name}`),
+      );
+      return;
+    }
+    respond(true, { ok: true, defaults }, undefined);
     emitSessionsChanged(context, { reason: "groups" });
   },
   "sessions.groups.delete": async ({ params, respond, context, sessionMutationAuthorization }) => {

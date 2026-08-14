@@ -221,6 +221,7 @@ const defaultControlUiFeatureMethods = [
   "sessions.dispatch",
   "sessions.fork",
   "sessions.groups.delete",
+  "sessions.groups.defaults",
   "sessions.groups.list",
   "sessions.groups.put",
   "sessions.groups.rename",
@@ -1080,16 +1081,18 @@ function installControlUiMockGateway(
   }
 
   function groupsPayload(): {
-    groups: Array<{ name: string; position: number; cwd?: string; worktree?: boolean }>;
+    groups: Array<{ name: string; position: number }>;
     sectionOrder: string[];
   } {
     return {
-      groups: groupsState.names.map((name, position) => ({
-        name,
-        position,
-        ...groupsState.defaults[name],
-      })),
+      groups: groupsState.names.map((name, position) => ({ name, position })),
       sectionOrder: [...groupsState.sectionOrder],
+    };
+  }
+
+  function groupDefaultsPayload() {
+    return {
+      defaults: groupsState.names.map((name) => ({ name, ...groupsState.defaults[name] })),
     };
   }
 
@@ -1787,6 +1790,8 @@ function installControlUiMockGateway(
       }
       case "sessions.groups.list":
         return groupsPayload();
+      case "sessions.groups.defaults":
+        return groupDefaultsPayload();
       case "sessions.groups.put": {
         groupsState.names = normalizedGroupNames(isRecord(params) ? params.names : undefined);
         if (isRecord(params) && Array.isArray(params.sectionOrder)) {
@@ -1833,7 +1838,7 @@ function installControlUiMockGateway(
           };
           persistGroupsState();
         }
-        return { ok: true, ...groupsPayload() };
+        return { ok: true, ...groupDefaultsPayload() };
       }
       case "sessions.groups.delete": {
         const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";

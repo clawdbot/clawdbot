@@ -252,6 +252,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.delete", "sessions-delete", "dynamic", "<=2026.7"],
   ["sessions.compact", "sessions-compact", "operator.admin", "<=2026.7"],
   ["sessions.groups.list", "sessions-groups", "operator.read", "<=2026.7"],
+  ["sessions.groups.defaults", "sessions-groups", "operator.write", "2026.8"],
   ["sessions.groups.put", "sessions-groups", "operator.write", "<=2026.7"],
   ["sessions.groups.rename", "sessions-groups", "operator.write", "<=2026.7"],
   ["sessions.groups.update", "sessions-groups", "operator.write", "2026.8"],

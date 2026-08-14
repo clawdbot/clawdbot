@@ -269,11 +269,16 @@ export class DraftGatewayState {
   }
 
   retryPendingCatalogTarget() {
-    const { data } = this.read();
+    const { context, data } = this.read();
     if (this.catalogRetryingValue) {
       return;
     }
-    if (!this.gatewayConnectedValue || !catalog.isTarget(data) || catalog.isResolvedTarget(data)) {
+    if (data?.group && context?.sessions.groupsStatus() === "loading") {
+      globalThis.clearTimeout(this.catalogRetryTimer);
+      this.catalogRetryTimer = undefined;
+      return;
+    }
+    if (!this.gatewayConnectedValue || !catalog.isRoutePending(data, context?.sessions)) {
       globalThis.clearTimeout(this.catalogRetryTimer);
       this.catalogRetryTimer = undefined;
       this.catalogRetryScope = "";
@@ -298,10 +303,13 @@ export class DraftGatewayState {
       if (
         this.catalogRetryScope !== retryScope ||
         !this.gatewayConnectedValue ||
-        !catalog.isTarget(current.data) ||
-        catalog.isResolvedTarget(current.data)
+        (current.data?.group && current.context?.sessions.groupsStatus() === "loading") ||
+        !catalog.isRoutePending(current.data, current.context?.sessions)
       ) {
         return;
+      }
+      if (current.data?.group) {
+        current.context?.sessions.groupsInvalidate();
       }
       const revalidation = current.context?.revalidate("new-session");
       if (!revalidation) {
@@ -319,10 +327,13 @@ export class DraftGatewayState {
     if (
       this.catalogRetryingValue ||
       !this.gatewayConnectedValue ||
-      !catalog.isTarget(data) ||
-      catalog.isResolvedTarget(data)
+      (data?.group && context?.sessions.groupsStatus() === "loading") ||
+      !catalog.isRoutePending(data, context?.sessions)
     ) {
       return;
+    }
+    if (data?.group) {
+      context?.sessions.groupsInvalidate();
     }
     const revalidation = context?.revalidate("new-session");
     if (!revalidation) {
@@ -344,7 +355,11 @@ export class DraftGatewayState {
 
   readPreference(agentId: string): NewSessionPreference | null {
     const snapshot = this.read();
-    if (catalog.isTarget(snapshot.data) || snapshot.pendingCloud.sessionKey) {
+    if (
+      catalog.isTarget(snapshot.data) ||
+      snapshot.data?.group ||
+      snapshot.pendingCloud.sessionKey
+    ) {
       return null;
     }
     return this.preferenceModeValue === "remote"
@@ -354,7 +369,11 @@ export class DraftGatewayState {
 
   persistPreference(agentIdValue: string, workspace: string, patch: NewSessionPreference) {
     const snapshot = this.read();
-    if (catalog.isTarget(snapshot.data) || snapshot.pendingCloud.sessionKey) {
+    if (
+      catalog.isTarget(snapshot.data) ||
+      snapshot.data?.group ||
+      snapshot.pendingCloud.sessionKey
+    ) {
       return;
     }
     const agentId = normalizeAgentId(agentIdValue);

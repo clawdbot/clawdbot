@@ -22,7 +22,6 @@ export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[
     if (!name) {
       return [];
     }
-    const cwd = typeof group?.cwd === "string" ? group.cwd.trim() : "";
     return [
       {
         name,
@@ -30,11 +29,32 @@ export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[
           typeof group?.position === "number" && Number.isSafeInteger(group.position)
             ? group.position
             : index,
-        ...(cwd ? { cwd } : {}),
-        ...(typeof group?.worktree === "boolean" ? { worktree: group.worktree } : {}),
       },
     ];
   });
+}
+
+export function mergeSessionGroupDefaults(
+  groups: readonly SessionGroupSettings[],
+  payload: unknown,
+): SessionGroupSettings[] {
+  const values = (payload as { defaults?: unknown } | null)?.defaults;
+  const defaults = new Map<string, { cwd?: string; worktree?: boolean }>();
+  if (Array.isArray(values)) {
+    for (const value of values) {
+      const record = value as Record<string, unknown> | null;
+      const name = typeof record?.name === "string" ? record.name.trim() : "";
+      if (!name) {
+        continue;
+      }
+      const cwd = typeof record?.cwd === "string" ? record.cwd.trim() : "";
+      defaults.set(name, {
+        ...(cwd ? { cwd } : {}),
+        ...(typeof record?.worktree === "boolean" ? { worktree: record.worktree } : {}),
+      });
+    }
+  }
+  return groups.map((group) => ({ ...group, ...defaults.get(group.name) }));
 }
 
 export function readSessionCustomGroupNames(payload: unknown): string[] {

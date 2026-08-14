@@ -9,6 +9,7 @@ import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
 import "./modal-dialog.ts";
+import "./web-awesome-popover.ts";
 
 export type SessionGroupDefaults = { cwd: string; worktree: boolean };
 

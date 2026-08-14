@@ -5,8 +5,11 @@ export type NewSessionRouteData = {
   requestedAgentId: string;
   catalogId: string;
   group?: string;
+  groupStatus?: "resolved" | "missing" | "unavailable";
   groupCwd?: string;
   groupWorktree?: boolean;
+  groupCatalogGeneration?: number;
+  groupDefaultsStatus?: import("../../lib/sessions/session-capability.ts").SessionGroupDefaultsStatus;
   model: string;
   catalogLabel: string;
   startTerminal: boolean;

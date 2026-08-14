@@ -91,6 +91,7 @@ export function renderSidebarSessionGroupMenu(params: {
   menu: SidebarSessionGroupMenuState | null;
   trigger: HTMLElement | null;
   connected: boolean;
+  groupDefaultsUnavailable?: boolean;
   actionDisabledReasons?: Partial<Record<SidebarSessionGroupMenuAction, string>>;
   onAction: (action: SidebarSessionGroupMenuAction, group: string) => void;
   onClose: (restoreFocus: boolean) => void;
@@ -136,7 +137,11 @@ export function renderSidebarSessionGroupMenu(params: {
             title=${params.actionDisabledReasons?.["group-defaults"] ?? nothing}
           >
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.settings}</span>
-            <span class="session-menu__text">${t("sessionsView.groupDefaultsMenu")}</span>
+            <span class="session-menu__text"
+              >${params.groupDefaultsUnavailable
+                ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
+                : t("sessionsView.groupDefaultsMenu")}</span
+            >
           </wa-dropdown-item>
           <wa-dropdown-item
             class="session-menu__item"

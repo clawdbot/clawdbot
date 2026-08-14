@@ -54,6 +54,24 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
+function registerCreatedSessionCategory(
+  category: string | undefined,
+  context: Parameters<typeof emitSessionsChanged>[0],
+): void {
+  if (!category) {
+    return;
+  }
+  try {
+    if (ensureSessionGroupRegistered(category)) {
+      // Catalog bookkeeping follows the authoritative session commit and has
+      // its own invalidation. Its failure must not make a durable create ambiguous.
+      emitSessionsChanged(context, { reason: "groups" });
+    }
+  } catch (error) {
+    sessionLog.warn(`failed to register created session category: ${formatErrorMessage(error)}`);
+  }
+}
+
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": async ({ req, params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
@@ -490,6 +508,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
+    const category = normalizeOptionalString(p.category);
     const created = await createGatewaySession({
       cfg,
       key: sessionKey,
@@ -590,10 +609,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, created.error);
       return;
     }
-    const category = normalizeOptionalString(p.category);
-    if (category) {
-      ensureSessionGroupRegistered(category);
-    }
+    registerCreatedSessionCategory(category, context);
     if (created.resetExisting) {
       await captureCreatedSessionDiffBaseline({
         key: created.key,

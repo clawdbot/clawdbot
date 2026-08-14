@@ -15,20 +15,32 @@ async function loadNewSessionData(
   const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";
   let groupWorktree = false;
+  let groupStatus: NewSessionRouteData["groupStatus"];
+  let groupCatalogGeneration: number | undefined;
+  let groupDefaultsStatus: NewSessionRouteData["groupDefaultsStatus"];
   if (requestedLocation.group) {
-    await context.sessions.groupsLoad();
-    const settings = context.sessions.state.groupSettings.find(
-      (candidate) => candidate.name === requestedLocation.group,
-    );
-    groupCwd = settings?.cwd ?? "";
-    groupWorktree = settings?.worktree === true;
+    const startedGeneration = context.sessions.groupsGeneration();
+    const settings = await context.sessions.groupsLoad();
+    groupCatalogGeneration = context.sessions.groupsGeneration();
+    groupDefaultsStatus = context.sessions.groupsStatus();
+    const currentSettings =
+      startedGeneration === groupCatalogGeneration && groupDefaultsStatus === "ready"
+        ? settings
+        : null;
+    const group = currentSettings?.find((candidate) => candidate.name === requestedLocation.group);
+    groupStatus = currentSettings === null ? "unavailable" : group ? "resolved" : "missing";
+    groupCwd = group?.cwd ?? "";
+    groupWorktree = group?.worktree === true;
   }
   if (!requestedLocation.catalogId) {
     return {
       ...requestedLocation,
       requestedAgentId,
+      groupStatus,
       groupCwd,
       groupWorktree,
+      groupCatalogGeneration,
+      groupDefaultsStatus,
       model: "",
       catalogLabel: "",
       startTerminal: false,
@@ -39,8 +51,11 @@ async function loadNewSessionData(
     ...requestedLocation,
     agentId,
     requestedAgentId,
+    groupStatus,
     groupCwd,
     groupWorktree,
+    groupCatalogGeneration,
+    groupDefaultsStatus,
     model: "",
     catalogLabel: "",
     startTerminal: false,

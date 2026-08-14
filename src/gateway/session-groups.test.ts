@@ -14,6 +14,7 @@ import {
 import {
   deleteSessionGroup,
   ensureSessionGroupRegistered,
+  listSessionGroupDefaults,
   listSidebarSectionOrder,
   listSessionGroups,
   putSessionGroups,
@@ -118,13 +119,16 @@ describe("session groups catalog", () => {
     ).toEqual({ name: "sidebar_sections" });
   });
 
-  it("lazily adds New Session defaults columns to an existing group catalog", () => {
+  it("keeps catalog reads and reorders schema-read-only until defaults are used", async () => {
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     legacy.exec("ALTER TABLE session_groups DROP COLUMN cwd;");
     legacy.exec("ALTER TABLE session_groups DROP COLUMN worktree;");
+    legacy
+      .prepare("INSERT INTO session_groups (name, position, created_at) VALUES (?, ?, ?)")
+      .run("Client", 0, Date.now());
     legacy.close();
 
     const beforeFeatureUse = openOpenClawStateDatabase({ env })
@@ -134,12 +138,40 @@ describe("session groups catalog", () => {
       expect.arrayContaining(["cwd", "worktree"]),
     );
 
-    expect(listSessionGroups(env)).toEqual([]);
-    const columns = openOpenClawStateDatabase({ env })
+    expect(listSessionGroups(env)).toEqual([{ name: "Client", position: 0 }]);
+    expect(putSessionGroups(["Client"], undefined, env)).toEqual([{ name: "Client", position: 0 }]);
+    const afterCatalogUse = openOpenClawStateDatabase({ env })
       .db.prepare("PRAGMA table_info(session_groups)")
       .all() as Array<{ name: string }>;
-    expect(columns.map((column) => column.name)).toEqual(
+    expect(afterCatalogUse.map((column) => column.name)).not.toEqual(
       expect.arrayContaining(["cwd", "worktree"]),
+    );
+
+    expect(listSessionGroupDefaults(env)).toEqual([{ name: "Client" }]);
+    await renameSessionGroup({ cfg, name: "Client", to: "Customer", env });
+    expect(listSessionGroupDefaults(env)).toEqual([{ name: "Customer" }]);
+    const afterDefaultsReadAndRename = openOpenClawStateDatabase({ env })
+      .db.prepare("PRAGMA table_info(session_groups)")
+      .all() as Array<{ dflt_value: unknown; name: string; notnull: number; type: string }>;
+    expect(afterDefaultsReadAndRename.map((column) => column.name)).not.toEqual(
+      expect.arrayContaining(["cwd", "worktree"]),
+    );
+    expect(
+      updateSessionGroupDefaults("Customer", { cwd: "/repos/customer", worktree: true }, env),
+    ).toContainEqual({ name: "Customer", cwd: "/repos/customer", worktree: true });
+    const columns = openOpenClawStateDatabase({ env })
+      .db.prepare("PRAGMA table_info(session_groups)")
+      .all() as Array<{ dflt_value: unknown; name: string; notnull: number; type: string }>;
+    expect(columns.filter((column) => column.name === "cwd" || column.name === "worktree")).toEqual(
+      [
+        expect.objectContaining({ dflt_value: null, name: "cwd", notnull: 0, type: "TEXT" }),
+        expect.objectContaining({
+          dflt_value: null,
+          name: "worktree",
+          notnull: 0,
+          type: "INTEGER",
+        }),
+      ],
     );
   });
 
@@ -149,19 +181,49 @@ describe("session groups catalog", () => {
       updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env),
     ).toContainEqual({
       name: "Client",
-      position: 0,
       cwd: "/repos/client",
       worktree: true,
     });
 
     putSessionGroups(["Other", "Client"], undefined, env);
     await renameSessionGroup({ cfg, name: "Client", to: "Customer", env });
-    expect(listSessionGroups(env)).toContainEqual({
+    expect(listSessionGroupDefaults(env)).toContainEqual({
       name: "Customer",
-      position: 1,
       cwd: "/repos/client",
       worktree: true,
     });
+  });
+
+  it("rejects renaming an unknown group after defaults schema activation", async () => {
+    putSessionGroups(["Client"], undefined, env);
+    updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env);
+
+    await expect(renameSessionGroup({ cfg, name: "Missing", to: "Other", env })).rejects.toThrow(
+      "unknown session group: Missing",
+    );
+    expect(listSessionGroups(env)).toEqual([{ name: "Client", position: 0 }]);
+    expect(listSessionGroupDefaults(env)).toEqual([
+      { name: "Client", cwd: "/repos/client", worktree: true },
+    ]);
+  });
+
+  it("clears New Session defaults without removing the group", () => {
+    putSessionGroups(["Client"], undefined, env);
+    updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env);
+
+    expect(updateSessionGroupDefaults("Client", { cwd: null, worktree: false }, env)).toEqual([
+      { name: "Client", worktree: false },
+    ]);
+  });
+
+  it("does not recreate a deleted group from a stale defaults update", async () => {
+    putSessionGroups(["Client"], undefined, env);
+    await deleteSessionGroup({ cfg, name: "Client", env });
+
+    expect(
+      updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env),
+    ).toBeNull();
+    expect(listSessionGroups(env)).toEqual([]);
   });
 
   it("absorbs ad-hoc categories at the end of the catalog", () => {

@@ -855,20 +855,18 @@ test("write-scoped operators manage chat organization but not admin session sett
 
     const defaultsUpdated = await rpcReq<{
       ok: true;
-      groups: Array<{ name: string; cwd?: string; worktree?: boolean }>;
+      defaults: Array<{ name: string; cwd?: string; worktree?: boolean }>;
     }>(ws, "sessions.groups.update", {
       name: "Travel",
       cwd: "/tmp/travel",
       worktree: true,
     });
     expect(defaultsUpdated.ok).toBe(true);
-    expect(defaultsUpdated.payload?.groups).toContainEqual({
+    expect(defaultsUpdated.payload?.defaults).toContainEqual({
       name: "Travel",
-      position: 1,
       cwd: "/tmp/travel",
       worktree: true,
     });
-
     const renamedGroup = await rpcReq<{
       ok: true;
       sectionOrder: string[];

@@ -61,7 +61,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
   listSessionGroupFolders(path?: string): Promise<FsListDirResult>;
-  sessionGroupDefaults(name: string): { cwd: string; worktree: boolean };
+  sessionGroupDefaults(name: string): { cwd: string; worktree: boolean } | null;
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
@@ -89,16 +89,6 @@ export class SessionOrganizerController implements ReactiveController {
   constructor(private readonly host: SessionOrganizerControllerHost) {
     host.addController(this);
   }
-
-  hostConnected(): void {}
-
-  // No dialog teardown here on purpose. The sidebar detaches for reasons that
-  // are not the operator leaving — a narrow viewport drops it entirely — and
-  // cancelling on those would throw away a name mid-edit. The dialog is a
-  // body-level modal, so it outlives the sidebar's DOM position by design; the
-  // Sessions page binds its own dialogs because a page unmount really is a
-  // navigation.
-  hostDisconnected(): void {}
 
   private async loadOperations(
     scope: SidebarSessionMutationScope,
@@ -547,30 +537,33 @@ export class SessionOrganizerController implements ReactiveController {
       }
       return;
     }
-    await showDialog({
-      group,
-      defaults: this.host.sessionGroupDefaults(group),
-      listDirectory: (path) => this.host.listSessionGroupFolders(path),
-      submit: async (defaults) => {
-        const scope = this.host.sessionData.beginSessionMutation();
-        if (!scope) {
-          return t("sessionsView.groupDefaultsStale");
-        }
-        const operations = await this.loadOperations(scope);
-        const result = await operations?.updateSessionGroupDefaults(
-          this.host,
-          group,
-          { cwd: defaults.cwd || null, worktree: defaults.worktree },
-          scope,
-        );
-        if (result === "completed") {
-          return null;
-        }
-        return result === "stale"
-          ? t("sessionsView.groupDefaultsStale")
-          : (this.host.sessionData.sessionMutationError ?? t("sessionsView.groupDefaultsFailed"));
-      },
-    });
+    const defaults = this.host.sessionGroupDefaults(group);
+    if (defaults) {
+      await showDialog({
+        group,
+        defaults,
+        listDirectory: (path) => this.host.listSessionGroupFolders(path),
+        submit: async (nextDefaults) => {
+          const scope = this.host.sessionData.beginSessionMutation();
+          if (!scope || !this.host.sessionGroupDefaults(group)) {
+            return t("sessionsView.groupDefaultsStale");
+          }
+          const operations = await this.loadOperations(scope);
+          const result = await operations?.updateSessionGroupDefaults(
+            this.host,
+            group,
+            { cwd: nextDefaults.cwd || null, worktree: nextDefaults.worktree },
+            scope,
+          );
+          return result === "completed"
+            ? null
+            : result === "stale"
+              ? t("sessionsView.groupDefaultsStale")
+              : (this.host.sessionData.sessionMutationError ??
+                t("sessionsView.groupDefaultsFailed"));
+        },
+      });
+    }
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {

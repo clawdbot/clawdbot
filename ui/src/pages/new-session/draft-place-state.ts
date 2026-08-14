@@ -131,6 +131,22 @@ export class DraftPlaceState {
     return this.repositoryState.preferenceReady;
   }
 
+  canAdoptGroupDefaults(): boolean {
+    return (
+      !this.folderSelectedByUser &&
+      !this.whereSelectedByUser &&
+      !this.projectSelectedByUser &&
+      !this.repositoryState.hasUserSelection
+    );
+  }
+
+  adoptGroupDefaults() {
+    if (this.read().data?.groupStatus !== "resolved" || !this.canAdoptGroupDefaults()) {
+      return;
+    }
+    this.adoptAgentDefaults({ preserveSelectedAgent: true });
+  }
+
   setAgentsHydrated(value: boolean) {
     this.agentsHydratedValue = value;
   }

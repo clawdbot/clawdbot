@@ -150,6 +150,23 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("loads a metadata-less group catalog without probing the newer defaults method", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        return { groups: [{ name: "Research", position: 0 }] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.groupsLoad()).resolves.toEqual([{ name: "Research", position: 0 }]);
+    expect(request).toHaveBeenCalledOnce();
+    expect(sessions.state.groups).toEqual(["Research"]);
+    sessions.dispose();
+  });
+
   it("publishes state.error when group rename is rejected", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.rename") {

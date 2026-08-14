@@ -1,8 +1,10 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
 
 class ControllerHost implements ReactiveControllerHost {
   readonly updateComplete = Promise.resolve(true);
@@ -11,7 +13,11 @@ class ControllerHost implements ReactiveControllerHost {
   requestUpdate() {}
 }
 
-function createBrowser(request: (method: string) => Promise<unknown>) {
+afterEach(() => {
+  localStorage.clear();
+});
+
+function createBrowser(request: (method: string) => Promise<unknown>, data?: NewSessionRouteData) {
   const host = new ControllerHost();
   const client = { request, recoveryScope: "principal-a", recoveryScopeReady: true };
   const context = {
@@ -31,7 +37,7 @@ function createBrowser(request: (method: string) => Promise<unknown>) {
     host,
     () => ({
       context,
-      data: undefined,
+      data,
       isConnected: true,
       isAdmin: false,
       canStartAsDraft: false,
@@ -73,7 +79,7 @@ function createBrowser(request: (method: string) => Promise<unknown>) {
       body: () => null,
     },
   );
-  return browser;
+  return { browser, gateway };
 }
 
 describe("DraftPlaceBrowser", () => {
@@ -86,7 +92,7 @@ describe("DraftPlaceBrowser", () => {
       },
     ],
   ])("keeps roster recents when %s", async (_label, request) => {
-    const browser = createBrowser(request);
+    const { browser } = createBrowser(request);
 
     await browser.refreshProjects();
 
@@ -105,5 +111,36 @@ describe("DraftPlaceBrowser", () => {
         displayName: "recent",
       },
     ]);
+  });
+});
+
+describe("DraftGatewayState", () => {
+  it("keeps group route defaults isolated from ordinary New Session preferences", () => {
+    patchNewSessionPreference("ws://gateway.example", "main", {
+      folder: "/workspace/ordinary",
+      worktree: true,
+    });
+    const { gateway } = createBrowser(async () => ({}), {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId: "",
+      group: "Client",
+      groupStatus: "resolved",
+      groupCwd: "/workspace/client",
+      groupWorktree: false,
+      model: "",
+      catalogLabel: "",
+      startTerminal: false,
+    });
+
+    expect(gateway.readPreference("main")).toBeNull();
+    gateway.persistPreference("main", "/workspace", {
+      folder: "/workspace/client",
+      worktree: false,
+    });
+    expect(loadNewSessionPreference("ws://gateway.example", "main")).toEqual({
+      folder: "/workspace/ordinary",
+      worktree: true,
+    });
   });
 });

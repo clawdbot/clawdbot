@@ -82,6 +82,7 @@ describe("method scope resolution", () => {
     ["projects.add", ["operator.write"]],
     ["projects.searchRemote", ["operator.read"]],
     ["sessions.groups.list", ["operator.read"]],
+    ["sessions.groups.defaults", ["operator.write"]],
     ["sessions.groups.put", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
     ["sessions.groups.update", ["operator.write"]],

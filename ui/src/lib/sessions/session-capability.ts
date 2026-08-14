@@ -44,6 +44,7 @@ export type SessionState = {
 };
 
 export type SessionGroupMutationResult = "completed" | "stale";
+export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
 export type SessionListOptions = {
   agentId?: string;
@@ -247,8 +248,14 @@ export type SessionCapability = {
     leafEntryId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsBranchesSwitchResult>;
-  /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
-  groupsLoad: () => Promise<void>;
+  /** Loads one connection-owned group catalog; null means the attempt retired or failed. */
+  groupsLoad: () => Promise<readonly SessionGroupSettings[] | null>;
+  /** Generation of the catalog/defaults snapshot used by group-target routes. */
+  groupsGeneration: () => number;
+  /** Whether group defaults are current enough for a group-target route. */
+  groupsStatus: () => SessionGroupDefaultsStatus;
+  /** Invalidates the connection-owned group catalog before an explicit route retry. */
+  groupsInvalidate: () => void;
   /** Replaces the group catalog; stale means the initiating connection retired. */
   groupsPut: (
     names: readonly string[],

@@ -9206,24 +9206,38 @@ public struct SessionsDeleteParams: Codable, Sendable {
 public struct SessionGroup: Codable, Sendable {
     public let name: String
     public let position: Int
+
+    public init(
+        name: String,
+        position: Int)
+    {
+        self.name = name
+        self.position = position
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case position
+    }
+}
+
+public struct SessionGroupDefaults: Codable, Sendable {
+    public let name: String
     public let cwd: String?
     public let worktree: Bool?
 
     public init(
         name: String,
-        position: Int,
         cwd: String? = nil,
         worktree: Bool? = nil)
     {
         self.name = name
-        self.position = position
         self.cwd = cwd
         self.worktree = worktree
     }
 
     private enum CodingKeys: String, CodingKey {
         case name
-        case position
         case cwd
         case worktree
     }
@@ -9246,6 +9260,22 @@ public struct SessionsGroupsListResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case groups
         case sectionorder = "sectionOrder"
+    }
+}
+
+public struct SessionsGroupsDefaultsParams: Codable, Sendable {}
+
+public struct SessionsGroupsDefaultsResult: Codable, Sendable {
+    public let defaults: [SessionGroupDefaults]
+
+    public init(
+        defaults: [SessionGroupDefaults])
+    {
+        self.defaults = defaults
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case defaults
     }
 }
 
@@ -9304,6 +9334,24 @@ public struct SessionsGroupsUpdateParams: Codable, Sendable {
         case name
         case cwd
         case worktree
+    }
+}
+
+public struct SessionsGroupsUpdateResult: Codable, Sendable {
+    public let ok: Bool
+    public let defaults: [SessionGroupDefaults]
+
+    public init(
+        ok: Bool,
+        defaults: [SessionGroupDefaults])
+    {
+        self.ok = ok
+        self.defaults = defaults
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case defaults
     }
 }
 
