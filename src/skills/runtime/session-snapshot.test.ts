@@ -34,8 +34,8 @@ const {
   ),
 }));
 
-vi.mock("../loading/workspace.js", () => ({
-  buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
+vi.mock("../loading/workspace-skill-prompt.js", () => ({
+  buildSkillSnapshot: buildWorkspaceSkillSnapshotMock,
 }));
 
 vi.mock("./refresh.js", () => ({

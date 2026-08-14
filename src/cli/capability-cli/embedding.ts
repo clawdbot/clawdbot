@@ -5,7 +5,7 @@ import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { listEmbeddingProviders } from "../../plugins/embedding-provider-runtime.js";
-import { listMemoryEmbeddingProviders } from "../../plugins/memory-embedding-providers.js";
+import { listRegisteredMemoryEmbeddingProviderAdapters } from "../../plugins/memory-embedding-provider-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
@@ -130,7 +130,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
         const selectedProvider = resolvedMemory?.provider;
         const providers = new Map(
-          listMemoryEmbeddingProviders().map((provider) => [
+          listRegisteredMemoryEmbeddingProviderAdapters().map((provider) => [
             provider.id,
             {
               id: provider.id,

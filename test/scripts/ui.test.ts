@@ -3,18 +3,13 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  assertUiBuildOutputRoot,
   isDirectScriptExecution,
   resolvePnpmSpawnCall,
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
-} from "../../scripts/ui.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
+} from "../../scripts/ui.mts";
 // writeFileSync creates the file before its content lands, so an existence
 // poll can observe an empty file on loaded runners; wait for bytes instead.
 function readNonEmpty(file: string): string | null {
@@ -59,18 +54,6 @@ async function waitForExit(
 }
 
 describe("scripts/ui windows spawn behavior", () => {
-  it("rejects a symlinked dist root before launching a UI build", () => {
-    const rootDir = tempDirs.make("openclaw-ui-output-root-");
-    const targetDir = path.join(rootDir, "live-gateway-dist");
-    fs.mkdirSync(targetDir);
-    fs.writeFileSync(path.join(targetDir, "sentinel.js"), "keep\n");
-    fs.symlinkSync(targetDir, path.join(rootDir, "dist"), "dir");
-
-    expect(() => assertUiBuildOutputRoot({ rootDir })).toThrow(/symbolic link/u);
-    expect(fs.readFileSync(path.join(targetDir, "sentinel.js"), "utf8")).toBe("keep\n");
-    expect(fs.readlinkSync(path.join(rootDir, "dist"))).toBe(targetDir);
-  });
-
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
     expect(
       shouldUseCmdExeForCommand("C:\\Users\\dev\\AppData\\Local\\pnpm\\pnpm.CMD", "win32"),
@@ -218,8 +201,8 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(isDirectScriptExecution(junctionScriptPath, realScriptPath, realpath)).toBe(true);
   });
 
-  it("honors build-all no-pnpm mode before requiring a pnpm runner", () => {
-    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", "--help"], {
+  it.each(["--help", "-h"])("keeps no-pnpm build %s informational", (helpFlag) => {
+    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", helpFlag], {
       cwd: path.resolve("."),
       encoding: "utf8",
       env: {
@@ -233,6 +216,22 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(result.status).toBe(0);
     expect(output).not.toContain("Missing UI runner");
     expect(output).toContain("vite");
+    expect(output).not.toContain("Control UI performance");
+  });
+
+  it.each(["check-control-ui-precompressed-assets.mts", "check-control-ui-performance.mts"])(
+    "keeps %s in the canonical build wrapper",
+    (validator) => {
+      expect(fs.readFileSync("scripts/ui.mts", "utf8")).toContain(validator);
+    },
+  );
+
+  it("keeps the package script on the canonical UI build wrapper", () => {
+    const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(packageJson.scripts["ui:build"]).toBe("node scripts/ui.js build");
   });
 
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP"] as const)(

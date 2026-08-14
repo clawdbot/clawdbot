@@ -1,11 +1,11 @@
 // Control UI chat domain owns pure slash command rules.
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -31,6 +31,7 @@ export type SlashCommandDef = {
   tier?: SlashCommandTier;
   source?: "native" | "plugin" | "skill";
   skillModelVisible?: boolean;
+  clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
 type LocalArgChoice = string | { value: string; label: string };
@@ -49,6 +50,7 @@ type CommandLike = {
   tier?: string;
   source?: "native" | "plugin" | "skill";
   skillModelVisible?: boolean;
+  clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
@@ -262,6 +264,7 @@ function toSlashCommand(
     ...(command.skillModelVisible !== undefined
       ? { skillModelVisible: command.skillModelVisible }
       : {}),
+    ...(command.clientPresentation ? { clientPresentation: command.clientPresentation } : {}),
   };
 }
 
@@ -319,6 +322,31 @@ function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
       }
       return typeof choice === "string" ? Boolean(choice) : Boolean(choice.value);
     });
+}
+
+function normalizeClientPresentation(
+  value: unknown,
+): NonNullable<CommandEntry["clientPresentation"]> | undefined {
+  const presentation = asRecord(value);
+  if (
+    !presentation ||
+    Object.keys(presentation).length !== 2 ||
+    !Object.hasOwn(presentation, "when") ||
+    !Object.hasOwn(presentation, "action") ||
+    presentation.when !== "no-arguments"
+  ) {
+    return undefined;
+  }
+  const action = asRecord(presentation.action);
+  if (
+    !action ||
+    Object.keys(action).length !== 1 ||
+    !Object.hasOwn(action, "kind") ||
+    action.kind !== "device-pairing"
+  ) {
+    return undefined;
+  }
+  return { when: "no-arguments", action: { kind: "device-pairing" } };
 }
 
 function buildLocalSlashCommands(): SlashCommandDef[] {
@@ -398,6 +426,8 @@ function normalizeCommandEntry(
         : undefined,
     skillModelVisible:
       typeof entry.skillModelVisible === "boolean" ? entry.skillModelVisible : undefined,
+    clientPresentation:
+      entry.source === "plugin" ? normalizeClientPresentation(entry.clientPresentation) : undefined,
   };
 }
 
@@ -459,6 +489,24 @@ const TIER_ORDER: Record<SlashCommandTier, number> = {
   power: 2,
 };
 
+const NON_MATCHING_COMMAND_RANK = 4;
+
+function getSlashCommandRelevance(command: SlashCommandDef, filter: string): number {
+  const names = [command.name, ...(command.aliases ?? [])].map(normalizeLowercaseStringOrEmpty);
+  if (names.some((name) => name === filter)) {
+    return 0;
+  }
+  if (names.some((name) => name.startsWith(filter))) {
+    return 1;
+  }
+  if (names.some((name) => name.includes(filter))) {
+    return 2;
+  }
+  return normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(filter)
+    ? 3
+    : NON_MATCHING_COMMAND_RANK;
+}
+
 export function getSlashCommandCompletions(
   filter: string,
   options?: { showAll?: boolean },
@@ -467,10 +515,7 @@ export function getSlashCommandCompletions(
   const showAll = options?.showAll ?? false;
   let commands = lower
     ? SLASH_COMMANDS.filter(
-        (cmd) =>
-          cmd.name.startsWith(lower) ||
-          cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lower)) ||
-          normalizeLowercaseStringOrEmpty(getSlashCommandDescription(cmd)).includes(lower),
+        (command) => getSlashCommandRelevance(command, lower) < NON_MATCHING_COMMAND_RANK,
       )
     : SLASH_COMMANDS;
 
@@ -480,7 +525,12 @@ export function getSlashCommandCompletions(
   }
 
   return commands.toSorted((a, b) => {
-    // Sort by tier first (essential → standard → power)
+    if (lower) {
+      const relevance = getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower);
+      if (relevance !== 0) {
+        return relevance;
+      }
+    }
     const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
     const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
     if (aTier !== bTier) {
@@ -490,13 +540,6 @@ export function getSlashCommandCompletions(
     const bi = CATEGORY_ORDER.indexOf(b.category ?? "session");
     if (ai !== bi) {
       return ai - bi;
-    }
-    if (lower) {
-      const aExact = a.name.startsWith(lower) ? 0 : 1;
-      const bExact = b.name.startsWith(lower) ? 0 : 1;
-      if (aExact !== bExact) {
-        return aExact - bExact;
-      }
     }
     return 0;
   });
@@ -516,11 +559,6 @@ export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
         normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower),
     )
     .toSorted((left, right) => left.name.localeCompare(right.name));
-}
-
-/** Count of commands hidden by tier filtering (for "Show N more" UI). */
-export function getHiddenCommandCount(): number {
-  return SLASH_COMMANDS.filter((cmd) => (cmd.tier ?? "standard") === "power").length;
 }
 
 type ParsedSlashCommand = {

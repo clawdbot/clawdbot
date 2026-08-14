@@ -9,7 +9,7 @@ import { encodeSessionArchiveContent } from "../config/sessions/archive-compress
 import {
   appendTranscriptMessage,
   persistSessionTranscriptTurn,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -220,7 +220,7 @@ describe("session cost usage", () => {
         ...sessionTarget,
         sessionKey: "agent:main:mapped-other-cost",
       };
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         {
           agentId: "main",
           sessionKey: mismatchedTarget.sessionKey,
@@ -463,7 +463,7 @@ describe("session cost usage", () => {
     const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
 
     await withStateDir(root, async () => {
-      await upsertSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: now });
+      await upsertSessionEntryCore({ sessionKey, storePath }, { sessionId, updatedAt: now });
       await persistSessionTranscriptTurn(
         { agentId: "main", sessionId, sessionKey, storePath },
         {

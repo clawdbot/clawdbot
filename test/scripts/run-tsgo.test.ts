@@ -7,7 +7,7 @@ import {
   createSparseTsgoSkipEnv,
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
-} from "../../scripts/lib/tsgo-sparse-guard.mjs";
+} from "../../scripts/lib/tsgo-sparse-guard.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -84,12 +84,48 @@ describe("run-tsgo sparse guard", () => {
     }
 
     expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.non-agents.json"], {
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.other.json"], {
         cwd,
         isSparseCheckoutEnabled: () => true,
         sparseCheckoutPatterns: ["/packages/", "/ui/config/", "/ui/src/"],
       }),
     ).toBeNull();
+  });
+
+  it("rejects package-test sparse worktrees missing inherited declaration roots", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.test.packages.json"], {
+        cwd,
+        fileExists: () => true,
+        isSparseCheckoutEnabled: () => true,
+        sparseCheckoutPatterns: ["/packages/"],
+      }),
+    ).toMatchInlineSnapshot(`
+      "tsconfig.test.packages.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
+      - src
+      - ui/src
+      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
+    `);
+  });
+
+  it("rejects declaration-shard sparse worktrees missing inherited roots", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.test.extension-declarations.json"], {
+        cwd,
+        fileExists: () => true,
+        isSparseCheckoutEnabled: () => true,
+        sparseCheckoutPatterns: ["/extensions/"],
+      }),
+    ).toMatchInlineSnapshot(`
+      "tsconfig.test.extension-declarations.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
+      - src
+      - ui/src
+      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
+    `);
   });
 
   it("rejects sparse core worktrees that include only selected ui and package files", () => {

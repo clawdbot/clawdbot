@@ -482,7 +482,7 @@ export function recordTaskProgressByRunId(params: {
   });
 }
 
-export function finalizeTaskRunByRunId(params: {
+export function finalizeTaskRecordByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;

@@ -1,3 +1,4 @@
+import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import {
@@ -7,8 +8,9 @@ import {
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
-import { renderChatControls } from "./components/chat-controls.ts";
+import { renderChatModelControls } from "./components/chat-model-controls.ts";
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
@@ -22,9 +24,13 @@ export function readChatPaneMutationAccess(
   sessionKey: string,
 ) {
   return {
-    runtimePatch: readSessionMethodAccess(snapshot, {
+    model: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, model: null },
+    }),
+    effort: readSessionMethodAccess(snapshot, {
+      method: "sessions.patch",
+      params: { key: sessionKey, thinkingLevel: null },
     }),
     unarchive: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
@@ -34,53 +40,67 @@ export function readChatPaneMutationAccess(
 }
 
 export function renderChatPaneComposerControls(params: {
-  paneId: string;
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;
   agentDefaultModel: string | undefined;
-  mutationAccess: SessionMethodAccess;
+  modelAccess: SessionMethodAccess;
+  effortAccess: SessionMethodAccess;
+  onModelSetup: () => void;
 }) {
-  const { paneId, state, selectedSession, agentDefaultModel, mutationAccess } = params;
-  const mutationAllowed = () => mutationAccess.allowed;
-  return renderChatControls({
-    paneId,
-    model: {
-      activeRunId: state.chatRunId,
-      agentDefaultModel,
-      connected: state.connected,
-      gatewayAvailable: Boolean(state.client),
-      loading: state.chatLoading,
-      modelCatalog: state.chatModelCatalog,
-      modelOverrides: state.sessions.state.modelOverrides,
-      modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
-      modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
-      modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-      modelsLoading: state.chatModelsLoading,
-      mutationDisabledReason: mutationAccess.allowed ? undefined : mutationAccess.reason,
-      sending: state.chatSending,
-      sessionKey: state.sessionKey,
-      sessionsResult: state.sessionsResult,
-      stream: state.chatStream,
-      onRequestUpdate: () => state.requestUpdate?.(),
-      onFastModeSelect: (next, targetSessionKey) =>
-        mutationAllowed()
-          ? switchChatFastMode(state, next, targetSessionKey)
-          : Promise.resolve(false),
-      onModelSelect: (next, targetSessionKey) =>
-        mutationAllowed() ? switchChatModel(state, next, targetSessionKey) : Promise.resolve(false),
-      onThinkingSelect: (next, targetSessionKey) =>
-        mutationAllowed()
-          ? switchChatThinkingLevel(state, next, targetSessionKey)
-          : Promise.resolve(false),
-    },
-    onboarding: state.onboarding,
-    settings: state.settings,
-    viewMenuOpen: state.chatViewMenuOpen,
-    onSettingsChange: state.applySettings,
-    onViewMenuOpenChange: (open, options) => {
-      state.setChatViewMenuOpen(open, options);
-    },
-  });
+  const { state, selectedSession, agentDefaultModel, modelAccess, effortAccess, onModelSetup } =
+    params;
+  const hasModelSnapshot =
+    state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
+  const refreshModelCatalog = () => refreshChatModelCatalogOnDemand(state);
+  return html`
+    <div class="chat-composer-model-control">
+      ${renderChatModelControls({
+        activeRunId: state.chatRunId,
+        agentDefaultModel,
+        connected: state.connected,
+        gatewayAvailable: Boolean(state.client),
+        loading: state.chatLoading,
+        modelCatalog: state.chatModelCatalog,
+        modelCatalogState: {
+          hasSnapshot: hasModelSnapshot,
+          onRetry: () => void refreshModelCatalog(),
+          status: state.chatModelCatalogError
+            ? "error"
+            : state.chatModelsLoading
+              ? hasModelSnapshot
+                ? "refreshing"
+                : "loading"
+              : "ready",
+        },
+        modelOverrides: state.sessions.state.modelOverrides,
+        modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+        modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
+        modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
+        modelsLoading: state.chatModelsLoading,
+        modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
+        effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
+        sending: state.chatSending,
+        sessionKey: state.sessionKey,
+        sessionsResult: state.sessionsResult,
+        stream: state.chatStream,
+        onRequestUpdate: () => state.requestUpdate?.(),
+        onModelSetup,
+        onFastModeSelect: (next, targetSessionKey) =>
+          effortAccess.allowed
+            ? switchChatFastMode(state, next, targetSessionKey)
+            : Promise.resolve(false),
+        onModelPickerOpen: refreshModelCatalog,
+        onModelSelect: (next, targetSessionKey) =>
+          modelAccess.allowed
+            ? switchChatModel(state, next, targetSessionKey)
+            : Promise.resolve(false),
+        onThinkingSelect: (next, targetSessionKey) =>
+          effortAccess.allowed
+            ? switchChatThinkingLevel(state, next, targetSessionKey)
+            : Promise.resolve(false),
+      })}
+    </div>
+  `;
 }
 
 export function createChatPaneSessionActionCallbacks(params: {

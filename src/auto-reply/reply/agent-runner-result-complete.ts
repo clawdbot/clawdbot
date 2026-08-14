@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -14,7 +14,6 @@ import type { ReplyPayload } from "../types.js";
 import {
   buildInlinePluginStatusPayload,
   markBeforeAgentRunBlockedPayloads,
-  resolvePendingFinalDeliveryRetryText,
   resolveReplyRunDeliveryContext,
   resolveSourceReplyPolicy,
 } from "./agent-runner-core.js";
@@ -35,7 +34,11 @@ import {
   mergeExecutionTrace,
 } from "./agent-runner-trace.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
-import { buildPendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  buildRecoverablePendingFinalDeliveryText,
+  normalizePendingFinalDeliveryPayloads,
+  normalizePendingFinalRecoveryPayloads,
+} from "./pending-final-delivery.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
@@ -133,7 +136,7 @@ export async function completeReplyAgentRun(input: {
     if (sessionKey) {
       readPostCompactionContext(followupRun.run.workspaceDir, {
         cfg,
-        agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        agentId: followupRun.run.agentId,
       })
         .then((contextContent) => {
           if (contextContent) {
@@ -310,10 +313,9 @@ export async function completeReplyAgentRun(input: {
       runtimePolicySessionKey,
       opts,
     });
-    const finalDeliveryText = buildPendingFinalDeliveryText(finalPayloads);
     // #85714: warn only for unusually substantive private final text. In
     // message_tool_only, no tool call can be intentional silence, and
-    // finalDeliveryText also includes verbose/status/usage metadata.
+    // final payloads also include verbose/status/usage metadata.
     const assistantFinalText = normalizeAssistantFinalDeliveryText(
       typeof runResult.meta?.finalAssistantVisibleText === "string"
         ? runResult.meta.finalAssistantVisibleText
@@ -357,7 +359,12 @@ export async function completeReplyAgentRun(input: {
         finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
       }
     }
-    const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
+    const recoverablePendingFinalText = buildRecoverablePendingFinalDeliveryText(
+      normalizePendingFinalRecoveryPayloads(finalPayloads),
+    );
+    const pendingText = sourceReplyPolicy.suppressDelivery
+      ? ""
+      : (recoverablePendingFinalText ?? "");
     const heartbeatAckMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
     const resolvedPendingText = isHeartbeat
       ? (() => {
@@ -368,17 +375,30 @@ export async function completeReplyAgentRun(input: {
           return stripped.shouldSkip ? "" : stripped.text || pendingText;
         })()
       : pendingText;
-    if (resolvedPendingText) {
+    const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
+      ? []
+      : finalPayloads.filter(
+          (payload) => normalizePendingFinalDeliveryPayloads([payload]).length > 0,
+        );
+    if (sendableFinalPayloads.length > 0) {
       const pendingFinalDeliveryIntentId = crypto.randomUUID();
-      for (const payload of finalPayloads) {
+      const expectedSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
+      const pendingFinalDeliveries = sendableFinalPayloads.map((payload) => {
+        const deliveryId = crypto.randomUUID();
         setReplyPayloadMetadata(payload, {
-          pendingFinalDeliveryIntentId,
-          pendingFinalDeliveryRetryText: resolvePendingFinalDeliveryRetryText({
-            isHeartbeat,
-            payload,
-          }),
+          pendingFinalDeliveryCompletion: {
+            deliveryId,
+            intentId: pendingFinalDeliveryIntentId,
+            ...(activeSessionEntry?.restartRecoveryDeliveryRunId
+              ? { recoveryRunId: activeSessionEntry.restartRecoveryDeliveryRunId }
+              : {}),
+            sessionId: expectedSessionId,
+            sessionKey,
+            storePath,
+          },
         });
-      }
+        return { id: deliveryId, state: "prepared" as const };
+      });
       const pendingFinalDeliveryContext = resolveReplyRunDeliveryContext({
         cfg,
         sessionCtx,
@@ -387,7 +407,6 @@ export async function completeReplyAgentRun(input: {
         runtimePolicySessionKey,
         opts,
       });
-      const expectedSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
       // A reset can rebind the key while the model runs; its replacement must
       // never inherit the old run's final or advertise an uncommitted intent.
       const persistedPendingFinalDelivery = await updateSessionEntry(
@@ -396,9 +415,11 @@ export async function completeReplyAgentRun(input: {
           entry.sessionId === expectedSessionId
             ? {
                 pendingFinalDelivery: {
-                  kind: "replayable" as const,
-                  text: resolvedPendingText,
+                  ...(resolvedPendingText
+                    ? { kind: "replayable" as const, text: resolvedPendingText }
+                    : { kind: "transport-only" as const }),
                   intentId: pendingFinalDeliveryIntentId,
+                  deliveries: pendingFinalDeliveries,
                   context: pendingFinalDeliveryContext,
                   createdAt: Date.now(),
                 },

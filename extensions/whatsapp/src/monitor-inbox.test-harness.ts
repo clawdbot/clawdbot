@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -186,6 +187,13 @@ function createResolvedMock() {
   return vi.fn().mockResolvedValue(undefined);
 }
 
+function createAcceptedSendMessageMock() {
+  let sequence = 0;
+  return vi.fn().mockImplementation(async () => ({
+    key: { id: `mock-accepted-${++sequence}` },
+  }));
+}
+
 function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
@@ -193,7 +201,7 @@ function createMockSock(): MockSock {
     end: vi.fn(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
-    sendMessage: createResolvedMock(),
+    sendMessage: createAcceptedSendMessageMock(),
     fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
@@ -231,7 +239,7 @@ vi.mock("./session.js", async () => {
     }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
     getStatusCode: vi.fn(() => 500),
-    formatError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    formatError: coerceErrorMessage,
   };
 });
 

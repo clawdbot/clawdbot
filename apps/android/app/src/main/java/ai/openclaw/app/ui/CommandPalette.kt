@@ -175,7 +175,7 @@ internal fun CommandPalette(
                     ownerAgentId = session.ownerAgentId,
                     title = commandSessionTitle(session.displayName),
                     subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw thread"),
-                    metadata = session.updatedAtMs?.let(::commandRelativeTime) ?: nativeString("now"),
+                    metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: nativeString("now"),
                   )
                 },
               onOpen = onOpenSession,
@@ -375,18 +375,3 @@ internal fun providerCommandSubtitle(
 
 /** Falls back to the canonical main-session label when gateway display names are blank. */
 private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")
-
-/** Formats command-palette session timestamps for compact rows. */
-internal fun commandRelativeTime(
-  updatedAtMs: Long,
-  nowMs: Long = System.currentTimeMillis(),
-): String {
-  val deltaMs = (nowMs - updatedAtMs).coerceAtLeast(0L)
-  val minutes = deltaMs / 60_000L
-  if (minutes < 1) return nativeString("now")
-  if (minutes < 60) return nativeString("\${minutes}m", minutes)
-  val hours = minutes / 60
-  if (hours < 24) return nativeString("\${hours}h", hours)
-  val days = hours / 24
-  return nativeString("\${days}d", days)
-}

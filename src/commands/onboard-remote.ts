@@ -1,3 +1,4 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Interactive remote gateway onboarding.
  *
@@ -12,7 +13,6 @@ import {
   buildGatewayDiscoveryLabel,
   buildGatewayDiscoveryTarget,
 } from "../infra/gateway-discovery-targets.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";

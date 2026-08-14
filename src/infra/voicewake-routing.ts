@@ -1,16 +1,8 @@
 // Persists and resolves voice wake routing rules.
-import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  classifySessionKeyShape,
-  isValidAgentId,
-  normalizeAgentId,
-} from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -36,8 +28,6 @@ export type VoiceWakeRoutingConfig = {
   updatedAtMs: number;
 };
 
-const MAX_VOICEWAKE_ROUTES = 32;
-const MAX_VOICEWAKE_TRIGGER_LENGTH = 64;
 const VOICEWAKE_ROUTING_CONFIG_KEY = "default";
 
 const DEFAULT_ROUTING: VoiceWakeRoutingConfig = {
@@ -108,139 +98,6 @@ function normalizeRouteRule(value: unknown): VoiceWakeRouteRule | null {
   return { trigger, target };
 }
 
-function isCanonicalAgentSessionKey(value: string): boolean {
-  const trimmed = value.trim();
-  if (classifySessionKeyShape(trimmed) !== "agent") {
-    return false;
-  }
-  return !trimmed.split(":").some((part) => part.length === 0);
-}
-
-function validateRouteTargetInput(
-  value: unknown,
-  label: string,
-): { ok: true } | { ok: false; message: string } {
-  if (!isPlainObject(value)) {
-    return { ok: false, message: `${label} must be an object` };
-  }
-  const rec = value as { mode?: unknown; agentId?: unknown; sessionKey?: unknown };
-  const mode = normalizeOptionalString(rec.mode);
-  const agentId = normalizeOptionalString(rec.agentId);
-  const sessionKey = normalizeOptionalString(rec.sessionKey);
-  if (mode !== undefined) {
-    if (mode !== "current") {
-      return {
-        ok: false,
-        message: `${label}.mode must be "current" when provided`,
-      };
-    }
-    if (agentId !== undefined || sessionKey !== undefined) {
-      return {
-        ok: false,
-        message: `${label} cannot mix mode with agentId or sessionKey`,
-      };
-    }
-    return { ok: true };
-  }
-  if (agentId !== undefined && sessionKey !== undefined) {
-    return {
-      ok: false,
-      message: `${label} cannot include both agentId and sessionKey`,
-    };
-  }
-  if (agentId !== undefined) {
-    if (!isValidAgentId(agentId)) {
-      return {
-        ok: false,
-        message: `${label}.agentId must be a valid agent id`,
-      };
-    }
-    return { ok: true };
-  }
-  if (sessionKey !== undefined) {
-    if (!isCanonicalAgentSessionKey(sessionKey)) {
-      return {
-        ok: false,
-        message: `${label}.sessionKey must be a canonical agent session key`,
-      };
-    }
-    return { ok: true };
-  }
-  return {
-    ok: false,
-    message: `${label} must include mode, agentId, or sessionKey`,
-  };
-}
-
-/** Validate user-provided voice wake routing config before persistence. */
-export function validateVoiceWakeRoutingConfigInput(
-  input: unknown,
-): { ok: true } | { ok: false; message: string } {
-  if (!isPlainObject(input)) {
-    return { ok: false, message: "config must be an object" };
-  }
-  const rec = input as {
-    defaultTarget?: unknown;
-    routes?: unknown;
-  };
-  if (rec.defaultTarget !== undefined) {
-    const validatedDefaultTarget = validateRouteTargetInput(
-      rec.defaultTarget,
-      "config.defaultTarget",
-    );
-    if (!validatedDefaultTarget.ok) {
-      return validatedDefaultTarget;
-    }
-  }
-  if (rec.routes !== undefined && !Array.isArray(rec.routes)) {
-    return { ok: false, message: "config.routes must be an array" };
-  }
-  if (Array.isArray(rec.routes)) {
-    if (rec.routes.length > MAX_VOICEWAKE_ROUTES) {
-      return {
-        ok: false,
-        message: `config.routes must contain at most ${MAX_VOICEWAKE_ROUTES} entries`,
-      };
-    }
-    const normalizedTriggers = new Map<string, number>();
-    for (const [index, route] of rec.routes.entries()) {
-      if (!isPlainObject(route)) {
-        return { ok: false, message: `config.routes[${index}] must be an object` };
-      }
-      const trigger = normalizeOptionalString(route.trigger);
-      const normalizedTrigger = trigger ? normalizeVoiceWakeTriggerWord(trigger) : "";
-      if (!trigger || !normalizedTrigger) {
-        return {
-          ok: false,
-          message: `config.routes[${index}].trigger must be a non-empty string`,
-        };
-      }
-      if (trigger.length > MAX_VOICEWAKE_TRIGGER_LENGTH) {
-        return {
-          ok: false,
-          message: `config.routes[${index}].trigger must be at most ${MAX_VOICEWAKE_TRIGGER_LENGTH} characters`,
-        };
-      }
-      const duplicateIndex = normalizedTriggers.get(normalizedTrigger);
-      if (duplicateIndex !== undefined) {
-        return {
-          ok: false,
-          message: `config.routes[${index}].trigger duplicates config.routes[${duplicateIndex}].trigger after normalization`,
-        };
-      }
-      normalizedTriggers.set(normalizedTrigger, index);
-      const validatedTarget = validateRouteTargetInput(
-        route.target,
-        `config.routes[${index}].target`,
-      );
-      if (!validatedTarget.ok) {
-        return validatedTarget;
-      }
-    }
-  }
-  return { ok: true };
-}
-
 /** Normalize persisted or user-provided voice wake routing config. */
 export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
   if (!input || typeof input !== "object") {
@@ -268,20 +125,6 @@ export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutin
     routes,
     updatedAtMs,
   };
-}
-
-function targetColumns(target: VoiceWakeRouteTarget): {
-  targetAgentId: string | null;
-  targetMode: string;
-  targetSessionKey: string | null;
-} {
-  if ("agentId" in target && target.agentId) {
-    return { targetAgentId: target.agentId, targetMode: "agent", targetSessionKey: null };
-  }
-  if ("sessionKey" in target && target.sessionKey) {
-    return { targetAgentId: null, targetMode: "session", targetSessionKey: target.sessionKey };
-  }
-  return { targetAgentId: null, targetMode: "current", targetSessionKey: null };
 }
 
 function targetFromColumns(params: {
@@ -339,69 +182,6 @@ export async function loadVoiceWakeRoutingConfig(
     })),
     updatedAtMs: configRow.updated_at_ms,
   };
-}
-
-/** Persist normalized voice wake routing config. */
-export async function setVoiceWakeRoutingConfig(
-  config: unknown,
-  baseDir?: string,
-): Promise<VoiceWakeRoutingConfig> {
-  const normalized = normalizeVoiceWakeRoutingConfig(config);
-  const updatedAtMs = Date.now();
-  const next: VoiceWakeRoutingConfig = {
-    ...normalized,
-    updatedAtMs,
-  };
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const routingDb = getNodeSqliteKysely<VoiceWakeRoutingDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        routingDb
-          .deleteFrom("voicewake_routing_routes")
-          .where("config_key", "=", VOICEWAKE_ROUTING_CONFIG_KEY),
-      );
-      executeSqliteQuerySync(
-        db,
-        routingDb
-          .deleteFrom("voicewake_routing_config")
-          .where("config_key", "=", VOICEWAKE_ROUTING_CONFIG_KEY),
-      );
-      const defaultTarget = targetColumns(next.defaultTarget);
-      executeSqliteQuerySync(
-        db,
-        routingDb.insertInto("voicewake_routing_config").values({
-          config_key: VOICEWAKE_ROUTING_CONFIG_KEY,
-          version: 1,
-          default_target_mode: defaultTarget.targetMode,
-          default_target_agent_id: defaultTarget.targetAgentId,
-          default_target_session_key: defaultTarget.targetSessionKey,
-          updated_at_ms: updatedAtMs,
-        }),
-      );
-      if (next.routes.length > 0) {
-        executeSqliteQuerySync(
-          db,
-          routingDb.insertInto("voicewake_routing_routes").values(
-            next.routes.map((route, position) => {
-              const target = targetColumns(route.target);
-              return {
-                config_key: VOICEWAKE_ROUTING_CONFIG_KEY,
-                position,
-                trigger: route.trigger,
-                target_mode: target.targetMode,
-                target_agent_id: target.targetAgentId,
-                target_session_key: target.targetSessionKey,
-                updated_at_ms: updatedAtMs,
-              };
-            }),
-          ),
-        );
-      }
-    },
-    baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {},
-  );
-  return next;
 }
 
 type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };

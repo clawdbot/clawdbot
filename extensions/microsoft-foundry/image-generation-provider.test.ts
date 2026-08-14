@@ -175,6 +175,16 @@ describe("microsoft foundry image generation provider", () => {
     });
   });
 
+  it("passes provider-owned configuration to shared image-auth readiness", () => {
+    const cfg = buildConfig();
+
+    expect(buildMicrosoftFoundryImageGenerationProvider().isConfigured?.({ cfg })).toBe(true);
+    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
+      provider: PROVIDER_ID,
+      cfg,
+    });
+  });
+
   it("sends MAI image generation requests to the Foundry MAI endpoint with API-key auth", async () => {
     postJsonRequestMock.mockResolvedValue(
       releasedJson({

@@ -69,8 +69,10 @@ Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://v
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "vydra/grok-imagine",
+          mediaModels: {
+            image: {
+              primary: "vydra/grok-imagine",
+            },
           },
         },
       },
@@ -97,8 +99,10 @@ Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://v
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "vydra/veo3",
+          mediaModels: {
+            video: {
+              primary: "vydra/veo3",
+            },
           },
         },
       },

@@ -216,6 +216,78 @@ describe("mock OpenAI response markers", () => {
       expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("MCP_APP_CONFORMANCE_READY");
     });
   });
+
+  it("drives the Agent Plugins bundle tool and validates its environment output", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const missingTool = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [{ content: "agent plugin bundle qa check", role: "user" }],
+          stream: false,
+        }),
+      });
+      const missingToolBody = await missingTool.json();
+      expect(missingToolBody.output?.[0]?.content?.[0]?.text).toBe(
+        "AGENT_BUNDLE_MCP_FAIL tool-not-declared",
+      );
+
+      const first = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [{ content: "agent plugin bundle qa check", role: "user" }],
+          stream: false,
+          tools: [
+            {
+              name: "weather-probe__weather_probe",
+              parameters: { type: "object" },
+              type: "function",
+            },
+          ],
+        }),
+      });
+      const firstBody = await first.json();
+      expect(firstBody.output?.[0]).toMatchObject({
+        arguments: "{}",
+        name: "weather-probe__weather_probe",
+        type: "function_call",
+      });
+
+      const second = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "agent plugin bundle qa check", role: "user" },
+            {
+              output: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data",
+              type: "function_call_output",
+            },
+          ],
+          stream: false,
+        }),
+      });
+      const secondBody = await second.json();
+      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("AGENT_BUNDLE_MCP_OK");
+
+      const unexpectedOutput = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "agent plugin bundle qa check", role: "user" },
+            { output: "probe failed", type: "function_call_output" },
+          ],
+          stream: false,
+        }),
+      });
+      const unexpectedOutputBody = await unexpectedOutput.json();
+      expect(unexpectedOutputBody.output?.[0]?.content?.[0]?.text).toBe(
+        "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
+      );
+    });
+  });
 });
 
 describe("e2e mock and config helper numeric limits", () => {

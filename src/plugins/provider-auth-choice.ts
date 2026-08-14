@@ -5,7 +5,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
+import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -30,8 +30,6 @@ import type {
   ProviderAuthResult,
   ProviderPlugin,
 } from "./types.js";
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -642,12 +640,4 @@ export async function applyAuthChoiceLoadedPluginProvider(
     ...(prepared.agentModelOverride ? { agentModelOverride: prepared.agentModelOverride } : {}),
     ...(prepared.retrySelection ? { retrySelection: true } : {}),
   };
-}
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
 }

@@ -5,6 +5,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,12 +17,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,6 +42,17 @@ internal fun SessionDashboardScreen(
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val controlPage by viewModel.gatewayControlPage.collectAsState()
+  val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
+  var showingDesktop by rememberSaveable(sessionKey) { mutableStateOf(false) }
+  if (showingDesktop) {
+    // The viewer replaces this screen in place rather than pushing a shell tab, so it must
+    // claim System Back itself; the shell handler would otherwise pop the whole dashboard.
+    BackHandler { showingDesktop = false }
+    // Session summaries do not advertise an environment id, so the viewer opens
+    // its source picker instead of guessing a gateway or node association.
+    DesktopScreen(viewModel = viewModel, source = null, onBack = { showingDesktop = false })
+    return
+  }
   ClawScaffold(
     contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 6.dp),
   ) {
@@ -59,6 +75,13 @@ internal fun SessionDashboardScreen(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
+        if (desktopObserveAvailable) {
+          ClawPlainIconButton(
+            icon = Icons.Outlined.DesktopWindows,
+            contentDescription = nativeString("Open desktop"),
+            onClick = { showingDesktop = true },
+          )
+        }
         Icon(
           imageVector = Icons.Outlined.Dashboard,
           contentDescription = null,

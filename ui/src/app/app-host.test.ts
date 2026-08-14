@@ -11,7 +11,6 @@ import {
 } from "../components/command-palette-contract.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -87,9 +86,7 @@ type TestOptionalCustomElement = {
 type ShellLazySurfaceState = ShellKeyboardState & {
   browserPanelElement: TestOptionalCustomElement;
   commandPaletteElement: TestOptionalCustomElement;
-  custodianPanelElement: TestOptionalCustomElement;
   handleDeferredBrowserToggle: (event: Event) => void;
-  handleDeferredCustodianToggle: (event: Event) => void;
   handleDeferredTerminalToggle: (event: Event) => void;
   terminalPanelElement: TestOptionalCustomElement;
 };
@@ -240,7 +237,7 @@ type ShellSessionNavigationState = {
   routeState: { routeId?: RouteId };
   navigate: (routeId: RouteId) => void;
   handleCommandPaletteSlashCommand: (command: string) => void;
-  replaceChatWithCurrentSession: () => void;
+  replaceChatWithCurrentSession: () => boolean;
 };
 
 function committedRouterState(
@@ -494,11 +491,11 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "main";
     shell.routeState = { routeId: "chat" };
 
-    shell.replaceChatWithCurrentSession();
+    expect(shell.replaceChatWithCurrentSession()).toBe(false);
     expect(replace).not.toHaveBeenCalled();
 
     snapshot.phase = "connected";
-    shell.replaceChatWithCurrentSession();
+    expect(shell.replaceChatWithCurrentSession()).toBe(true);
     expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 
@@ -869,14 +866,11 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("delivers first panel toggles after their lazy modules load", async () => {
     const terminalElement = createLazyElementSpec("terminal panel");
     const browserElement = createLazyElementSpec("browser panel");
-    const custodianElement = createLazyElementSpec("custodian panel");
     const terminalToggle = vi.fn();
     const browserToggle = vi.fn();
-    const custodianToggle = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
     shell.terminalPanelElement = terminalElement;
     shell.browserPanelElement = browserElement;
-    shell.custodianPanelElement = custodianElement;
     shell.runtime = {
       context: {
         gateway: {
@@ -904,9 +898,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         if (selector === browserElement.tagName) {
           return { handleToggleRequest: browserToggle };
         }
-        if (selector === custodianElement.tagName) {
-          return { handleToggleRequest: custodianToggle };
-        }
         return null;
       },
     });
@@ -914,16 +905,13 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       detail: { dock: "right", open: true },
     });
     const browserEvent = new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT);
-    const custodianEvent = new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT);
 
     shell.handleDeferredTerminalToggle(terminalEvent);
     shell.handleDeferredBrowserToggle(browserEvent);
-    shell.handleDeferredCustodianToggle(custodianEvent);
 
     await vi.waitFor(() => {
       expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
       expect(browserToggle).toHaveBeenCalledWith(browserEvent);
-      expect(custodianToggle).toHaveBeenCalledWith(custodianEvent);
     });
   });
 

@@ -272,12 +272,19 @@ describe("plugin lifecycle lease", () => {
   it("reuses the active lease for nested lifecycle work", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-reentrant" }, async (state) => {
       const events: string[] = [];
-      await withPluginLifecycleLease({ env: state.env, leaseMs: 1_000, waitMs: 0 }, async () => {
-        events.push("outer");
-        await withPluginLifecycleLease({ env: state.env, leaseMs: 1_000, waitMs: 0 }, async () => {
-          events.push("inner");
-        });
-      });
+      await withPluginLifecycleLease(
+        { env: state.env, leaseMs: 1_000, waitMs: 0 },
+        async (outerLease) => {
+          events.push("outer");
+          await withPluginLifecycleLease({}, async (innerLease) => {
+            events.push("inner");
+            expect(innerLease).toBe(outerLease);
+            expect(innerLease.databasePath).toBe(
+              path.resolve(state.stateDir, "state", "openclaw.sqlite"),
+            );
+          });
+        },
+      );
       expect(events).toEqual(["outer", "inner"]);
     });
   });

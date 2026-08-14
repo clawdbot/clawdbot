@@ -157,26 +157,3 @@ struct SettingsCardToggleRow: View {
         }
     }
 }
-
-struct SettingsToggleRow: View {
-    let title: SettingsTextValue
-    let subtitle: SettingsTextValue?
-    @Binding var binding: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: self.$binding) {
-                self.title.text
-                    .font(.body)
-            }
-            .toggleStyle(.checkbox)
-
-            if let subtitle {
-                subtitle.text
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-}

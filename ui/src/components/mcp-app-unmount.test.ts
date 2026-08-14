@@ -36,19 +36,25 @@ class TestMcpAppUnmountTarget extends HTMLElement {
 
 class TestMcpAppUnmountOwner extends LitElement {
   key = "initial";
+  valueKey = "initial";
+  retainRenderedValue = false;
   private readonly gate = new McpAppUnmountGate(this, targetTag);
 
-  show(key: string) {
+  show(key: string, valueKey = key, retainRenderedValue = false) {
     this.key = key;
+    this.valueKey = valueKey;
+    this.retainRenderedValue = retainRenderedValue;
     this.requestUpdate();
   }
 
   override render() {
     const value =
-      this.key === "initial"
+      this.valueKey === "initial"
         ? staticHtml`<${staticTargetTag}></${staticTargetTag}><span data-value="initial">initial</span>`
-        : html`<span data-value=${this.key}>${this.key}</span>`;
-    return this.gate.render(this.key, value, () => [this.renderRoot]);
+        : html`<span data-value=${this.valueKey}>${this.valueKey}</span>`;
+    return this.gate.render(this.key, value, () => [this.renderRoot], {
+      retainRenderedValue: this.retainRenderedValue,
+    });
   }
 }
 
@@ -86,6 +92,24 @@ afterEach(() => {
 });
 
 describe("McpAppUnmountGate", () => {
+  it("retains the current value for an unchanged explicit owner", async () => {
+    const owner = document.createElement(ownerTag) as TestMcpAppUnmountOwner;
+    document.body.append(owner);
+    await owner.updateComplete;
+    const target = owner.shadowRoot!.querySelector(targetTag);
+
+    owner.show("initial", "pending", true);
+    await owner.updateComplete;
+    expect(owner.shadowRoot!.querySelector(targetTag)).toBe(target);
+    expect(owner.shadowRoot!.querySelector("[data-value='pending']")).toBeNull();
+    expect(teardown).not.toHaveBeenCalled();
+
+    owner.show("initial", "resolved");
+    await owner.updateComplete;
+    expect(owner.shadowRoot!.querySelector(targetTag)).toBeNull();
+    expect(owner.shadowRoot!.querySelector("[data-value='resolved']")).not.toBeNull();
+  });
+
   it("keeps the old subtree connected and coalesces replacements until teardown resolves", async () => {
     const pending = deferred();
     teardown.mockReturnValue(pending.promise);

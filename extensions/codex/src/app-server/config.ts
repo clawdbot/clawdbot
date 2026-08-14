@@ -1,5 +1,6 @@
 // Codex helper facade keeps the existing config import surface stable.
 export {
+  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config-contracts.js";

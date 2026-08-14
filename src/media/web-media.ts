@@ -17,7 +17,7 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -40,8 +40,9 @@ import { readRemoteMediaBuffer } from "./fetch.js";
 import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
-  getDefaultLocalRoots,
+  getDefaultLocalRootsCore,
   LocalMediaAccessError,
+  readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
@@ -52,7 +53,7 @@ import {
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
 
-export { getDefaultLocalRoots, LocalMediaAccessError };
+export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
 
 /** Loaded media bytes plus resolved MIME kind and filename metadata for outbound/plugin callers. */
@@ -1029,7 +1030,7 @@ async function loadWebMediaInternal(
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
-  if (mediaUrl.startsWith("file://")) {
+  if (/^file:/iu.test(mediaUrl)) {
     try {
       mediaUrl = safeFileURLToPath(mediaUrl);
     } catch (err) {
@@ -1185,7 +1186,7 @@ async function loadWebMediaInternal(
   }
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
-  if (!(sandboxValidated || localRoots === "any")) {
+  if (readFileOverride && !(sandboxValidated || localRoots === "any")) {
     await assertLocalMediaAllowed(mediaUrl, localRoots, { inboundRoots });
   }
 
@@ -1206,12 +1207,10 @@ async function loadWebMediaInternal(
     data = await readOutboundMediaFile(readFileOverride, mediaUrl, { maxBytes: sourceReadCap });
   } else {
     try {
-      data = (
-        await readLocalFileSafely({
-          filePath: mediaUrl,
-          maxBytes: sourceReadCap,
-        })
-      ).buffer;
+      data = await readLocalMediaFile(mediaUrl, localRoots, {
+        ...(inboundRoots ? { inboundRoots } : {}),
+        maxBytes: sourceReadCap,
+      });
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
@@ -1228,6 +1227,15 @@ async function loadWebMediaInternal(
           throw new LocalMediaAccessError(
             "not-file",
             `Local media path is not a file: ${mediaUrl}`,
+            { cause: err },
+          );
+        }
+        if (err.code === "path-mismatch") {
+          // fs-safe reports pre-open identity drift as path-mismatch; keep the
+          // product-facing classification as an access denial, not a bad path.
+          throw new LocalMediaAccessError(
+            "path-not-allowed",
+            `Local media path is not under an allowed directory: ${mediaUrl}`,
             { cause: err },
           );
         }

@@ -208,7 +208,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.completed).toBe(true);
   });
 
-  it("resubscribes an evicted session before compacting without displacing its sibling", async () => {
+  it("compacts a warm session without displacing its independently retained sibling", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
@@ -229,19 +229,13 @@ describe("maybeCompactCodexAppServerSession", () => {
       compacted: true,
     });
 
-    expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/resume",
-      "thread/compact/start",
-      "thread/unsubscribe",
-    ]);
-    expect(fake.request).toHaveBeenCalledWith(
-      "thread/resume",
-      { threadId: "thread-1", excludeTurns: true },
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
+    expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/compact/start"]);
+    await expect(
+      consumeCodexAppServerLiveThread(fake.client, "thread-1", "config-thread-1"),
+    ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-1" }));
     await expect(
       consumeCodexAppServerLiveThread(fake.client, "thread-2", "config-thread-2"),
-    ).resolves.toBe(true);
+    ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-2" }));
   });
 
   it("keeps an owned thread subscribed when a sibling finishes during compaction", async () => {
@@ -258,14 +252,48 @@ describe("maybeCompactCodexAppServerSession", () => {
     fake.completeCompaction();
 
     await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
-    expect(fake.request).toHaveBeenCalledWith(
+    expect(fake.request).not.toHaveBeenCalledWith(
       "thread/unsubscribe",
       { threadId: "thread-1" },
-      { timeoutMs: 5_000 },
+      expect.anything(),
     );
     await expect(
+      consumeCodexAppServerLiveThread(fake.client, "thread-1", "config-thread-1"),
+    ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-1" }));
+    await expect(
       consumeCodexAppServerLiveThread(fake.client, "thread-2", "config-thread-2"),
-    ).resolves.toBe(true);
+    ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-2" }));
+  });
+
+  it("releases an obsolete physical owner when compaction migrates the same native thread", async () => {
+    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({ clientId: "client-before-compaction" });
+    const pending = startCompaction(sessionFile);
+    await vi.waitFor(() => {
+      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    });
+
+    seedCodexTestBinding(sessionFile, {
+      threadId: "thread-1",
+      clientId: "client-after-compaction",
+      cwd: tempDir,
+    });
+    fake.completeCompaction();
+
+    await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(fake.request.mock.calls.filter(([method]) => method === "thread/unsubscribe")).toEqual([
+      [
+        "thread/unsubscribe",
+        { threadId: "thread-1" },
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      ],
+    ]);
+    await expect(consumeCodexAppServerLiveThread(fake.client, "thread-1")).resolves.toBeUndefined();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      clientId: "client-after-compaction",
+    });
   });
 
   it("preserves an incognito thread's separately owned live subscription", async () => {
@@ -539,6 +567,70 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(
       (await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection,
     ).toBeUndefined();
+  });
+
+  it("clears bootstrap projection before manual native compaction rewrites thread history", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "fingerprint-1",
+        },
+      },
+    });
+
+    await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+      ok: true,
+      compacted: true,
+    });
+    expect(
+      (await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection,
+    ).toBeUndefined();
+  });
+
+  it("preserves projected context and warm ownership when native compaction is rejected", async () => {
+    const fake = createFakeCodexClient();
+    fake.request.mockRejectedValueOnce(
+      new CodexAppServerRpcError(
+        { code: -32_600, message: "compaction temporarily unavailable" },
+        "thread/compact/start",
+      ),
+    );
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const projection = {
+      schemaVersion: 1 as const,
+      mode: "thread_bootstrap" as const,
+      epoch: "epoch-1",
+      fingerprint: "fingerprint-1",
+    };
+    const sessionFile = await writeTestBinding({
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection,
+      },
+    });
+
+    await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "compaction temporarily unavailable",
+    });
+    expect((await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection).toEqual(
+      projection,
+    );
+    expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/compact/start"]);
+    await expect(consumeCodexAppServerLiveThread(fake.client, "thread-1")).resolves.toEqual(
+      expect.objectContaining({ release: expect.any(Function) }),
+    );
   });
 
   it("preserves projection when aborted before guarded native compaction", async () => {
@@ -1709,6 +1801,79 @@ describe("maybeCompactCodexAppServerSession", () => {
         ],
       },
     );
+    warn.mockRestore();
+  });
+
+  it("bounds ignored compaction override warnings through the compact entry point", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
+
+    async function runWithIgnoredOverrides(index: number): Promise<void> {
+      const agentId = `cap-${index}`;
+      await maybeCompactCodexAppServerSessionImpl(
+        {
+          sessionId: `session-${index}`,
+          sessionKey: `agent:${agentId}:session-${index}`,
+          sessionFile: path.join(tempDir, `${agentId}.jsonl`),
+          workspaceDir: tempDir,
+          trigger: "budget",
+          config: {
+            agents: {
+              list: [
+                {
+                  id: agentId,
+                  compaction: {
+                    model: "openai/gpt-5.4-mini",
+                    provider: "custom-summary",
+                  },
+                },
+              ],
+            },
+          },
+        },
+        { bindingStore: testCodexAppServerBindingStore },
+      );
+    }
+
+    // Fill exactly the advertised 4,096-entry cap: every distinct key warns once.
+    for (let index = 0; index < 4_096; index += 1) {
+      await runWithIgnoredOverrides(index);
+      if ((index + 1) % 256 === 0) {
+        // Thousands of resolved promises otherwise starve Vitest timeout and
+        // progress callbacks without increasing real LRU-cap coverage.
+        await flushAsyncTasks(1);
+      }
+    }
+    expect(warn).toHaveBeenCalledTimes(4_096);
+
+    // At exactly 4,096 entries the oldest key is still retained, so a duplicate stays suppressed.
+    await runWithIgnoredOverrides(0);
+    expect(warn).toHaveBeenCalledTimes(4_096);
+
+    // The 4,097th distinct key pushes past the cap and evicts the LRU entry. The duplicate
+    // check on key 0 refreshed its recency, so the evicted key is 1.
+    await runWithIgnoredOverrides(4_096);
+    expect(warn).toHaveBeenCalledTimes(4_097);
+
+    // The evicted key warns again on reappearance.
+    await runWithIgnoredOverrides(1);
+    expect(warn).toHaveBeenCalledTimes(4_098);
+
+    // A recent duplicate stays suppressed.
+    await runWithIgnoredOverrides(4_096);
+    expect(warn).toHaveBeenCalledTimes(4_098);
+    expect(warn.mock.calls.at(-1)).toEqual([
+      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+      {
+        sessionId: "session-1",
+        sessionKey: "agent:cap-1:session-1",
+        ignoredConfig: [
+          "agents.list.cap-1.compaction.model",
+          "agents.list.cap-1.compaction.provider",
+        ],
+      },
+    ]);
+    info.mockRestore();
     warn.mockRestore();
   });
 

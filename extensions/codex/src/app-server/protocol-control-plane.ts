@@ -9,6 +9,7 @@ export type CodexPluginSummary = {
   installed: boolean;
   enabled: boolean;
   installPolicy?: string;
+  mustShowInstallationInterstitial?: boolean | null;
   authPolicy?: string;
   availability?: string;
   interface?: JsonValue;

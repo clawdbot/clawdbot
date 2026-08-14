@@ -15,7 +15,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   clearPluginOwnedSessionState,
-  listSessionEntries,
+  listSessionEntriesCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
@@ -109,7 +109,7 @@ function loadSessionStore(
   _options?: { skipCache?: boolean },
 ): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),

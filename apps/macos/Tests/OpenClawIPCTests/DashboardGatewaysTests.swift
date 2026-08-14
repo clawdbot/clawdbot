@@ -70,11 +70,11 @@ struct DashboardGatewayCatalogTests {
         #expect(entries[0].name == "127.0.0.1")
     }
 
-    @Test @MainActor func `catalog maps only connected control state to healthy`() {
+    @Test @MainActor func `catalog maps live control health`() {
         #expect(DashboardGatewayCatalog.primaryHealth(for: .connected) == .ok)
         #expect(DashboardGatewayCatalog.primaryHealth(for: .disconnected) == .unknown)
         #expect(DashboardGatewayCatalog.primaryHealth(for: .connecting) == .unknown)
-        #expect(DashboardGatewayCatalog.primaryHealth(for: .degraded("offline")) == .unknown)
+        #expect(DashboardGatewayCatalog.primaryHealth(for: .degraded("offline")) == .error)
     }
 
     @Test func `local catalog does not deduplicate a retained remote profile`() throws {
@@ -142,7 +142,15 @@ struct DashboardGatewaysBridgeTests {
         #expect(controller._testTLSParams == params)
         #expect(DashboardWindowController.isExpectedTLSAuthority(
             host: "gateway.example",
+            port: 0,
+            dashboardURL: url))
+        #expect(DashboardWindowController.isExpectedTLSAuthority(
+            host: "gateway.example",
             port: 443,
+            dashboardURL: url))
+        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+            host: "gateway.example",
+            port: 8443,
             dashboardURL: url))
         #expect(!DashboardWindowController.isExpectedTLSAuthority(
             host: "other.example",

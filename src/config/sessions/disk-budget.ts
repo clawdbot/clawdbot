@@ -20,7 +20,7 @@ import {
   SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
-import { resolveSessionFilePath } from "./paths.js";
+import { resolveSessionFilePathCore } from "./paths.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
@@ -151,7 +151,7 @@ function resolveSessionTranscriptPathForEntry(params: {
     return null;
   }
   try {
-    const resolved = resolveSessionFilePath(params.entry.sessionId, params.entry, {
+    const resolved = resolveSessionFilePathCore(params.entry.sessionId, params.entry, {
       sessionsDir: params.sessionsDir,
     });
     const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);

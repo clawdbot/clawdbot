@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Bootstrap, RunnerSelection, Snapshot } from "./ui-types.js";
+import type { Bootstrap, RunnerSelection } from "./ui-types.js";
 
 const httpMock = vi.hoisted(() => {
   class QaLabHttpError extends Error {
@@ -105,7 +106,13 @@ function createBootstrap(selection: RunnerSelection): Bootstrap {
 
 async function mountRunner(
   selection: RunnerSelection,
-  snapshot: Snapshot = { conversations: [], events: [], messages: [], threads: [] },
+  snapshot: QaBusStateSnapshot = {
+    conversations: [],
+    cursor: 0,
+    events: [],
+    messages: [],
+    threads: [],
+  },
 ) {
   let bootstrap = createBootstrap(selection);
   httpMock.getJson.mockImplementation(async (url: string) => {
@@ -215,12 +222,15 @@ describe("QA Lab runner browser interactions", () => {
       },
       {
         conversations: [{ accountId: "default", id: "qa-room", kind: "channel" }],
+        cursor: 0,
         events: [],
         messages: [],
         threads: [
           {
             accountId: "default",
             conversationId: "qa-room",
+            createdAt: 0,
+            createdBy: "qa-operator",
             id: "owned-thread",
             title: "Owned thread",
           },

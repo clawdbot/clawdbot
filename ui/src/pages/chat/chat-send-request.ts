@@ -1,6 +1,7 @@
-import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -21,6 +22,7 @@ export async function requestChatSend(
     queueMode?: QueueMode;
     replyToId?: string;
     expectedLeafEntryId?: string | null;
+    expectedRunId?: string;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -41,6 +43,7 @@ export async function requestChatSend(
     ...(params.expectedLeafEntryId !== undefined
       ? { expectedLeafEntryId: params.expectedLeafEntryId }
       : {}),
+    ...(params.expectedRunId ? { expectedRunId: params.expectedRunId } : {}),
     idempotencyKey: params.runId,
     attachments: buildChatApiAttachments(params.attachments),
   });
@@ -114,6 +117,19 @@ export async function requestSkillWorkshopRevisionChatSend(
     targetAgentId?: string;
   },
 ): Promise<ChatSendAck> {
+  if (
+    !canCallGatewayMethod(
+      {
+        client: state.client,
+        hello: state.hello,
+        phase: state.connected ? "connected" : "offline",
+      },
+      "skills.proposals.requestRevision",
+      "operator.admin",
+    )
+  ) {
+    throw new Error("Skill Workshop revision requests require operator.admin access.");
+  }
   const routing = resolveChatSendRouting(state, {
     sessionKey: params.sessionKey,
     agentId: params.targetAgentId,

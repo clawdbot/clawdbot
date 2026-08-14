@@ -38,13 +38,19 @@ export type TestSessionsPage = HTMLElement & {
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
   deleteAllArchived: () => Promise<void>;
   stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
-  rememberCustomGroup: (name: string) => Promise<void>;
+  rememberCustomGroup: (name: string) => Promise<unknown>;
+  requestNewCategory: (sessionKey?: string) => Promise<void>;
   openSessionMenu: (
     row: GatewaySessionRow,
     position: { x: number; y: number },
     trigger: HTMLElement | null,
   ) => void;
-  patchSession: (key: string, patch: { archived?: boolean; pinned?: boolean }) => Promise<unknown>;
+  patchSession: (
+    key: string,
+    patch: { archived?: boolean; pinned?: boolean },
+    scope?: unknown,
+    expectedSessionId?: string,
+  ) => Promise<unknown>;
   archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
   forkSession: (key: string) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;

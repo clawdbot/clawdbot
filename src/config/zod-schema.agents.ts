@@ -22,11 +22,12 @@ const AgentEntryConfigSchema = z.preprocess(
     }
     return value;
   },
-  AgentEntrySchema.omit({ id: true }),
+  AgentEntrySchema.omit({ id: true }).extend({ default: z.boolean().optional() }),
 );
 
 export const AgentsSchema = z
   .object({
+    ownership: z.literal("explicit").optional(),
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     entries: z
       .record(
@@ -37,13 +38,35 @@ export const AgentsSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const agents = Object.values(value.entries ?? {});
-    const defaultCount = agents.filter((agent) => agent.default === true).length;
-    if (defaultCount !== 1) {
+    const entries = Object.entries(value.entries ?? {});
+    if (entries.length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["entries"],
-        message: `agents.entries must contain exactly one default=true entry (found ${defaultCount})`,
+        message: "agents.entries must contain at least one configured agent",
+      });
+    }
+    const marked = entries.filter(([, entry]) => entry.default === true);
+    if (marked.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries"],
+        message: `agents.entries must contain at most one default=true entry (found ${marked.length})`,
+      });
+    }
+    if (value.ownership === "explicit" && marked.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownership"],
+        message: "agents.ownership=explicit cannot be combined with a legacy default=true marker",
+      });
+    }
+    if (entries.length > 1 && marked.length === 0 && value.ownership !== "explicit") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownership"],
+        message:
+          'multi-agent rosters require agents.ownership="explicit" or one legacy default=true marker; add agents.ownership="explicit" or run openclaw doctor',
       });
     }
   })

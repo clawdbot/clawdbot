@@ -150,7 +150,10 @@ export type GatewayReloadHandlerParams = {
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
-    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+    beforeReplace: (
+      channels: ReadonlySet<ChannelKind>,
+      accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
+    ) => Promise<void>;
     commitRuntime: () => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
@@ -170,11 +173,13 @@ export type GatewayReloadHandlerParams = {
   onCronRestart?: () => void;
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;
+  /** Revalidate successor-owned startup state before the current listener is closed. */
+  assertRestartReady?: () => Promise<void> | void;
 };
 
 export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
-  "createHealthMonitor" | "logReload"
+  "assertRestartReady" | "createHealthMonitor" | "logReload"
 > & {
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;

@@ -1,8 +1,10 @@
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { normalizeToolName } from "../agents/tool-policy.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
@@ -28,12 +30,13 @@ type CachedScopedTools = {
   workspaceDir: string | undefined;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
-  configRef: OpenClawConfig;
-  time: number;
 };
 
 type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> & {
   cfg: OpenClawConfig;
+  authProfileStore?: AuthProfileStore;
+  authProfileStoreAgentDir?: string;
+  grantToken?: string;
   senderIsOwner: boolean | undefined;
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
@@ -48,13 +51,13 @@ function resolveMediatedNativeTools(
   if (mode === "exact") {
     return new Set(
       (toolsAllow ?? [])
-        .map((name) => normalizeToolName(name))
+        .map((name) => normalizeToolPolicyName(name))
         .filter((name) => NATIVE_TOOL_EXCLUDE.has(name)),
     );
   }
   if (
     toolsAllow === undefined ||
-    toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
+    toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
   ) {
     return new Set();
   }
@@ -85,9 +88,15 @@ function resolveMcpLoopbackTools(
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const { toolsAllow: _toolsAllow, ...scopeParams } = params;
+  const {
+    toolsAllow: _toolsAllow,
+    authProfileStoreAgentDir,
+    grantToken: _grantToken,
+    ...scopeParams
+  } = params;
   const scoped = resolveGatewayScopedTools({
     ...scopeParams,
+    agentDir: authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
     surface: "loopback",
     excludeToolNames,
@@ -134,10 +143,10 @@ function applyGrantToolsAllow(
   if (!toolsAllow) {
     return tools;
   }
-  const allowed = new Set(toolsAllow.map((name) => normalizeToolName(name)).filter(Boolean));
+  const allowed = new Set(toolsAllow.map((name) => normalizeToolPolicyName(name)).filter(Boolean));
   return tools.filter((tool) => {
     const name = readMcpLoopbackToolName(tool);
-    return name !== undefined && allowed.has(normalizeToolName(name));
+    return name !== undefined && allowed.has(normalizeToolPolicyName(name));
   });
 }
 
@@ -161,14 +170,18 @@ function applyPolicyToolsAllow(
 
 /** Short-lived cache for loopback tool lists keyed by session/channel context. */
 export class McpLoopbackToolCache {
-  #entries = new Map<string, CachedScopedTools>();
+  #entries = new DirectoryCache<CachedScopedTools>(TOOL_CACHE_TTL_MS, TOOL_CACHE_MAX_ENTRIES);
+  // Revocation needs the config scopes where one grant may have cached tools.
+  #grantConfigScopes = new Map<string, Set<OpenClawConfig>>();
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
     // Callers differing only in capabilities must not share cached tool lists.
     const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
     const cacheKey = [
+      params.grantToken ?? "",
       params.sessionKey,
       params.runtimePolicySessionKey ?? "",
+      params.runtimePolicyAgentId ?? "",
       params.agentId ?? "",
       params.sessionId ?? "",
       params.runId ?? "",
@@ -229,16 +242,8 @@ export class McpLoopbackToolCache {
           ? "non-owner"
           : "unknown-owner",
     ].join("\u0000");
-    const now = Date.now();
-    for (const [key, entry] of this.#entries) {
-      if (now - entry.time >= TOOL_CACHE_TTL_MS) {
-        this.#entries.delete(key);
-      }
-    }
-    const cached = this.#entries.get(cacheKey);
-    // Config object identity is part of the cache contract so explicit gateway
-    // reloads invalidate tool scope and schema without filesystem polling.
-    if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
+    const cached = this.#entries.get(cacheKey, params.cfg);
+    if (cached) {
       return cached;
     }
 
@@ -248,17 +253,31 @@ export class McpLoopbackToolCache {
       workspaceDir: next.workspaceDir,
       tools: next.tools,
       toolSchema: buildMcpToolSchema(next.tools),
-      configRef: params.cfg,
-      time: now,
     };
-    this.#entries.set(cacheKey, nextEntry);
-    while (this.#entries.size > TOOL_CACHE_MAX_ENTRIES) {
-      const oldestKey = this.#entries.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      this.#entries.delete(oldestKey);
+    this.#entries.set(cacheKey, nextEntry, params.cfg);
+    if (params.grantToken) {
+      const scopes = this.#grantConfigScopes.get(params.grantToken) ?? new Set<OpenClawConfig>();
+      scopes.add(params.cfg);
+      this.#grantConfigScopes.set(params.grantToken, scopes);
     }
     return nextEntry;
+  }
+
+  evictGrant(token: string): boolean {
+    const scopes = this.#grantConfigScopes.get(token);
+    if (!scopes) {
+      return false;
+    }
+    const cacheKeyPrefix = `${token}\u0000`;
+    for (const cfg of scopes) {
+      this.#entries.clearMatching((cacheKey) => cacheKey.startsWith(cacheKeyPrefix), cfg);
+    }
+    this.#grantConfigScopes.delete(token);
+    return true;
+  }
+
+  clear(): void {
+    this.#entries.clear();
+    this.#grantConfigScopes.clear();
   }
 }

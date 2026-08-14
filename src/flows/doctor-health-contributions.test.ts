@@ -13,9 +13,20 @@ import { resolveDoctorContributionHealthChecks } from "./doctor-health-contribut
 import {
   createDoctorHealthContribution,
   resolveDoctorHealthContributions,
+  runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
+
+// This suite's SecretRef migration assertion uses a core model credential. Registry owner suites
+// cover plugin-derived targets, so avoid scanning every bundled plugin for this core-only fixture.
+vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/target-registry-data.js")>();
+  return {
+    ...actual,
+    getSecretTargetRegistry: actual.getCoreSecretTargetRegistry,
+  };
+});
 
 const mocks = vi.hoisted(() => ({
   isDefaultInstallIdentity: vi.fn(() => true),
@@ -28,12 +39,18 @@ const mocks = vi.hoisted(() => ({
     migrated: 0,
     warnings: [],
   }),
+  maybeMigrateModelCatalogCredentials: vi.fn(async () => ({
+    detected: 0,
+    migrated: 0,
+    warnings: [],
+  })),
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
+  noteSharedAuthStoreStatus: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
   noteWebFetchProxyDiagnostic: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
@@ -82,8 +99,19 @@ const mocks = vi.hoisted(() => ({
   maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
-  resolveDefaultAgentId: vi.fn(() => "default"),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
+  listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
+  listAgentEntries: vi.fn(() => [{ id: "default" }]),
+  tryResolveSoleAgentId: vi.fn<(_cfg: OpenClawConfig) => string | undefined>(() => "default"),
+  resolveAgentWorkspaceDir: vi.fn<(_cfg: OpenClawConfig, agentId: string) => string>(
+    () => "/tmp/openclaw-workspace",
+  ),
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  tryResolveSystemAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  resolveDefaultAgentId: vi.fn<(_cfg: OpenClawConfig) => string>(() => "default"),
   resolveAgentContextLimits: vi.fn(
     (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
       cfg.agents?.defaults?.contextLimits ?? {},
@@ -107,8 +135,8 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
-  collectWorkspaceBackupTip: vi.fn((): string | undefined => undefined),
-  shouldSuggestMemorySystem: vi.fn(async () => false),
+  collectWorkspaceBackupTip: vi.fn<(workspaceDir: string) => string | undefined>(() => undefined),
+  shouldSuggestMemorySystem: vi.fn<(workspaceDir: string) => Promise<boolean>>(async () => false),
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatCadenceMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
@@ -157,10 +185,18 @@ const mocks = vi.hoisted(() => ({
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
   isSystemdUserServiceAvailable: vi.fn(async () => true),
-  readSystemdUserLingerStatus: vi.fn(async () => ({ user: "alice", linger: "no" as const })),
+  readSystemdUserLingerStatus: vi.fn(
+    async (_params: {
+      env: Record<string, string | undefined>;
+      user?: string;
+    }): Promise<{ user: string; linger: "yes" | "no" } | null> => ({
+      user: "alice",
+      linger: "no",
+    }),
+  ),
+  resolveSystemdUserServiceAccount: vi.fn(() => "alice" as string | null),
   gatewayServiceIsLoaded: vi.fn(async () => true),
   resolveGatewayService: vi.fn(),
-  getSkillCuratorDoctorWarning: vi.fn(),
 }));
 
 vi.mock("../config/paths.js", async () => {
@@ -181,10 +217,6 @@ vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
 
 vi.mock("./bundled-health-checks.js", () => ({
   registerBundledHealthChecks: mocks.registerBundledHealthChecks,
-}));
-
-vi.mock("../skills/workshop/curator.js", () => ({
-  getSkillCuratorDoctorWarning: mocks.getSkillCuratorDoctorWarning,
 }));
 
 vi.mock("./doctor-repair-flow.js", () => ({
@@ -225,6 +257,10 @@ vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
   maybeMigrateLegacyPluginModelCatalogs: mocks.maybeMigrateLegacyPluginModelCatalogs,
 }));
 
+vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
+  maybeMigrateModelCatalogCredentials: mocks.maybeMigrateModelCatalogCredentials,
+}));
+
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: mocks.maybeRepairGatewayDaemon,
 }));
@@ -243,6 +279,7 @@ vi.mock("../daemon/systemd.js", async (importOriginal) => {
     ...actual,
     isSystemdUserServiceAvailable: mocks.isSystemdUserServiceAvailable,
     readSystemdUserLingerStatus: mocks.readSystemdUserLingerStatus,
+    resolveSystemdUserServiceAccount: mocks.resolveSystemdUserServiceAccount,
   };
 });
 
@@ -271,6 +308,7 @@ vi.mock("../commands/doctor-auth.js", () => ({
   collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
   noteAuthProfileHealth: mocks.noteAuthProfileHealth,
   noteLegacyCodexProviderOverride: mocks.noteLegacyCodexProviderOverride,
+  noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
 }));
 
 vi.mock("../commands/doctor-memory-search.js", () => ({
@@ -349,10 +387,16 @@ vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
   detectLegacyClawdBrowserProfileResidue: mocks.detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
+  maybeRepairOwnedChromeExtensionNativeHosts: mocks.maybeRepairOwnedChromeExtensionNativeHosts,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: mocks.listAgentIds,
+  listAgentEntries: mocks.listAgentEntries,
+  tryResolveSoleAgentId: mocks.tryResolveSoleAgentId,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  tryResolveConfiguredAgentWorkspaceDir: mocks.tryResolveConfiguredAgentWorkspaceDir,
+  tryResolveSystemAgentWorkspaceDir: mocks.tryResolveSystemAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentContextLimits: mocks.resolveAgentContextLimits,
 }));
@@ -370,6 +414,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
@@ -588,6 +633,7 @@ describe("doctor health contributions", () => {
     mocks.noteAuthProfileHealth.mockClear();
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteLegacyCodexProviderOverride.mockClear();
+    mocks.noteSharedAuthStoreStatus.mockClear();
     mocks.noteMemorySearchHealth.mockClear();
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.noteWebFetchProxyDiagnostic.mockClear();
@@ -663,6 +709,16 @@ describe("doctor health contributions", () => {
     });
     mocks.resolveAgentWorkspaceDir.mockReset();
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
+    mocks.tryResolveConfiguredAgentWorkspaceDir.mockReset();
+    mocks.tryResolveConfiguredAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
+    mocks.tryResolveSystemAgentWorkspaceDir.mockReset();
+    mocks.tryResolveSystemAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
+    mocks.listAgentIds.mockReset();
+    mocks.listAgentIds.mockReturnValue(["default"]);
+    mocks.listAgentEntries.mockReset();
+    mocks.listAgentEntries.mockReturnValue([{ id: "default" }]);
+    mocks.tryResolveSoleAgentId.mockReset();
+    mocks.tryResolveSoleAgentId.mockReturnValue("default");
     mocks.resolveDefaultAgentId.mockReset();
     mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentContextLimits.mockReset();
@@ -757,6 +813,8 @@ describe("doctor health contributions", () => {
     mocks.isSystemdUserServiceAvailable.mockResolvedValue(true);
     mocks.readSystemdUserLingerStatus.mockReset();
     mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "alice", linger: "no" });
+    mocks.resolveSystemdUserServiceAccount.mockReset();
+    mocks.resolveSystemdUserServiceAccount.mockReturnValue("alice");
     mocks.replaceConfigFile.mockReset();
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.applyWizardMetadata.mockReset();
@@ -776,6 +834,75 @@ describe("doctor health contributions", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("continues after an advisory doctor contribution throws", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const contributions = [
+      createDoctorHealthContribution({
+        id: "doctor:test-failure",
+        label: "Test failure",
+        run: async () => {
+          throw new Error("media migration required");
+        },
+      }),
+      createDoctorHealthContribution({
+        id: "doctor:test-later",
+        label: "Test later",
+        run: laterRun,
+      }),
+    ];
+    const ctx = {
+      cfg: {},
+      cfgForPersistence: {},
+      configResult: { cfg: {} },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+
+    await runDoctorHealthContributionList(ctx, contributions);
+
+    expect(laterRun).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith(
+      "doctor:test-failure run failed: media migration required",
+      "Doctor warnings",
+    );
+  });
+
+  it("rejects a failed initial config write before later work runs", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const cfg = { gateway: { mode: "invalid" } } as unknown as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: { cfg, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("Config validation failed"));
+
+    await expect(
+      runDoctorHealthContributionList(ctx, [
+        requireDoctorContribution("doctor:write-config-migrations"),
+        createDoctorHealthContribution({
+          id: "doctor:test-later",
+          label: "Test later",
+          run: laterRun,
+        }),
+      ]),
+    ).rejects.toThrow("Config validation failed");
+
+    expect(laterRun).not.toHaveBeenCalled();
+    expect(ctx.configResultWriteCommitted).not.toBe(true);
+    expect(ctx.cfgForPersistence).toEqual(cfg);
   });
 
   it("keeps legacy plugin manifest lint opt-in for structured findings", async () => {
@@ -830,6 +957,22 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("invalidates retained plugin metadata after rewriting a legacy manifest", async () => {
+    mocks.maybeRepairLegacyPluginManifestContracts.mockResolvedValueOnce(true);
+    const invalidatePluginMetadataSnapshot = vi.fn();
+    const contribution = requireDoctorContribution("doctor:legacy-plugin-manifests");
+    const ctx = {
+      cfg: {},
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: buildDoctorPrompter(true),
+      invalidatePluginMetadataSnapshot,
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(invalidatePluginMetadataSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("runs release configured plugin install repair before plugin registry and final config writes", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
@@ -839,6 +982,9 @@ describe("doctor health contributions", () => {
       ids.indexOf("doctor:plugin-registry"),
     );
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
+    expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(
+      ids.indexOf("doctor:active-tool-schema-warnings"),
+    );
   });
 
   it("repairs canonical session rows before downstream agent-state checks", () => {
@@ -899,8 +1045,10 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("writes a successful config migration once across both write phases", async () => {
-    const cfg = { gateway: { mode: "local" } } as OpenClawConfig;
+  it("persists migrated Discord config once across both write phases", async () => {
+    const cfg = {
+      channels: { discord: { streaming: { mode: "partial" } } },
+    } as OpenClawConfig;
     const ctx = {
       cfg,
       cfgForPersistence: structuredClone(cfg),
@@ -917,6 +1065,9 @@ describe("doctor health contributions", () => {
     await requireDoctorContribution("doctor:write-config").run(ctx);
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: cfg }),
+    );
     expect(ctx.configResultWriteCommitted).toBe(true);
     expect(ctx.cfgForPersistence).toEqual(ctx.cfg);
   });
@@ -947,6 +1098,51 @@ describe("doctor health contributions", () => {
     expect(ctx.configResultWriteCommitted).not.toBe(true);
     expect(ctx.cfgForPersistence).toEqual(cfg);
     expect(mocks.collectActiveToolSchemaProjectionWarnings).not.toHaveBeenCalled();
+  });
+
+  it("defers every config write after a cron ownership handoff refusal", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const cfg = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: { cfg, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.replaceConfigFile.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Config write refused: cannot inspect cron ownership. Run "openclaw doctor --fix", then retry.',
+        ),
+        { code: "CONFIG_WRITE_REJECTED", refusal: "cron-owner-safety" },
+      ),
+    );
+
+    await runDoctorHealthContributionList(ctx, [
+      requireDoctorContribution("doctor:write-config-migrations"),
+      createDoctorHealthContribution({
+        id: "doctor:test-later",
+        label: "Test later",
+        run: laterRun,
+      }),
+    ]);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(laterRun).not.toHaveBeenCalled();
+    expect(ctx.configResultWriteCommitted).not.toBe(true);
+    expect(ctx.configWriteDeferredByCronOwnership).toBe(true);
+    expect(ctx.cfgForPersistence).toEqual(cfg);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("preserving any retained legacy owner"),
+      "Doctor warnings",
+    );
   });
 
   it("skips read-scope gateway probes when gateway health only proved reachability", async () => {
@@ -1093,7 +1289,9 @@ describe("doctor health contributions", () => {
       changes: ["Installed configured plugin matrix."],
       warnings: [],
       touchedConfig: true,
+      pluginInventoryChanged: true,
     });
+    const invalidatePluginMetadataSnapshot = vi.fn();
     const contribution = requireDoctorContribution("doctor:release-configured-plugin-installs");
     const ctx = {
       cfg: {},
@@ -1101,6 +1299,7 @@ describe("doctor health contributions", () => {
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       env: {},
+      invalidatePluginMetadataSnapshot,
     } as unknown as Parameters<(typeof contribution)["run"]>[0];
 
     await contribution.run(ctx);
@@ -1115,6 +1314,7 @@ describe("doctor health contributions", () => {
       "Doctor changes",
     );
     expect(ctx.cfg.meta?.lastTouchedVersion).toBe("2026.5.2-test");
+    expect(invalidatePluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
   it("keeps legacy parent writable release repairs old-parent-readable", async () => {
@@ -1170,27 +1370,6 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
-  });
-
-  it("reports a wedged skill curator as a warning finding", async () => {
-    mocks.getSkillCuratorDoctorWarning.mockReturnValueOnce(
-      "skill curator has not completed a sweep since 2026-01-01 — check gateway logs",
-    );
-    const contribution = requireDoctorContribution("doctor:skill-curator");
-    const check = contribution.healthChecks[0] as HealthCheck;
-    const findings = await check.detect({
-      cfg: {},
-      mode: "doctor",
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    });
-
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/skill-curator",
-        severity: "warning",
-        target: "skill-curator",
-      }),
-    ]);
   });
 
   it("keeps workspace status opt-in for structured lint selection", async () => {
@@ -1469,7 +1648,11 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      readOnly: true,
+      providerDiscoveryProviderIds: [],
+    });
   });
 
   it("materializes heartbeat cadence before scratch migration and final config writes", async () => {
@@ -1653,6 +1836,26 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("hints how to enable authenticated GitHub project search", async () => {
+    const contribution = requireDoctorContribution("doctor:github-projects");
+    const ctx = {
+      cfg: {},
+      configResult: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as unknown as DoctorContributionRunContext;
+
+    await contribution.run(ctx);
+    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("GH_TOKEN"), "GitHub projects");
+
+    mocks.note.mockClear();
+    await contribution.run({ ...ctx, env: { GH_TOKEN: "configured" } });
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
   it("passes the active config into legacy state migration", async () => {
     const contribution = requireDoctorContribution("doctor:legacy-state");
     const legacyStateCheck = CORE_HEALTH_CHECKS.find(
@@ -1665,6 +1868,7 @@ describe("doctor health contributions", () => {
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
     const ctx = {
       cfg,
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1673,10 +1877,21 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({ cfg });
+    const detectParams = mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as
+      | {
+          legacySessionSurfaces?: unknown;
+        }
+      | undefined;
+    const legacySessionSurfaces = detectParams?.legacySessionSurfaces;
+    expect(legacySessionSurfaces).toMatchObject({ failures: [], surfaces: expect.any(Array) });
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
+      cfg,
+      legacySessionSurfaces,
+    });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
+      legacySessionSurfaces,
       recoverCorruptTargetStore: false,
     });
   });
@@ -1705,6 +1920,7 @@ describe("doctor health contributions", () => {
     }));
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(false),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1745,6 +1961,7 @@ describe("doctor health contributions", () => {
     }));
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1766,6 +1983,7 @@ describe("doctor health contributions", () => {
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
     const ctx = {
       cfg,
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1774,14 +1992,23 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
+    const detectParams = mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as
+      | {
+          legacySessionSurfaces?: unknown;
+        }
+      | undefined;
+    const legacySessionSurfaces = detectParams?.legacySessionSurfaces;
+    expect(legacySessionSurfaces).toMatchObject({ failures: [], surfaces: expect.any(Array) });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
       doctorOnlyStateMigrations: true,
+      legacySessionSurfaces,
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
       doctorOnlyStateMigrations: true,
+      legacySessionSurfaces,
       recoverCorruptTargetStore: true,
     });
   });
@@ -1797,6 +2024,7 @@ describe("doctor health contributions", () => {
     });
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1865,6 +2093,11 @@ describe("doctor health contributions", () => {
       mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
     );
     expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+      runtime: ctx.runtime,
+    });
+    expect(mocks.maybeMigrateModelCatalogCredentials).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
       runtime: ctx.runtime,
@@ -2023,6 +2256,39 @@ describe("doctor health contributions", () => {
       });
     });
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+  });
+
+  it("reports the Gateway service owner under sudo-to-root", async () => {
+    mocks.resolveSystemdUserServiceAccount.mockReturnValue("debian");
+    mocks.readSystemdUserLingerStatus.mockImplementation(async (params) =>
+      params?.user === "debian" ? { user: "debian", linger: "no" } : null,
+    );
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const systemdLingerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/systemd-linger",
+    );
+    expect(systemdLingerCheck).toBeDefined();
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [systemdLingerCheck!],
+          onlyIds: ["core/doctor/systemd-linger"],
+        }),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            fixHint: "Run: sudo loginctl enable-linger debian",
+            target: "systemd.user.debian",
+          }),
+        ],
+      });
+    });
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
@@ -2185,7 +2451,6 @@ describe("doctor health contributions", () => {
       {},
       expect.objectContaining({
         includeWorkspaceMemoryHealth: false,
-        skipQmdBinaryProbe: true,
         skipAuthProfileResolution: true,
         gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
         noteFn: expect.any(Function),
@@ -2256,6 +2521,69 @@ describe("doctor health contributions", () => {
       ],
     });
     expect(mocks.collectWorkspaceBackupTip).toHaveBeenCalledWith("/tmp/openclaw-workspace");
+  });
+
+  it("labels normal workspace suggestions for secondary agents", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-suggestions");
+    const cfg = {} as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: cfg,
+      configResult: { cfg },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.listAgentIds.mockReturnValue(["default", "secondary"]);
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
+    mocks.collectWorkspaceBackupTip.mockImplementation((workspaceDir) =>
+      workspaceDir === "/tmp/secondary" ? "- Back up this workspace." : undefined,
+    );
+    mocks.shouldSuggestMemorySystem.mockImplementation(
+      async (workspaceDir) => workspaceDir === "/tmp/secondary",
+    );
+
+    await contribution.run(ctx);
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      'Agent "secondary": - Back up this workspace.',
+      "Workspace",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      'Agent "secondary": Enable memory system for better recall.',
+      "Workspace",
+    );
+    expect(mocks.note).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps single-agent workspace suggestion wording unchanged", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-suggestions");
+    const cfg = {} as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: cfg,
+      configResult: { cfg },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.collectWorkspaceBackupTip.mockReturnValue("- Back up this workspace.");
+    mocks.shouldSuggestMemorySystem.mockResolvedValue(true);
+
+    await contribution.run(ctx);
+
+    expect(mocks.note).toHaveBeenNthCalledWith(1, "- Back up this workspace.", "Workspace");
+    expect(mocks.note).toHaveBeenNthCalledWith(
+      2,
+      "Enable memory system for better recall.",
+      "Workspace",
+    );
   });
 
   it("keeps disk space opt-in for default lint selection", async () => {
@@ -2735,6 +3063,52 @@ describe("doctor health contributions", () => {
     expect(ctx.cfgForPersistence).toEqual({});
     expect(ctx.runtime.error).toHaveBeenCalledWith("structured warning");
     expect(ctx.runtime.log).toHaveBeenCalledWith("changed from structured health");
+  });
+
+  it.each([
+    ["explicit multi-agent config", undefined, undefined],
+    ["sole-agent config", "default", "/tmp/openclaw-workspace"],
+  ])("uses %s workspace scope for metadata and structured health", async (_, soleAgentId, cwd) => {
+    mocks.tryResolveSoleAgentId.mockReturnValue(soleAgentId);
+    const runWithPluginMetadataSnapshot = vi.fn(
+      async (_scope: unknown, run: () => Promise<void>) => await run(),
+    );
+    const contribution = createDoctorHealthContribution({
+      id: "doctor:test-workspace-scope",
+      label: "Test workspace scope",
+      healthChecks: {
+        description: "test workspace scope",
+        detect: vi.fn(async () => []),
+      },
+    });
+    const ctx = {
+      cfg: { agents: { ownership: "explicit" } },
+      cfgForPersistence: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+      runWithPluginMetadataSnapshot,
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await runDoctorHealthContributionList(ctx, [contribution]);
+
+    expect(runWithPluginMetadataSnapshot).toHaveBeenCalledWith(
+      { config: ctx.cfg, workspaceDir: cwd },
+      expect.any(Function),
+    );
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.objectContaining({ cwd }), {
+      checks: contribution.healthChecks,
+      dryRun: false,
+    });
+    if (soleAgentId === undefined) {
+      expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(ctx.cfg, soleAgentId, ctx.env);
+    }
   });
 
   it("renders findings from structured health when legacy run is omitted", async () => {
@@ -3543,6 +3917,14 @@ describe("doctor health contributions", () => {
         env: {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
           OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        },
+        shouldWrite: true,
+      },
+      {
+        name: "legacy protocol's broad parent opt-in",
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "enabled",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "supported",
         },
         shouldWrite: true,
       },

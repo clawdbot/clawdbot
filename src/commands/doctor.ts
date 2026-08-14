@@ -156,7 +156,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
     return;
   }
   const doctorHealth = await import("../flows/doctor-health.js");
-  await doctorHealth.doctorCommand(runtime, options);
+  await doctorHealth.runDoctorHealthFlow(runtime, options);
 }
 
 async function maybeCreateSessionSqliteGithubIssue(

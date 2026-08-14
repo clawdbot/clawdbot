@@ -54,7 +54,7 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes, changelog entries, or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
 - Do not edit `CHANGELOG.md` in contributor PRs. Maintainers or ClawSweeper add the changelog entry when landing user-facing changes.
 - Run tests: `pnpm build && pnpm check && pnpm test`
-- For iterative local commits, `scripts/committer --fast "message" <files...>` skips commit hooks. Only use it when you've already run equivalent targeted validation for the touched surface.
+- For iterative local commits after running equivalent targeted validation for the touched surface, `git commit --no-verify` skips commit hooks.
 - For extension/plugin changes, run the fast local lane first:
   - `pnpm test:extension <extension-name>`
   - `pnpm test:extension --list` to see valid extension ids
@@ -63,9 +63,9 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
   - These commands also cover the shared seam/smoke files that the default unit lane skips
   - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
 - If you touched bundled-plugin boundaries in shared code, run the matching inventories:
-  - `node scripts/check-src-extension-import-boundary.mjs --json` for `src/**`
-  - `node scripts/check-sdk-package-extension-import-boundary.mjs --json` for `src/plugin-sdk/**` and `packages/**`
-  - `node scripts/check-test-helper-extension-import-boundary.mjs --json` for `test/helpers/**`
+  - `node --import tsx scripts/check-src-extension-import-boundary.mts --json` for `src/**`
+  - `node --import tsx scripts/check-sdk-package-extension-import-boundary.mts --json` for `src/plugin-sdk/**` and `packages/**`
+  - `node --import tsx scripts/check-test-helper-extension-import-boundary.mts --json` for `test/helpers/**`
 - Shared test helpers must use `src/test-utils/bundled-plugin-public-surface.ts` instead of repo-relative `extensions/**` imports. Keep plugin-local deep mocks inside the owning bundled plugin package.
 - If you are using an AI coding agent with OpenClaw skills available, run the `autoreview` skill before opening or updating your PR. Address accepted/actionable findings before asking for review.
 - Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.

@@ -5,7 +5,7 @@ import {
 } from "../config/sessions/conversation-delivery-store.js";
 import type { ConversationRecord } from "../config/sessions/conversation-registry.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import {
   claimPendingConversationTurnReply,
   registerPendingConversationTurn,
@@ -26,9 +26,7 @@ const conversation = {
   lastSeenAt: 200,
 };
 
-function sentResult(
-  messageId = "reef-outbound-1",
-): Extract<MessageActionRunResult, { kind: "send" }> {
+function sentResult(messageId = "reef-outbound-1"): Extract<MessageActionResult, { kind: "send" }> {
   return {
     kind: "send",
     channel: "reef",

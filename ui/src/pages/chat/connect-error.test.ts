@@ -33,4 +33,13 @@ describe("formatConnectError", () => {
       }),
     ).toBe("device role upgrade requires approval (approved: operator; requested: node)");
   });
+
+  it("routes missing browser identity to a supported secure context", () => {
+    expect(
+      formatConnectError({
+        message: "device identity required",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+      }),
+    ).toBe("device identity required (use HTTPS or localhost)");
+  });
 });

@@ -1,5 +1,6 @@
 // Webhook request guards validate incoming HTTP requests before plugin webhook dispatch.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -11,7 +12,6 @@ import {
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
-import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
 export { resolveAcceptedBrowserOrigin } from "../gateway/origin-check.js";
 
@@ -111,12 +111,12 @@ export function createWebhookInFlightLimiter(options?: {
   /** Maximum number of keys retained before oldest entries are pruned. */
   maxTrackedKeys?: number;
 }): WebhookInFlightLimiter {
-  const maxInFlightPerKey = resolveWebhookIntegerOption(
+  const maxInFlightPerKey = resolveIntegerOption(
     options?.maxInFlightPerKey,
     WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
     { min: 1 },
   );
-  const maxTrackedKeys = resolveWebhookIntegerOption(
+  const maxTrackedKeys = resolveIntegerOption(
     options?.maxTrackedKeys,
     WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     { min: 1 },

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -82,6 +82,7 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
       ...(createdActor ? { createdActor } : {}),
     },
     storeKey: "agent:main:main",
+    storeKeys: ["agent:main:main"],
     storePath: "/tmp/sessions.json",
   };
 }
@@ -160,7 +161,7 @@ describe("session sharing policy", () => {
         incognito: true as const,
         createdActor: { type: "human" as const, id: "owner@example.com" },
       };
-      await upsertSessionEntry({ agentId: "main", sessionKey }, entry);
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       const owner = client({ user: "owner@example.com" });
       const viewer = client({ user: "viewer@example.com" });
       const admin = client({ user: "admin@example.com", scopes: ["operator.admin"] });
@@ -223,11 +224,11 @@ describe("session sharing policy", () => {
 
   it("keeps agent scope for indirect run and approval authorization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "global" },
         { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "work", sessionKey: "global" },
         {
           sessionId: "session-work-global",
@@ -236,7 +237,7 @@ describe("session sharing policy", () => {
           createdActor: { type: "human", id: "owner@example.com" },
         },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:solo-draft" },
         { sessionId: "session-solo-draft", updatedAt: 1, visibility: "draft" },
       );
@@ -306,7 +307,7 @@ describe("session sharing policy", () => {
   it("limits suggestion events to participants and the suggestion author", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:suggestions";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-suggestions",
@@ -351,7 +352,7 @@ describe("session sharing policy", () => {
   it("keeps draft typing events owner and admin only", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:draft-typing";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-draft",

@@ -27,11 +27,11 @@
     <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Berhenti berbicara"</string>
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bacakan balasan terbaru"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang berbicara"</string>
-    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang mendengarkan"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mendengarkan"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang menghubungkan"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang berpikir"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Berpikir"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang mengetik"</string>
-    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang mengirim"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mengirim"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agen sedang bekerja"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kesalahan"</string>
     <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Siap"</string>
@@ -60,7 +60,7 @@
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Membaca agen, sesi, dan chat"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ponsel siap"</string>
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway terhubung"</string>
-    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway offline"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway luring"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hubungkan kembali Gateway di OpenClaw pada ponsel yang disandingkan."</string>
     <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Buka OpenClaw di ponsel"</string>
     <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Jam tangan tidak pernah memulai atau mengautentikasi Gateway itu sendiri."</string>

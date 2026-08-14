@@ -2,7 +2,6 @@
 // unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
 // the chunk so messages are only split when they truly exceed the limit.
 
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   findFenceSpanAt,
   isSafeFenceBreak,
@@ -16,6 +15,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import {
   avoidTrailingHighSurrogateBreak,
   chunkTextByBreakResolver,
+  normalizeChunkLimit,
 } from "../shared/text-chunking.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 
@@ -32,11 +32,6 @@ export type ChunkMode = "length" | "newline";
 
 const DEFAULT_CHUNK_LIMIT = 4000;
 const DEFAULT_CHUNK_MODE: ChunkMode = "length";
-
-function normalizeChunkLimit(limit: number): number {
-  // String slicing truncates fractional indexes, so positive limits need an integer progress step.
-  return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
-}
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;

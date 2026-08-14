@@ -147,7 +147,6 @@ Point OpenClaw at the address reachable from WSL2:
       remote: {
         cdpUrl: "http://WINDOWS_HOST_OR_IP:9222",
         attachOnly: true,
-        color: "#00AA00",
       },
     },
   },

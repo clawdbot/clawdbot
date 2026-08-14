@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
+import { boundCodeModeResult } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
@@ -10,8 +11,7 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  enforceOutputLimit,
-  enforceResultLimit,
+  boundOutputToLimit,
   enforceSnapshotPayloadLimits,
   prepareSource,
   resolveCodeModeConfig,
@@ -44,11 +44,11 @@ import {
 } from "./code-mode-state.js";
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { resolveSwarmConfig } from "./swarm-config.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import { ToolInputError } from "./tools/common.js";
 
-export async function runExec(params: {
+export async function runCodeModeExec(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
   code: string;
@@ -57,6 +57,7 @@ export async function runExec(params: {
   restartSafe: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
   const config = resolveCodeModeConfig(
@@ -69,6 +70,7 @@ export async function runExec(params: {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+  params.onRuntime?.(runtime);
   const bridgeDispatch = { started: false };
   if (params.signal?.aborted) {
     return {
@@ -238,7 +240,7 @@ async function settleCodeModeResult(params: {
   let pending = params.pending ?? [];
   const activeRunId = params.activeRunId ?? `cm_${randomUUID()}`;
   const output = params.output;
-  const deliveredOutputCount = params.deliveredOutputCount ?? 0;
+  let deliveredOutputCount = params.deliveredOutputCount ?? 0;
   // One exec/wait call shares a single wall-clock deadline across its initial
   // worker run and this inline settle phase, so auto-draining bridge calls
   // cannot stack a second full `timeoutMs` budget on top of the run that
@@ -298,7 +300,6 @@ async function settleCodeModeResult(params: {
       enforceSnapshotPayloadLimits({
         snapshotBytes: result.snapshotBytes,
         config: params.config,
-        output,
       });
       if (!params.reservedActiveRunSlot) {
         releaseReservation = reserveActiveRunSlot();
@@ -315,6 +316,7 @@ async function settleCodeModeResult(params: {
       pending.push(
         ...createPendingBridgeStates({
           pendingRequests: newPendingRequests,
+          config: params.config,
           runtime: params.runtime,
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
@@ -386,7 +388,9 @@ async function settleCodeModeResult(params: {
         ),
       );
       output.push(...result.output);
-      enforceOutputLimit(output, params.config);
+      if (boundOutputToLimit(output, params.config)) {
+        deliveredOutputCount = 0;
+      }
     } catch (error) {
       cancelPendingBridgeStates(pending);
       throw error;
@@ -407,7 +411,8 @@ async function settleCodeModeResult(params: {
       cancelPendingBridgeStates(pending);
       return {
         status: "failed" as const,
-        error: "restart-safe code mode cannot call side-effecting tools.",
+        error:
+          "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; recovery runs must use audited read, grep, or find tools.",
         code: "invalid_input" as const,
         failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
         bridgeDispatchStarted: params.bridgeDispatch.started,
@@ -424,7 +429,6 @@ async function settleCodeModeResult(params: {
         enforceSnapshotPayloadLimits({
           snapshotBytes: result.snapshotBytes,
           config: params.config,
-          output,
         });
         // Reserve before launching fresh work; transferred snapshots must
         // obey the same process-wide active-run cap as initial suspensions.
@@ -441,6 +445,7 @@ async function settleCodeModeResult(params: {
         pending.push(
           ...createPendingBridgeStates({
             pendingRequests: newPendingRequests,
+            config: params.config,
             runtime: params.runtime,
             namespaceRuntime: params.namespaceRuntime,
             parentToolCallId: params.parentToolCallId,
@@ -497,20 +502,21 @@ async function settleCodeModeResult(params: {
   // Defensive cleanup covers aborts or terminal failures; successful runs have
   // already drained every dispatched call before releasing their snapshot.
   cancelPendingBridgeStates(pending);
-  enforceResultLimit({
+  const bounded = boundCodeModeResult({
     output,
-    value: result.status === "completed" ? result.value : undefined,
-    config: params.config,
+    ...(result.status === "completed" ? { value: result.value } : {}),
+    maxOutputBytes: params.config.maxOutputBytes,
   });
   return {
     ...result,
+    ...(result.status === "completed" ? { value: bounded.value } : {}),
     ...(result.status === "failed"
       ? {
           failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : result.failurePhase,
           bridgeDispatchStarted: params.bridgeDispatch.started,
         }
       : {}),
-    output: output.slice(deliveredOutputCount),
+    output: bounded.output.slice(bounded.truncated ? 0 : deliveredOutputCount),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
@@ -522,6 +528,7 @@ export async function runWait(params: {
   runId: string;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
   const state = activeRuns.get(params.runId);
@@ -541,6 +548,7 @@ export async function runWait(params: {
   if (resumingRunIds.has(state.runId)) {
     throw new ToolInputError("code mode run is already being resumed.");
   }
+  params.onRuntime?.(state.runtime);
   resumingRunIds.add(state.runId);
   // One wait call shares a single wall-clock deadline across draining the prior
   // pending calls, the resume worker, and the inline settle phase.
@@ -612,7 +620,7 @@ export async function runWait(params: {
       ),
     );
     const output = [...state.output, ...result.output];
-    enforceOutputLimit(output, state.config);
+    const outputTruncated = boundOutputToLimit(output, state.config);
     return await settleCodeModeResult({
       result,
       output,
@@ -625,7 +633,7 @@ export async function runWait(params: {
       runtime: state.runtime,
       namespaceRuntime: state.namespaceRuntime,
       bridgeDispatch: { started: true },
-      deliveredOutputCount: state.deliveredOutputCount,
+      deliveredOutputCount: outputTruncated ? 0 : state.deliveredOutputCount,
       pending,
       activeRunId: state.runId,
       reservedActiveRunSlot: true,

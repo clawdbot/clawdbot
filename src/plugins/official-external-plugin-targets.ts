@@ -15,8 +15,19 @@ type StaticWebProvider = {
   envVars?: readonly string[];
 };
 
+type StaticConfiguredState = {
+  env?: {
+    allOf?: readonly string[];
+    anyOf?: readonly string[];
+  };
+};
+
 type StaticManifest = {
-  channel?: { id?: string; envVars?: readonly string[] };
+  channel?: {
+    id?: string;
+    envVars?: readonly string[];
+    configuredState?: StaticConfiguredState;
+  };
   contracts?: Record<string, readonly string[]>;
   providers?: readonly StaticProvider[];
   webSearchProviders?: readonly StaticWebProvider[];
@@ -36,6 +47,15 @@ function normalizeIds(values: Iterable<string>): Set<string> {
 
 function envHasAny(env: NodeJS.ProcessEnv, names: readonly string[] | undefined): boolean {
   return names?.some((name) => Boolean(env[name]?.trim())) ?? false;
+}
+
+function envHasChannelCandidate(
+  env: NodeJS.ProcessEnv,
+  channel: StaticManifest["channel"],
+): boolean {
+  const allOf = channel?.configuredState?.env?.allOf ?? [];
+  const anyOf = channel?.configuredState?.env?.anyOf ?? [];
+  return envHasAny(env, [...(channel?.envVars ?? []), ...allOf, ...anyOf]);
 }
 
 export function hasOfficialExternalProviderTarget(params: {
@@ -101,7 +121,7 @@ export function hasOfficialExternalChannelTarget(params: {
     const channelConfig = channels?.[channelId];
     return (
       (isRecord(channelConfig) && channelConfig.enabled !== false) ||
-      envHasAny(params.env, channel?.envVars)
+      envHasChannelCandidate(params.env, channel)
     );
   });
 }

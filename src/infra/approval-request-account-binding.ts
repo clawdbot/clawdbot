@@ -1,6 +1,6 @@
 // Matches approval requests against channel account and session bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,10 +11,92 @@ import {
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
+import type { ApprovalRequestChannelRouteClass } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
-type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
+export type ApprovalRequestLike = {
+  id: string;
+  request: ExecApprovalRequest["request"] | PluginApprovalRequest["request"];
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+function resolveApprovalForwardAccountIds(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel?: string | null;
+  defaultAccountId?: string | null;
+}): string[] {
+  const forwarding =
+    "command" in params.request.request ? params.cfg.approvals?.exec : params.cfg.approvals?.plugin;
+  const channel = normalizeOptionalChannel(params.channel);
+  if (!forwarding?.enabled || (forwarding.mode !== "targets" && forwarding.mode !== "both")) {
+    return [];
+  }
+  if (
+    !matchesApprovalRequestFilters({
+      request: params.request.request,
+      agentFilter: forwarding.agentFilter,
+      sessionFilter: forwarding.sessionFilter,
+    })
+  ) {
+    return [];
+  }
+  const accountIds = (forwarding.targets ?? []).flatMap((target) => {
+    if (normalizeOptionalChannel(target.channel) !== channel) {
+      return [];
+    }
+    const accountId = normalizeOptionalAccountId(target.accountId ?? params.defaultAccountId);
+    return accountId ? [accountId] : [];
+  });
+  return accountIds;
+}
+
+function hasApprovalForwardTarget(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel?: string | null;
+}): boolean {
+  const forwarding =
+    "command" in params.request.request ? params.cfg.approvals?.exec : params.cfg.approvals?.plugin;
+  if (
+    !forwarding?.enabled ||
+    (forwarding.mode !== "targets" && forwarding.mode !== "both") ||
+    !matchesApprovalRequestFilters({
+      request: params.request.request,
+      agentFilter: forwarding.agentFilter,
+      sessionFilter: forwarding.sessionFilter,
+    })
+  ) {
+    return false;
+  }
+  const channel = normalizeOptionalChannel(params.channel);
+  return (forwarding.targets ?? []).some(
+    (target) => normalizeOptionalChannel(target.channel) === channel,
+  );
+}
+
+/** Classifies whether native delivery has named channel-account owners. */
+export function classifyApprovalRequestChannelRoute(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel: string;
+  defaultAccountId?: string | null;
+}): ApprovalRequestChannelRouteClass {
+  const expectedChannel = normalizeOptionalChannel(params.channel);
+  if (!expectedChannel) {
+    return "unbound";
+  }
+  if (resolveApprovalRequestChannelAccountId(params)) {
+    return "bound-or-explicit";
+  }
+  if (hasApprovalForwardTarget(params)) {
+    return "bound-or-explicit";
+  }
+  return "unbound";
+}
 
 type ApprovalRequestSessionBinding = {
   channel?: string;
@@ -41,7 +123,7 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   }
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
   const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
@@ -151,4 +233,36 @@ export function doesApprovalRequestMatchChannelAccount(params: {
 
   const boundAccountId = sessionBinding?.accountId;
   return !expectedAccountId || !boundAccountId || expectedAccountId === boundAccountId;
+}
+
+/** Selects the one channel account that owns a native approval request. */
+export function doesApprovalRequestSelectChannelAccount(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel: string;
+  accountId?: string | null;
+  defaultAccountId: string;
+  eligibleAccountIds: readonly string[];
+}): boolean {
+  const accountId =
+    normalizeOptionalAccountId(params.accountId) ??
+    normalizeOptionalAccountId(params.defaultAccountId);
+  if (!accountId) {
+    return false;
+  }
+  const boundAccountId = resolveApprovalRequestChannelAccountId(params);
+  if (accountId === normalizeOptionalAccountId(boundAccountId)) {
+    return true;
+  }
+  const forwardAccountIds = resolveApprovalForwardAccountIds(params);
+  if (forwardAccountIds.includes(accountId)) {
+    return true;
+  }
+  if (boundAccountId || forwardAccountIds.length > 0) {
+    return false;
+  }
+  const eligibleAccountIds = params.eligibleAccountIds
+    .map(normalizeOptionalAccountId)
+    .filter((candidate): candidate is string => Boolean(candidate));
+  return eligibleAccountIds.length === 1 && eligibleAccountIds[0] === accountId;
 }

@@ -1,0 +1,172 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
+
+const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  if (originalExecCommand) {
+    Object.defineProperty(document, "execCommand", originalExecCommand);
+  } else {
+    Reflect.deleteProperty(document, "execCommand");
+  }
+  document.body.innerHTML = "";
+});
+
+function renderCodeCopyButton(): HTMLButtonElement {
+  document.body.innerHTML = toSanitizedMarkdownHtml("```ts\nconst answer = 42;\n```");
+  const button = document.querySelector<HTMLButtonElement>(".code-block-copy");
+  if (!button) {
+    throw new Error("Expected Markdown code-copy button");
+  }
+  button.addEventListener("click", handleMarkdownCodeBlockCopy);
+  return button;
+}
+
+describe("Markdown code-block clipboard feedback", () => {
+  it("visibly reports both denied clipboard paths and restores the idle labels", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn(async () => {
+      throw new DOMException("Clipboard access denied", "NotAllowedError");
+    });
+    const execCommand = vi.fn(() => false);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+    const button = renderCodeCopyButton();
+
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(writeText).toHaveBeenCalledWith("const answer = 42;");
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy failed");
+    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+    expect(button.classList.contains("copied")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy");
+    expect(button.getAttribute("aria-label")).toBe("Copy code");
+  });
+
+  it("preserves successful copy feedback and restores its accessible label", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const button = renderCodeCopyButton();
+
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(writeText).toHaveBeenCalledWith("const answer = 42;");
+    expect(button.classList.contains("copied")).toBe(true);
+    expect(button.getAttribute("aria-label")).toBe("Copied!");
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(button.classList.contains("copied")).toBe(false);
+    expect(button.getAttribute("aria-label")).toBe("Copy code");
+  });
+
+  it("ignores an older clipboard attempt that finishes after the latest denied copy", async () => {
+    vi.useFakeTimers();
+    let resolveFirstWrite!: () => void;
+    const firstWrite = new Promise<void>((resolve) => {
+      resolveFirstWrite = resolve;
+    });
+    const writeText = vi
+      .fn()
+      .mockReturnValueOnce(firstWrite)
+      .mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => false,
+    });
+    const button = renderCodeCopyButton();
+
+    button.click();
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+
+    resolveFirstWrite();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy failed");
+    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+    expect(button.classList.contains("copied")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(button.getAttribute("aria-label")).toBe("Copy code");
+  });
+
+  it.each([
+    { name: "a previous denied copy", firstSucceeds: false, firstResetAtMs: 2_000 },
+    { name: "a previous successful copy", firstSucceeds: true, firstResetAtMs: 1_500 },
+  ])("keeps the latest denied-copy feedback after $name", async (scenario) => {
+    vi.useFakeTimers();
+    const writeText = vi
+      .fn()
+      .mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"));
+    if (scenario.firstSucceeds) {
+      writeText.mockResolvedValueOnce(undefined);
+    }
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => false,
+    });
+    const button = renderCodeCopyButton();
+
+    button.click();
+    await vi.advanceTimersByTimeAsync(1_000);
+    button.click();
+    await vi.advanceTimersByTimeAsync(scenario.firstResetAtMs - 1_000);
+
+    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy failed");
+    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+
+    await vi.advanceTimersByTimeAsync(3_000 - scenario.firstResetAtMs);
+
+    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy");
+    expect(button.getAttribute("aria-label")).toBe("Copy code");
+  });
+
+  it("keeps independent reset deadlines for different code-copy buttons", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        writeText: vi.fn().mockRejectedValue(new DOMException("Clipboard access denied")),
+      },
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => false,
+    });
+    const first = renderCodeCopyButton();
+    const second = first.cloneNode(true) as HTMLButtonElement;
+    second.addEventListener("click", handleMarkdownCodeBlockCopy);
+    document.body.append(second);
+
+    first.click();
+    await vi.advanceTimersByTimeAsync(500);
+    second.click();
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(first.getAttribute("aria-label")).toBe("Copy code");
+    expect(second.getAttribute("aria-label")).toBe("Copy failed");
+
+    second.remove();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(second.getAttribute("aria-label")).toBe("Copy code");
+  });
+});
