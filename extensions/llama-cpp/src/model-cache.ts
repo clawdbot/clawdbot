@@ -11,12 +11,12 @@ import {
   DEFAULT_LLAMA_CPP_MODEL_URI,
 } from "./defaults.js";
 
-export type LlamaCppModelFileInspection =
+type LlamaCppModelFileInspection =
   | { status: "ready" }
   | { status: "missing" }
   | { status: "invalid" };
 
-export type LlamaCppModelCacheInspectionTarget =
+type LlamaCppModelCacheInspectionTarget =
   | {
       status: "inspectable";
       filePath: string;
