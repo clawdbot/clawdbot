@@ -66,15 +66,20 @@ describe("sidebar session live-run projection", () => {
   });
 
   it.each([
-    ["legacy running status", { status: "running" }, true],
-    ["confirmed active run", { status: "running", hasActiveRun: true }, true],
-    ["stale running status", { status: "running", hasActiveRun: false }, false],
-    ["completed run with a stale active flag", { status: "done", hasActiveRun: true }, false],
-    ["failed run with a stale active flag", { status: "failed", hasActiveRun: true }, false],
-    ["archived active run", { status: "running", hasActiveRun: true, archived: true }, false],
-  ] as const)("normalizes %s before publishing sidebar state", (_name, row, expected) => {
-    expect(projectSidebarSession(row).hasActiveRun).toBe(expected);
-  });
+    ["legacy running status", { status: "running" }, true, undefined],
+    ["confirmed active run", { status: "running", hasActiveRun: true }, true, true],
+    ["stale running status", { status: "running", hasActiveRun: false }, false, false],
+    ["completed run with a stale active flag", { status: "done", hasActiveRun: true }, false, true],
+    ["failed run with a stale active flag", { status: "failed", hasActiveRun: true }, false, true],
+    ["archived active run", { status: "running", hasActiveRun: true, archived: true }, false, true],
+  ] as const)(
+    "normalizes %s without dropping Gateway liveness",
+    (_name, row, expected, gatewayHasActiveRun) => {
+      const projected = projectSidebarSession(row);
+      expect(projected.hasActiveRun).toBe(expected);
+      expect(projected.gatewayHasActiveRun).toBe(gatewayHasActiveRun);
+    },
+  );
 
   it("carries active cloud disk pressure into the existing sidebar badge model", () => {
     const projected = projectSidebarSession({

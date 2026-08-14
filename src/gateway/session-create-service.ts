@@ -24,9 +24,8 @@ import {
 } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
-  forkSessionFromParent,
+  forkSessionFromParentWithDecision,
   MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
-  resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
@@ -1122,24 +1121,9 @@ export async function createGatewaySession(params: {
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to resolve parent session for fork"),
           };
         }
-        // Operator forks honor the same oversized-parent cap as subagent forks;
-        // an explicit fork of an unusable parent fails loudly instead of
-        // silently producing an empty child.
-        const forkDecision = await resolveParentForkDecision({
-          parentEntry: currentParentSessionEntry,
-          agentId: parentSessionTarget.agentId,
-          storePath: parentSessionTarget.storePath,
-        });
-        if (forkDecision.status === "skip") {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `parent session is too large to fork (${forkDecision.parentTokens}/${forkDecision.maxTokens} tokens)`,
-            ),
-          };
-        }
-        const fork = await forkSessionFromParent({
+        // The storage owner selects one source for both size admission and copying,
+        // so an active tail cannot make a smaller stable prefix fail the cap.
+        const forkResult = await forkSessionFromParentWithDecision({
           parentEntry: currentParentSessionEntry,
           agentId: parentSessionTarget.agentId,
           parentSessionKey: forkParentSessionKey,
@@ -1149,12 +1133,22 @@ export async function createGatewaySession(params: {
           targetStorePath: target.storePath,
           ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
         });
-        if (!fork) {
+        if (forkResult.status === "too-large") {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `parent session is too large to fork (${forkResult.decision.parentTokens}/${forkResult.decision.maxTokens} tokens)`,
+            ),
+          };
+        }
+        if (forkResult.status !== "created") {
           return {
             ok: false,
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to fork parent session transcript"),
           };
         }
+        const fork = forkResult.transcript;
         return {
           ...initialized,
           entry: buildForkedGatewaySessionEntry(

@@ -3950,7 +3950,17 @@ test("sessions.create forks an active parent from its last completed message", a
   const { storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
   const parentSessionId = "sess-active-completed-fork-parent";
-  await writeSessionStore({ entries: { main: sessionStoreEntry(parentSessionId) } });
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parentSessionId, {
+        // The in-flight tail can make the whole parent exceed the cap; only the
+        // selected completed prefix should govern this fork.
+        totalTokens: 200_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
   await seedSessionTranscript({
     sessionId: parentSessionId,
     sessionKey: "agent:main:main",

@@ -5,6 +5,7 @@ import {
   resolveSessionParentForkDecision,
   type SessionParentForkDecision,
   type ParentForkedSessionTranscript,
+  type ForkSessionFromParentTranscriptResult,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -126,6 +127,22 @@ export async function forkSessionFromParent(
     ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
   });
   return fork.status === "created" ? fork.transcript : null;
+}
+
+export async function forkSessionFromParentWithDecision(
+  params: ForkSessionFromParentParams,
+): Promise<ForkSessionFromParentTranscriptResult> {
+  assertParentSessionForkAllowed(params.parentEntry);
+  return await forkSessionFromParentTranscript({
+    agentId: params.agentId,
+    enforceTokenLimit: true,
+    parentEntry: params.parentEntry,
+    parentSessionKey: params.parentSessionKey,
+    sessionKey: params.sessionKey,
+    storePath: resolveParentForkStorePath(params),
+    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
+    ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
+  });
 }
 
 function normalizeForkTarget(params: { canonicalKey: string; storeKeys?: readonly string[] }): {

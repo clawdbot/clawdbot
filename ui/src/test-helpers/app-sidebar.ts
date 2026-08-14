@@ -89,6 +89,8 @@ export type LobsterPetElement = HTMLElement & {
 
 export type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
+  forkFromLastCompleted: boolean;
+  onAction: (action: { kind: "fork" }) => void;
   selectionCount: number;
   readonly updateComplete: Promise<boolean>;
 };
