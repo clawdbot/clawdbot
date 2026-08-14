@@ -7,9 +7,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 
-export const PLUGIN_WORKSPACE_SCOPE_OMITTED_DIAGNOSTIC_CODE = "workspace-scope-omitted" as const;
+const PLUGIN_WORKSPACE_SCOPE_OMITTED_DIAGNOSTIC_CODE = "workspace-scope-omitted" as const;
 
-export type PluginControlPlaneWorkspaceResolution = {
+type PluginControlPlaneWorkspaceResolution = {
   workspaceDir?: string;
   workspaceScope: "selected" | "omitted";
   diagnostic?: PluginDiagnostic;
