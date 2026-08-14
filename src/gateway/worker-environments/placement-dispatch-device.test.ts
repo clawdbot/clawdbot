@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST, type PlacementStore } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -29,6 +30,7 @@ describe("device worker placement dispatch", () => {
 
   it("provisions, syncs, and activates a local-install device environment", async () => {
     const harness = createHarness(placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => true);
     vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
       ...harness.ready,
       providerId: "device",
@@ -76,5 +78,37 @@ describe("device worker placement dispatch", () => {
     });
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({ state: "active" });
+  });
+
+  it("records an unavailable device dispatch as a durable failed placement", async () => {
+    const harness = createHarness(placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => false);
+    const states: string[] = [];
+    const request = {
+      ...REQUEST,
+      profileId: "device:offline-device",
+      deviceId: "offline-device",
+      inheritedProfile: {
+        providerId: "device",
+        profileSnapshot: {
+          install: "bundle" as const,
+          settings: { device: "offline-device" },
+        },
+      },
+    };
+
+    await expect(
+      harness.service.dispatch(request, (placement) => states.push(placement.state)),
+    ).rejects.toThrow("device worker requires a connected current node host");
+
+    expect(states).toEqual(["requested", "failed"]);
+    expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+    expect(createWorkerSessionPlacementStore({ database }).get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      environmentId: null,
+      recoveryError: expect.stringContaining("connected current node host"),
+      terminalReason: expect.stringContaining("connected current node host"),
+      terminalAtMs: 1_000,
+    });
   });
 });

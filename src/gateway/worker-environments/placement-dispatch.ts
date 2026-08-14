@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
+import { DEVICE_WORKER_PROVIDER_ID, isDeviceWorkerAvailable } from "./device-provider.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -178,6 +178,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
+      if (request.deviceId && !(await isDeviceWorkerAvailable(environments, request.deviceId))) {
+        throw new Error(
+          `device worker requires a connected current node host; reconnect or reprovision: ${request.deviceId}`,
+        );
+      }
       const localPath = await options.resolveWorkspacePath(request);
       const idempotencyKey = `session-dispatch:${request.sessionId}:${placement.generation}`;
       const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
