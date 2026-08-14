@@ -91,7 +91,9 @@ describe("Control UI service-worker reconnect refresh", () => {
 
     const { refreshControlUiServiceWorker } = await import("./sw-refresh.runtime.ts");
     const refresh = refreshControlUiServiceWorker();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(update).not.toHaveBeenCalled();
 
     state = "activated";
