@@ -28,6 +28,7 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import {
@@ -41,7 +42,6 @@ import {
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import { scopeUpgradeHandlers } from "./device-scope-upgrade.js";
-import { reconcileRevokedDeviceWorker } from "./device-worker-revocation.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

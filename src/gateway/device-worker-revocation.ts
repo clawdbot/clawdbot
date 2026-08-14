@@ -1,11 +1,13 @@
-import { reconcileDeviceWorker } from "../worker-environments/device-provider.js";
-import type { GatewayRequestContext } from "./shared-types.js";
+import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { reconcileDeviceWorker } from "./worker-environments/device-provider.js";
 
 /** Reconciles worker authority after pairing removal without delaying token invalidation. */
 type DeviceWorkerRevocationContext = Pick<
   GatewayRequestContext,
-  "logGateway" | "workerEnvironmentService" | "workerPlacementDispatchService"
->;
+  "workerEnvironmentService" | "workerPlacementDispatchService"
+> & {
+  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+};
 
 export async function reconcileRevokedDeviceWorker(
   context: DeviceWorkerRevocationContext,

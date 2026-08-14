@@ -21,6 +21,7 @@ import {
   listApprovedPairedDeviceRoles,
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
+import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import {
   resolveNodePairingCommandAllowlist,
   normalizeDeclaredNodeCommands,
@@ -36,7 +37,6 @@ import {
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
-import { reconcileRevokedDeviceWorker } from "./device-worker-revocation.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { refreshConnectedNodeSurfaceCaches } from "./nodes.read.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
