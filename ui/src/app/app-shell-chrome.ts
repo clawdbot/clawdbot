@@ -16,7 +16,6 @@ import {
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
-  type TerminalPanelToggleDetail,
 } from "../components/panel-toggle-contract.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -113,7 +112,7 @@ export class ShellChromeOwner {
     window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
-    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle, true);
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
   }
@@ -133,11 +132,7 @@ export class ShellChromeOwner {
     window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
-    window.removeEventListener(
-      TERMINAL_PANEL_TOGGLE_EVENT,
-      this.handleDeferredTerminalToggle,
-      true,
-    );
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
   }
@@ -476,10 +471,6 @@ export class ShellChromeOwner {
 
   readonly handleDeferredTerminalToggle = (event: Event): void => {
     const host = this.host;
-    if (event instanceof CustomEvent && typeof event.detail === "object" && event.detail) {
-      (event.detail as TerminalPanelToggleDetail).agentId =
-        host.context?.agentSelection?.state.selectedId?.trim() || null;
-    }
     if (isOptionalElementDefined(host.terminalPanelElement)) {
       return;
     }

@@ -55,7 +55,9 @@ suite.define(() => {
         };
         shell.runtime?.context?.agentSelection?.set("research");
         window.dispatchEvent(
-          new CustomEvent("openclaw:terminal-toggle", { detail: { open: true } }),
+          new CustomEvent("openclaw:terminal-toggle", {
+            detail: { agentId: "research", open: true },
+          }),
         );
       });
 
