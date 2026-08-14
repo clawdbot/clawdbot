@@ -71,14 +71,21 @@ notarization credentials, and its archive is not a general-download artifact.
 
 ```bash
 scripts/mac-elevation-host.sh package
-scripts/mac-elevation-host.sh install \
-  --archive "dist/elevation-host/OpenClaw-<full-source-sha>-stable.zip"
-scripts/mac-elevation-host.sh status
+cd dist/elevation-host
+shasum -a 256 -c "OpenClaw-<full-source-sha>-stable.zip.sha256"
+shasum -a 256 -c "OpenClaw-<full-source-sha>-stable-installer.sh.sha256"
+./OpenClaw-<full-source-sha>-stable-installer.sh install \
+  --archive "OpenClaw-<full-source-sha>-stable.zip"
+./OpenClaw-<full-source-sha>-stable-installer.sh status
 ```
 
 The elevation package is ZIP-only, notarized and stapled, contains exactly
 `OpenClaw.app`, omits Apple Events entitlements, records an immutable receipt,
-and verifies a freshly extracted copy. Installation owns the separate
+and verifies a freshly extracted copy. The same source-addressed artifact set
+includes an executable installer copied from that exact Git commit plus separate
+archive and installer checksum files, so a target Mac does not need a source
+checkout. Transfer the complete set and verify both checksums before running the
+installer. Installation owns the separate
 `ai.openclaw.mac.elevation-host` launchd job with `RunAtLoad` and `KeepAlive`.
 It refuses to replace or race the ordinary `ai.openclaw.mac` Launch at login
 job. `recover` restores the recorded prior bundle after a failed cutover;

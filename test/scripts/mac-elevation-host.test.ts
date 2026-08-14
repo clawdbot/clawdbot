@@ -143,16 +143,18 @@ describe("mac elevation host command contract", () => {
     expect(script).not.toContain("osascript");
   });
 
-  it("scopes prerequisites to each lifecycle command", () => {
+  it("runs a copied lifecycle installer without a source checkout", () => {
     const tempRoot = tempDirs.make("openclaw-elevation-uninstall-");
     const binDir = path.join(tempRoot, "bin");
+    const installerPath = path.join(tempRoot, "portable-installer.sh");
     mkdirSync(binDir);
+    writeExecutable(installerPath, readFileSync(scriptPath, "utf8"));
     const launchctl = path.join(binDir, "launchctl");
     writeFileSync(launchctl, "#!/bin/sh\nexit 0\n", "utf8");
     chmodSync(launchctl, 0o755);
 
-    const result = spawnSync("/bin/bash", [scriptPath, "uninstall"], {
-      cwd: process.cwd(),
+    const result = spawnSync("/bin/bash", [installerPath, "uninstall"], {
+      cwd: tempRoot,
       encoding: "utf8",
       env: {
         HOME: tempRoot,
@@ -212,6 +214,14 @@ describe("mac elevation host command contract", () => {
     expect(script).toContain("SKIP_DMG=1");
     expect(script).toContain("NOTARY_RESULT_FILE");
     expect(script).toContain("archiveSha256");
+    expect(script).toContain("archiveChecksum");
+    expect(script).toContain('installer_path="$OUTPUT_DIR/${prefix}-installer.sh"');
+    expect(script).toContain("installerSha256");
+    expect(script).toContain("installerChecksum");
+    expect(script).toContain(
+      'git -C "$ROOT_DIR" show "${source_commit}:scripts/mac-elevation-host.sh"',
+    );
+    expect(script).toContain("portable installer does not match the selected source commit");
     expect(script).toContain("notarizationId");
     expect(script).toContain("entitlementsSha256");
     expect(script).toContain("elevation archive root must contain exactly OpenClaw.app");
