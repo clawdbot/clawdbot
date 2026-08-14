@@ -5,7 +5,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import {
   deliveryContextFromSession,
   normalizeSessionDeliveryState,
@@ -2056,7 +2059,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       meta: Record<string, unknown> & { agentMeta: Record<string, unknown> };
     };
     result.meta.executionTrace = {
-      runner: "embedded",
+      runner: "cli",
       fallbackUsed: false,
       winnerProvider: "openai",
       winnerModel: "gpt-5.4",
@@ -2231,22 +2234,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("session-1");
   });
 
-  it.each([
-    {
-      name: "persists only the CLI assistant reply after the runner persists the current user turn",
-      runner: "cli",
-      canonicalUserRecorder: true,
-      embeddedAssistantGapFill: false,
-    },
-    {
-      name: "persists the full embedded turn when no canonical user recorder exists",
-      runner: "embedded",
-      canonicalUserRecorder: false,
-      embeddedAssistantGapFill: true,
-    },
-  ])("$name", async ({ runner, canonicalUserRecorder, embeddedAssistantGapFill }) => {
+  it("persists only the CLI assistant reply after the runner persists the current user turn", async () => {
     type AttemptCall = {
       onUserMessagePersisted?: () => void;
+      userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
     };
     setupSingleAttemptFallback();
     setupStoredSession();
@@ -2256,12 +2247,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
     };
     result.meta.executionTrace = {
-      runner,
+      runner: "cli",
       fallbackUsed: false,
       winnerProvider: "openai",
       winnerModel: "gpt-5.4",
     };
     state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      attemptParams.userTurnTranscriptRecorder.markRuntimePersisted();
       attemptParams.onUserMessagePersisted?.();
       return result;
     });
@@ -2274,21 +2266,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       target: () => undefined,
     });
 
-    await (canonicalUserRecorder
-      ? agentCommand({
-          message: "hello",
-          to: "+1234567890",
-          userTurnTranscriptRecorder,
-        })
-      : runBasicAgentCommand());
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      userTurnTranscriptRecorder,
+    });
 
-    if (canonicalUserRecorder) {
-      expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({
-        userTurnTranscriptRecorder,
-      });
-    }
-    expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
-      embeddedAssistantGapFill,
+    expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({
+      userTurnTranscriptRecorder,
+    });
+    expect(mockCallArg(state.persistCliTurnTranscriptMock)).toMatchObject({
+      skipUserTurn: true,
     });
   });
 
@@ -3443,13 +3431,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionFile: "sqlite:default:internal-session:/tmp/openclaw-session-store.json",
       }),
     );
-    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "rotated-model-run-session",
-        sessionKey: "agent:default:internal-session-effects:run",
-        storePath: "/tmp/openclaw-session-store.json",
-      }),
-    );
+    expect(state.persistCliTurnTranscriptMock).not.toHaveBeenCalled();
     expect(state.removeInternalSessionEffectsSessionMock).toHaveBeenCalledWith({
       agentId: "default",
       sessionId: "rotated-model-run-session",

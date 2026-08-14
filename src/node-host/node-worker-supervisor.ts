@@ -1,30 +1,34 @@
-import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { isPathInside } from "../infra/path-guards.js";
-import { redactToolPayloadText } from "../logging/redact.js";
-import {
-  redactRegisteredSecretValues,
-  registerSecretValueForRedaction,
-} from "../logging/secret-redaction-registry.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   appendCapturedOutput,
   createCapturedOutputBuffers,
   finalizeCapturedOutput,
 } from "../process/exec-output.js";
 import { createChildAdapter } from "../process/supervisor/adapters/child.js";
-import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import {
-  parseWorkerLaunchDescriptor,
+  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchPlan,
   type WorkerLaunchDescriptor,
 } from "../worker/launch-descriptor.js";
+import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import type { NodeWorkerInstallation } from "./node-worker-build.js";
+import { resolveNodeWorkerEntry } from "./node-worker-entry.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
   NodeWorkerLaunchStore,
   type NodeWorkerLaunchReceipt,
   type NodeWorkerTerminalState,
 } from "./node-worker-launch-store.js";
+import {
+  createNodeWorkerCredentialScrubber,
+  NODE_WORKER_STDERR_MAX_BYTES,
+  NODE_WORKER_STDOUT_MAX_BYTES,
+  parseNodeWorkerSuccessfulResult,
+  sanitizeNodeWorkerDiagnostic,
+  type NodeWorkerCredentialScrubber,
+} from "./node-worker-output.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -41,8 +45,6 @@ import {
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
 
-const STDOUT_MAX_BYTES = 64 * 1024;
-const STDERR_MAX_BYTES = 4 * 1024;
 const STOP_GRACE_MS = 1_000;
 const FORCE_STOP_WAIT_MS = 4_000;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -50,10 +52,6 @@ const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 
 type ChildAdapter = Awaited<ReturnType<typeof createChildAdapter>>;
 type StopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
-type CredentialScrubber = {
-  maxRepresentationBytes: number;
-  scrub: (text: string) => string;
-};
 type ActiveBase = {
   launchId: string;
   planHash: string;
@@ -66,7 +64,7 @@ type RunningChild = ActiveBase & {
   done: Promise<void>;
   journalReady: Promise<void>;
   releaseJournal: () => void;
-  scrubber: CredentialScrubber;
+  scrubber: NodeWorkerCredentialScrubber;
   stopState?: StopState;
 };
 type TerminalOutcome = Readonly<{
@@ -80,83 +78,6 @@ type ObservedTerminal = ActiveBase & {
   persistenceError?: unknown;
 };
 type ActiveOwnership = RunningChild | ObservedTerminal;
-
-function resolveWorkerEntry(params: {
-  bundleRoot: string;
-  bundleHash: string;
-  gatewayNamespace: string;
-}): string {
-  const root = fs.realpathSync.native(params.bundleRoot);
-  const bundle = fs.realpathSync.native(
-    path.join(root, params.gatewayNamespace, "bundles", params.bundleHash),
-  );
-  if (!isPathInside(root, bundle)) {
-    throw new Error("node worker bundle resolves outside its configured root");
-  }
-  const entry = fs.realpathSync.native(path.join(bundle, "openclaw.mjs"));
-  if (!isPathInside(bundle, entry) || !fs.statSync(entry).isFile()) {
-    throw new Error("node worker entry must be a regular file inside its bundle");
-  }
-  return entry;
-}
-
-function createCredentialScrubber(credential: string): CredentialScrubber {
-  const representations = new Set([
-    credential,
-    encodeURIComponent(credential),
-    JSON.stringify(credential).slice(1, -1),
-  ]);
-  const ordered = [...representations].toSorted((left, right) => right.length - left.length);
-  return {
-    maxRepresentationBytes: Math.max(
-      ...ordered.map((representation) => Buffer.byteLength(representation, "utf8")),
-    ),
-    scrub: (text) => {
-      let scrubbed = text;
-      for (const representation of ordered) {
-        scrubbed = scrubbed.replaceAll(representation, "[REDACTED]");
-      }
-      return scrubbed;
-    },
-  };
-}
-
-function redactLaunchText(value: string, scrubCredential: (text: string) => string): string {
-  const launchRedacted = scrubCredential(value);
-  const exactRedacted = redactRegisteredSecretValues(launchRedacted, () => "[REDACTED]");
-  return redactToolPayloadText(exactRedacted);
-}
-
-function sanitizeDiagnostic(
-  value: string,
-  fallback: string,
-  scrubCredential: (text: string) => string,
-): string {
-  const oneLine = redactLaunchText(value, scrubCredential).replace(/\s+/gu, " ").trim();
-  return truncateUtf8Suffix(oneLine || fallback, STDERR_MAX_BYTES);
-}
-
-function successfulResult(
-  stdout: ReturnType<typeof createCapturedOutputBuffers>,
-  scrubCredential: (text: string) => string,
-): string {
-  if (stdout.truncatedBytes > 0) {
-    throw new Error(`worker stdout exceeded ${STDOUT_MAX_BYTES} bytes`);
-  }
-  const raw = finalizeCapturedOutput(stdout, "head", true).toString("utf8").trim();
-  const redacted = redactLaunchText(raw, scrubCredential);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(redacted) as unknown;
-  } catch (error) {
-    throw new Error("worker returned invalid JSON output", { cause: error });
-  }
-  const result = JSON.stringify(parsed);
-  if (Buffer.byteLength(result, "utf8") > STDOUT_MAX_BYTES) {
-    throw new Error(`worker result exceeded ${STDOUT_MAX_BYTES} bytes`);
-  }
-  return result;
-}
 
 function sameProcessIdentity(
   left: NodeWorkerProcessIdentity | null,
@@ -187,43 +108,50 @@ class NodeWorkerSupervisor {
   private readonly bundleRoot: string;
   private readonly store: NodeWorkerLaunchStore;
   private readonly workerEnv: NodeJS.ProcessEnv;
+  private readonly localInstallation?: NodeWorkerInstallation;
   private supervisorIdentity?: NodeWorkerProcessIdentity;
   private closed = false;
   private closePromise?: Promise<void>;
 
-  constructor(options: { bundleRoot?: string; env?: NodeJS.ProcessEnv } = {}) {
+  constructor(
+    options: {
+      bundleRoot?: string;
+      env?: NodeJS.ProcessEnv;
+      localInstallation?: NodeWorkerInstallation;
+    } = {},
+  ) {
     const env = options.env ?? process.env;
     this.bundleRoot = path.resolve(
       options.bundleRoot ?? path.join(resolveStateDir(env), "node-host"),
     );
     this.store = new NodeWorkerLaunchStore({ env });
     this.workerEnv = snapshotNodeWorkerEnv(env);
+    this.localInstallation = options.localInstallation;
   }
 
   private requireSupervisorIdentity(): NodeWorkerProcessIdentity {
     return (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
   }
 
-  async launch(input: NodeWorkerLaunchInput): Promise<NodeWorkerLaunchReceipt> {
+  async launch(
+    input: NodeWorkerLaunchInput,
+    connectionEndpoint: WorkerConnectionEndpoint,
+  ): Promise<NodeWorkerLaunchReceipt> {
     if (!GATEWAY_NAMESPACE_PATTERN.test(input.gatewayNamespace)) {
       throw new Error("gateway namespace must be a safe bounded path component");
     }
-    if (!BUNDLE_HASH_PATTERN.test(input.bundleHash)) {
+    if (!BUNDLE_HASH_PATTERN.test(input.expectedBundleHash)) {
       throw new Error("node worker bundle hash must be 64 lowercase hexadecimal characters");
     }
     if (!Number.isSafeInteger(input.placementGeneration) || input.placementGeneration < 0) {
       throw new Error("node worker placement generation must be a non-negative safe integer");
     }
-    const descriptor = parseWorkerLaunchDescriptor(structuredClone(input.descriptor));
-    if (descriptor.admission.handshake.bundleHash !== input.bundleHash) {
+    const plan = parseWorkerLaunchPlan(structuredClone(input.descriptor));
+    const descriptor = completeWorkerLaunchDescriptor(plan, connectionEndpoint);
+    if (descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
       throw new Error("node worker descriptor bundle hash does not match the launch bundle");
     }
-    const planHash = nodeWorkerPlanHash({
-      bundleHash: input.bundleHash,
-      descriptor,
-      gatewayNamespace: input.gatewayNamespace,
-      placementGeneration: input.placementGeneration,
-    });
+    const planHash = nodeWorkerPlanHash(input);
     const local = this.active.get(input.launchId);
     if (local) {
       if (local.planHash !== planHash) {
@@ -281,7 +209,28 @@ class NodeWorkerSupervisor {
     if (active?.state === "observed") {
       return this.reconcileActiveTerminal(active);
     }
-    return this.store.get(launchId);
+    if (active?.state === "running") {
+      const workerState = inspectNodeWorkerProcessIdentity(active.worker);
+      if (workerState === "dead" || workerState === "reused") {
+        let treeState = inspectOwnedNodeWorkerTree(active.worker);
+        if (treeState === "live") {
+          await signalOwnedNodeWorkerTree(active.worker, "SIGTERM");
+          treeState = await waitForOwnedNodeWorkerTreeDeath(active.worker, STOP_GRACE_MS);
+        }
+        if (treeState === "live") {
+          await signalOwnedNodeWorkerTree(active.worker, "SIGKILL");
+          await waitForOwnedNodeWorkerTreeDeath(active.worker, FORCE_STOP_WAIT_MS);
+        }
+        await active.done;
+        const observed = this.active.get(launchId);
+        if (observed?.state === "observed") {
+          return this.reconcileActiveTerminal(observed);
+        }
+      }
+      return this.store.get(launchId);
+    }
+    const receipt = this.store.get(launchId);
+    return receipt?.state === "running" ? await this.recoverRunning(receipt) : receipt;
   }
 
   async cancel(
@@ -469,14 +418,16 @@ class NodeWorkerSupervisor {
     supervisor: NodeWorkerProcessIdentity;
   }): Promise<NodeWorkerLaunchReceipt> {
     const credential = params.descriptor.admission.credential;
-    const scrubber = createCredentialScrubber(credential);
+    const scrubber = createNodeWorkerCredentialScrubber(credential);
     registerSecretValueForRedaction(credential);
     let adapter: ChildAdapter;
     try {
-      const entry = resolveWorkerEntry({
+      const entry = await resolveNodeWorkerEntry({
         bundleRoot: this.bundleRoot,
-        bundleHash: params.input.bundleHash,
+        installKind: params.input.installKind,
+        expectedBundleHash: params.input.expectedBundleHash,
         gatewayNamespace: params.input.gatewayNamespace,
+        ...(this.localInstallation ? { localInstallation: this.localInstallation } : {}),
       });
       adapter = await createChildAdapter({
         argv: [process.execPath, entry, "worker", "--internal-worker-ipc"],
@@ -492,11 +443,7 @@ class NodeWorkerSupervisor {
         supervisor: params.supervisor,
         worker: null,
         state: "failed",
-        errorText: sanitizeDiagnostic(
-          formatErrorMessage(error),
-          "node worker spawn failed",
-          scrubber.scrub,
-        ),
+        errorText: sanitizeNodeWorkerDiagnostic(error, "node worker spawn failed", scrubber.scrub),
       });
     }
     if (!adapter.pid) {
@@ -524,8 +471,8 @@ class NodeWorkerSupervisor {
         supervisor: params.supervisor,
         worker: null,
         state: "failed",
-        errorText: sanitizeDiagnostic(
-          formatErrorMessage(error),
+        errorText: sanitizeNodeWorkerDiagnostic(
+          error,
           "node worker process identity unavailable",
           scrubber.scrub,
         ),
@@ -595,13 +542,13 @@ class NodeWorkerSupervisor {
     const stdout = createCapturedOutputBuffers();
     const stderr = createCapturedOutputBuffers();
     active.adapter.onStdout((chunk) =>
-      appendCapturedOutput(stdout, chunk, STDOUT_MAX_BYTES, "head"),
+      appendCapturedOutput(stdout, chunk, NODE_WORKER_STDOUT_MAX_BYTES, "head"),
     );
     active.adapter.onStderr((chunk) =>
       appendCapturedOutput(
         stderr,
         chunk,
-        STDERR_MAX_BYTES + active.scrubber.maxRepresentationBytes,
+        NODE_WORKER_STDERR_MAX_BYTES + active.scrubber.maxRepresentationBytes,
         "tail",
       ),
     );
@@ -621,13 +568,13 @@ class NodeWorkerSupervisor {
         try {
           outcome = Object.freeze({
             state: "completed",
-            resultJson: successfulResult(stdout, active.scrubber.scrub),
+            resultJson: parseNodeWorkerSuccessfulResult(stdout, active.scrubber.scrub),
           });
         } catch (error) {
           outcome = Object.freeze({
             state: "failed",
-            errorText: sanitizeDiagnostic(
-              formatErrorMessage(error),
+            errorText: sanitizeNodeWorkerDiagnostic(
+              error,
               "invalid worker result",
               active.scrubber.scrub,
             ),
@@ -638,7 +585,7 @@ class NodeWorkerSupervisor {
         const exitLabel = exit.signal ? `signal ${exit.signal}` : `exit code ${String(exit.code)}`;
         outcome = Object.freeze({
           state: "failed",
-          errorText: sanitizeDiagnostic(
+          errorText: sanitizeNodeWorkerDiagnostic(
             `node worker failed with ${exitLabel}${detail ? `: ${detail}` : ""}`,
             "node worker failed",
             active.scrubber.scrub,
@@ -649,8 +596,8 @@ class NodeWorkerSupervisor {
       await active.journalReady;
       outcome = Object.freeze({
         state: active.stopState ?? "failed",
-        errorText: sanitizeDiagnostic(
-          formatErrorMessage(error),
+        errorText: sanitizeNodeWorkerDiagnostic(
+          error,
           "node worker wait failed",
           active.scrubber.scrub,
         ),
@@ -694,6 +641,7 @@ export function createNodeWorkerSupervisor(
   options: {
     bundleRoot?: string;
     env?: NodeJS.ProcessEnv;
+    localInstallation?: NodeWorkerInstallation;
   } = {},
 ): NodeWorkerSupervisor {
   return new NodeWorkerSupervisor(options);

@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveNodeWorkerInstallation } from "./node-worker-build.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -18,6 +19,7 @@ import {
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_CREDENTIAL,
+  TEST_WORKER_ENDPOINT,
   TEST_WORKER_SOURCE,
   testNodeWorkerLaunchIdentity,
   testWorkerDescriptor,
@@ -164,7 +166,7 @@ describe("node worker supervisor", () => {
     const { env, supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "success-launch");
 
-    expect(await supervisor.launch(input)).toMatchObject({
+    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
       launchId: "success-launch",
       state: "running",
       environmentId: "environment-1",
@@ -179,18 +181,68 @@ describe("node worker supervisor", () => {
       argv: ["worker", "--internal-worker-ipc"],
       status: "completed",
     });
-    expect(await supervisor.launch(input)).toEqual(completed);
+    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toEqual(completed);
     await expect(
-      supervisor.launch({
-        ...input,
-        descriptor: testWorkerDescriptor(workspaceDir, "different-plan"),
-      }),
+      supervisor.launch(
+        {
+          ...input,
+          descriptor: testWorkerDescriptor(workspaceDir, "different-plan"),
+        },
+        TEST_WORKER_ENDPOINT,
+      ),
     ).rejects.toThrow("replayed with a different plan");
 
     const row = openOpenClawStateDatabase({ env })
       .db.prepare("SELECT * FROM node_worker_launches WHERE launch_id = ?")
       .get(input.launchId);
     expect(JSON.stringify(row)).not.toContain(TEST_WORKER_CREDENTIAL);
+    await supervisor.close();
+  });
+
+  it("runs the advertised local install and refuses it after its worker bytes change", async () => {
+    const root = tempDirs.make("node-worker-local-install-");
+    const packageRoot = path.join(root, "package");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module", dependencies: {} }),
+    );
+    fs.writeFileSync(path.join(packageRoot, "openclaw.mjs"), TEST_WORKER_SOURCE, { mode: 0o755 });
+    const distPath = path.join(packageRoot, "dist", "entry.js");
+    fs.writeFileSync(distPath, "export const workerBuild = 1;\n");
+    const installation = await resolveNodeWorkerInstallation({
+      packageRoot,
+      openclawVersion: "2026.8.1",
+      protocolFeatures: [],
+    });
+    const supervisor = createNodeWorkerSupervisor({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      localInstallation: installation,
+    });
+    const localInput = (launchId: string) => {
+      const input = launchInput(workspaceDir, launchId);
+      input.installKind = "local";
+      input.expectedBundleHash = installation.build.bundleHash;
+      input.descriptor.admission.handshake = structuredClone(installation.build);
+      return input;
+    };
+
+    const first = localInput("local-success");
+    expect(await supervisor.launch(first, TEST_WORKER_ENDPOINT)).toMatchObject({
+      state: "running",
+    });
+    expect(await waitForTerminal(supervisor, first.launchId)).toMatchObject({ state: "completed" });
+
+    fs.writeFileSync(distPath, "export const workerBuild = 2;\n");
+    expect(
+      await supervisor.launch(localInput("local-mutated"), TEST_WORKER_ENDPOINT),
+    ).toMatchObject({
+      state: "failed",
+      errorText: expect.stringContaining("changed after its build was advertised"),
+    });
     await supervisor.close();
   });
 
@@ -213,7 +265,7 @@ describe("node worker supervisor", () => {
           case "status":
             return await supervisor.status(input.launchId);
           case "launch":
-            return await supervisor.launch(input);
+            return await supervisor.launch(input, TEST_WORKER_ENDPOINT);
           case "cancel":
             return await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
           case "close":
@@ -224,7 +276,9 @@ describe("node worker supervisor", () => {
         }
       };
 
-      expect(await supervisor.launch(input)).toMatchObject({ state: "running" });
+      expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
+        state: "running",
+      });
       await vi.waitFor(() => expect(finish).toHaveBeenCalled(), { timeout: 5_000 });
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
 
@@ -277,14 +331,16 @@ describe("node worker supervisor", () => {
           LC_TIME: suppliedEnv.LC_TIME,
           NODE_EXTRA_CA_CERTS: suppliedEnv.NODE_EXTRA_CA_CERTS,
           NODE_USE_SYSTEM_CA: suppliedEnv.NODE_USE_SYSTEM_CA,
+          NODE_DISABLE_COMPILE_CACHE: "1",
           OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: suppliedEnv.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS,
+          OPENCLAW_NO_RESPAWN: "1",
           [suppliedPathKey]: suppliedEnv[suppliedPathKey],
         };
         const supervisor = createNodeWorkerSupervisor({ bundleRoot, env: suppliedEnv });
         suppliedEnv.HOME = path.join(root, "mutated-home");
         suppliedEnv.LANG = "mutated-locale";
         const input = launchInput(workspaceDir, "env-launch", "env");
-        await supervisor.launch(input);
+        await supervisor.launch(input, TEST_WORKER_ENDPOINT);
         const completed = await waitForTerminal(supervisor, input.launchId);
         const workerEnv = JSON.parse(completed.resultJson ?? "null") as Record<string, string>;
 
@@ -320,9 +376,9 @@ describe("node worker supervisor", () => {
     const failureInput = launchInput(workspaceDir, "failure-launch", "secret-fail");
     const overflowInput = launchInput(workspaceDir, "overflow-launch", "overflow");
 
-    await supervisor.launch(successInput);
-    await supervisor.launch(failureInput);
-    await supervisor.launch(overflowInput);
+    await supervisor.launch(successInput, TEST_WORKER_ENDPOINT);
+    await supervisor.launch(failureInput, TEST_WORKER_ENDPOINT);
+    await supervisor.launch(overflowInput, TEST_WORKER_ENDPOINT);
     for (let index = 0; index < 600; index += 1) {
       registerSecretValueForRedaction(`eviction-secret-${index}`);
     }
@@ -363,7 +419,7 @@ describe("node worker supervisor", () => {
       const { supervisor, workspaceDir } = fixture();
       const input = launchInput(workspaceDir, `cutoff-${prompt}`, prompt);
 
-      await supervisor.launch(input);
+      await supervisor.launch(input, TEST_WORKER_ENDPOINT);
       const failure = await waitForTerminal(supervisor, input.launchId);
 
       expect(failure.state).toBe("failed");
@@ -390,7 +446,9 @@ describe("node worker supervisor", () => {
       },
     );
 
-    expect(await supervisor.launch(input)).toMatchObject({ state: "completed" });
+    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
+      state: "completed",
+    });
     const marker = path.join(workspaceDir, "fast-terminal-marker");
     await new Promise((resolve) => {
       setTimeout(resolve, 150);
@@ -404,7 +462,7 @@ describe("node worker supervisor", () => {
     const input = launchInput(workspaceDir, "prestart-exit-launch", "exit-before-start");
     const exitedPath = path.join(workspaceDir, "prestart-exited");
 
-    await supervisor.launch(input);
+    await supervisor.launch(input, TEST_WORKER_ENDPOINT);
     const terminal = await waitForTerminal(supervisor, input.launchId);
 
     expect(fs.existsSync(exitedPath)).toBe(true);
@@ -418,7 +476,9 @@ describe("node worker supervisor", () => {
   ] as const)("records %s while awaiting the owned child", async (operation, state) => {
     const { supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, `${operation}-launch`, "wait");
-    expect(await supervisor.launch(input)).toMatchObject({ state: "running" });
+    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
+      state: "running",
+    });
 
     if (operation === "cancel") {
       await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
@@ -457,7 +517,7 @@ describe("node worker supervisor", () => {
         },
       );
 
-      await supervisor.launch(input);
+      await supervisor.launch(input, TEST_WORKER_ENDPOINT);
       await stopping;
 
       expect((await supervisor.status(input.launchId))?.state).toBe(state);
@@ -466,10 +526,23 @@ describe("node worker supervisor", () => {
     },
   );
 
+  it("does not return stale running after the active worker disappears", async () => {
+    const { supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "silent-worker-death", "wait");
+    const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+    expect(running.worker).not.toBeNull();
+
+    process.kill(running.worker!.pid, "SIGKILL");
+    await vi.waitFor(async () => {
+      expect((await supervisor.status(input.launchId))?.state).not.toBe("running");
+    });
+    await supervisor.close();
+  });
+
   it("never signals a running worker for a mismatched immutable cancel identity", async () => {
     const { supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "identity-cancel-launch", "wait");
-    const running = await supervisor.launch(input);
+    const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
     const expected = testNodeWorkerLaunchIdentity(input);
     const mismatches = [
       { ...expected, launchId: "launch-other" },
@@ -497,7 +570,7 @@ describe("node worker supervisor", () => {
   ] as const)("%s terminates the worker-owned grandchild", async (operation, state) => {
     const { supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, `${operation}-tree-launch`, "tree");
-    const running = await supervisor.launch(input);
+    const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
     expect(running.state).toBe("running");
     const grandchildPath = path.join(workspaceDir, "grandchild.pid");
     await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
@@ -529,10 +602,10 @@ describe("node worker supervisor", () => {
     fs.writeFileSync(outsideEntry, TEST_WORKER_SOURCE);
     fs.symlinkSync(outsideEntry, path.join(escapedBundle, "openclaw.mjs"));
     const input = launchInput(workspaceDir, "escaped-entry");
-    input.bundleHash = escapedHash;
+    input.expectedBundleHash = escapedHash;
     input.descriptor.admission.handshake.bundleHash = escapedHash;
 
-    expect(await supervisor.launch(input)).toMatchObject({
+    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
       state: "failed",
       errorText: expect.stringContaining("inside its bundle"),
     });

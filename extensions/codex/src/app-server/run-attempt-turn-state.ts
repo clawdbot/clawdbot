@@ -66,6 +66,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     lifecycleTerminalEmitted: false,
     nativeHookRelayLastRenewedAt: 0,
     activeAppServerTurnRequests: 0,
+    // Requests without their own deadline must leave the attempt watchdog armed.
+    activeAppServerTurnRequestsWithoutTimeout: 0,
     unsettledFinalizationHookCount: 0,
     rejectedFinalizationHookAssistant: undefined as { itemId?: string } | undefined,
     turnCrossedToolHandoff: false,
@@ -166,6 +168,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     isCompleted: () => state.completed,
     isTerminalTurnNotificationQueued: () => state.terminalTurnNotificationQueued,
     getActiveAppServerTurnRequests: () => state.activeAppServerTurnRequests,
+    getActiveAppServerTurnRequestsWithoutTimeout: () =>
+      state.activeAppServerTurnRequestsWithoutTimeout,
     getActiveTurnItemCount: () => activeTurnItemIds.size,
     getActiveCompletionBlockerItemCount: () => activeCompletionBlockerItemIds.size,
     getActiveFinalizationHookCount: () => state.unsettledFinalizationHookCount,
