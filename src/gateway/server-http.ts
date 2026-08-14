@@ -575,12 +575,14 @@ export function createGatewayHttpServer(opts: {
 
       addRequestStage(
         "chat-managed-media",
-        scopedRequestPath.startsWith("/api/chat/media/outgoing/"),
+        scopedRequestPath.startsWith("/api/chat/media/outgoing/") ||
+          (controlUiRouteBasePath.length > 0 &&
+            scopedRequestPath.startsWith(`${controlUiRouteBasePath}/api/chat/media/outgoing/`)),
         async () =>
           (await getManagedMediaAttachmentsModule()).handleManagedOutgoingMediaHttpRequest(
             req,
             res,
-            routeAuth,
+            { ...routeAuth, basePath: controlUiRouteBasePath },
           ),
       );
       addRequestStage(
