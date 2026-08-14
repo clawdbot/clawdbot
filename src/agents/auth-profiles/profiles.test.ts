@@ -599,6 +599,33 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it("does not persist built-in CLI ownership metadata", async () => {
+    await withAuthProfileTestState("openclaw-auth-cli-provenance-", async ({ agentDir }) => {
+      const profileId = "openai:default";
+      const runtimeStore: RuntimeAuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "external-access",
+            refresh: "external-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+        runtimeExternalProfileIds: [profileId],
+        runtimeExternalCliProfileIds: [profileId],
+      };
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: runtimeStore }]);
+
+      saveAuthProfileStore(runtimeStore, agentDir);
+
+      const persisted = loadPersistedAuthProfileStore(agentDir);
+      expect(persisted).not.toHaveProperty("runtimeExternalCliProfileIds");
+      expect(persisted?.profiles[profileId]).toBeUndefined();
+    });
+  });
+
   it.each(["before save", "before publication"] as const)(
     "preserves a runtime-only OAuth mutation %s",
     async (mutationTiming) => {

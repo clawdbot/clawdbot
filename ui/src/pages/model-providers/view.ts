@@ -30,7 +30,7 @@ import type {
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
-import { hasValidProviderSignIn, renderProviderStatus } from "./view-status.ts";
+import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
 
 export type ModelProviderRowMessage = {
   kind: "success" | "error";
@@ -55,6 +55,7 @@ type ModelProvidersViewProps = {
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   configBusy: boolean;
+  quickAddSupported: boolean;
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -554,7 +555,7 @@ function renderAddProvider(props: ModelProvidersViewProps) {
 }
 
 function renderModelReadiness(props: ModelProvidersViewProps) {
-  const signedIn = props.cards.some(hasValidProviderSignIn);
+  const signedIn = props.cards.some(hasVerifiedProvider);
   return html`
     <div class="model-providers__setup" data-model-readiness="model-required">
       ${renderSettingsSection(
@@ -650,7 +651,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       },
       providerRows,
     )}
-    ${renderAddProvider(props)}
+    ${props.quickAddSupported ? renderAddProvider(props) : nothing}
     ${props.mutationBlockedReason
       ? html`<div class="callout warning">${props.mutationBlockedReason}</div>`
       : nothing}

@@ -556,6 +556,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
       <openclaw-browser-panel
+        data-chat-autotype-exempt
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${browserPanelAvailable}
         .suppressed=${settingsTakeover}
@@ -567,6 +568,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         })}
       ></openclaw-browser-panel>
       <openclaw-desktop-panel
+        data-chat-autotype-exempt
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${desktopPanelAvailable}
         .suppressed=${settingsTakeover}

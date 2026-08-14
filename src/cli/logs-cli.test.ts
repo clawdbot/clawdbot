@@ -208,7 +208,9 @@ describe("logs cli", () => {
 
     expect(stdoutWrites.join("")).toContain("Log file:");
     expect(stdoutWrites.join("")).toContain("raw line");
-    expect(stderrWrites.join("")).toContain("Log tail truncated");
+    expect(stderrWrites.join("")).toContain(
+      "Log tail truncated (increase --limit or --max-bytes).",
+    );
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
