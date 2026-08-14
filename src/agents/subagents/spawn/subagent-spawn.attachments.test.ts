@@ -4,7 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadWebMediaRaw } from "../../../media/web-media.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS } from "./subagent-attachments.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -134,6 +136,24 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
+  it.each([
+    ["U+0085 next line", "foo\u0085bar"],
+    ["U+2028 line separator", "foo\u2028bar"],
+    ["U+2029 paragraph separator", "foo\u2029bar"],
+  ])("name with %s returns attachments_invalid_name", async (_label, name) => {
+    const result = await spawnWithName(name);
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_invalid_name/);
+  });
+
+  it("rejects attachment path lists that exceed the child prompt budget", async () => {
+    const oversizedName = `${"n".repeat(SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS)}.bin`;
+    const result = await spawnWithName(oversizedName);
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_prompt_paths_exceeded/);
+    expect(result.error).toContain(`maxChars=${SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS}`);
+  });
+
   it("duplicate name returns attachments_duplicate_name", async () => {
     const { spawnSubagentDirect } = subagentSpawnModule;
     const result = await spawnSubagentDirect(
@@ -183,6 +203,18 @@ describe("spawnSubagentDirect filename validation", () => {
     const relFile = path.posix.join(relDir, "receipt.jpg");
     expect(childSystemPrompt).toContain(relDir);
     expect(childSystemPrompt).toContain(relFile);
+
+    const mediaOptions = {
+      maxBytes: 1024 * 1024,
+      workspaceDir: workspaceDirOverride,
+      localRoots: [workspaceDirOverride],
+    };
+    await expect(loadWebMediaRaw(relDir, mediaOptions)).rejects.toThrow(
+      /Local media path is not a file/,
+    );
+    const loaded = await loadWebMediaRaw(relFile, mediaOptions);
+    expect(loaded.buffer.byteLength).toBeGreaterThan(0);
+    expect(loaded.kind).toBe("image");
   });
 
   it("materializes attachments under explicit cwd when native subagent cwd is provided", async () => {
