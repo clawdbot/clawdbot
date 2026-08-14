@@ -19,6 +19,7 @@ export function createMockReplyOperation(
   const updateSessionIdMock = vi.fn();
   const sessionId = overrides.sessionId ?? "session";
   let toolAuthorityFingerprint = overrides.toolAuthorityFingerprint;
+  let toolAuthorityProjector: Parameters<ReplyOperation["bindToolAuthorityProjector"]>[0];
   let toolAuthorityRoute: ReplyOperation["toolAuthorityRoute"];
   const replyOperation: ReplyOperation = {
     key: overrides.key ?? "main",
@@ -50,6 +51,14 @@ export function createMockReplyOperation(
     bindToolAuthorityFingerprint: vi.fn((fingerprint) => {
       toolAuthorityFingerprint = fingerprint;
     }),
+    bindToolAuthorityProjector: vi.fn((projector) => {
+      toolAuthorityProjector = projector;
+    }),
+    projectToolAuthorityFingerprint: vi.fn((overlay) =>
+      toolAuthorityProjector && toolAuthorityRoute
+        ? toolAuthorityProjector(overlay, toolAuthorityRoute)
+        : undefined,
+    ),
     bindToolAuthorityRoute: vi.fn((route) => {
       toolAuthorityRoute = route;
     }),

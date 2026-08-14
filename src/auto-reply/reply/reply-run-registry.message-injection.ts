@@ -7,6 +7,7 @@ import {
   type ReplyBackendQueueMessageOptions,
   type ReplyBackendQueueMessageResult,
   type ReplyMessageInjectionAttempt,
+  type ReplyMessageInjectionOptions,
   type ReplyMessageInjectionOutcome,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
@@ -144,13 +145,26 @@ export function resolveReplyMessageInjectionRejection(params: {
 export function beginReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   text: string,
-  options?: ReplyBackendQueueMessageOptions,
+  options?: ReplyMessageInjectionOptions,
 ): ReplyMessageInjectionAttempt {
+  const operation = target[replyMessageInjectionTargetOperation];
+  const { toolAuthorityOverlay, ...backendOptions } = options ?? {};
+  const projectedToolAuthorityFingerprint = toolAuthorityOverlay
+    ? operation.projectToolAuthorityFingerprint(toolAuthorityOverlay)
+    : backendOptions.toolAuthorityFingerprint;
+  const queueOptions: ReplyBackendQueueMessageOptions | undefined = options
+    ? {
+        ...backendOptions,
+        ...(toolAuthorityOverlay
+          ? { toolAuthorityFingerprint: projectedToolAuthorityFingerprint }
+          : {}),
+      }
+    : undefined;
   const resolved = resolveReplyMessageInjectionRejection({
-    operation: target[replyMessageInjectionTargetOperation],
+    operation,
     originatingLeafEntryId: target.originatingLeafEntryId,
     expectedRunId: target.identity === "run" ? target.runId : undefined,
-    options,
+    options: queueOptions,
   });
   if (!("injection" in resolved)) {
     const immediateRejection = { status: "rejected" as const, ...resolved };
@@ -174,9 +188,9 @@ export function beginReplyMessageInjectionTarget(
     acceptanceSettled = true;
     acceptance.resolve(accepted);
   };
-  const callerOnQueueAccepted = options?.onQueueAccepted;
-  const queueOptions: ReplyBackendQueueMessageOptions = {
-    ...options,
+  const callerOnQueueAccepted = queueOptions?.onQueueAccepted;
+  const runtimeQueueOptions: ReplyBackendQueueMessageOptions = {
+    ...queueOptions,
     onQueueAccepted: (accepted) => {
       settleAcceptance(accepted);
       callerOnQueueAccepted?.(accepted);
@@ -184,7 +198,7 @@ export function beginReplyMessageInjectionTarget(
   };
   let queued: Promise<void | ReplyBackendQueueMessageResult>;
   try {
-    queued = resolved.injection.queueMessage(text, queueOptions);
+    queued = resolved.injection.queueMessage(text, runtimeQueueOptions);
   } catch (error) {
     settleAcceptance(false);
     const immediateRejection = {

@@ -149,6 +149,8 @@ function createReplyOperation(): TestReplyOperation {
     updateSessionKey: vi.fn(),
     hasOwnedSessionId: vi.fn(() => false),
     bindToolAuthorityFingerprint: vi.fn(),
+    bindToolAuthorityProjector: vi.fn(),
+    projectToolAuthorityFingerprint: vi.fn(),
     bindToolAuthorityRoute: vi.fn(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),

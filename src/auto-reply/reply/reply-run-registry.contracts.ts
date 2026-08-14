@@ -6,6 +6,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../get-reply-options.types.js";
+import type { FollowupRun } from "./queue.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 
@@ -42,10 +43,49 @@ export type ReplyBackendQueueMessageOptions = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
-type ReplyToolAuthorityRoute = Readonly<{
+export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Consumed by reply ownership and never forwarded to the active backend. */
+  toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+};
+
+export type ReplyToolAuthorityRoute = Readonly<{
   provider: string;
   model: string;
 }>;
+
+/** Per-message authority facts projected against an active run's frozen owner state. */
+export type ReplyToolAuthorityOverlay = Readonly<{
+  originatingChannel: FollowupRun["originatingChannel"];
+  messageProvider: FollowupRun["run"]["messageProvider"];
+  chatType: FollowupRun["run"]["chatType"];
+  agentAccountId: FollowupRun["run"]["agentAccountId"];
+  conversationToolPolicy: FollowupRun["run"]["conversationToolPolicy"];
+  groupId: FollowupRun["run"]["groupId"];
+  groupChannel: FollowupRun["run"]["groupChannel"];
+  groupSpace: FollowupRun["run"]["groupSpace"];
+  memberRoleIds: FollowupRun["run"]["memberRoleIds"];
+  spawnedBy: FollowupRun["run"]["spawnedBy"];
+  senderId: FollowupRun["run"]["senderId"];
+  senderName: FollowupRun["run"]["senderName"];
+  senderUsername: FollowupRun["run"]["senderUsername"];
+  senderE164: FollowupRun["run"]["senderE164"];
+  senderIsOwner: boolean;
+  inputProvenance: FollowupRun["run"]["inputProvenance"];
+  trustedInternalHandoff: FollowupRun["run"]["trustedInternalHandoff"];
+  scheduledToolPolicy: FollowupRun["run"]["scheduledToolPolicy"];
+  runtimePluginToolGrant: FollowupRun["run"]["runtimePluginToolGrant"];
+  toolsAllow: FollowupRun["toolsAllow"];
+  disableTools: boolean;
+  traceAuthorized: boolean;
+  approvalReviewerDeviceId: FollowupRun["run"]["approvalReviewerDeviceId"];
+  clientCaps: FollowupRun["run"]["clientCaps"];
+  toolBindings: FollowupRun["run"]["toolBindings"];
+}>;
+
+export type ReplyToolAuthorityProjector = (
+  overlay: ReplyToolAuthorityOverlay,
+  route: ReplyToolAuthorityRoute,
+) => string;
 
 export type ReplyBackendQueueMessageResult = {
   /** Acceptance was irreversible, but the harness could not prove transcript commitment. */
@@ -216,6 +256,10 @@ export type ReplyOperation = {
   markAcceptedSteeredInboundAudio(): void;
   /** Bind provisional request authority before a concrete backend attempt attaches. */
   bindToolAuthorityFingerprint(fingerprint: string): void;
+  /** Bind the active run's immutable authority projector for direct inbound steering. */
+  bindToolAuthorityProjector(projector: ReplyToolAuthorityProjector): void;
+  /** Project an inbound turn through the current concrete route; settled owners fail closed. */
+  projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   /** Record the concrete candidate route; fallback attempts may replace it. */
   bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): void;
   updateSessionId(nextSessionId: string): void;

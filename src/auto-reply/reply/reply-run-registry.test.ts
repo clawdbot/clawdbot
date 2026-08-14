@@ -33,6 +33,7 @@ import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   registerReplyOperationSuccessorBarrier,
   type ReplyBackendQueueMessageOptions,
+  type ReplyToolAuthorityOverlay,
   ReplyRunAlreadyActiveError,
   ReplyRunSuccessorAdmissionBlockedError,
   replyRunRegistry,
@@ -46,7 +47,10 @@ import {
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import {
+  createFollowupRunToolAuthorityProjector,
+  resolveFollowupRunToolAuthorityFingerprint,
+} from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
@@ -60,6 +64,38 @@ function createTestReplyOperation(
     resetTriggered: false,
     ...overrides,
   });
+}
+
+function toolAuthorityOverlay(
+  run: ReturnType<typeof createQueueTestRun>,
+): ReplyToolAuthorityOverlay {
+  return {
+    originatingChannel: run.originatingChannel,
+    messageProvider: run.run.messageProvider,
+    chatType: run.run.chatType,
+    agentAccountId: run.run.agentAccountId,
+    conversationToolPolicy: run.run.conversationToolPolicy,
+    groupId: run.run.groupId,
+    groupChannel: run.run.groupChannel,
+    groupSpace: run.run.groupSpace,
+    memberRoleIds: run.run.memberRoleIds,
+    spawnedBy: run.run.spawnedBy,
+    senderId: run.run.senderId,
+    senderName: run.run.senderName,
+    senderUsername: run.run.senderUsername,
+    senderE164: run.run.senderE164,
+    senderIsOwner: run.run.senderIsOwner === true,
+    inputProvenance: run.run.inputProvenance,
+    trustedInternalHandoff: run.run.trustedInternalHandoff,
+    scheduledToolPolicy: run.run.scheduledToolPolicy,
+    runtimePluginToolGrant: run.run.runtimePluginToolGrant,
+    toolsAllow: run.toolsAllow,
+    disableTools: run.disableTools === true,
+    traceAuthorized: run.run.traceAuthorized === true,
+    approvalReviewerDeviceId: run.run.approvalReviewerDeviceId,
+    clientCaps: run.run.clientCaps,
+    toolBindings: run.run.toolBindings,
+  };
 }
 
 async function queueCurrentReplyRunMessage(
@@ -124,6 +160,40 @@ describe("reply run registry", () => {
     expect(resolveFollowupRunToolAuthorityFingerprint(run, first)).not.toBe(
       resolveFollowupRunToolAuthorityFingerprint(run, second),
     );
+  });
+
+  it("projects inbound authority through the canonical full fingerprint", () => {
+    const run = createQueueTestRun({ prompt: "projected authority" });
+    run.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
+    const route = { provider: "openai", model: "gpt-fallback" };
+    const projector = createFollowupRunToolAuthorityProjector(run);
+    const overlay = toolAuthorityOverlay(run);
+
+    expect(projector(overlay, route)).toBe(resolveFollowupRunToolAuthorityFingerprint(run, route));
+    expect(projector({ ...overlay, clientCaps: ["different-capability"] }, route)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(run, route),
+    );
+  });
+
+  it("projects only while the active operation owns a concrete route", () => {
+    const run = createQueueTestRun({ prompt: "operation projection" });
+    const operation = createTestReplyOperation({ sessionId: "session-projector" });
+    const projector = createFollowupRunToolAuthorityProjector(run);
+    const overlay = toolAuthorityOverlay(run);
+
+    operation.bindToolAuthorityProjector(projector);
+    expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
+
+    operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-primary" });
+    expect(operation.projectToolAuthorityFingerprint(overlay)).toBe(
+      resolveFollowupRunToolAuthorityFingerprint(run, {
+        provider: "openai",
+        model: "gpt-primary",
+      }),
+    );
+
+    operation.complete();
+    expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
   });
 
   it("tracks the concrete authority route across fallback candidates", () => {
@@ -1853,6 +1923,48 @@ describe("reply run registry", () => {
         toolAuthorityFingerprint: "authority-a",
       }),
     ).resolves.toEqual({ status: "accepted" });
+  });
+
+  it("projects inbound authority before backend admission without forwarding the overlay", async () => {
+    const run = createQueueTestRun({ prompt: "projected inbound" });
+    const route = { provider: "openai", model: "gpt-primary" };
+    const overlay = toolAuthorityOverlay(run);
+    const queueMessage = vi.fn(
+      async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+    );
+    const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
+    operation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(run));
+    operation.bindToolAuthorityRoute(route);
+    operation.bindToolAuthorityFingerprint(resolveFollowupRunToolAuthorityFingerprint(run, route));
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    await expect(
+      queueCurrentReplyRunMessage("session-projected-authority", "same authority", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "caller-cannot-override-projection",
+        toolAuthorityOverlay: overlay,
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+    const forwardedOptions = queueMessage.mock.calls[0]?.[1];
+    expect(forwardedOptions).toMatchObject({
+      isInboundUserMessage: true,
+      toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(run, route),
+    });
+    expect(forwardedOptions).not.toHaveProperty("toolAuthorityOverlay");
+
+    await expect(
+      queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: { ...overlay, clientCaps: ["changed-capability"] },
+      }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+    expect(queueMessage).toHaveBeenCalledOnce();
   });
 
   it("refuses stale injectable owners for admission and delivery until activity resumes", async () => {

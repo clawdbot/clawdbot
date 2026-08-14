@@ -28,6 +28,7 @@ import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-
 import {
   replyRunRegistry as baseReplyRunRegistry,
   type ReplyBackendQueueMessageOptions,
+  type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -1134,6 +1135,12 @@ function managedAudioBlocks(content: Array<Record<string, unknown>>) {
   return content.filter((block) => block.type === "audio");
 }
 
+function bindTestToolAuthority(operation: ReplyOperation) {
+  operation.bindToolAuthorityProjector(() => "test-authority");
+  operation.bindToolAuthorityFingerprint("test-authority");
+  operation.bindToolAuthorityRoute({ provider: "anthropic", model: "test-model" });
+}
+
 function expectManagedAudioBlock(
   block: Record<string, unknown> | undefined,
   fileName: string,
@@ -1479,6 +1486,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       sessionId: mockState.sessionId,
       resetTriggered: false,
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",
@@ -1522,6 +1530,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: "current-leaf",
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",
@@ -1632,6 +1641,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: "different-owner-leaf",
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",
@@ -1676,6 +1686,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: "current-leaf",
     });
+    bindTestToolAuthority(original);
     original.setPhase("running");
     original.attachBackend({
       kind: "embedded",
@@ -1718,6 +1729,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             resetTriggered: false,
             originatingLeafEntryId: "current-leaf",
           });
+          bindTestToolAuthority(successor);
           successor.setPhase("running");
           successor.attachBackend({
             kind: "embedded",
@@ -1758,6 +1770,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: "leaf-before-active-run-output",
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     const queueMessage = vi.fn(async () => {});
     operation.attachBackend({
@@ -1809,6 +1822,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: null,
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     let reportAcceptance: ((accepted: boolean) => void) | undefined;
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
@@ -1865,6 +1879,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: null,
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
@@ -1952,6 +1967,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: "current-leaf",
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",
@@ -2039,6 +2055,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: "current-leaf",
     });
+    bindTestToolAuthority(original);
     original.setPhase("running");
     original.attachBackend({
       kind: "embedded",
@@ -2068,6 +2085,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         resetTriggered: false,
         originatingLeafEntryId: "current-leaf",
       });
+      bindTestToolAuthority(successor);
       successor.setPhase("running");
       successor.attachBackend({
         kind: "embedded",
@@ -2164,6 +2182,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: null,
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
       options?.onQueueAccepted?.(false);
@@ -2214,6 +2233,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: null,
     });
+    bindTestToolAuthority(first);
     first.setPhase("running");
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
       options?.onQueueAccepted?.(true);
@@ -2239,6 +2259,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: null,
     });
+    bindTestToolAuthority(successor);
     successor.setPhase("running");
     successor.attachBackend({
       kind: "embedded",
@@ -2273,6 +2294,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: null,
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     const queueMessage = vi.fn((): Promise<void> => {
       expect(respond).not.toHaveBeenCalled();
@@ -2314,6 +2336,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: "leaf-before-active-run-output",
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     const successorQueue = vi.fn(async () => {});
     const successorCancel = vi.fn();
@@ -2378,6 +2401,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       resetTriggered: false,
       originatingLeafEntryId: "leaf-before-stale-run-output",
     });
+    bindTestToolAuthority(operation);
     operation.setPhase("running");
     const staleQueue = vi.fn(async () => {});
     const staleCancel = vi.fn();
