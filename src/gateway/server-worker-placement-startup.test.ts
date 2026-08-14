@@ -4,6 +4,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 const runtimeFactoryMocks = vi.hoisted(() => ({
   createDispatch: vi.fn(),
   createDiskSpace: vi.fn(),
+  resolveSessionEvidence: vi.fn(),
 }));
 
 vi.mock("./worker-environments/placement-dispatch.js", async (importOriginal) => {
@@ -14,6 +15,10 @@ vi.mock("./worker-environments/placement-dispatch.js", async (importOriginal) =>
     createWorkerPlacementDispatchService: runtimeFactoryMocks.createDispatch,
   };
 });
+
+vi.mock("./server-worker-placement-session-evidence.js", () => ({
+  resolveWorkerPlacementSessionEvidence: runtimeFactoryMocks.resolveSessionEvidence,
+}));
 
 vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) => {
   const actual =
@@ -91,7 +96,7 @@ describe("worker placement startup health lifetime", () => {
       releaseScheduledHealth.reject(healthError);
       await Promise.resolve();
       expect(stopSettled).toBe(false);
-      expect(environments.stop).toHaveBeenCalledOnce();
+      expect(environments.stop).not.toHaveBeenCalled();
 
       releaseReconcile.resolve();
       await stopping;
@@ -101,5 +106,81 @@ describe("worker placement startup health lifetime", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("drains deferred startup session evidence before stopping environments", async () => {
+    const evidence = createDeferredCore<"current">();
+    runtimeFactoryMocks.resolveSessionEvidence.mockImplementation(async () => evidence.promise);
+    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+      read: vi.fn(),
+      version: vi.fn(() => 0),
+      sweep: vi.fn().mockResolvedValue(undefined),
+    });
+    runtimeFactoryMocks.createDispatch.mockReturnValue({
+      dispatch: vi.fn(),
+      forceDestroyEnvironment: vi.fn(),
+      reclaim: vi.fn(),
+      reconcile: vi.fn().mockResolvedValue(undefined),
+      reconcileActive: vi.fn().mockResolvedValue(undefined),
+    });
+    const placement = {
+      sessionId: "session-startup",
+      sessionKey: "agent:main:startup",
+      agentId: "main",
+      state: "local",
+      generation: 1,
+      turnClaim: null,
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: null,
+      remoteWorkspaceDir: null,
+      workerBundleHash: null,
+      lastTranscriptAckCursor: null,
+      lastLiveEventAckCursor: null,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+    } as const;
+    const environments = {
+      start: vi.fn(),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    const runtime = createGatewayWorkerPlacementRuntime({
+      placements: {
+        get: () => placement,
+        list: () => [placement],
+        retireSessionPlacement: vi.fn(),
+        pruneOrphanedWorkspaceReconciliations: () => [],
+        listWorkspaceReconciliationOwners: () => [],
+      } as never,
+      environments: environments as never,
+      admitNewPlacements: true,
+      revokeSessionAuthority: vi.fn(),
+      warn: vi.fn(),
+    });
+    let closeStarted = false;
+    let sidecar: { stop: () => Promise<void> } | undefined;
+    const starting = runtime.startRuntime({
+      isClosePreludeStarted: () => closeStarted,
+      registerSidecar: (registered) => {
+        sidecar = registered;
+      },
+    });
+    await vi.waitFor(() => expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalled());
+    closeStarted = true;
+    const stopping = sidecar?.stop();
+    if (!stopping) {
+      throw new Error("startup did not register its placement sidecar");
+    }
+
+    await Promise.resolve();
+    expect(environments.stop).not.toHaveBeenCalled();
+    evidence.resolve("current");
+    await expect(starting).resolves.toBeNull();
+    await stopping;
+    expect(environments.stop).toHaveBeenCalledOnce();
   });
 });

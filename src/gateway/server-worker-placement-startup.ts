@@ -537,17 +537,12 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         placementReconcileInterval = undefined;
         uninstallSessionIdentityMutation();
         uninstallPlacementAdmission();
-        const environmentStop = params.environments.stop();
-        const stopResults = await Promise.allSettled([
-          ...[placementReconcile.current, diskSpaceSweep.current].filter(
+        await Promise.allSettled(
+          [placementReconcile.current, diskSpaceSweep.current].filter(
             (operation): operation is Promise<void> => operation !== undefined,
           ),
-          environmentStop,
-        ]);
-        const environmentStopResult = stopResults.at(-1);
-        if (environmentStopResult?.status === "rejected") {
-          throw environmentStopResult.reason;
-        }
+        );
+        await params.environments.stop();
       },
     };
     // Close must see the drain handle before reconciliation can yield.
@@ -567,7 +562,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       await sidecar.stop();
       return null;
     }
-    const startupReconcile = dispatchService.reconcile();
+    const startupReconcile = (async () => {
+      await dispatchService.reconcile();
+      await sessionRetirement.reconcile();
+    })();
     placementReconcile.current = startupReconcile;
     try {
       try {
@@ -577,7 +575,6 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           placementReconcile.current = undefined;
         }
       }
-      await sessionRetirement.reconcile();
       if (hooks.isClosePreludeStarted()) {
         await sidecar.stop();
         return null;
