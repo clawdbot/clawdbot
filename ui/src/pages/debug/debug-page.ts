@@ -42,6 +42,7 @@ class DebugPage extends OpenClawLightDomElement {
   );
   private callEpoch = 0;
   private diagnosticsTaskActiveClient: GatewayBrowserClient | null = null;
+  private diagnosticsAgentId: string | null = null;
   private readonly diagnosticsTask = new Task(this, {
     autoRun: false,
     args: () =>
@@ -96,7 +97,12 @@ class DebugPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.agentSelection,
       (selection, notify) => selection.subscribe(notify),
-      () => {
+      (selection) => {
+        const agentId = selection.state.selectedId;
+        if (agentId === this.diagnosticsAgentId) {
+          return;
+        }
+        this.diagnosticsAgentId = agentId;
         this.debugModels = [];
         void this.diagnosticsTask.run([null, null]);
         this.diagnosticsTaskActiveClient = null;
@@ -108,6 +114,7 @@ class DebugPage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     void this.diagnosticsTask.run([null, null]);
     this.diagnosticsTaskActiveClient = null;
+    this.diagnosticsAgentId = null;
     this.callEpoch += 1;
     super.disconnectedCallback();
   }
