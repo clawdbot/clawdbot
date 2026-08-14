@@ -66,6 +66,7 @@ import type {
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
 type DiagnosticLike = { level: string; code: string; path: string; message: string };
@@ -509,7 +510,7 @@ export async function runClawsAddCommand(
       cronGateway: {
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),
         list: async (agentId) =>
-          await callGatewayFromCli("cron.list", {}, { agentId, includeDisabled: true }),
+          await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
         waitUntilAgentAvailable: async () => await waitUntilGatewayConfigApplied(),
       },
     });
