@@ -20,6 +20,7 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
+import { createServiceChildRelayAdapter } from "../service-child-relay-host.js";
 import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -107,6 +108,23 @@ export async function createChildAdapter(params: {
     : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
+
+  if (
+    process.platform !== "win32" &&
+    params.ownedWorker === undefined &&
+    isServiceManagedRuntime()
+  ) {
+    return await createServiceChildRelayAdapter({
+      command: preparedSpawn.command,
+      args: preparedSpawn.args,
+      cwd: params.cwd,
+      env: preparedSpawn.env,
+      stdinMode,
+      input: params.input,
+      secretInput: params.secretInput,
+      oomScoreWrapperSelected: preparedSpawn.wrapped,
+    });
+  }
 
   // A detached POSIX child is still a descendant in the service cgroup/job, but
   // owns a process group that can be killed without touching the node host.

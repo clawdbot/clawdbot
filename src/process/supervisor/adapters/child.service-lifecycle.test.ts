@@ -1,0 +1,247 @@
+import { spawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { createProcessSupervisor } from "../supervisor.js";
+import { createChildAdapter } from "./child.js";
+
+const activePids = new Set<number>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("timed out waiting for process state");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+afterEach(async () => {
+  delete process.env.OPENCLAW_SERVICE_MARKER;
+  for (const pid of activePids) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+  await waitFor(() => [...activePids].every((pid) => !isAlive(pid))).catch(() => {});
+  activePids.clear();
+});
+
+describe.skipIf(process.platform === "win32")("service-managed child lifecycle", () => {
+  it("cancels the complete admitted command group before settling", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const adapter = await createChildAdapter({
+      argv: [
+        "/bin/sh",
+        "-c",
+        'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+      ],
+      stdinMode: "pipe-closed",
+    });
+    let output = "";
+    adapter.onStdout((chunk) => {
+      output += chunk;
+    });
+    await waitFor(() => /^\d+ \d+/u.test(output));
+    const [rootPid, descendantPid] = output
+      .trim()
+      .split(/\s+/u)
+      .map((value) => Number.parseInt(value, 10));
+    activePids.add(rootPid);
+    activePids.add(descendantPid);
+
+    adapter.kill("SIGTERM");
+    await adapter.wait();
+    await waitFor(() => !isAlive(rootPid));
+
+    expect(isAlive(descendantPid)).toBe(false);
+  });
+
+  it.each([
+    { reason: "overall-timeout" as const, timeoutMs: 100, noOutputTimeoutMs: undefined },
+    { reason: "no-output-timeout" as const, timeoutMs: undefined, noOutputTimeoutMs: 100 },
+  ])("removes the group before returning $reason", async (timing) => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const run = await createProcessSupervisor().spawn({
+      mode: "child",
+      argv: [
+        "/bin/sh",
+        "-c",
+        'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+      ],
+      stdinMode: "pipe-closed",
+      sessionId: "service-lifecycle-test",
+      backendId: "service-lifecycle-test",
+      timeoutMs: timing.timeoutMs,
+      noOutputTimeoutMs: timing.noOutputTimeoutMs,
+    });
+    const exit = await run.wait();
+    const [rootPid, descendantPid] = exit.stdout
+      .trim()
+      .split(/\s+/u)
+      .map((value) => Number.parseInt(value, 10));
+
+    expect(exit.reason).toBe(timing.reason);
+    await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+  });
+
+  it("preserves root-result timing while retaining descendant cleanup ownership", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const adapter = await createChildAdapter({
+      argv: [
+        "/bin/sh",
+        "-c",
+        'sleep 0.4 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; exit 0',
+      ],
+      stdinMode: "pipe-closed",
+    });
+    let output = "";
+    adapter.onStdout((chunk) => {
+      output += chunk;
+    });
+    const startedAt = Date.now();
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    const elapsed = Date.now() - startedAt;
+    const [, descendantPid] = output
+      .trim()
+      .split(/\s+/u)
+      .map((value) => Number.parseInt(value, 10));
+    activePids.add(descendantPid);
+
+    expect(elapsed).toBeLessThan(300);
+    expect(isAlive(descendantPid)).toBe(true);
+    await waitFor(() => !isAlive(descendantPid));
+  });
+
+  it("revalidates and escalates when the group ignores SIGTERM", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const adapter = await createChildAdapter({
+      argv: [
+        "/bin/sh",
+        "-c",
+        `trap '' TERM; /bin/sh -c 'trap "" TERM; sleep 60' >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait`,
+      ],
+      stdinMode: "pipe-closed",
+    });
+    let output = "";
+    adapter.onStdout((chunk) => {
+      output += chunk;
+    });
+    await waitFor(() => /^\d+ \d+/u.test(output));
+    const [rootPid, descendantPid] = output
+      .trim()
+      .split(/\s+/u)
+      .map((value) => Number.parseInt(value, 10));
+    activePids.add(rootPid);
+    activePids.add(descendantPid);
+
+    adapter.kill("SIGTERM");
+    await adapter.wait();
+    await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+  });
+
+  it("keeps stdin and the secret descriptor distinct from lifecycle channels", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const adapter = await createChildAdapter({
+      argv: [
+        "/bin/sh",
+        "-c",
+        'IFS= read -r secret <&3; IFS= read -r input; printf "%s:%s\\n" "${#secret}" "$input"',
+      ],
+      stdinMode: "pipe-open",
+      secretInput: {
+        fd: 3,
+        createData: () => Buffer.from("synthetic-secret\n", "utf8"),
+      },
+    });
+    let output = "";
+    adapter.onStdout((chunk) => {
+      output += chunk;
+    });
+    adapter.stdin?.write("ordinary-input\n");
+    adapter.stdin?.end();
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    expect(output).toBe("16:ordinary-input\n");
+  });
+
+  it("fails closed when the command drops its lineage descriptor early", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const adapter = await createChildAdapter({
+      argv: ["/bin/sh", "-c", `exec 3>&-; trap '' TERM; printf "%s\\n" "$$"; sleep 60`],
+      stdinMode: "pipe-closed",
+    });
+    let output = "";
+    adapter.onStdout((chunk) => {
+      output += chunk;
+    });
+    await waitFor(() => /^\d+/u.test(output));
+    const rootPid = Number.parseInt(output, 10);
+    activePids.add(rootPid);
+
+    await adapter.wait();
+    await waitFor(() => !isAlive(rootPid));
+  });
+
+  it("fails closed when the service host exits", async () => {
+    const tempDir = tempDirs.make("openclaw-service-child-host-");
+    const scriptPath = path.join(tempDir, "host.mts");
+    const childModuleUrl = new URL("./child.ts", import.meta.url).href;
+    await writeFile(
+      scriptPath,
+      `
+        process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+        const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
+        const adapter = await createChildAdapter({
+          argv: ["/bin/sh", "-c", 'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\\\n" "$$" "$child"; wait'],
+          stdinMode: "pipe-closed",
+        });
+        let output = "";
+        adapter.onStdout((chunk) => { output += chunk; });
+        while (!/^\\d+ \\d+/u.test(output)) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        process.stdout.write("PROBE " + output.trim() + "\\n", () => process.exit(0));
+      `,
+      "utf8",
+    );
+    const host = spawn(process.execPath, ["--import", "tsx", scriptPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, OPENCLAW_SERVICE_MARKER: "openclaw" },
+    });
+    let stdout = "";
+    let stderr = "";
+    host.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    host.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    const exitCode = await new Promise<number | null>((resolve) => {
+      host.once("exit", resolve);
+    });
+    expect(exitCode, stderr).toBe(0);
+    const match = /PROBE (\d+) (\d+)/u.exec(stdout);
+    expect(match, stdout).not.toBeNull();
+    const rootPid = Number.parseInt(match![1], 10);
+    const descendantPid = Number.parseInt(match![2], 10);
+    activePids.add(rootPid);
+    activePids.add(descendantPid);
+
+    await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+  });
+});

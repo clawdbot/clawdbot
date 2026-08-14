@@ -391,6 +391,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
+    "process/supervisor/service-child-relay": "src/process/supervisor/service-child-relay.ts",
+    "process/supervisor/service-child-group-anchor":
+      "src/process/supervisor/service-child-group-anchor.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
       "src/telegram-ingress-worker.runtime.ts",
