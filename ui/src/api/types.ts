@@ -283,6 +283,7 @@ export type AgentsListResult = ProtocolAgentsListResult;
 export type AgentIdentityResult = {
   agentId: string;
   name: string;
+  nameSource?: "config" | "agent" | "workspace" | "default";
   avatar: string;
   avatarSource?: string | null;
   avatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -520,6 +521,7 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  archivedAt?: number;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseStrictBooleanArg } from "../lib/arg-utils.mts";
-import { coerceErrorMessage } from "../lib/error-format.mts";
+import { coerceErrorMessage, toStringifiedError } from "../lib/error-format.mts";
 import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
@@ -69,6 +69,7 @@ type Options = {
   envFile?: string;
   expect: string[];
   gatewayPort: number;
+  humanDelayFixedMs?: number;
   idleTimeout: string;
   keepBox: boolean;
   leaseId?: string;
@@ -223,6 +224,7 @@ function usageText() {
     "Useful options:",
     "  --class <name>                Crabbox machine class. Default: standard.",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
+    "  --human-delay-fixed-ms <ms>   Set a fixed custom human delay before Gateway startup.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
     "  --link-preview <true|false>   Set channels.telegram.linkPreview before Gateway startup.",
@@ -402,6 +404,8 @@ export function parseArgs(argvInput: string[]): Options {
       opts.expect.push(readValue({ repeatable: true }));
     } else if (arg === "--gateway-port") {
       opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
+    } else if (arg === "--human-delay-fixed-ms") {
+      opts.humanDelayFixedMs = parsePositiveTimerMs(readValue(), "--human-delay-fixed-ms");
     } else if (arg === "--id") {
       opts.leaseId = readValue();
     } else if (arg === "--idle-timeout") {
@@ -502,6 +506,9 @@ export function parseArgs(argvInput: string[]): Options {
   }
   if (command === "publish" && !opts.publishPr) {
     throw new Error("publish requires --pr.");
+  }
+  if (command !== "start" && opts.humanDelayFixedMs !== undefined) {
+    throw new Error("--human-delay-fixed-ms is available only for start sessions.");
   }
   if (opts.mcpAppFixture && command !== "start") {
     throw new Error("--mcp-app-fixture is available only for start sessions.");
@@ -958,8 +965,7 @@ export function runCommand(params: {
           timeoutKillGraceMs,
         }).then(
           () => reject(error),
-          (cleanupError: unknown) =>
-            reject(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))),
+          (cleanupError: unknown) => reject(toStringifiedError(cleanupError)),
         );
         return;
       }
@@ -1241,6 +1247,7 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
 export function writeSutConfig(params: {
   gatewayPort: number;
   groupId: string;
+  humanDelayFixedMs?: number;
   linkPreview?: boolean;
   mcpAppFixture?: boolean;
   mockPort: number;
@@ -1257,6 +1264,15 @@ export function writeSutConfig(params: {
   const config = {
     agents: {
       defaults: {
+        ...(params.humanDelayFixedMs === undefined
+          ? {}
+          : {
+              humanDelay: {
+                maxMs: params.humanDelayFixedMs,
+                minMs: params.humanDelayFixedMs,
+                mode: "custom",
+              },
+            }),
         model: { primary: "openai/gpt-5.6-luna" },
         models: {
           "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
@@ -1368,6 +1384,7 @@ export async function startLocalSut(
   params: {
     gatewayPort: number;
     groupId: string;
+    humanDelayFixedMs?: number;
     mockResponseText: string;
     mockPort: number;
     linkPreview?: boolean;
@@ -1668,6 +1685,7 @@ async function startLocalSutDaemon(params: {
   funnelBridge?: FunnelBridge;
   gatewayPort: number;
   groupId: string;
+  humanDelayFixedMs?: number;
   mockResponseText: string;
   mockPort: number;
   linkPreview?: boolean;
@@ -2051,12 +2069,12 @@ function sshArgs(inspect: CrabboxInspect, sshPort = inspect.sshPort?.trim() || "
 }
 
 function isTransientSshFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   return /Connection (?:closed|reset)|Operation timed out|Connection timed out/u.test(message);
 }
 
 function isSshConnectionFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
   return (
     code === "ETIMEDOUT" ||
@@ -2888,6 +2906,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       funnelBridge,
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      humanDelayFixedMs: opts.humanDelayFixedMs,
       linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
       mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
@@ -3157,7 +3176,7 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
     }
     desktopSessionTerminationAttempted = true;
     await terminateRemoteDesktopSession(root, session.crabbox.inspect).catch((error: unknown) => {
-      summary.desktopSessionTerminateError = error instanceof Error ? error.message : String(error);
+      summary.desktopSessionTerminateError = coerceErrorMessage(error);
     });
   };
   try {
@@ -3234,37 +3253,37 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
       await stopLocalSutDaemon(session.localSut);
       sutQuiesced = true;
     } catch (error) {
-      summary.sutStopError = error instanceof Error ? error.message : String(error);
+      summary.sutStopError = coerceErrorMessage(error);
       summary.status = "fail";
     }
     if (sutQuiesced) {
       try {
         preserveLocalSutRuntimeArtifacts(session.localSut, session.outputDir);
       } catch (error) {
-        summary.runtimeArtifactError = error instanceof Error ? error.message : String(error);
+        summary.runtimeArtifactError = coerceErrorMessage(error);
         summary.status = "fail";
       }
     }
     try {
       destroyLocalSutRuntime(session.localSut);
     } catch (error) {
-      summary.sutDestroyError = error instanceof Error ? error.message : String(error);
+      summary.sutDestroyError = coerceErrorMessage(error);
       summary.status = "fail";
     }
     if (session.localSut.funnelBridge) {
       await stopTailscaleFunnelBridge(root, session.localSut.funnelBridge).catch(
         (error: unknown) => {
-          summary.funnelResetError = error instanceof Error ? error.message : String(error);
+          summary.funnelResetError = coerceErrorMessage(error);
         },
       );
     }
     await terminateDesktopSession();
     await releaseCredential(root, opts, session.credential.leaseFile).catch((error: unknown) => {
-      summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
+      summary.credentialReleaseError = coerceErrorMessage(error);
     });
     if (session.crabbox.createdLease && !opts.keepBox) {
       await stopCrabbox(root, opts, session.crabbox.id).catch((error: unknown) => {
-        summary.crabboxStopError = error instanceof Error ? error.message : String(error);
+        summary.crabboxStopError = coerceErrorMessage(error);
       });
     }
     if (opts.keepBox) {
@@ -3508,6 +3527,7 @@ async function main() {
     const sutRuntime = await startLocalSut({
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      humanDelayFixedMs: opts.humanDelayFixedMs,
       linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
       mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
@@ -3592,12 +3612,12 @@ async function main() {
     killTree(localSut?.mock);
     if (credential) {
       await releaseCredential(root, opts, credential.leaseFile).catch((error: unknown) => {
-        summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
+        summary.credentialReleaseError = coerceErrorMessage(error);
       });
     }
     if (leaseId && createdLease && !opts.keepBox) {
       await stopCrabbox(root, opts, leaseId).catch((error: unknown) => {
-        summary.crabboxStopError = error instanceof Error ? error.message : String(error);
+        summary.crabboxStopError = coerceErrorMessage(error);
       });
     }
     if (opts.keepBox && leaseId) {
@@ -3664,7 +3684,7 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(coerceErrorMessage(error));
     process.exit(1);
   });
 }

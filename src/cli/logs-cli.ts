@@ -5,7 +5,10 @@ import {
   coerceErrorMessage as normalizeErrorMessage,
   toStringifiedError,
 } from "@openclaw/normalization-core/error-coercion";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -26,7 +29,6 @@ import { projectGatewayConnectionDetailsForDiagnostics } from "../gateway/connec
 import { isLoopbackHost } from "../gateway/net.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
@@ -723,7 +725,7 @@ export function registerLogsCli(program: Command) {
           if (
             !emitJsonLine({
               type: "notice",
-              message: "Log tail truncated (increase --max-bytes).",
+              message: "Log tail truncated (increase --limit or --max-bytes).",
             })
           ) {
             return;
@@ -783,7 +785,7 @@ export function registerLogsCli(program: Command) {
           }
         }
         if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --max-bytes).")) {
+          if (!errorLine("Log tail truncated (increase --limit or --max-bytes).")) {
             return;
           }
         }

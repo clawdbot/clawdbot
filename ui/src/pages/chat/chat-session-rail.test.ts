@@ -58,7 +58,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
       taskIds: new Set<string>(),
       nextExpiryAt: null,
     },
-    view: { kind: "list" },
     taskDetails: new Map(),
     taskDetailErrors: new Map(),
     taskDetailLoadingIds: new Set(),
@@ -68,9 +67,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
     onToggleFinished: () => {},
     onRefresh: () => {},
     onCancel: () => {},
-    onSelectTask: () => {},
-    onBack: () => {},
-    onOpenTranscript: () => {},
   };
 }
 
@@ -217,18 +213,18 @@ describe("ChatSessionCompanionThreads", () => {
     });
     const client = { request: request as GatewayBrowserClient["request"] };
 
-    await requestSessionCompanionAnswer(client, "one", "Question");
-    await requestSessionCompanionState(client, "one");
-    await resetSessionCompanion(client, "one");
+    await requestSessionCompanionAnswer(client, "one", "Question", "work");
+    await requestSessionCompanionState(client, "one", "work");
+    await resetSessionCompanion(client, "one", "work");
 
     expect(request.mock.calls).toEqual([
       [
         "sessions.companion.ask",
-        { sessionKey: "one", question: "Question" },
+        { sessionKey: "one", agentId: "work", question: "Question" },
         { timeoutMs: 70_000 },
       ],
-      ["sessions.companion.state", { sessionKey: "one" }],
-      ["sessions.companion.reset", { sessionKey: "one" }],
+      ["sessions.companion.state", { sessionKey: "one", agentId: "work" }],
+      ["sessions.companion.reset", { sessionKey: "one", agentId: "work" }],
     ]);
   });
 
@@ -249,6 +245,15 @@ describe("ChatSessionCompanionThreads", () => {
 
     expect(threads.view("one").exchanges[0]?.answer).toBe("Answer for one");
     expect(threads.view("two").exchanges[0]?.answer).toBe("Answer for two");
+  });
+
+  it("keeps matching bare session keys isolated by agent", () => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.setDraft("global", "main draft", "main");
+    threads.setDraft("global", "work draft", "work");
+
+    expect(threads.view("global", "main").draft).toBe("main draft");
+    expect(threads.view("global", "work").draft).toBe("work draft");
   });
 
   it("moves a composer submission through pending to a timestamped answer", async () => {
@@ -553,6 +558,17 @@ describe("ChatSessionRailElement", () => {
       ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
+  });
+
+  it("keeps the ticking rail section out of screen-reader live regions", async () => {
+    const element = await mount();
+    const section = element.querySelector(".chat-session-rail--expanded");
+    // The section wraps a 1Hz elapsed clock; aria-live here would announce
+    // every tick. The message thread owns the polite region instead.
+    expect(section?.hasAttribute("aria-live")).toBe(false);
+    expect(element.querySelector(".chat-session-rail__thread")?.getAttribute("aria-live")).toBe(
+      "polite",
+    );
   });
 
   it("does not reopen or report visible after hide when an automatic open arrives", async () => {

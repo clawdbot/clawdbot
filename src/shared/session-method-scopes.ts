@@ -93,6 +93,9 @@ export function resolveDynamicSessionMutationRequiredScope(
   method: string,
   params?: unknown,
 ): SessionMutationOperatorScope | undefined {
+  if (method === "sessions.recover") {
+    return "operator.write";
+  }
   if (method === "sessions.create") {
     return resolveSessionsCreateRequiredScope(params);
   }

@@ -168,7 +168,7 @@ export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: numbe
 }
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
-  const item = host.chatQueue.find((entry) => entry.id === id);
+  let item = host.chatQueue.find((entry) => entry.id === id);
   if (
     !item ||
     item.pendingRunId ||
@@ -180,23 +180,39 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     return;
   }
   if (item.kind === "steered") {
-    if (!host.connected || !host.client || !hasAbortableSessionRun(host)) {
+    if (!host.connected || !host.client) {
       setChatError(host, t("chat.sendErrors.steerRunNoLongerActive"));
       return;
     }
-    const retry = updateQueuedMessage(host, id, (entry) => ({
-      ...entry,
-      sendAttempts: 0,
-      sendError: undefined,
-      sendRequestStartedAtMs: undefined,
-      sendState: "waiting-idle",
-    }));
-    if (!retry) {
+    if (hasAbortableSessionRun(host)) {
+      const retry = updateQueuedMessage(host, id, (entry) => ({
+        ...entry,
+        sendAttempts: 0,
+        sendError: undefined,
+        sendRequestStartedAtMs: undefined,
+        sendState: "waiting-idle",
+      }));
+      if (!retry) {
+        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+        return;
+      }
+      await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
+      return;
+    }
+    const converted = updateQueuedMessage(host, id, (entry) => {
+      const {
+        kind: _kind,
+        pendingRunId: _pendingRunId,
+        steerTargetRunId: _steerTargetRunId,
+        ...queued
+      } = entry;
+      return resetRetryState(queued, reconnectSafeQueuedSendState(host));
+    });
+    if (!converted) {
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
     }
-    await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
-    return;
+    item = converted;
   }
   let outbox = findStoredOutbox(host, item.id);
   if (!outbox) {

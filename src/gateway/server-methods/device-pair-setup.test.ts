@@ -4,7 +4,8 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as devicePairingJoinCode from "../../infra/device-pairing-join-code.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -69,6 +70,10 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReset();
     mocks.renderQrPngDataUrl.mockReset();
     mocks.runCommandWithTimeout.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("returns the setup code, QR data URL, and only an auth label", async () => {
@@ -233,6 +238,46 @@ describe("device.pair.setupCode", () => {
         bootstrapProfile: { roles: ["node"], scopes: [] },
       }),
     );
+  });
+
+  it("mints from a secure fallback and preserves its public context path", async () => {
+    const resolution = {
+      ...okResolution,
+      payload: {
+        url: "ws://192.168.1.20:18789/openclaw-gw",
+        urls: [
+          "ws://192.168.1.20:18789/openclaw-gw",
+          "wss://gateway.tailnet.example/public-gateway",
+        ],
+        bootstrapToken: "boot-123",
+        expiresAtMs: 123_456,
+      },
+    };
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue(resolution);
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+    // Keep storage substitution test-local: this shard shares a non-isolated worker
+    // with the real mint/redeem test, where a leaked module mock creates unbacked codes.
+    const registerDevicePairingJoinCode = vi
+      .spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode")
+      .mockReturnValue("a".repeat(22));
+
+    const { options, respond } = createOptions({ includeQr: false, joinUrl: true });
+    await expectDefined(
+      devicePairSetupHandlers["device.pair.setupCode"],
+      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
+    )(options);
+
+    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ bootstrapProfile: { roles: ["node"], scopes: [] } }),
+    );
+    expect(registerDevicePairingJoinCode).toHaveBeenCalledWith({
+      payload: resolution.payload,
+      expiresAtMs: resolution.expiresAtMs,
+    });
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      joinUrl: `https://gateway.tailnet.example/public-gateway/j/${"a".repeat(22)}`,
+    });
   });
 
   it("requests the limited mobile bootstrap profile when selected", async () => {

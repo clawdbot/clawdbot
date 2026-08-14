@@ -20,91 +20,32 @@ describe("coercion helper declaration AST guard", () => {
   it("finds functions, callable variables, methods, fields, and object properties", () => {
     const source = [
       "export async function readString() {}",
-      "if (true) {",
-      "  function asRecord() {}",
-      "}",
       "const isRecord = (value: unknown) => Boolean(value);",
-      "let toError = function (value: unknown) { return value; };",
-      "var optionalString = async (value: unknown) => value;",
-      "const readString = (((value: unknown) => String(value)) satisfies ((value: unknown) => string));",
-      "function readNumber(record: Record<string, unknown>, key: string) { return record[key]; }",
-      "const timestampMs = (value: unknown) => Number(value);",
-      "function readBoolean() {}",
-      "function readOptionalString() {}",
-      "function normalizeString() {}",
-      "const asString = (value: unknown) => String(value);",
-      "function asObject() {}",
       "const readOptionalString = normalizeOptionalString;",
       "const optionalString = helpers.readStringValue;",
-      "const asObject = helpers.asOptionalRecord;",
+      "const timestampMs = (((value: unknown) => Number(value)) satisfies ((value: unknown) => number));",
       "class Example {",
-      "  readString() {}",
-      "  toError = () => new Error();",
+      "  readNumber() {}",
       "  asRecord = function () { return {}; };",
       "}",
       "const object = {",
-      "  optionalString() {},",
       "  readBoolean: () => true,",
-      "  readNumber: function () { return 1; },",
       "};",
-      "function normalizeOptionalString() {}",
-      "const parseDateFirstTimestampMs = () => 0;",
-      "function safeParseJsonRecord() {}",
-      "function resolveIntegerOption() {}",
+      "function normalizeAgentId() {}",
+      "const isValidAgentId = () => true;",
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
       { file: "src/example.ts", kind: "function", line: 1, name: "readString" },
-      { file: "src/example.ts", kind: "function", line: 3, name: "asRecord" },
-      { file: "src/example.ts", kind: "variable", line: 5, name: "isRecord" },
-      { file: "src/example.ts", kind: "variable", line: 6, name: "toError" },
-      { file: "src/example.ts", kind: "variable", line: 7, name: "optionalString" },
-      { file: "src/example.ts", kind: "variable", line: 8, name: "readString" },
-      { file: "src/example.ts", kind: "function", line: 9, name: "readNumber" },
-      { file: "src/example.ts", kind: "variable", line: 10, name: "timestampMs" },
-      { file: "src/example.ts", kind: "function", line: 11, name: "readBoolean" },
-      { file: "src/example.ts", kind: "function", line: 12, name: "readOptionalString" },
-      { file: "src/example.ts", kind: "function", line: 13, name: "normalizeString" },
-      { file: "src/example.ts", kind: "variable", line: 14, name: "asString" },
-      { file: "src/example.ts", kind: "function", line: 15, name: "asObject" },
-      {
-        file: "src/example.ts",
-        kind: "variable",
-        line: 16,
-        name: "readOptionalString",
-      },
-      { file: "src/example.ts", kind: "variable", line: 17, name: "optionalString" },
-      { file: "src/example.ts", kind: "variable", line: 18, name: "asObject" },
-      { file: "src/example.ts", kind: "method", line: 20, name: "readString" },
-      { file: "src/example.ts", kind: "field", line: 21, name: "toError" },
-      { file: "src/example.ts", kind: "field", line: 22, name: "asRecord" },
-      { file: "src/example.ts", kind: "method", line: 25, name: "optionalString" },
-      { file: "src/example.ts", kind: "property", line: 26, name: "readBoolean" },
-      { file: "src/example.ts", kind: "property", line: 27, name: "readNumber" },
-      {
-        file: "src/example.ts",
-        kind: "function",
-        line: 29,
-        name: "normalizeOptionalString",
-      },
-      {
-        file: "src/example.ts",
-        kind: "variable",
-        line: 30,
-        name: "parseDateFirstTimestampMs",
-      },
-      {
-        file: "src/example.ts",
-        kind: "function",
-        line: 31,
-        name: "safeParseJsonRecord",
-      },
-      {
-        file: "src/example.ts",
-        kind: "function",
-        line: 32,
-        name: "resolveIntegerOption",
-      },
+      { file: "src/example.ts", kind: "variable", line: 2, name: "isRecord" },
+      { file: "src/example.ts", kind: "variable", line: 3, name: "readOptionalString" },
+      { file: "src/example.ts", kind: "variable", line: 4, name: "optionalString" },
+      { file: "src/example.ts", kind: "variable", line: 5, name: "timestampMs" },
+      { file: "src/example.ts", kind: "method", line: 7, name: "readNumber" },
+      { file: "src/example.ts", kind: "field", line: 8, name: "asRecord" },
+      { file: "src/example.ts", kind: "property", line: 11, name: "readBoolean" },
+      { file: "src/example.ts", kind: "function", line: 13, name: "normalizeAgentId" },
+      { file: "src/example.ts", kind: "variable", line: 14, name: "isValidAgentId" },
     ]);
   });
 
@@ -126,9 +67,10 @@ describe("coercion helper declaration AST guard", () => {
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([]);
   });
 
-  it("allows an exact function-kind declaration and reports ordinary excess/stale counts", () => {
+  it("allows one exact declaration and reports duplicate, unowned, and stale entries", () => {
     const declarations: CoercionHelperDeclaration[] = [
       { file: "src/allowed.ts", kind: "function", line: 2, name: "isRecord" },
+      { file: "src/allowed.ts", kind: "function", line: 3, name: "isRecord" },
       { file: "src/new.ts", kind: "function", line: 4, name: "readString" },
     ];
     const carveOuts: CoercionHelperCarveOut[] = [
@@ -136,29 +78,28 @@ describe("coercion helper declaration AST guard", () => {
         file: "src/allowed.ts",
         name: "isRecord",
         kind: "function",
-        count: 1,
         reason: "Dependency-free protocol boundary.",
       },
       {
         file: "src/removed.ts",
         name: "toError",
         kind: "function",
-        count: 1,
         reason: "Hostile object trap semantics.",
       },
     ];
 
     expect(auditCoercionHelperDeclarations(declarations, carveOuts)).toEqual({
-      excessDeclarations: [{ file: "src/new.ts", kind: "function", line: 4, name: "readString" }],
+      excessDeclarations: [
+        { file: "src/allowed.ts", kind: "function", line: 3, name: "isRecord" },
+        { file: "src/new.ts", kind: "function", line: 4, name: "readString" },
+      ],
       invalidCarveOuts: [],
       staleCarveOuts: [
         {
           file: "src/removed.ts",
           name: "toError",
           kind: "function",
-          count: 1,
           reason: "Hostile object trap semantics.",
-          actualCount: 0,
         },
       ],
     });
@@ -177,14 +118,13 @@ describe("coercion helper declaration AST guard", () => {
         file: "src/owner.ts",
         name: "isRecord",
         kind: "function",
-        count: 1,
         reason: "Exact function owner.",
       };
 
       expect(auditCoercionHelperDeclarations([declaration], [carveOut])).toEqual({
         excessDeclarations: [declaration],
         invalidCarveOuts: [],
-        staleCarveOuts: [{ ...carveOut, actualCount: 0 }],
+        staleCarveOuts: [carveOut],
       });
     },
   );
@@ -194,7 +134,6 @@ describe("coercion helper declaration AST guard", () => {
       file: "src/owner.ts",
       name: "isRecord",
       kind: "function",
-      count: 1,
       reason: "Exact function owner.",
     };
     const invalid = [
@@ -205,7 +144,7 @@ describe("coercion helper declaration AST guard", () => {
         file: "src/not-banned.ts",
         name: "domainParser",
       } as unknown as CoercionHelperCarveOut,
-      { ...valid, file: "src/blank.ts", count: 0, reason: "" },
+      { ...valid, file: "src/blank.ts", reason: "" },
       {
         ...valid,
         file: "src/kind.ts",
@@ -216,7 +155,6 @@ describe("coercion helper declaration AST guard", () => {
     expect(auditCoercionHelperDeclarations([], invalid).invalidCarveOuts).toEqual([
       "src/owner.ts [isRecord] is listed more than once",
       "src/not-banned.ts [domainParser] is not a banned helper name",
-      "src/blank.ts [isRecord] must have a positive count",
       "src/blank.ts [isRecord] needs a non-empty reason",
       "src/kind.ts [isRecord] has invalid kind getter",
     ]);
@@ -253,32 +191,14 @@ describe("coercion helper declaration AST guard", () => {
     expect(findExportedCallableNames(source, "src/owner.ts")).toEqual(["alias", "canonical"]);
   });
 
-  it.each([
-    ["classified", ["kept"], [{ file: "src/owner.ts", name: "kept", status: "enforced" }]],
-    [
-      "deferred",
-      ["format"],
-      [
-        {
-          file: "src/owner.ts",
-          name: "format",
-          status: "deferred",
-          reason: "Meaningful public collision.",
-        },
-      ],
-    ],
-  ] as const)("accepts a %s canonical export", (_label, names, classifications) => {
-    expect(
-      auditCanonicalCoercionExports(new Map([["src/owner.ts", names]]), classifications),
-    ).toEqual({
-      invalidClassifications: [],
-      staleClassifications: [],
-      unclassifiedExports: [],
-    });
-  });
-
   it("reports unclassified exports and stale, duplicate, or blank deferred entries", () => {
     const kept = { file: "src/owner.ts", name: "kept", status: "enforced" } as const;
+    const deferredKept = {
+      file: "src/owner.ts",
+      name: "format",
+      status: "deferred",
+      reason: "Meaningful public collision.",
+    } as const;
     const removed = {
       file: "src/owner.ts",
       name: "removed",
@@ -292,8 +212,8 @@ describe("coercion helper declaration AST guard", () => {
       reason: "",
     } as const;
     const audit = auditCanonicalCoercionExports(
-      new Map([["src/owner.ts", ["kept", "newHelper"]]]),
-      [kept, kept, removed, blank],
+      new Map([["src/owner.ts", ["kept", "format", "newHelper"]]]),
+      [kept, deferredKept, kept, removed, blank],
     );
 
     expect(audit.invalidClassifications).toEqual([
@@ -327,7 +247,6 @@ describe("coercion helper declaration AST guard", () => {
             file: "src/z.ts",
             name: "readString",
             kind: "function",
-            count: 1,
             reason: "Exact function owner.",
           },
         ],
@@ -348,10 +267,15 @@ describe("coercion helper declaration AST guard", () => {
     expect(output).toContain("Banned local coercion-helper declarations:");
     expect(output).toContain("readString (method declaration)");
     expect(output).toContain("Stale coercion-helper carve-outs:");
-    expect(output).toContain("expected 1 function declaration(s), found 0");
-    expect(output).toContain("Core/package/UI/workspace-script code");
-    expect(output).toContain("Plugin production code");
-    expect(output).toContain("number-runtime");
+    expect(output).toContain(
+      "src/z.ts [readString] has no function declaration; remove the carve-out",
+    );
+    expect(output).toContain(
+      "Core/package/UI/workspace-script code: use the matching @openclaw/normalization-core export or module.",
+    );
+    expect(output).toContain(
+      "Bundled plugin production code: use the matching openclaw/plugin-sdk runtime; number-runtime is bundled/private-local, not a third-party typed contract.",
+    );
     expect(output).toContain("Dependency-free, copied, generated, or serialized code");
   });
 

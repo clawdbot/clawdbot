@@ -1233,7 +1233,8 @@ describe("mcp loopback server", () => {
     const boundContext = {
       sessionKey: "agent:main:discord:channel:bound",
       runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
-      agentId: "worker",
+      runtimePolicyAgentId: "worker",
+      agentId: "main",
       sessionId: "session-bound",
       runId: "run-bound",
       modelProvider: "anthropic",

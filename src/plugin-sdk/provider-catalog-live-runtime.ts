@@ -9,7 +9,10 @@ import type {
 } from "../plugins/types.js";
 import {
   buildOpenAICompatibleLiveModels,
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogRecord,
+  readLiveModelCatalogStringField,
 } from "./provider-catalog-live-normalize.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
@@ -33,6 +36,11 @@ export type LiveModelCatalogHeaderContext = {
 };
 
 export { clearLiveCatalogCacheForTests };
+export {
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
+  readLiveModelCatalogStringField,
+};
 
 export type FetchLiveProviderModelIdsParams = {
   providerId: string;

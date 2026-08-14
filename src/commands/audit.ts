@@ -1,5 +1,8 @@
 /** Operator CLI for bounded metadata-only activity audit pages. */
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   AuditActivityListParams,
@@ -13,9 +16,9 @@ import type {
   PrincipalRefV1,
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { parsePositiveAuditCursor } from "../audit/audit-cursor.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 const DEFAULT_AUDIT_LIMIT = 100;
@@ -470,17 +473,24 @@ export async function auditListCommand(
       );
     }
     const decisionLimit = parseAuditDecisionLimit(options.limit);
-    const result = await queryAuditRunInspection({
-      ...(executionId
-        ? { executionId }
+    const cursor = options.cursor;
+    const numericCursor = parsePositiveAuditCursor(cursor);
+    const runExecutionCursor =
+      numericCursor !== undefined && numericCursor !== null ? cursor : undefined;
+    const decisionPage = {
+      decisionLimit,
+      ...(cursor ? { decisionCursor: cursor } : {}),
+    };
+    const result = await queryAuditRunInspection(
+      executionId
+        ? { executionId, ...decisionPage }
         : {
             runId: runId!,
             executionLimit: Math.min(decisionLimit, MAX_AUDIT_EXECUTION_LIMIT),
-            ...(options.cursor ? { executionCursor: options.cursor } : {}),
-          }),
-      decisionLimit,
-      ...(options.cursor ? { decisionCursor: options.cursor } : {}),
-    });
+            ...(runExecutionCursor ? { executionCursor: runExecutionCursor } : {}),
+            ...decisionPage,
+          },
+    );
     if (options.json) {
       writeRuntimeJson(runtime, result);
       return;

@@ -3,7 +3,8 @@
  */
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -170,8 +171,15 @@ export async function compactEmbeddedAgentSessionDirect(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: requestedParams.config ?? {},
+    workspaceDir: requestedWorkspaceDir,
+    env: process.env,
+    allowWorkspaceScopedSnapshot: true,
+  });
   const pluginPlanCandidates = resolveModelCandidateChain({
     cfg: requestedParams.config,
+    manifestPlugins: currentPluginMetadataSnapshot?.plugins ?? [],
     provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
     model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
     requestedRouteResolution: "resolved",
@@ -275,6 +283,7 @@ export async function compactEmbeddedAgentSessionDirect(
       const fallbacksOverride = resolveCompactionFallbacksOverride(params);
       const resolvedPrimaryCandidate = resolveModelCandidateChain({
         cfg: params.config,
+        manifestPlugins: preparedModelRuntime.metadataSnapshot.plugins,
         provider: primaryProvider,
         model: primaryModel,
         requestedRouteResolution: "resolved",
@@ -288,6 +297,7 @@ export async function compactEmbeddedAgentSessionDirect(
       const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
       const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
         cfg: params.config,
+        manifestPlugins: preparedModelRuntime.metadataSnapshot.plugins,
         provider: primaryProvider,
         model: primaryModel,
         requestedRouteResolution: "resolved",
@@ -336,10 +346,7 @@ export async function compactEmbeddedAgentSessionDirect(
       });
       return fallbackResult.result;
     };
-    return await withPluginRuntimeRegistryScope(
-      preparedModelRuntime.pluginRegistry,
-      compactPrepared,
-    );
+    return await withPluginRuntimeGenerationScope(preparedModelRuntime, compactPrepared);
   } catch (err) {
     return fallbackFailureToCompactionResult(err);
   } finally {

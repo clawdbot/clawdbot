@@ -110,7 +110,11 @@ describe("GatewayClient", () => {
   ) {
     const { res } = makeControlUiResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method ?? "GET" } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method ?? "GET",
+        headers: { host: "gateway.example.test" },
+      } as IncomingMessage,
       res,
       { root: { kind: "resolved", path: tmp } },
     );
@@ -623,17 +627,19 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, ["task"]);
   });
 
-  it("requires operator.read for node presence broadcasts", () => {
+  it("requires operator.read for node topology broadcasts", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();
 
     broadcast("node.presence", { nodeId: "mac-1", lastActiveAtMs: 100 });
+    broadcast("node.runnerInventory.changed", { nodeId: "mac-1" });
 
     expect(pairingSocket.send).not.toHaveBeenCalled();
     expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["node.presence"]);
-    expectSentEvents(writeSocket, ["node.presence"]);
-    expectSentEvents(adminSocket, ["node.presence"]);
+    const expectedEvents = ["node.presence", "node.runnerInventory.changed"];
+    expectSentEvents(readSocket, expectedEvents);
+    expectSentEvents(writeSocket, expectedEvents);
+    expectSentEvents(adminSocket, expectedEvents);
   });
 
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {

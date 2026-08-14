@@ -6,7 +6,7 @@
     <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"上一個 %1$s"</string>
     <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下一個 %1$s"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"控制項"</string>
-    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"說話"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"對話"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手錶音訊失敗"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"語音輸入"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"即時"</string>
@@ -29,13 +29,13 @@
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在說話"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在聆聽"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在連線"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在思考"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"思考中"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在輸入"</string>
-    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在傳送"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"傳送中"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"代理程式正在處理"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"錯誤"</string>
     <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"就緒"</string>
-    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"您"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"你"</string>
     <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"代理程式"</string>
     <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"系統"</string>
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開始對話"</string>

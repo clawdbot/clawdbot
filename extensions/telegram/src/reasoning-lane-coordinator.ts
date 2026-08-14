@@ -29,11 +29,13 @@ const REASONING_TAG_PREFIXES = [
   "<think",
   "<thinking",
   "<thought",
+  "<internal",
   "<antthinking",
   "<mm:think",
   "</think",
   "</thinking",
   "</thought",
+  "</internal",
   "</antthinking",
   "</mm:think",
 ];
@@ -116,11 +118,13 @@ export function splitTelegramReasoningText(
 
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+  const reasoningText = taggedReasoning || strippedAnswer;
+  if (!reasoningText) {
+    return {};
+  }
 
   return {
-    reasoningText: markReasoningMessage(
-      formatReasoningMessage(taggedReasoning || strippedAnswer || text),
-    ),
+    reasoningText: markReasoningMessage(formatReasoningMessage(reasoningText)),
   };
 }
 

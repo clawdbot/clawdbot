@@ -258,6 +258,45 @@ export async function handleSendChat(
       });
       return;
     }
+    const clientPresentation = parsed?.command.clientPresentation;
+    const dispatchClientPresentation = host.dispatchClientPresentation;
+    if (
+      host.connected &&
+      parsed?.args === "" &&
+      clientPresentation?.when === "no-arguments" &&
+      !hasAttachments &&
+      host.chatReplyTarget == null &&
+      dispatchClientPresentation
+    ) {
+      const submitKey = chatSubmitKey(host, "local", message, []);
+      const presentationResult = await withChatSubmitGuard(host, submitKey, async () => {
+        if (host.sessionKey !== submittedSessionKey) {
+          return "not-handled" as const;
+        }
+        let handled = false;
+        try {
+          handled = await dispatchClientPresentation(clientPresentation.action);
+        } catch {
+          // Presentation failures retain the established remote command path.
+        }
+        if (!handled) {
+          return "not-handled" as const;
+        }
+        // The awaited action may outlive its submitted session; never mutate a newly selected one.
+        if (host.sessionKey !== submittedSessionKey) {
+          return "handled" as const;
+        }
+        if (messageOverride == null) {
+          clearSubmittedComposerState(host, previousDraft, attachmentsToSend);
+          recordNonTranscriptInputHistory(host, message);
+        }
+        return "handled" as const;
+      });
+      // An in-flight identical submit is already deciding whether to handle or fall through.
+      if (presentationResult !== "not-handled") {
+        return;
+      }
+    }
     // /approve bypasses the run whose approval it resolves.
     if (parsed?.command.key === "approve" && isChatBusy(host)) {
       const submitKey = chatSubmitKey(host, "detached", message, attachmentsToSend);

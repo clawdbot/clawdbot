@@ -277,6 +277,58 @@ describe("registerDirectoryCli", () => {
   });
 
   it.each([
+    [
+      "self",
+      ["directory", "self", "--channel", "demo-directory", "--json"],
+      "Error: Channel demo-directory does not support directory self",
+    ],
+    [
+      "peers",
+      ["directory", "peers", "list", "--channel", "demo-directory", "--json"],
+      "Error: Channel demo-directory does not support directory peers",
+    ],
+    [
+      "groups",
+      ["directory", "groups", "list", "--channel", "demo-directory", "--json"],
+      "Error: Channel demo-directory does not support directory groups",
+    ],
+    [
+      "group members",
+      [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "demo-directory",
+        "--group-id",
+        "group-1",
+        "--json",
+      ],
+      "Error: Channel demo-directory does not support group members listing",
+    ],
+  ])("writes JSON errors for unsupported directory %s", async (_label, args, expectedError) => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "demo-directory": {} } },
+      channelId: "demo-directory",
+      plugin: {
+        id: "demo-directory",
+        directory: {},
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
+
+    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledOnce();
+    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+    expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
     ["peers list", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
     ["groups list", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
     [

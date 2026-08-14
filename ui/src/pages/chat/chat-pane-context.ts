@@ -50,6 +50,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
 
   override disconnectedCallback() {
+    this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
     super.disconnectedCallback();
@@ -104,7 +105,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
-      this.markSessionRead(selectedSession);
+      // Hidden retained panes keep this subscription alive; only the pane the
+      // user is actually looking at may clear unread/attention state.
+      if (this.presented) {
+        this.markSessionRead(selectedSession);
+      }
     }
     this.syncSessionSuggestionTarget(
       stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
@@ -205,6 +210,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      this.continueInTerminalDialog = null;
       this.cancelHeaderRename();
       cancelChatScroll(state);
       releaseChatMediaResourceSubscriber(state.requestUpdate);

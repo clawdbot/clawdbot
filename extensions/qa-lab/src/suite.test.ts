@@ -301,14 +301,6 @@ describe("qa suite", () => {
     );
   });
 
-  it("parses progress env booleans", () => {
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("true")).toBe(true);
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("on")).toBe(true);
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("false")).toBe(false);
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("off")).toBe(false);
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("maybe")).toBeUndefined();
-  });
-
   it("stops an owned lab when readiness never becomes healthy", async () => {
     const stop = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({

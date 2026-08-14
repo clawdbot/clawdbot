@@ -37,6 +37,7 @@ type HookPayload = {
   message: string;
   name: string;
   agentId?: string;
+  effectiveAgentId: string;
   wakeMode: "now" | "next-heartbeat";
   sessionKey: string;
   sourcePath: string;
@@ -49,6 +50,7 @@ function payload(overrides: Partial<HookPayload> = {}): HookPayload {
   return {
     message: "test message",
     name: "Email",
+    effectiveAgentId: "main",
     wakeMode: "now",
     sessionKey: "session-1",
     sourcePath: "/hooks/agent",

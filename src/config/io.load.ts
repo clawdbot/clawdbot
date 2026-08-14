@@ -170,7 +170,7 @@ export function loadConfigFromContext(
       context,
       validated.config,
       effectiveConfigRaw,
-      pluginMetadata.getSnapshot(),
+      pluginMetadata.getManifestRegistry(),
     );
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({

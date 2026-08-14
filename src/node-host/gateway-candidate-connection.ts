@@ -25,7 +25,7 @@ type GatewayCandidateConnectionParams = {
   candidates: readonly NodeHostGatewayConfig[];
   clientOptions: CandidateConnectionOptions;
   onEvent: (event: GatewayCandidateEvent) => void;
-  onHelloOk: (hello: GatewayCandidateHello, url: string) => void;
+  onHelloOk: (hello: GatewayCandidateHello, url: string, tlsFingerprint?: string) => void;
   onConnectError: (error: Error) => void;
   onReconnectPaused: (info: GatewayReconnectPausedInfo) => void;
   onClose: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
@@ -84,7 +84,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
           winnerSelected = true;
           params.onWinningCandidate(candidate);
         }
-        params.onHelloOk(hello, url);
+        params.onHelloOk(hello, url, candidate.tlsFingerprint);
       },
       onConnectError: (error) => {
         if (currentCandidateIndex === candidateIndex) {

@@ -371,12 +371,24 @@ byte-offset cursors and bounded backward file reads, so selecting a large
 session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
-The list and read commands are read-only. They expose catalog metadata and transcript
-content only through the generic `sessions.catalog.list` and
-`sessions.catalog.read` methods to an authenticated operator connection with
-`operator.write`. A Gateway-local Claude CLI row can be adopted from the normal
-Chat composer: OpenClaw imports bounded visible history, resumes with
-`--fork-session` on the first turn, and leaves the source transcript untouched.
+Catalog RPCs keep their normal method scopes: `sessions.catalog.list` and
+`sessions.catalog.read` require `operator.read`; `sessions.catalog.continue` and
+`sessions.catalog.archive` require `operator.write`.
+
+Catalog visibility also follows the authenticated caller. An `operator.admin`
+connection sees every discovered row. When the Gateway has durable profiles for
+fewer than two people, catalog visibility is unchanged and rows remain unfiltered.
+On a multi-user Gateway, a non-admin connection sees and can read, continue, or
+archive only rows whose recorded `createdActor.id` matches the caller's Gateway
+profile. Unattributed host CLI or desktop sessions are hidden from those callers.
+This is a privacy and coordination boundary inside one trusted Gateway domain,
+not hostile-user isolation; use separate agents or Gateway/host trust boundaries
+when people must not share access to files, credentials, or tools. See
+[Multi-user mode](/concepts/multi-user).
+
+A Gateway-local Claude CLI row can be adopted from the normal Chat composer:
+OpenClaw imports bounded visible history, resumes with `--fork-session` on the
+first turn, and leaves the source transcript untouched.
 
 A headless node host can opt into the same continuation flow:
 
@@ -405,6 +417,33 @@ Gateway loopback MCP config or Gateway skills plugin, cannot reseed from a
 Gateway transcript, and reject attachments and images. Claude Desktop rows and
 nodes that do not advertise the run command remain view-only. The macOS app
 node does not advertise this command yet, so its rows remain view-only.
+
+### Host OpenClaw sessions
+
+A headless node host can separately opt into full OpenClaw session hosting from
+its local installation:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: { enabled: true },
+  },
+}
+```
+
+Restart the node host after enabling this setting. At startup it freezes the
+exact OpenClaw version, worker-bundle hash, and worker protocol features of its
+own installation in the connection handshake, then repeats that build in its
+live runner inventory. The Gateway reports prepared session-host eligibility
+only while those declarations match, and provisioning requires the node and
+Gateway versions to match exactly. If they differ, update the node before
+retrying.
+
+This setting completes device-environment provisioning and session-host status;
+it does **not** yet make device turn dispatch succeed. The Gateway still returns
+`device-runner-transport-unimplemented` until the local-install chain adds
+supervised launch and workspace transport. Do not treat the status as proof that
+a complete turn can run on the device yet.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
@@ -484,7 +523,7 @@ These rows describe the Gateway policy ceiling, not the commands implemented by 
 
 Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows/Linux) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
-Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [HealthKit summaries](/platforms/ios-healthkit) for the iPhone consent gate and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop input.
+Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `desktop.stream`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [Paired node desktops](/gateway/configuration-reference#paired-node-desktops), [HealthKit summaries](/platforms/ios-healthkit), and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop access.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.commands.allow` opt-in.
 
@@ -511,9 +550,9 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       pluginTools: {
         enabled: true,
       },
-      // Persistently enable dangerous/privacy-heavy node commands (camera.snap, etc.).
+      // Persistently enable dangerous/privacy-heavy node commands.
       commands: {
-        allow: ["camera.snap", "screen.record"],
+        allow: ["camera.snap", "desktop.stream", "screen.record"],
         // Block exact command names even if defaults or commands.allow include them.
         deny: ["camera.clip"],
       },

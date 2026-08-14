@@ -31,6 +31,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     sessionObserver,
     getMcpAppSandboxPort,
     ensureSandboxHostPort,
+    getPortalService,
     terminalLaunchPolicy,
     execApprovalManager,
     cancelRunBoundApprovals,
@@ -63,8 +64,11 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     claimControlUiDeviceAuthMigration,
     releaseControlUiDeviceAuthMigrationClaim,
     nodeRegistry,
+    nodeDesktopService,
     workerEnvironmentService,
+    hostDesktopService,
     workerEnvironmentStartup,
+    workerPlacementRuntime,
     workerPlacementControlAvailable,
     terminalSessions,
     agentRunSeq,
@@ -116,6 +120,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       sessionObserver,
       getMcpAppSandboxPort,
       ensureSandboxHostPort,
+      getPortalService,
       resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
       isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       execApprovalManager,
@@ -162,9 +167,14 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
         releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
+      ...(nodeDesktopService ? { nodeDesktopService } : {}),
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
+      ...(hostDesktopService ? { hostDesktopService } : {}),
       ...(workerEnvironmentStartup
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
+        : {}),
+      ...(workerPlacementRuntime
+        ? { workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }

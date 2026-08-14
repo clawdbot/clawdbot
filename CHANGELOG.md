@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **macOS app profiles:** isolate named app instances across state, preferences, Keychain, Gateway services, and duplicate-instance ownership while keeping host-global login and node services untouched.
 - **Developer workflow:** remove the obsolete scoped-commit helper and use standard Git commands in isolated worktrees.
@@ -68,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Codex subagent fan-out:** settle successful terminal yields immediately and preserve requester ownership so completed children reliably resume their parent.
 - **Control UI session companion:** load bounded visible session context before answering, keep unavailable questions retryable, and prevent private companion reference wrappers from appearing as answers. Fixes #120746. Thanks @shakkernerd.
 - **Telegram live locations:** expose initial, moving, and stopped live-location updates through the channel-neutral `message_received` hook without starting agent turns for edits.
 - **Updater plugin convergence:** keep pre-plugin doctor passes from installing configured plugins before the updater's plugin sweep, while preserving the final post-plugin migration pass and preventing ambient update-phase state from leaking into fresh doctor processes.

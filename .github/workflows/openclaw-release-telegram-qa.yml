@@ -1520,10 +1520,14 @@ jobs:
           export XDG_CONFIG_HOME="${temp_root}/xdg-config"
           export XDG_DATA_HOME="${temp_root}/xdg-data"
 
-          chown "$RUNNER_UID:$RUNNER_GID" "$temp_root"
-          chmod 0711 "$temp_root"
+          # The SUT must create config lock/temp entries beside the runner-owned
+          # config. Sticky group-write prevents it from replacing that config.
+          chown "$RUNNER_UID:$SUT_GID" "$temp_root"
+          chmod 1770 "$temp_root"
           chown "$RUNNER_UID:$SUT_GID" "$config_path"
           chmod 0640 "$config_path"
+          [[ "$(stat -c '%F:%a:%u:%g' "$temp_root")" == "directory:1770:${RUNNER_UID}:${SUT_GID}" ]]
+          [[ "$(stat -c '%F:%a:%u:%g' "$config_path")" == "regular file:640:${RUNNER_UID}:${SUT_GID}" ]]
           sut_tmp="${temp_root}/sut-tmp"
           install -d -o "$SUT_UID" -g "$SUT_GID" -m 0700 "$sut_tmp"
           export TMPDIR="$sut_tmp"
@@ -1834,14 +1838,18 @@ jobs:
                       runtime_stage=write-sandbox-proof
                       printf "%s" "$runtime_sandbox_payload_b64" | base64 -d >&3
                       exec 3>&-
-                      runtime_stage=exec-runtime
-                      exec "$runtime_node_bin" \
-                        --import "$runtime_preload_path" \
-                        "$runtime_candidate_root/dist/index.js" \
-                        "$@"
+                      runtime_node_args=(
+                        --import "$runtime_preload_path"
+                        "$runtime_candidate_root/dist/index.js" "$@"
+                      )
+                    else
+                      runtime_node_args=("$runtime_candidate_root/dist/index.js" "$@")
                     fi
+                    # Login Bash reads /etc/bash.bashrc with inherited nounset.
+                    # Add PS1 only after the attested inbound env-key comparison.
+                    export PS1=
                     runtime_stage=exec-runtime
-                    exec "$runtime_node_bin" "$runtime_candidate_root/dist/index.js" "$@"
+                    exec "$runtime_node_bin" "${runtime_node_args[@]}"
                   '\'' openclaw-sut "$@"
             ' openclaw-sut "$@"
           LAUNCHER

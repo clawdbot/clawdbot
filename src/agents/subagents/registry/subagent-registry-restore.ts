@@ -8,6 +8,10 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import {
+  backfillSubagentRequesterAgentIds,
+  resolveSubagentRequesterAgentId,
+} from "../../subagent-requester-owner.js";
 import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import { retrySubagentCleanup } from "../spawn/subagent-spawn-cleanup.js";
 import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
@@ -57,7 +61,11 @@ export function createSubagentRegistryRestorer(config: {
   ensureListener: () => void;
   startSweeper: () => void;
   resumeRun: (runId: string) => void;
-  listSwarmRunsForGroup: (groupId: string, requesterSessionKey?: string) => SubagentRunRecord[];
+  listSwarmRunsForGroup: (
+    groupId: string,
+    requesterSessionKey?: string,
+    requesterAgentId?: string,
+  ) => SubagentRunRecord[];
   startQueuedSubagentRun: (
     runId: string,
     gatewayRunId?: string,
@@ -153,6 +161,9 @@ export function createSubagentRegistryRestorer(config: {
         runs,
         resumedRuns,
       });
+      if (backfillSubagentRequesterAgentIds(cfg, runs.values()) > 0) {
+        restoredStateChanged = true;
+      }
       for (const entry of runs.values()) {
         if (updateSubagentArchiveAtMs(entry, cfg)) {
           restoredStateChanged = true;
@@ -162,24 +173,32 @@ export function createSubagentRegistryRestorer(config: {
         persist();
       }
       const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
+      const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
+        resolveSubagentRequesterAgentId(cfg, entry);
       for (const entry of runs.values()) {
         const requesterTurnRunId = entry.requesterTurnRunId?.trim();
         if (!requesterTurnRunId) {
           continue;
         }
-        let turns = requesterTurns.get(entry.requesterSessionKey);
+        const requesterIdentity = `${resolveRequesterAgentId(entry) ?? "unknown"}\0${entry.requesterSessionKey}`;
+        let turns = requesterTurns.get(requesterIdentity);
         if (!turns) {
           turns = new Map();
-          requesterTurns.set(entry.requesterSessionKey, turns);
+          requesterTurns.set(requesterIdentity, turns);
         }
         const entries = turns.get(requesterTurnRunId) ?? [];
         entries.push(entry);
         turns.set(requesterTurnRunId, entries);
       }
-      for (const [requesterSessionKey, turns] of requesterTurns) {
+      for (const [, turns] of requesterTurns) {
         for (const [requesterTurnRunId, entries] of turns) {
+          const firstEntry = entries[0];
+          if (!firstEntry) {
+            continue;
+          }
           settleRequesterTurn({
-            requesterSessionKey,
+            requesterSessionKey: firstEntry.requesterSessionKey,
+            requesterAgentId: resolveRequesterAgentId(firstEntry),
             requesterTurnRunId,
             requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
             acceptedSessionSpawns: entries.map((entry) => ({
@@ -226,6 +245,7 @@ export function createSubagentRegistryRestorer(config: {
           const groupRuns = listSwarmRunsForGroup(
             entry.groupId ?? "",
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
+            entry.requesterAgentId,
           );
           const currentSwarmConfig = resolveSwarmConfig(
             deps().getRuntimeConfig(),

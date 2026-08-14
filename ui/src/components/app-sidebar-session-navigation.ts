@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
@@ -20,7 +21,6 @@ import {
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -628,10 +628,13 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const lineageAgentId = normalizeAgentId(
       parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
     );
+    // Adopted catalog keys render as live rows inside the Coding catalog;
+    // re-inserting one here would show the selected session twice.
     const selectedFallback = navigationState.visibleSessionRows.find(
       (session) =>
         (selected === routeAgentId || lineageAgentId === selected) &&
         session.key === navigationState.activeRowKey &&
+        !adopted.has(session.key) &&
         !areUiSessionKeysEquivalent(session.key, mainSessionKey),
     );
     const mainSessionKeys = new Set<string>([mainSessionKey]);

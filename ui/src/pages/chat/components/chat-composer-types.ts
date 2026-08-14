@@ -46,8 +46,14 @@ export type CapabilityMenuProps = Omit<
 >;
 
 type ChatComposerDisabledBannerContent = {
+  title?: string;
   text: string;
+  tone?: "info" | "neutral";
+  icon?: "warning";
   actionLabel: string;
+  actionStyle?: "primary";
+  busy?: boolean;
+  busyLabel?: string;
   disabledReason?: string;
   onAction: () => void;
 };

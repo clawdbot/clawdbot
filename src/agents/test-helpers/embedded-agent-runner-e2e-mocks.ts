@@ -29,7 +29,7 @@ type EmbeddedRunnerBackoffMockOptions = {
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
-function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
+export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
   return {
     policyHash: "",
     ...(workspaceDir !== undefined ? { workspaceDir } : {}),

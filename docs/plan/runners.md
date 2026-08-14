@@ -13,21 +13,22 @@ Proposal, revision 2. Supersedes revision 1 in place (2026-08-11, operator
 decision). Implementation in progress; update this table in every PR that
 advances a milestone.
 
-| #   | Milestone                                                  | Status      | PRs              |
-| --- | ---------------------------------------------------------- | ----------- | ---------------- |
-| 0   | This plan (revision 2)                                     | landed      | #122454          |
-| 1a  | Naming: session copy revert                                | landed      | #120667          |
-| 1b  | Naming: devices consolidation                              | landed      | #120689          |
-| 1c  | Cleanup: node-pairing → device-pairing merge               | not started | —                |
-| 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664          |
-| 3   | `openclaw connect` one-paste onboarding + `/j/` join route | not started | —                |
-| 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531 |
-| 5   | Public worker ingress path                                 | not started | —                |
-| 6   | Node worker provider (device runners)                      | not started | —                |
-| 7   | Bundle push consent + runner updates                       | not started | —                |
-| 8   | Stop-and-continue moves                                    | not started | —                |
-| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                |
-| 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                |
+| #   | Milestone                                                  | Status      | PRs                                                                             |
+| --- | ---------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------- |
+| 0   | This plan (revision 2)                                     | landed      | #122454                                                                         |
+| 1a  | Naming: session copy revert                                | landed      | #120667                                                                         |
+| 1b  | Naming: devices consolidation                              | landed      | #120689                                                                         |
+| 1c  | Cleanup: node-pairing → device-pairing merge               | landed      | #120726                                                                         |
+| 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664, #122870                                                                |
+| 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499                                                                |
+| 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531, #122635, #122774, #122923                                     |
+| F   | Real-wire session boundary harness                         | landed      | #121212                                                                         |
+| 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                |
+| 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280 |
+| 7   | Bundle push consent + runner updates                       | not started | —                                                                               |
+| 8   | Stop-and-continue moves                                    | not started | —                                                                               |
+| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                                                               |
+| 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                                                                               |
 
 Revision history: revision 1 (2026-08-08) established the session/runner
 vocabulary, the naming rulings, and the milestone skeleton after a
@@ -206,6 +207,22 @@ Isolation on node runners: optional worker-in-docker/podman, same sandbox
 axis as gateway-local sessions. Cloud leases keep full-permission-within-the-
 box (the machine is the boundary).
 
+Milestone 6 now has the public worker ingress, transport-neutral launch
+descriptor, durable node-host supervisor, private launch/status/cancel dialect,
+bounded terminal receipts, and the Gateway launch replay/poll/cancel adapter.
+A node freezes its optional local worker build in the connection handshake and
+repeats it in one atomic, reconnect-scoped private runner inventory with the
+supervisor dialect. The Gateway requires those semantic build identities to
+match. Public node and environment projections expose only `sessionHost`; a
+read-scoped topology invalidation makes clients refetch without exposing the
+build. Provider eligibility and new launch selection require the exact handshake,
+while status and cancellation reacquire only the current supervisor proof and use
+the durable launch identity so an upgrade cannot strand an existing worker.
+Node-local opt-in advertises the current installation; default nodes remain
+non-hosts. Milestone 7 upgrades this to Gateway-pinned, namespaced bundle bytes.
+Slots, isolation, checkouts, workspace transfer, and persistent-runner lifecycle
+remain milestone 6 work.
+
 ### Trust model (operator-decided, v1)
 
 Cloud workers run full-permission because the box is disposable and
@@ -296,22 +313,28 @@ Revision 1's design rule stands: normal state is silent; only exceptions
 speak. Additions:
 
 - **Use the existing environment type discriminant** for picker grouping:
-  local gateway, connected execution-capable nodes, worker environments, and
-  the separate cloud profiles list. `sessionHost` is deferred to milestone 6,
-  where device runners introduce the capability fact that needs it.
+  local gateway, execution-capable nodes, worker environments, and the
+  separate cloud profiles list. Device-runner inventory adds `sessionHost`
+  without creating another place ontology.
 - **Where picker regrouped** (`ui/src/pages/new-session/place-picker.ts`):
   sections "This gateway" / "Devices" / "Cloud". Device rows intersect the
-  environment catalog with connected, execution-capable nodes; cloud
+  environment catalog with execution-capable paired nodes; connected rows are
+  selectable, while remembered offline rows stay visible but disabled. Cloud
   profiles remain their separate list. Folder and destination stay
   orthogonal.
+- **Node connection history is server-owned.** Successful node hello records
+  `lastConnectedAtMs`; retiring that exact pairing generation and connection
+  records `lastDisconnectedAtMs` in the existing node surface. `node.list` and
+  `environments.list/status` project those facts. The picker uses the existing
+  topology refresh events and distinguishes "Never connected", "Offline for
+  …", and the legacy/unclean-exit fallback "Last seen …". Connected rows stay
+  silent. This adds no config, event, or SQLite schema-version surface.
 - **Placement chip** on the session header: shows quiet current placement;
   active cloud placements reclaim through `sessions.reclaim` with "Bring
   home". Stop-and-continue moves arrive with milestone 8.
-- **Remaining milestone work**: live presence and pairing subscriptions, the
-  admin-gated "Connect a machine…" foot, busy and never-connected states,
-  and additive `EnvironmentSummary` platform, session-host, trust, and runner
-  version facts. `runner-offline` then shows a banner with the recorded reason
-  and its recovery verbs.
+- **Remaining milestone work**: the admin-gated "Connect a machine…" foot and
+  busy/slot state. `runner-offline` then shows a banner with the recorded
+  reason and its recovery verbs.
 
 ### Cloud convergence (milestone 10)
 
@@ -385,8 +408,27 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
 
 1. **1c naming cleanup**: finish nodes → devices in route ids, i18n keys,
    labels; `node-pairing.ts` facade merge. Before any new placement copy.
-2. **Continuation ergonomics** (in progress): `openclaw resume`, web
-   "Continue in terminal".
+2. **Continuation ergonomics** (in progress): `openclaw resume` plus the web
+   **Continue in terminal…** session action. The browser copies one
+   credential-free command with one bounded, versioned, URL-safe handoff
+   argument that encodes the exact qualified session key and selected Gateway
+   WebSocket URL without shell-specific quoting. The key is agent-qualified and
+   bounded to 512 user-perceived characters. Query-routed Gateway URLs are
+   intentionally excluded because authentication and stored device scope are
+   not query-aware; the UI never strips or copies the query and instead directs
+   operators to a manually authenticated target or queryless configured URL. It
+   never executes the CLI or delegates first-use authentication. Before attach,
+   Resume asks the Gateway to resolve the key, uses only the returned canonical
+   key, and rejects a missing or ambiguous handoff without starting another
+   session. Resume may reuse only the current
+   profile's auth, SecretRefs, and exact-origin device auth when the handoff URL
+   byte-for-byte matches a target owned by the configured mode: local + Control
+   UI base path or public origin + base path in local mode, and only the remote
+   URL in remote mode. TLS pin reuse is limited to direct-local and
+   configured remote identities; public origins inherit no local-listener pin.
+   Ambient Gateway auth env fallback is suppressed for handoffs. Mismatches fail
+   closed, terminal auth remains independent, and session ACLs stay
+   authoritative.
 3. **`openclaw connect`**: verb + `oc-pair://` decoder + TLS pin in payload +
    `/j/<shortcode>` join route (reserved prefix, single-use, rate-limited) +
    shortcode mint + curl wrapper on the public site. Exit: a fresh machine
@@ -407,6 +449,16 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    column. Fault-injection tests gate exit: device sleep mid-turn, node WS
    blip mid-turn (turn survives), gateway restart with offline device,
    credential expiry, slot saturation, dispatch-with-no-live-runner timeout.
+   The local-install route lands as three PRs: **A** enables node session-host
+   advertisement and completes receipt/credential provisioning; **B** wires
+   supervised worker launch with a clean, published HTTP(S) origin-clone
+   fallback and unchanged-workspace verification; **C** replaces that typed
+   `workspace-transport-pending` boundary with authenticated workspace
+   transfer and full reconciliation. Part C carries clean, dirty, unpublished,
+   plain-directory, submodule, and Git LFS workspaces through a closure-bound
+   HTTPS capability; clean published origins remain an optional fast path.
+   Milestone 7 then upgrades this paired-machine claim to Gateway-pinned bundle
+   bytes.
 7. **Bundle push + updates**: consent split, push over paired channel,
    version surfacing, stale-node dispatch refusal.
 8. **Stop-and-continue moves**: drain + reclaim + re-dispatch to another

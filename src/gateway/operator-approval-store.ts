@@ -1,7 +1,9 @@
 // Persistent operator approval lifecycle and first-answer-wins transitions.
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sql, type Selectable } from "kysely";
 import {
   type DecisionReceiptV1,
@@ -261,27 +263,16 @@ function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
 }
 
 function parseApprovalPresentation(raw: string): ApprovalPresentation | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    return validateApprovalPresentation(value) ? value : null;
-  } catch {
-    return null;
-  }
+  const value = safeParseJson(raw);
+  return validateApprovalPresentation(value) ? value : null;
 }
 
 function parseStringArray(raw: string): string[] | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (
-      !Array.isArray(value) ||
-      value.some((entry) => typeof entry !== "string" || !entry.trim())
-    ) {
-      return null;
-    }
-    return value as string[];
-  } catch {
+  const value = safeParseJson(raw);
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
     return null;
   }
+  return value as string[];
 }
 
 function requireString(value: string, label: string): string {
@@ -329,17 +320,6 @@ function decodeOperatorApprovalHistoryCursor(raw: string): OperatorApprovalHisto
     }
     throw new OperatorApprovalHistoryCursorError();
   }
-}
-
-function normalizeStringArray(values: readonly string[] | undefined): string[] {
-  const result: string[] = [];
-  for (const value of values ?? []) {
-    const normalized = normalizeNullableString(value);
-    if (normalized && !result.includes(normalized)) {
-      result.push(normalized);
-    }
-  }
-  return result;
 }
 
 function stringifyPresentation(presentation: ApprovalPresentation): string {
@@ -815,6 +795,7 @@ function terminalApprovalReceiptMetadataRows(params: {
   runId: string;
   nowMs: number;
   after?: OperatorApprovalReceiptCursor;
+  offset?: number;
   limit: number;
 }): OperatorApprovalReceiptMetadataRow[] {
   const boundary = params.after
@@ -845,6 +826,7 @@ function terminalApprovalReceiptMetadataRows(params: {
     )
     .orderBy("operator_approvals.resolved_at_ms", "asc")
     .orderBy("operator_approvals.approval_id", "asc")
+    .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
     .limit(params.limit);
   const metadata = (query: typeof ordered) =>
     query
@@ -983,6 +965,7 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
   context: OperatorApprovalReceiptContext;
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
+  exactCount?: boolean;
 }): {
   count: number;
   coverageState?: "enforced" | "unknown";
@@ -1001,13 +984,21 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
         nowMs: params.nowMs ?? Date.now(),
         limit: OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS + 1,
       });
-      const count = metadataRows.length;
-      if (count === 0) {
+      const boundedCount = metadataRows.length;
+      const count = params.exactCount
+        ? (executeSqliteQueryTakeFirstSync(
+            db,
+            terminalApprovalsForRunQuery(stateDb, params.context.runId, params.nowMs ?? Date.now())
+              .clearSelect()
+              .select((eb) => eb.fn.countAll<number>().as("count")),
+          )?.count ?? 0)
+        : boundedCount;
+      if (boundedCount === 0) {
         return { count: 0, missingEvidence: [] };
       }
       // Whole-set coverage stays conservative without decoding an unbounded
       // collection on the Gateway event loop.
-      if (count > OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS) {
+      if (boundedCount > OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS) {
         return {
           count,
           coverageState: "unknown" as const,
@@ -1059,6 +1050,7 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
 export function pageOperatorApprovalReceiptsForRun(params: {
   context: OperatorApprovalReceiptContext;
   after?: OperatorApprovalReceiptCursor;
+  offset?: number;
   limit: number;
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
@@ -1075,6 +1067,7 @@ export function pageOperatorApprovalReceiptsForRun(params: {
         runId: params.context.runId,
         nowMs: params.nowMs ?? Date.now(),
         after: params.after,
+        offset: params.offset,
         limit: params.limit + 1,
       });
       const pageMetadata = metadataRows.slice(0, params.limit);
@@ -1289,8 +1282,10 @@ export function insertOperatorApproval(params: {
   if (input.presentation.kind !== input.kind) {
     throw new Error("operator approval kind must match its safe presentation");
   }
-  const reviewerDeviceIdsJson = JSON.stringify(normalizeStringArray(input.reviewerDeviceIds));
-  const audienceSessionKeys = normalizeStringArray(input.audienceSessionKeys);
+  const reviewerDeviceIdsJson = JSON.stringify(
+    normalizeUniqueTrimmedStringList(input.reviewerDeviceIds),
+  );
+  const audienceSessionKeys = normalizeUniqueTrimmedStringList(input.audienceSessionKeys);
   if (audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS) {
     throw new Error(
       `operator approval audience exceeds ${OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS} sessions`,

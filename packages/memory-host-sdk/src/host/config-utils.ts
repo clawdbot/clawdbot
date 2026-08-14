@@ -227,7 +227,7 @@ function resolveDefaultAgentWorkspaceDir(env: NodeJS.ProcessEnv = process.env): 
   const home = resolveRequiredHomeDir(env, os.homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (profile && normalizeLowercaseStringOrEmpty(profile) !== "default") {
-    return path.join(home, ".openclaw", `workspace-${profile}`);
+    return path.join(resolveStateDir(env), "workspace");
   }
   return path.join(home, ".openclaw", "workspace");
 }

@@ -50,7 +50,7 @@
   margin-top: var(--space-4);
 }
 
-@media (max-width: 620px) {
+@media (max-width: 640px) {
   .memory-overview__hero {
     grid-template-columns: 112px minmax(0, 1fr);
     min-height: 176px;

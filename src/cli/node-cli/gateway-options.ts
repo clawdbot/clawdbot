@@ -21,6 +21,8 @@ type NodePairGatewayOptions = {
   candidates: NodeHostGatewayConfig[];
 };
 
+type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
+
 function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGatewayConfig {
   const parsed = new URL(url);
   const tls = parsed.protocol === "wss:";
@@ -34,7 +36,13 @@ function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGat
 }
 
 export function resolveNodePairGatewayOptions(input: string): NodePairGatewayOptions {
-  const payload = decodePairingSetupCode(input);
+  return resolveNodePairGatewayPayload(decodePairingSetupCode(input));
+}
+
+/** Project a validated pairing payload into the canonical node-host candidate list. */
+export function resolveNodePairGatewayPayload(
+  payload: PairingSetupPayload,
+): NodePairGatewayOptions {
   const candidates = (payload.urls ?? [payload.url]).map((url) =>
     gatewayConfigFromUrl(url, url === payload.url ? payload.tlsFingerprint : undefined),
   );

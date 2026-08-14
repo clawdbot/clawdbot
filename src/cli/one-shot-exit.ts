@@ -7,6 +7,7 @@ type VitestWorkerMarkers = {
 };
 
 const SYSTEM_CA_FLAG = "--use-system-ca";
+const ONE_SHOT_EXIT_DRAIN_TIMEOUT_MS = 5_000;
 
 let requestedExitCode: number | "process" | undefined;
 
@@ -135,10 +136,15 @@ function flushExitAfterOneShotOutput(
     runtime.exit(requestedCode === "process" ? resolveProcessExitCode() : requestedCode);
   let pendingStreams = 2;
 
+  // A missing pipe callback must not leave a completed one-shot command alive forever.
+  const fallback = setTimeout(exit, ONE_SHOT_EXIT_DRAIN_TIMEOUT_MS);
+  fallback.unref();
+
   const drain = (stream: NodeJS.WriteStream) => {
     stream.write("", () => {
       pendingStreams -= 1;
       if (pendingStreams === 0) {
+        clearTimeout(fallback);
         setImmediate(exit);
       }
     });

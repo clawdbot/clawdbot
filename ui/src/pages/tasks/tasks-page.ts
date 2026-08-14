@@ -5,7 +5,7 @@ import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
@@ -404,7 +404,8 @@ class TasksPage extends OpenClawLightDomElement {
           hello: this.context.gateway.snapshot.hello,
         }),
         connected: this.gateway.connected,
-        // tasks.cancel needs operator.write; read-only operators get no button.
+        canCopy: hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        // Task mutations need operator.write; read-only operators get no mutation buttons.
         canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
         loading: this.listTask.status === TaskStatus.PENDING,
         error: this.error,

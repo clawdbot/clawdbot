@@ -4201,6 +4201,46 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)).not.toHaveProperty("sessionFile");
   });
 
+  it("keeps the persisted transcript owner when a caller supplies a stale session key", async () => {
+    const sessionId = "session-canonical-owner";
+    const canonicalScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntryCore(canonicalScope, { sessionId, updatedAt: 10 });
+
+    const target = await resolveSessionTranscriptRuntimeTarget({
+      ...canonicalScope,
+      sessionKey: "agent:main:telegram:default:direct:fixture-peer",
+    });
+    await appendTranscriptEvent(target, {
+      id: "canonical-owner-event",
+      timestamp: new Date(20).toISOString(),
+      type: "metadata",
+    });
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: expectDefined(
+        resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+        "session database path",
+      ),
+    });
+    expect(
+      database.db
+        .prepare("SELECT session_key, entry_valid FROM session_nodes ORDER BY session_key")
+        .all(),
+    ).toEqual([{ session_key: canonicalScope.sessionKey, entry_valid: 1 }]);
+    expect(
+      database.db
+        .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
+        .get(sessionId),
+    ).toEqual({ session_key: canonicalScope.sessionKey });
+    expect(target.sessionKey).toBe(canonicalScope.sessionKey);
+  });
+
   it("drops imported legacy session transcript paths from canonical rows", async () => {
     const sessionKey = "agent:main:main";
     await importSqliteSessionRows({

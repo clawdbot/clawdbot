@@ -55,6 +55,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
     }),
   ),
 );
+const migrateLegacyConfigMachineState = vi.hoisted(() =>
+  vi.fn(() => ({ changes: [], warnings: [] })),
+);
 const migrateLegacyMediaPersistence = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
 );
@@ -175,6 +178,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+  migrateLegacyConfigMachineState,
   migrateLegacyMediaPersistence,
 }));
 
@@ -928,8 +932,9 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
-  it("blocks gateway readiness when startup migrations leave warnings", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+  it("blocks gateway readiness when state migration warnings outlive the startup checkpoint", async () => {
+    needsStateMigrationCheckpoint.mockReturnValue(true);
+    needsStartupMigrationCheckpoint.mockReturnValue(false);
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: false,
       skipped: false,

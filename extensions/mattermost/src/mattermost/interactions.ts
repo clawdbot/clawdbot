@@ -1,6 +1,7 @@
 // Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/core";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
@@ -134,7 +135,7 @@ export function computeInteractionCallbackUrl(
   if (callbackBaseUrl) {
     return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
   }
-  const port = typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789;
+  const port = resolveGatewayPort(cfg);
   let host =
     cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
       ? cfg.gateway.customBindHost.trim()

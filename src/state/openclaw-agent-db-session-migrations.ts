@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
@@ -10,14 +11,7 @@ import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shar
 type MigratedConversationEntry = Record<string, unknown>;
 
 function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  try {
-    return asOptionalRecord(JSON.parse(value));
-  } catch {
-    return undefined;
-  }
+  return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
 }
 
 function inferMigratedChatType(params: {

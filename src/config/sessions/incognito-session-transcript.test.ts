@@ -112,13 +112,14 @@ describe("incognito transcript access", () => {
       storePath,
     };
     const now = Date.now();
+    const staleUpdatedAt = now - 366 * 24 * 60 * 60 * 1000;
 
     try {
       await patchSessionEntryCore(
         staleScope,
-        () => ({ sessionId: "incognito-stale-session", updatedAt: now }),
+        () => ({ sessionId: "incognito-stale-session", updatedAt: staleUpdatedAt }),
         {
-          fallbackEntry: { sessionId: "incognito-stale-session", updatedAt: now },
+          fallbackEntry: { sessionId: "incognito-stale-session", updatedAt: staleUpdatedAt },
           replaceEntry: true,
           skipMaintenance: true,
         },

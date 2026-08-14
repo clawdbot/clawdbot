@@ -13,7 +13,7 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
-import { listProfiles } from "../../../state/user-profiles.js";
+import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import {
@@ -153,8 +153,7 @@ export async function sendGatewayHello(
       tickIntervalMs: TICK_INTERVAL_MS,
       attachments: resolveChatAttachmentPolicy(context.configSnapshot),
       allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
-      hasMultipleSessionSharingIdentities:
-        listProfiles().filter((profile) => !profile.mergedInto).length >= 2,
+      hasMultipleSessionSharingIdentities: hasMultipleSessionSharingIdentities(),
     },
   };
   advanceHandshakePhase("hello_payload_prepared");

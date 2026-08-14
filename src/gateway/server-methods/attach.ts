@@ -2,8 +2,8 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveMainSessionKey } from "../../config/sessions.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
@@ -15,22 +15,38 @@ import {
   createMcpAttachGrantServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../mcp-http.loopback-runtime.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveSessionStoreKey } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const attachHandlers: GatewayRequestHandlers = {
   "attach.grant": async ({ params, respond, context }) => {
     const grantParams = asRecord(params);
     const cfg = context.getRuntimeConfig();
-    const sessionKey =
-      normalizeOptionalString(grantParams.sessionKey) ?? resolveMainSessionKey(cfg);
-    const agentId =
-      sessionKey === "global" ? normalizeOptionalString(grantParams.agentId) : undefined;
-    const harnessEntry = isAgentHarnessSessionKey(sessionKey)
-      ? resolveSessionEntryAccessTarget({ cfg, sessionKey }).entry
+    const requestedSessionKey = normalizeOptionalString(grantParams.sessionKey) ?? "main";
+    const requestedAgent = resolveRequestedSessionAgentId(
+      cfg,
+      requestedSessionKey,
+      normalizeOptionalString(grantParams.agentId),
+    );
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const storageSessionKey = resolveSessionStoreKey({
+      cfg,
+      sessionKey: requestedSessionKey,
+      storeAgentId: requestedAgent.agentId,
+    });
+    const sessionKey = parseAgentSessionKey(storageSessionKey)
+      ? storageSessionKey
+      : `agent:${requestedAgent.agentId}:${storageSessionKey}`;
+    const harnessEntry = isAgentHarnessSessionKey(storageSessionKey)
+      ? resolveSessionEntryAccessTarget({ cfg, sessionKey: storageSessionKey }).entry
       : undefined;
     if (
-      isAgentHarnessSessionKey(sessionKey) &&
-      (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, harnessEntry))
+      isAgentHarnessSessionKey(storageSessionKey) &&
+      (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(storageSessionKey, harnessEntry))
     ) {
       respond(
         false,
@@ -51,7 +67,6 @@ export const attachHandlers: GatewayRequestHandlers = {
     }
     const grant = mintAttachGrant({
       sessionKey,
-      ...(agentId ? { agentId } : {}),
       ttlMs: asPositiveFiniteNumber(grantParams.ttlMs),
     });
     respond(true, {

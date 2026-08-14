@@ -1,6 +1,12 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
+import "../../styles/sessions.css";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -10,15 +16,14 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import "../../styles/sessions.css";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
@@ -53,11 +58,6 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
-import { parseFilterInteger } from "./page-state.ts";
 
 export type TranscriptSearchState =
   | { status: "idle" }
@@ -198,10 +198,6 @@ function resolveThinkLevelOptions(
       label: formatThinkingOverrideLabel(option.id, option.label),
     })),
   ];
-}
-
-function withCurrentOption(options: readonly string[], current: string): string[] {
-  return !current || options.includes(current) ? [...options] : [...options, current];
 }
 
 function withCurrentLabeledOption(
@@ -638,7 +634,7 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    parseFilterInteger(props.activeMinutes) !== undefined ||
+    parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
     !props.includeGlobal
   );
 }
@@ -1639,7 +1635,10 @@ function renderSessionDetailsRow(params: {
     verbose,
   );
   const reasoning = row.reasoningLevel ?? "";
-  const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
+  const reasoningLevels = withCurrentLabeledOption(
+    buildSessionLevelOptions(REASONING_LEVELS),
+    reasoning,
+  );
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
   const checkpointLabel = formatCheckpointCount(visibleCheckpointCount);
@@ -1715,10 +1714,7 @@ function renderSessionDetailsRow(params: {
               label: t("sessionsView.reasoning"),
               disabled: props.loading || Boolean(props.patchAdminDisabledReason),
               disabledReason: props.patchAdminDisabledReason,
-              options: reasoningLevels.map((level) => ({
-                value: level,
-                label: level || t("sessionsView.inherit"),
-              })),
+              options: reasoningLevels,
               current: reasoning,
               onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
             })}

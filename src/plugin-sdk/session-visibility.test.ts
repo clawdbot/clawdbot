@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { GatewayCredentialsRequiredError } from "../gateway/call.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
+import { classifyLookupFailure, lookupFailedDenialSuffix } from "./session-visibility-internal.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
@@ -39,6 +42,24 @@ describe("scoped session access providers", () => {
       allowed: false,
       status: "forbidden",
       error: "Session history denied because target agent ownership is unavailable.",
+    });
+  });
+
+  it("accepts a legacy Set spawnedKeys input on the exported checker", () => {
+    const checker = createSessionVisibilityChecker({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({}),
+      spawnedKeys: new Set(["agent:main:subagent:child-1"]),
+    });
+
+    expect(checker.check("agent:main:subagent:child-1")).toEqual({ allowed: true });
+    expect(checker.check("agent:main:subagent:unrelated")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
     });
   });
 
@@ -140,6 +161,41 @@ describe("scoped session access providers", () => {
     expect(history.check(target).allowed).toBe(false);
   });
 
+  it("keeps incognito sessions hidden from scoped and ownership grants", () => {
+    const requesterSessionKey = "agent:main:main";
+    const targetSessionKey = "agent:main:dashboard:incognito-private";
+    const expected = {
+      allowed: false,
+      status: "forbidden",
+      error: `Session not visible from session tools: ${targetSessionKey}`,
+    } as const;
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(() => ({
+      expectedSessionId: "incognito-incarnation",
+    }));
+    try {
+      const direct = createSessionVisibilityChecker({
+        action: "history",
+        requesterSessionKey,
+        visibility: "all",
+        a2aPolicy: createAgentToAgentPolicy({}),
+        spawnedKeys: new Set([targetSessionKey]),
+      });
+      const row = createSessionVisibilityRowChecker({
+        action: "history",
+        requesterSessionKey,
+        visibility: "all",
+        a2aPolicy: createAgentToAgentPolicy({}),
+      });
+
+      expect(direct.check(targetSessionKey)).toEqual(expected);
+      expect(row.check({ key: targetSessionKey, spawnedBy: requesterSessionKey })).toEqual(
+        expected,
+      );
+    } finally {
+      unregister();
+    }
+  });
+
   it("fails closed when a provider throws", () => {
     const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(() => {
       throw new Error("provider failure");
@@ -157,5 +213,63 @@ describe("scoped session access providers", () => {
     } finally {
       unregister();
     }
+  });
+});
+
+describe("classifyLookupFailure", () => {
+  it("classifies a retryable gateway request error as transient", () => {
+    const error = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "transport timeout",
+      retryable: true,
+    });
+    expect(classifyLookupFailure(error)).toBe("transient");
+  });
+
+  it.each([
+    { kind: "timeout", code: undefined, expected: "transient" },
+    { kind: "closed", code: 1006, expected: "transient" },
+    { kind: "closed", code: 1013, expected: "transient" },
+    { kind: "closed", code: 1008, expected: "unknown" },
+  ] as const)(
+    "classifies gateway transport $kind/$code as $expected",
+    ({ kind, code, expected }) => {
+      const error = Object.assign(new Error("gateway transport failed"), {
+        name: "GatewayTransportError",
+        kind,
+        connectionDetails: {},
+        ...(code === undefined ? {} : { code }),
+      });
+      expect(classifyLookupFailure(error)).toBe(expected);
+    },
+  );
+
+  it("classifies an explicit pre-connect auth failure as credentials", () => {
+    const error = new GatewayCredentialsRequiredError({
+      method: "sessions.list",
+      configPath: "/tmp/openclaw.json",
+    });
+    expect(classifyLookupFailure(error)).toBe("credentials");
+  });
+
+  it("keeps unknown and non-retryable request failures generic", () => {
+    const requestError = new GatewayClientRequestError({
+      code: "INTERNAL_ERROR",
+      message: "failed to decode session row",
+      retryable: false,
+    });
+    expect(classifyLookupFailure(requestError)).toBe("unknown");
+    expect(classifyLookupFailure(new Error("something else"))).toBe("unknown");
+    expect(classifyLookupFailure(null)).toBe("unknown");
+    expect(classifyLookupFailure(undefined)).toBe("unknown");
+  });
+
+  it("renders cause-appropriate denial suffixes", () => {
+    expect(lookupFailedDenialSuffix("transient")).toMatch(/transient\); retry/i);
+    expect(lookupFailedDenialSuffix("credentials")).toMatch(
+      /check gateway configuration and credentials/i,
+    );
+    expect(lookupFailedDenialSuffix("unknown")).toMatch(/inspect OpenClaw logs/i);
+    expect(lookupFailedDenialSuffix("unknown")).not.toMatch(/credentials|retry/i);
   });
 });

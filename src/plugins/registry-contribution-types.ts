@@ -322,8 +322,8 @@ export type SessionDiscussionInfo = {
 
 export type SessionDiscussionProvider = {
   id: string;
-  info(params: { sessionKey: string }): Promise<SessionDiscussionInfo>;
-  open(params: { sessionKey: string }): Promise<SessionDiscussionInfo>;
+  info(params: { sessionKey: string; agentId: string }): Promise<SessionDiscussionInfo>;
+  open(params: { sessionKey: string; agentId: string }): Promise<SessionDiscussionInfo>;
 };
 
 export type ResolvedPluginRuntimeArtifact = { source: string; rootDir: string };

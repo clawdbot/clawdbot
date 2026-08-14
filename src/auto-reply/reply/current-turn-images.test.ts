@@ -6,7 +6,16 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import type { MsgContext } from "../templating.js";
+import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
+
+vi.mock("./agent-turn-attachments.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agent-turn-attachments.js")>();
+  return {
+    ...actual,
+    resolveAgentTurnAttachments: vi.fn(actual.resolveAgentTurnAttachments),
+  };
+});
 
 const originalStateDirEnv = process.env.OPENCLAW_STATE_DIR;
 const PNG_IMAGE_BYTES = Buffer.from(
@@ -16,6 +25,23 @@ const PNG_IMAGE_BYTES = Buffer.from(
 const JPEG_IMAGE_BYTES = Buffer.from("ffd8ffe000104a46494600010100000100010000ffd9", "hex");
 const PDF_BYTES = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n");
 const ZIP_BYTES = Buffer.from("504b0506000000000000000000000000000000000000", "hex");
+
+function createDescribedImageContext(describedIndexes: number[]): MsgContext {
+  return {
+    Body: "[Image]\nDescription:\na tiny dot image",
+    media: ["first", "second"].map((name) => ({
+      path: `/tmp/${name}.png`,
+      contentType: "image/png",
+    })),
+    MediaUnderstanding: describedIndexes.map((attachmentIndex) => ({
+      kind: "image.description" as const,
+      attachmentIndex,
+      provider: "openai",
+      model: "gpt-4o",
+      text: "a tiny dot image",
+    })),
+  };
+}
 
 function restoreProcessState() {
   if (originalStateDirEnv === undefined) {
@@ -345,6 +371,44 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
+  it("does not rehydrate current image facts already described in the prompt", async () => {
+    vi.mocked(resolveAgentTurnAttachments).mockClear();
+
+    const result = await resolveCurrentTurnImages({
+      ctx: createDescribedImageContext([0, 1]),
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(result).toEqual({});
+    expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
+  });
+
+  it("hydrates only current image facts missing prompt descriptions", async () => {
+    const imageData = Buffer.from("second image").toString("base64");
+    vi.mocked(resolveAgentTurnAttachments).mockResolvedValueOnce({
+      attachments: [{ data: imageData, mediaType: "image/png" }],
+      attachmentIndexes: [0],
+      recentHistoryImages: [],
+    });
+
+    const result = await resolveCurrentTurnImages({
+      ctx: createDescribedImageContext([0]),
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(resolveAgentTurnAttachments).toHaveBeenCalledWith({
+      ctx: expect.objectContaining({
+        media: [expect.objectContaining({ path: "/tmp/second.png", kind: "image" })],
+      }),
+      cfg: {},
+      includeRecentHistoryImages: false,
+      includeAttachmentIndexes: true,
+    });
+    expect(result.images).toEqual([{ type: "image", data: imageData, mimeType: "image/png" }]);
+    expect(result.imageOrder).toEqual(["inline"]);
+    expect(result.imageSourceIndexes).toEqual([1]);
+  });
+
   it("appends extracted PDF page images without dropping current image attachments", async () => {
     await withTestDir({ prefix: "openclaw-current-turn-pdf-images-" }, async (base) => {
       const imagePath = path.join(base, "photo.png");
@@ -422,6 +486,61 @@ describe("resolveCurrentTurnImages", () => {
         "current-photo",
       ]);
       expect(result.imageOrder).toEqual(["inline", "inline"]);
+    });
+  });
+
+  it("retains resolved native images when current media partially resolves", async () => {
+    await withTestDir({ prefix: "openclaw-current-turn-partial-" }, async (base) => {
+      const imagePath = path.join(base, "present.png");
+      const imageBytes = Buffer.from("present-image");
+      await fs.writeFile(imagePath, imageBytes);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "compare these images",
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: base },
+            {
+              path: path.join(base, "missing.png"),
+              contentType: "image/png",
+              workspaceDir: base,
+            },
+          ],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toEqual([
+        {
+          type: "image",
+          data: imageBytes.toString("base64"),
+          mimeType: "image/png",
+        },
+      ]);
+      expect(result.imageOrder).toEqual(["inline"]);
+      expect(result.imageSourceIndexes).toEqual([0]);
+      expect(result.unresolvedSourceIndexes).toEqual([1]);
+    });
+  });
+
+  it("proceeds without native images when current media resolution throws", async () => {
+    vi.mocked(resolveAgentTurnAttachments).mockRejectedValueOnce(new Error("boom"));
+    await withTestDir({ prefix: "openclaw-current-turn-throw-" }, async (base) => {
+      const imagePath = path.join(base, "present.png");
+      await fs.writeFile(imagePath, "present-image");
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "describe this image",
+          media: [{ path: imagePath, contentType: "image/png", workspaceDir: base }],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toBeUndefined();
+      expect(result.imageOrder).toBeUndefined();
+      expect(result.imageSourceIndexes).toBeUndefined();
+      expect(result.unresolvedSourceIndexes).toEqual([0]);
     });
   });
 });

@@ -19,8 +19,8 @@ import {
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { parseBooleanValue } from "../sdk-config.js";
 import { resolveUserPath } from "../utils.js";
-import { parseBooleanValue } from "../utils/boolean.js";
 import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,

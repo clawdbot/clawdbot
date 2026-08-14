@@ -119,7 +119,7 @@ function buildVoiceTestHarness() {
     });
     resolveConfiguredRealtimeVoiceProviderMock.mockClear();
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
-      provider: { id: "openai" },
+      provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     });
     decodeOpusStreamMock.mockReset();

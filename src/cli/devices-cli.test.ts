@@ -1294,6 +1294,24 @@ describe("devices cli rename", () => {
   });
 });
 
+describe("devices cli join-code", () => {
+  it("mints with admin scope and prints the pasteable command", async () => {
+    const joinUrl = `https://gateway.example/j/${"a".repeat(22)}`;
+    callGateway.mockResolvedValueOnce({ joinUrl, setupCode: "opaque" });
+
+    await runDevicesCommand(["join-code"]);
+
+    expectGatewayCall(0, {
+      method: "device.pair.setupCode",
+      params: { bootstrapProfile: "node", includeQr: false, joinUrl: true },
+      scopes: ["operator.admin"],
+    });
+    expect(readRuntimeOutput()).toContain(joinUrl);
+    expect(readRuntimeOutput()).toContain(`npx openclaw connect ${joinUrl}`);
+    expect(readRuntimeOutput()).not.toContain("opaque");
+  });
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   runtime.exit.mockImplementation(() => {});

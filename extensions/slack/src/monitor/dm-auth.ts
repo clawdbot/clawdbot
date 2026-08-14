@@ -37,7 +37,6 @@ export async function authorizeSlackDirectMessage(params: {
     id: params.senderId,
     name: senderName,
     allowNameMatching: params.ctx.allowNameMatching,
-    allowUnscoped: params.ctx.installationIdentity?.kind !== "enterprise",
   });
   const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
   if (allowMatch.allowed) {

@@ -11,6 +11,7 @@ import { resetConfigRuntimeState } from "../config/config.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -1469,6 +1470,23 @@ describe("gateway server cron", () => {
       expect((writerRuns.payload as { entries: Array<{ jobId: string }> }).entries).toContainEqual(
         expect.objectContaining({ jobId: writerJobId }),
       );
+
+      const removeWriter = await directCronReq(cronState, "cron.remove", { id: writerJobId });
+      expect(removeWriter.ok).toBe(true);
+      expect(
+        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: writerJobId,
+        }),
+      ).toEqual([expect.objectContaining({ agentId: "writer" })]);
+      const retainedWriterRuns = await directCronReq(cronState, "cron.runs", {
+        scope: "all",
+        agentId: "writer",
+      });
+      expect(retainedWriterRuns.payload).toMatchObject({
+        entries: [expect.objectContaining({ jobId: writerJobId })],
+        total: 1,
+      });
 
       const statusRes = await directCronReq(cronState, "cron.status", {});
       expect(statusRes.ok).toBe(true);

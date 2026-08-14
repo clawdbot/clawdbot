@@ -161,7 +161,12 @@ export function extractGroupMeta(
       cacheWrite += callCacheWrite;
       maxPromptTokens = Math.max(maxPromptTokens, callInput + callCacheRead + callCacheWrite);
     }
-    const c = m.cost as Record<string, number> | undefined;
+    // Producers write cost nested under usage.cost (the AssistantMessage
+    // shape); a bare message.cost never exists, so reading only it left the
+    // popover's $ line permanently dead.
+    const c =
+      (usage as { cost?: { total?: number } } | undefined)?.cost ??
+      (m.cost as Record<string, number> | undefined);
     if (c?.total) {
       cost += c.total;
     }

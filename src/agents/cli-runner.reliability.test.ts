@@ -4062,6 +4062,70 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("persists a blocked bare-key turn under its fixed-store owner", async () => {
+    supervisorSpawnMock.mockClear();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "policy-plugin",
+        decision: {
+          outcome: "block" as const,
+          message: "Blocked by policy.",
+        },
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+    const storePath = path.join(dir, "shared-sessions.json");
+    const sessionKey = "global";
+    const context = makeClaudePreparedContext({
+      sessionKey,
+      runId: "run-blocked-fixed-owner",
+    });
+    context.preparedBackend.backend.sessionMode = "none";
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            config: {
+              session: { store: storePath },
+              agents: {
+                ownership: "explicit",
+                defaults: { sessionStore: { agentId: "ops" } },
+                entries: { ops: {}, research: {} },
+              },
+            },
+            sessionFile,
+            storePath,
+            workspaceDir: dir,
+            prompt: "secret prompt",
+          },
+        }),
+      ).resolves.toMatchObject({ meta: { livenessState: "blocked" } });
+
+      await expect(
+        loadTranscriptEvents({
+          agentId: "ops",
+          sessionId: context.params.sessionId,
+          sessionKey,
+          storePath,
+        }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({ role: "user" }),
+          }),
+        ]),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists before_agent_run CLI blocks through the canonical recorder", async () => {
     supervisorSpawnMock.mockClear();
     const hookRunner = {

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -54,6 +55,28 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 
+type TerminalPresentationObservation = {
+  terminalPresentation?: string;
+  toolCallOrdinal?: number;
+};
+
+export function createTerminalToolPresentationTracker() {
+  let latestOrdinal = -1;
+  let nextOrdinal = 0;
+  let value: string | undefined;
+  return {
+    allocateOrdinal: () => nextOrdinal++,
+    observe: (observation: TerminalPresentationObservation): void => {
+      const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
+      if (ordinal >= latestOrdinal) {
+        latestOrdinal = ordinal;
+        value = observation.terminalPresentation;
+      }
+    },
+    read: () => value,
+  };
+}
+
 type TerminalRunParams = RunEmbeddedAgentParams & {
   authProfileStateMode?: "read-write" | "read-only";
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
@@ -90,7 +113,6 @@ export function resolveSettledTurnFinalizationRequest(input: {
   }
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
-  const { promptError } = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: input.runParams.trigger === "cron",
     payloadCount: input.payloadsWithToolMedia?.length ?? 0,
@@ -143,7 +165,6 @@ export function resolveSettledTurnFinalizationRequest(input: {
     payloadCount,
     hasTerminalToolPresentation: input.hasTerminalToolPresentation,
     aborted: terminalAborted,
-    promptError,
     timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
@@ -172,7 +193,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   attemptCompactionCount: number;
   replayState: EmbeddedRunReplayState;
   activePromptPersisted: boolean;
-  activateInternalPrompt: (prompt: string, persisted: boolean) => void;
+  activateInternalPrompt: (prompt: string) => void;
   setSuppressNextUserMessagePersistence: (value: boolean) => void;
   armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
@@ -268,7 +289,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.reasoningOnlyAttempts < input.maxReasoningOnlyRetryAttempts
   ) {
     retryState.reasoningOnlyAttempts += 1;
-    input.activateInternalPrompt(nextReasoningOnlyRetryInstruction, false);
+    input.activateInternalPrompt(nextReasoningOnlyRetryInstruction);
     log.warn(
       `reasoning-only assistant turn detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
@@ -306,7 +327,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.emptyResponseAttempts < input.maxEmptyResponseRetryAttempts
   ) {
     retryState.emptyResponseAttempts += 1;
-    input.activateInternalPrompt(nextEmptyResponseRetryInstruction, false);
+    input.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(
       `empty response detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
@@ -341,7 +362,8 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     !emptyAssistantReplyIsSilent &&
     !settledTurnFinalizationAttempted &&
-    input.attemptCompactionCount > 0 &&
+    (input.attemptCompactionCount > 0 ||
+      isCompactionReplayCheckpoint(attempt.currentAttemptAssistant?.providerReplay)) &&
     payloadCount === 0 &&
     !terminalInterrupted &&
     !promptError &&
@@ -425,7 +447,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.beforeFinalizeRevisionAttempts += 1;
     input.activateInternalPrompt(
       `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${beforeFinalizeRevisionReason}`,
-      true,
     );
     retryState.compactionContinuationInstruction = null;
     log.warn(

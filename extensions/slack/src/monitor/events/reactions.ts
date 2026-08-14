@@ -2,7 +2,7 @@
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
@@ -36,7 +36,6 @@ function shouldEmitSlackReactionNotification(params: {
       id: event.user,
       name: actorName,
       allowNameMatching: ctx.allowNameMatching,
-      allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
     });
   }
   return ctx.reactionMode === "all";
@@ -102,8 +101,7 @@ export function registerSlackReactionEvents(params: {
       const authorLabel = authorInfo?.name ?? event.item_user;
       const baseText = `Slack reaction ${action}: :${emojiLabel}: by ${actorLabel} in ${ingressContext.channelLabel} msg ${item.ts}`;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-      enqueueSystemEvent(text, {
-        sessionKey: ingressContext.sessionKey,
+      enqueueRoutedSystemEvent(text, ingressContext.route, {
         contextKey: `slack:reaction:${eventScope ? `${eventScope.teamId}:` : ""}${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}:${eventId}`,
       });
     } catch (err) {

@@ -778,15 +778,15 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildAllStepCacheState", () => {
-  it("shares content-addressed outputs across checkout roots", () => {
+  it("restores exact declaration snapshots across checkout roots", () => {
     const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shared-build-cache-"));
     const firstRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-source-"));
     const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-target-"));
     const step = {
-      label: "cached",
+      label: "tsdown-unified",
       cache: {
         inputs: ["src"],
-        outputs: ["dist"],
+        outputs: [{ path: "dist", extensions: [".d.ts", ".d.mts", ".d.cts"] }],
         restore: "always" as const,
       },
     };
@@ -795,10 +795,18 @@ describe("resolveBuildAllStepCacheState", () => {
     try {
       for (const rootDir of [firstRoot, secondRoot]) {
         fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+        fs.mkdirSync(path.join(rootDir, "dist/plugin-sdk"), { recursive: true });
         fs.writeFileSync(path.join(rootDir, "src/input.ts"), "same input");
       }
-      fs.mkdirSync(path.join(firstRoot, "dist"), { recursive: true });
-      fs.writeFileSync(path.join(firstRoot, "dist/output.js"), "cached output");
+      const currentDts = path.join(secondRoot, "dist/plugin-sdk/current.d.ts");
+      const removedDts = path.join(secondRoot, "dist/plugin-sdk/removed-facade.d.ts");
+      const removedJs = path.join(secondRoot, "dist/plugin-sdk/removed-facade.js");
+      fs.writeFileSync(
+        path.join(firstRoot, "dist/plugin-sdk/current.d.ts"),
+        "export declare const current: true;",
+      );
+      fs.writeFileSync(removedDts, "export declare const removed: true;");
+      fs.writeFileSync(removedJs, "export const removed = true;");
 
       const sourceState = resolveBuildAllStepCacheState(step, { rootDir: firstRoot, env });
       writeBuildAllStepCacheStamp(
@@ -809,11 +817,19 @@ describe("resolveBuildAllStepCacheState", () => {
 
       const targetState = resolveBuildAllStepCacheState(step, { rootDir: secondRoot, env });
       expect(targetState).toMatchObject({ fresh: true, restorable: true });
-      expect(targetState.outputRoot).toBe(path.join(cacheRoot, "cached", "outputs"));
+      expect(targetState.outputRoot).toBe(path.join(cacheRoot, "tsdown-unified", "outputs"));
       expect(restoreBuildAllStepCacheOutputs(targetState, { rootDir: secondRoot })).toBe(true);
-      expect(fs.readFileSync(path.join(secondRoot, "dist/output.js"), "utf8")).toBe(
-        "cached output",
-      );
+      fs.rmSync(removedJs);
+
+      expect({
+        current: fs.readFileSync(currentDts, "utf8"),
+        declaration: fs.existsSync(removedDts),
+        runtime: fs.existsSync(removedJs),
+      }).toEqual({
+        current: "export declare const current: true;",
+        declaration: false,
+        runtime: false,
+      });
     } finally {
       fs.rmSync(cacheRoot, { force: true, recursive: true });
       fs.rmSync(firstRoot, { force: true, recursive: true });

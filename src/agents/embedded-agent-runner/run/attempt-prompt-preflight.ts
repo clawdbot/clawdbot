@@ -257,8 +257,8 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       }),
     );
     if (preemptiveCompaction.route !== "fits") {
-      // Character pressure remains observable, but it is not authoritative enough to
-      // discard history or manufacture an overflow before the provider sees the payload.
+      // This pressure estimate is diagnostic only; it never compacts or discards history.
+      // Real compaction runs through explicit preflight or provider-overflow recovery.
       log.info(
         `[context-pressure-diagnostic] admitted provider attempt for ` +
           `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +

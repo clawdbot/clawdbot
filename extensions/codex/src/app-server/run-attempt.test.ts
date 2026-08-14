@@ -3911,59 +3911,96 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("captures the complete mirrored branch through a settled tool-result boundary", async () => {
-    const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
-    const sessionId = "session-settled-finalization-context";
-    const sessionFile = `agent:main:${sessionId}`;
-    const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    await attachSqliteSessionTarget(params, storePath, sessionId);
-    params.prompt = "Send the update to Alice.";
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify(
-      itemNotification("item/started", {
-        type: "commandExecution",
-        id: "tool-settled",
-        command: "echo sent-to-alice",
-        cwd: workspaceDir,
-        processId: null,
-        source: "agent",
-        status: "inProgress",
-        commandActions: [],
-        aggregatedOutput: null,
-        exitCode: null,
-        durationMs: null,
-      }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "commandExecution",
-        id: "tool-settled",
-        command: "echo sent-to-alice",
-        cwd: workspaceDir,
-        processId: 42,
-        source: "agent",
-        status: "completed",
-        commandActions: [],
-        aggregatedOutput: "sent-to-alice\n",
-        exitCode: 0,
-        durationMs: 12,
-      }),
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
-    expect(result.settledTurnFinalizationContext).toMatchObject({
-      source: "openclaw-transcript",
-      messages: [
-        expect.objectContaining({ role: "user" }),
-        expect.objectContaining({ role: "assistant" }),
-        expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
-      ],
-    });
-    expect(Object.isFrozen(result.settledTurnFinalizationContext?.messages)).toBe(true);
-  });
+  it.each([
+    { label: "completed turn", failure: undefined, expectedContext: true },
+    {
+      label: "provider overload after the tool result",
+      failure: {
+        message: "Selected model is at capacity. Please try a different model.",
+        codexErrorInfo: "serverOverloaded",
+      },
+      expectedContext: true,
+    },
+    {
+      label: "usage limit after the tool result",
+      failure: {
+        message: "Usage limit exceeded.",
+        codexErrorInfo: "usageLimitExceeded",
+      },
+      expectedContext: false,
+    },
+    {
+      label: "unauthorized response after the tool result",
+      failure: {
+        message: "Unauthorized.",
+        codexErrorInfo: "unauthorized",
+      },
+      expectedContext: false,
+    },
+  ])(
+    "captures the complete mirrored branch through a settled tool-result boundary for a $label",
+    async ({ failure, expectedContext }) => {
+      const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
+      const sessionId = "session-settled-finalization-context";
+      const sessionFile = `agent:main:${sessionId}`;
+      const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      await attachSqliteSessionTarget(params, storePath, sessionId);
+      params.prompt = "Send the update to Alice.";
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.notify(
+        itemNotification("item/started", {
+          type: "commandExecution",
+          id: "tool-settled",
+          command: "echo sent-to-alice",
+          cwd: workspaceDir,
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        }),
+      );
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "commandExecution",
+          id: "tool-settled",
+          command: "echo sent-to-alice",
+          cwd: workspaceDir,
+          processId: 42,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "sent-to-alice\n",
+          exitCode: 0,
+          durationMs: 12,
+        }),
+      );
+      if (failure) {
+        await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error: failure }));
+      } else {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      }
+      const result = await run;
+      expect(Boolean(readAttemptTerminal(result).promptError)).toBe(Boolean(failure));
+      expect(Boolean(result.settledTurnFinalizationContext)).toBe(expectedContext);
+      if (result.settledTurnFinalizationContext) {
+        expect(result.settledTurnFinalizationContext).toMatchObject({
+          source: "openclaw-transcript",
+          messages: [
+            expect.objectContaining({ role: "user" }),
+            expect.objectContaining({ role: "assistant" }),
+            expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+          ],
+        });
+        expect(Object.isFrozen(result.settledTurnFinalizationContext.messages)).toBe(true);
+      }
+    },
+  );
   it("preserves every command failure from official app-server events", async () => {
     const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
@@ -4355,6 +4392,50 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams?.input).toEqual([
       { type: "text", text: "hello", text_elements: [] },
       { type: "image", url: `data:image/png;base64,${pngBase64}` },
+    ]);
+    expect(
+      requests.filter(
+        (entry) =>
+          entry.method === "skills/list" &&
+          (entry.params as { forceReload?: boolean } | undefined)?.forceReload === false,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("appends path-matched explicit skills to the initial turn input", async () => {
+    const params = createRunParams();
+    const skillPath = path.join(params.workspaceDir, ".agents", "skills", "release", "SKILL.md");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method !== "skills/list") {
+        return undefined;
+      }
+      return {
+        data: [
+          {
+            cwd: params.workspaceDir,
+            skills: [
+              {
+                name: "release",
+                description: "Release workflow",
+                path: skillPath,
+                scope: "repo",
+                enabled: true,
+              },
+            ],
+            errors: [],
+          },
+        ],
+      } satisfies v2.SkillsListResponse;
+    });
+    params.explicitSkillSelections = [{ name: "release-command", path: skillPath }];
+
+    const run = runCodexAppServerAttempt(params);
+    await completeStartedRun(run, harness.waitForMethod, harness.completeTurn);
+
+    const turnStart = harness.requests.find((entry) => entry.method === "turn/start");
+    expect((turnStart?.params as { input?: unknown[] } | undefined)?.input).toEqual([
+      { type: "text", text: "hello", text_elements: [] },
+      { type: "skill", name: "release", path: skillPath },
     ]);
   });
 

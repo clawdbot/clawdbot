@@ -99,14 +99,10 @@ export {
 } from "./src/self-check.js";
 export { runQaE2eSelfCheck, runQaLabSelfCheck } from "./src/self-check-runner.js";
 export {
-  testing,
-  buildQaRuntimeEnv,
   type QaCliBackendAuthMode,
   type QaGatewayChildListeningContext,
   type QaGatewayChildCommand,
   type QaGatewayChildStateMutationContext,
-  resolveQaControlUiRoot,
-  resolveQaGatewayChildProviderMode,
   startQaGatewayChild,
 } from "./src/gateway-child.js";
 export {

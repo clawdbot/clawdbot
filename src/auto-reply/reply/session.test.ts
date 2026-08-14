@@ -15,6 +15,7 @@ import {
   appendTranscriptEvent,
   loadSessionEntry,
   loadTranscriptEvents,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
@@ -36,6 +37,10 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
@@ -428,6 +433,47 @@ afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState guarded initialization", () => {
+  it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
+    const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const agentId = "work";
+      const sessionId = "incognito-work-session";
+      const sessionKey = "agent:work:dashboard:incognito-work-session";
+      const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+      await upsertSessionEntryCore(
+        { agentId, sessionKey, storePath },
+        { sessionId, incognito: true, updatedAt: Date.now() },
+      );
+
+      try {
+        await expect(
+          initSessionState({
+            cfg: {
+              agents: { list: [{ id: "main", default: true }, { id: agentId }] },
+              session: { store: path.join(stateDir, "durable", "{agentId}", "sessions.json") },
+            } as OpenClawConfig,
+            ctx: {
+              Body: "hello from incognito webchat",
+              Provider: "webchat",
+              SessionKey: sessionKey,
+              Surface: "webchat",
+            },
+            expectedExistingSessionId: sessionId,
+            pinExpectedExistingSession: true,
+            requestedSessionId: sessionId,
+            resumeRequestedSession: true,
+          }),
+        ).resolves.toMatchObject({
+          sessionId,
+          sessionKey,
+          storePath,
+        });
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+      }
+    });
+  });
+
   it("rejects inbound work for an archived session", async () => {
     const storePath = await createStorePath("openclaw-session-init-archived-");
     const sessionKey = "agent:main:telegram:chat:archived";
@@ -4918,6 +4964,10 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, other: {} },
+      },
       models: {
         providers: {
           openai: {
@@ -4944,6 +4994,7 @@ describe("persistSessionUsageUpdate", () => {
       storePath,
       sessionKey,
       cfg,
+      agentDir: "/tmp/openclaw-main-agent",
       usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
       lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
       providerUsed: "openai",
@@ -4963,6 +5014,7 @@ describe("persistSessionUsageUpdate", () => {
       storePath,
       sessionKey,
       cfg,
+      agentDir: "/tmp/openclaw-main-agent",
       usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
       lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
       providerUsed: "openai",

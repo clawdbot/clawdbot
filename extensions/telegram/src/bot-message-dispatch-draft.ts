@@ -125,12 +125,16 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
               }
             : {}),
           onProviderMessage: async (message) => {
-            recordSentMessage(params.context.chatId, message.message_id, params.cfg);
+            recordSentMessage(params.context.chatId, message.message_id, params.cfg, {
+              accountId: params.context.route.accountId,
+              agentId: params.opts.ownerAgentId,
+            });
             await (
               params.telegramDeps.recordOutboundMessageForPromptContext ??
               recordOutboundMessageForPromptContext
             )({
               cfg: params.cfg,
+              ownerAgentId: params.opts.ownerAgentId,
               account: {
                 accountId: params.context.route.accountId,
                 ...(params.telegramCfg.name !== undefined ? { name: params.telegramCfg.name } : {}),
@@ -322,7 +326,8 @@ export function splitTextIntoLaneSegments(
         ...(update.isReasoningSnapshot ? { isReasoningSnapshot: true } : {}),
       },
     })),
-    suppressedReasoningOnly: Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
+    suppressedReasoningOnly:
+      isReasoning === true && !split.answerText && (suppressReasoning || !split.reasoningText),
   };
 }
 

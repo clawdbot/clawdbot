@@ -633,21 +633,29 @@ describe("runGuidedOnboarding", () => {
     expect(notes).toContain("Gateway: running");
   });
 
-  it("offers an auto-attempted transient failure for manual retry", async () => {
-    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:claude-cli");
+  it("surfaces an auto-attempted failure detail before offering manual retry", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:codex-cli");
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
     const activate = vi
       .fn()
-      .mockResolvedValueOnce({ ok: false, status: "rate_limit", error: "try later" })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: "unknown",
+        error: "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
+      })
       .mockResolvedValueOnce({
         ok: true,
-        modelRef: "claude-cli/opus",
+        modelRef: "openai/gpt-5.4",
         latencyMs: 700,
         lines: ["Gateway: running"],
       }) as GuidedOnboardingDeps["activate"];
-    const deps = setupDeps({ prompter, activate });
+    const deps = setupDeps({
+      prompter,
+      activate,
+      detect: vi.fn(async () => detection({ candidates: [candidate("codex-cli", "Codex")] })),
+    });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
@@ -658,8 +666,8 @@ describe("runGuidedOnboarding", () => {
           expect.objectContaining({
             options: [
               expect.objectContaining({
-                value: "candidate:claude-cli",
-                label: "Retry Claude Code (logged in)",
+                value: "candidate:codex-cli",
+                label: "Retry Codex (logged in)",
               }),
             ],
           }),
@@ -669,7 +677,9 @@ describe("runGuidedOnboarding", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     const retryNotes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(retryNotes).toContain("These didn't work just now:");
-    expect(retryNotes).toContain("rate-limiting");
+    expect(retryNotes).toContain(
+      "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
+    );
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {

@@ -10,6 +10,7 @@ import {
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { t } from "../../i18n/index.ts";
@@ -33,11 +34,11 @@ import {
 } from "./chat-pane-browser-annotation.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import {
+  CHAT_AUTOTYPE_EXEMPT_SELECTOR,
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   CHAT_MODAL_SELECTOR,
   CHAT_OPEN_DETAILS_SELECTOR,
   CHAT_SPACE_ACTIVATION_SELECTOR,
-  CHAT_TEXT_ENTRY_SELECTOR,
   keyboardEventPathMatches,
 } from "./chat-pane-shared.ts";
 import { subscribeChatPaneStartup } from "./chat-pane-startup-subscriptions.ts";
@@ -62,6 +63,7 @@ const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
+  private chatRouteReadyReported = false;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
 
@@ -290,7 +292,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       !event.ctrlKey &&
       !event.altKey &&
       event.key.length === 1 &&
-      !keyboardEventPathMatches(event, CHAT_TEXT_ENTRY_SELECTOR) &&
+      !keyboardEventPathMatches(event, CHAT_AUTOTYPE_EXEMPT_SELECTOR) &&
       !(event.key === " " && keyboardEventPathMatches(event, CHAT_SPACE_ACTIVATION_SELECTOR)) &&
       !document.querySelector(CHAT_MODAL_SELECTOR)
     ) {
@@ -555,6 +557,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
+      // The outer router commit is not a meaningful chat paint. Keep the
+      // handoff cover until this pane has committed its usable composer.
+      this.chatRouteReadyReported = true;
+      this.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true, composed: true }));
+    }
     if (changedProperties.has("focusComposer") && this.focusComposer) {
       const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
       const input = textarea?.closest<HTMLElement>(".agent-chat__input");

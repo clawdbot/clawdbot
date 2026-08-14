@@ -27,6 +27,7 @@ extension RootTabs {
         case dreaming
         case usage
         case cron
+        case desktop
         case terminal
         case docs
         case settings
@@ -50,6 +51,7 @@ extension RootTabs {
             case .dreaming: String(localized: "Dreaming")
             case .usage: String(localized: "Usage")
             case .cron: String(localized: "Automations")
+            case .desktop: String(localized: "Desktop")
             case .terminal: String(localized: "Terminal")
             case .docs: String(localized: "Docs")
             case .settings: String(localized: "Settings")
@@ -78,6 +80,7 @@ extension RootTabs {
             case .dreaming: "moon.stars"
             case .usage: "chart.bar.xaxis"
             case .cron: "timer"
+            case .desktop: "display"
             case .terminal: "terminal"
             case .docs: "book"
             case .settings: "gearshape"
@@ -92,7 +95,7 @@ extension RootTabs {
             case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
                  .files,
                  .dreaming,
-                 .usage, .cron, .terminal, .settings, .docs:
+                 .usage, .cron, .desktop, .terminal, .settings, .docs:
                 nil
             }
         }
@@ -238,6 +241,7 @@ extension RootTabs {
         .instances,
         .files,
         .dreaming,
+        .desktop,
         .terminal,
         .docs,
     ]

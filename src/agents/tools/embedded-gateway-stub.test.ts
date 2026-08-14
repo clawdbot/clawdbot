@@ -202,6 +202,26 @@ describe("embedded gateway stub", () => {
     expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
   });
 
+  it("rejects an explicit agent that conflicts with an unscoped store owner", async () => {
+    runtime.resolveSessionAgentId.mockImplementationOnce(() => {
+      throw new Error('The shared fixed-store row belongs to "ops", not "research".');
+    });
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({
+        method: "sessions.search",
+        params: { agentId: "research", query: "needle", sessionKeys: ["global"] },
+      }),
+    ).rejects.toThrow('belongs to "ops", not "research"');
+    expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "global",
+      config: { agents: { list: [{ id: "main", default: true }] } },
+      agentId: "research",
+    });
+    expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
+  });
+
   it("projects embedded chat history through the shared display projector", async () => {
     // Embedded history must use the same projection path as gateway history so
     // byte/message limits and display filtering stay aligned.

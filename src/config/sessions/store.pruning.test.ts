@@ -142,6 +142,20 @@ describe("pruneStaleEntries", () => {
     expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
     expect(store.archived).toBeUndefined();
   });
+
+  it("preserves pinned entries until they are unpinned", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["pinned", { ...makeEntry(now - 31 * DAY_MS), pinnedAt: now - DAY_MS }],
+    ]);
+
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
+    expect(store).toHaveProperty("pinned");
+
+    delete store.pinned?.pinnedAt;
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
+    expect(store.pinned).toBeUndefined();
+  });
 });
 
 describe("resolveQuotaSuspensionEntryMaintenance", () => {
@@ -364,6 +378,41 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     }
   });
 
+  it("does not trigger capping when protected sessions alone exceed the high-water mark", async () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["archived-1", { ...makeEntry(now - 5), archivedAt: now }],
+      ["archived-2", { ...makeEntry(now - 4), archivedAt: now }],
+      ["archived-3", { ...makeEntry(now - 3), archivedAt: now }],
+      ["dashboard-1", makeEntry(now - 2)],
+      ["dashboard-2", makeEntry(now - 1)],
+    ]);
+    let capped: number | undefined;
+
+    await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/protected-quota.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 30 * DAY_MS,
+        maxEntries: 2,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      onMaintenanceApplied: (report) => {
+        capped = report.capped;
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: createMaintenanceArtifacts(),
+    });
+
+    expect(capped).toBe(0);
+    expect(store).toHaveProperty("dashboard-1");
+    expect(store).toHaveProperty("dashboard-2");
+  });
+
   it.each([
     {
       name: "preserves every active admission instead of only the writer session",
@@ -400,7 +449,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         key,
         { sessionId, updatedAt: now - preserved.length - 1 + index },
       ]),
-      ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
+      ["removable-old", { sessionId: "removable-old-session", updatedAt: now - 2 }],
+      ["removable-recent", { sessionId: "removable-recent-session", updatedAt: now - 1 }],
     ]);
     const admission = await beginSessionWorkAdmission({
       scope: storePath,
@@ -428,7 +478,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       for (const [key] of preserved) {
         expect(store).toHaveProperty(key);
       }
-      expect(store.removable).toBeUndefined();
+      expect(store["removable-old"]).toBeUndefined();
+      expect(store).toHaveProperty("removable-recent");
     } finally {
       admission.release();
     }
@@ -650,13 +701,13 @@ describe("capEntryCount", () => {
 
     const evicted = capEntryCount(store, 3);
 
-    expect(evicted).toBe(2);
-    expect(Object.keys(store)).toHaveLength(3);
+    expect(evicted).toBe(1);
+    expect(Object.keys(store)).toHaveLength(4);
     expect(store).toHaveProperty(threadKey);
     expect(store).toHaveProperty("newest");
     expect(store).toHaveProperty("recent");
+    expect(store).toHaveProperty("old");
     expect(store.oldest).toBeUndefined();
-    expect(store.old).toBeUndefined();
   });
 
   it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
@@ -690,10 +741,10 @@ describe("capEntryCount", () => {
 
     const evicted = capEntryCount(store, 2);
 
-    expect(evicted).toBe(1);
+    expect(evicted).toBe(0);
     expect(store).toHaveProperty(lockedKey);
     expect(store).toHaveProperty("recent");
-    expect(store.old).toBeUndefined();
+    expect(store).toHaveProperty("old");
   });
 
   it("preserves archived sessions when capping", () => {
@@ -704,8 +755,22 @@ describe("capEntryCount", () => {
       ["old", makeEntry(now - DAY_MS)],
     ]);
 
-    expect(capEntryCount(store, 2)).toBe(1);
+    expect(capEntryCount(store, 2)).toBe(0);
     expect(store).toHaveProperty("archived");
+    expect(store).toHaveProperty("recent");
+    expect(store).toHaveProperty("old");
+  });
+
+  it("preserves pinned sessions when capping", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["pinned", { ...makeEntry(now - 10 * DAY_MS), pinnedAt: now - 5 * DAY_MS }],
+      ["recent", makeEntry(now)],
+      ["old", makeEntry(now - DAY_MS)],
+    ]);
+
+    expect(capEntryCount(store, 1)).toBe(1);
+    expect(store).toHaveProperty("pinned");
     expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
   });
@@ -726,11 +791,11 @@ describe("capEntryCount", () => {
         preserveKeys: collectSessionMaintenancePreserveKeys(),
       });
 
-      expect(evicted).toBe(2);
-      expect(Object.keys(store)).toHaveLength(2);
+      expect(evicted).toBe(1);
+      expect(Object.keys(store)).toHaveLength(3);
       expect(store).toHaveProperty(childKey);
       expect(store).toHaveProperty("recent-1");
-      expect(store["recent-2"]).toBeUndefined();
+      expect(store).toHaveProperty("recent-2");
       expect(store.old).toBeUndefined();
     } finally {
       unregister();
@@ -756,11 +821,11 @@ describe("capEntryCount", () => {
         preserveKeys: collectSessionMaintenancePreserveKeys(),
       });
 
-      expect(evicted).toBe(1);
-      expect(Object.keys(store)).toHaveLength(2);
+      expect(evicted).toBe(0);
+      expect(Object.keys(store)).toHaveLength(3);
       expect(store).toHaveProperty(childKey);
       expect(store).toHaveProperty("recent-1");
-      expect(store.old).toBeUndefined();
+      expect(store).toHaveProperty("old");
     } finally {
       unregister();
     }
@@ -977,6 +1042,30 @@ describe("resolveMaintenanceConfigFromInput", () => {
       expect(result).toBeNull();
       await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
     });
+  });
+
+  it.each([
+    ["the number 0", 0],
+    ["the string '0'", "0"],
+    ["the byte string '0b'", "0b"],
+    ["a byte string that rounds to zero", "0.4b"],
+  ])("falls back to the default high-water mark when highWaterBytes is %s", (_label, raw) => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      maxDiskBytes: "500mb",
+      highWaterBytes: raw,
+    });
+
+    expect(maintenance.maxDiskBytes).toBe(500 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(500 * 1024 * 1024 * 0.8));
+  });
+
+  it("keeps an explicit positive highWaterBytes", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      maxDiskBytes: "500mb",
+      highWaterBytes: "300mb",
+    });
+
+    expect(maintenance.highWaterBytes).toBe(300 * 1024 * 1024);
   });
 
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {

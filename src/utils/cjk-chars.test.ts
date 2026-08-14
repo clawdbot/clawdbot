@@ -1,10 +1,10 @@
 // CJK character tests cover detection and width handling for CJK text.
-import { describe, expect, it } from "vitest";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
   estimateTokensFromChars,
-} from "./cjk-chars.js";
+} from "@openclaw/normalization-core/cjk-chars";
+import { describe, expect, it } from "vitest";
 
 describe("estimateStringChars", () => {
   it("returns 0 for empty string", () => {

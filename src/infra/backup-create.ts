@@ -8,6 +8,7 @@ import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
   buildBackupArchiveRoot,
+  canonicalizePathForContainment,
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
@@ -211,26 +212,6 @@ async function chooseBackupTempRoot(params: {
     );
   }
   return fallback;
-}
-
-async function canonicalizePathForContainment(targetPath: string): Promise<string> {
-  const resolved = path.resolve(targetPath);
-  const suffix: string[] = [];
-  let probe = resolved;
-
-  while (true) {
-    try {
-      const realProbe = await fs.realpath(probe);
-      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
-    } catch {
-      const parent = path.dirname(probe);
-      if (parent === probe) {
-        return resolved;
-      }
-      suffix.push(path.basename(probe));
-      probe = parent;
-    }
-  }
 }
 
 function buildManifest(params: {

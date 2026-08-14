@@ -11,6 +11,10 @@ import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../g
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import {
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
@@ -30,6 +34,8 @@ type NodeHostRunOptions = {
   gatewayCandidates?: NodeHostGatewayConfig[];
   gatewayBootstrapToken?: string;
   preferGatewayBootstrapToken?: boolean;
+  /** Stop cleanly after the first authenticated hello (used before service install). */
+  stopAfterFirstConnect?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -122,9 +128,16 @@ function isExactUnknownMethodError(error: unknown, method: string): boolean {
   );
 }
 
-function isExactLegacyNodeAuthorizationError(error: unknown, gatewayProtocol: number): boolean {
+function isExactLegacyNodeAuthorizationError(
+  error: unknown,
+  method: string,
+  gatewayProtocol: number,
+): boolean {
+  const legacyUnknownMethodShape =
+    gatewayProtocol === 3 ||
+    (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD);
   return (
-    gatewayProtocol === 3 &&
+    legacyUnknownMethodShape &&
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
     error.message === "unauthorized role: node"
@@ -138,7 +151,7 @@ function classifyNodeMethodFailure(
 ): "legacy-unsupported" | "rejected" | "transient" {
   if (
     isExactUnknownMethodError(error, method) ||
-    isExactLegacyNodeAuthorizationError(error, gatewayProtocol)
+    isExactLegacyNodeAuthorizationError(error, method, gatewayProtocol)
   ) {
     return "legacy-unsupported";
   }
@@ -149,6 +162,7 @@ function classifyNodeMethodFailure(
 }
 
 type NodeOptionalPublicationMethod =
+  | typeof NODE_RUNNER_INVENTORY_UPDATE_METHOD
   | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
   | typeof NODE_SKILLS_UPDATE_METHOD;
 
@@ -227,6 +241,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    enableWorkerRuns: true,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
   const { token, password } = opts.preferGatewayBootstrapToken
@@ -443,6 +458,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     );
   };
 
+  const publishRunnerInventory = () => {
+    queueOptionalPublication(
+      NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        ...(preparedRuntime.manifest.workerRuns
+          ? { workerRuns: preparedRuntime.manifest.workerRuns }
+          : {}),
+      },
+      "runner inventory",
+    );
+  };
+
   const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
     void configureNodeHost({
       nodeId,
@@ -475,6 +503,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       // restart-scoped availability, not a capability upgrade requiring re-pairing.
       caps: preparedRuntime.manifest.caps,
       commands: preparedRuntime.manifest.commands,
+      workerRuns: preparedRuntime.manifest.workerRuns,
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,
       deviceIdentity: loadOrCreateDeviceIdentity(),
@@ -502,13 +531,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         void activeRuntime.invoke(payload);
       }
     },
-    onHelloOk: (hello, url) => {
+    onHelloOk: (hello, url, tlsFingerprint) => {
       writeStderrLine(`node host gateway connected: ${url}`);
+      activeRuntime.updateGatewayConnection({ url, ...(tlsFingerprint ? { tlsFingerprint } : {}) });
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
       retireOptionalPublications();
       optionalPublicationStates = new Map();
+      if (opts.stopAfterFirstConnect) {
+        void finish(0);
+        return;
+      }
+      publishRunnerInventory();
       publishInventory();
     },
     onConnectError: (error) => {
@@ -527,6 +562,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onClose: (code, reason) => {
       retireGatewayConnection();
+      activeRuntime.updateGatewayConnection();
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },

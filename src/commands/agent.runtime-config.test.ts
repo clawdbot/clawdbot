@@ -89,6 +89,7 @@ const setRuntimeConfigSnapshotMock = vi.hoisted(() =>
   vi.fn<(cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => void>(),
 );
 vi.mock("../config/runtime-snapshot.js", () => ({
+  registerRuntimeConfigSnapshotPreparer: vi.fn(),
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 

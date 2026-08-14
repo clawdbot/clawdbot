@@ -1,8 +1,4 @@
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshotRevision,
@@ -129,18 +125,9 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
   const config = deps.getConfig();
   const agents = listAgentIds(config).map((rawAgentId): PreparedAgentFacts => {
     const agentId = normalizeAgentId(rawAgentId);
-    const owner =
-      deps.getPreparedOwner({
-        agentId,
-        config,
-        readOnly: true,
-        allowGatewaySubagentBinding: true,
-      }) ??
-      deps.getPreparedOwner({
-        agentId,
-        config,
-        readOnly: true,
-      });
+    // Flagless resolution reaches the configured owner regardless of its
+    // publication-time gateway-binding capability.
+    const owner = deps.getPreparedOwner({ agentId, config, readOnly: true });
     if (!owner) {
       throw new ChatMetadataSnapshotUnavailableError(
         `prepared chat metadata owner is unavailable for agent "${agentId}"`,
@@ -557,13 +544,7 @@ export function createGatewayChatMetadataRuntime(params: {
           `prepared chat startup projection is unavailable for agent "${sessionAgentId}"`,
         );
       }
-      const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(generation.facts.config));
-      const defaultAgent = generation.agentsById.get(defaultAgentId);
-      if (!defaultAgent) {
-        throw new ChatMetadataSnapshotUnavailableError(
-          `prepared chat startup projection is unavailable for default agent "${defaultAgentId}"`,
-        );
-      }
+      const defaultAgentId = sessionAgentId;
       const profileNeutralProjections = await Promise.all(
         [...generation.agentsById.values()].map(
           async (agent) => [agent.agentId, await projectAgent(generation, agent)] as const,

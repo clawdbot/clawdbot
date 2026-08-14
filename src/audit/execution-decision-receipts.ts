@@ -9,6 +9,7 @@ import {
   summarizeOperatorApprovalReceiptsForRun,
 } from "../gateway/operator-approval-store.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { parsePositiveAuditCursor } from "./audit-cursor.js";
 import {
   pageExecutionDecisionFactsForContext,
   summarizeExecutionDecisionFactsForContext,
@@ -18,10 +19,14 @@ type ExecutionDecisionReadOptions = OpenClawStateDatabaseOptions & { now?: numbe
 
 const MAX_AGGREGATE_MISSING_EVIDENCE = 16;
 const MISSING_EVIDENCE_TRUNCATED = "decision.missing_evidence_truncated";
-type DecisionCursor = {
-  stage: "approval" | "generic";
-  after?: { occurredAt: number; rowId: number };
-};
+type DecisionCursor =
+  | {
+      stage: "approval" | "generic";
+      after?: { occurredAt: number; rowId: number };
+    }
+  | {
+      offset: number;
+    };
 
 export class ExecutionDecisionCursorError extends Error {
   constructor(message = "invalid execution decision cursor") {
@@ -33,6 +38,10 @@ export class ExecutionDecisionCursorError extends Error {
 function parseDecisionCursor(value: string | undefined): DecisionCursor | undefined | null {
   if (value === undefined) {
     return undefined;
+  }
+  const offset = parsePositiveAuditCursor(value);
+  if (offset !== null && offset !== undefined) {
+    return { offset };
   }
   const match = /^([ag]):(0|[1-9]\d*):(0|[1-9]\d*)$/.exec(value);
   if (!match) {
@@ -129,6 +138,10 @@ export function presentExecutionDecisionReceipts(params: {
   }
   const limit = params.decisionLimit ?? 50;
   const now = params.options.now ?? Date.now();
+  // Numeric cursors are the shipped aggregate offset. Resolve its owner span
+  // once, then let the canonical bounded owner pagers emit opaque successors.
+  const opaqueCursor = cursor && "stage" in cursor ? cursor : undefined;
+  const legacyOffset = cursor && "offset" in cursor ? cursor.offset - 1 : undefined;
   const approvalSummary = summarizeOperatorApprovalReceiptsForRun({
     context: {
       contextId: params.context.contextId,
@@ -137,6 +150,7 @@ export function presentExecutionDecisionReceipts(params: {
     },
     nowMs: now,
     databaseOptions: params.options,
+    exactCount: legacyOffset !== undefined,
   });
   const genericSummary = summarizeExecutionDecisionFactsForContext({
     context: params.context,
@@ -146,6 +160,10 @@ export function presentExecutionDecisionReceipts(params: {
   const decisions: DecisionReceiptV1[] = [];
   let remainingLimit = limit;
   let nextDecisionCursor: string | undefined;
+  const approvalOffset =
+    legacyOffset !== undefined && legacyOffset < approvalSummary.count ? legacyOffset : undefined;
+  const genericOffset =
+    legacyOffset === undefined ? undefined : Math.max(0, legacyOffset - approvalSummary.count);
 
   if (cursor === undefined && remainingLimit > 0) {
     decisions.push(admissionDecision(params.context));
@@ -154,7 +172,11 @@ export function presentExecutionDecisionReceipts(params: {
       nextDecisionCursor = formatDecisionCursor("approval");
     }
   }
-  if (remainingLimit > 0 && cursor?.stage !== "generic") {
+  if (
+    remainingLimit > 0 &&
+    opaqueCursor?.stage !== "generic" &&
+    (legacyOffset === undefined || approvalOffset !== undefined)
+  ) {
     let page;
     try {
       page = pageOperatorApprovalReceiptsForRun({
@@ -163,7 +185,8 @@ export function presentExecutionDecisionReceipts(params: {
           executionId: params.context.executionId,
           runId: params.context.runId,
         },
-        after: cursor?.stage === "approval" ? cursor.after : undefined,
+        after: opaqueCursor?.stage === "approval" ? opaqueCursor.after : undefined,
+        offset: approvalOffset,
         limit: remainingLimit,
         nowMs: now,
         databaseOptions: params.options,
@@ -189,7 +212,8 @@ export function presentExecutionDecisionReceipts(params: {
     try {
       page = pageExecutionDecisionFactsForContext({
         context: params.context,
-        after: cursor?.stage === "generic" ? cursor.after : undefined,
+        after: opaqueCursor?.stage === "generic" ? opaqueCursor.after : undefined,
+        offset: genericOffset,
         limit: remainingLimit,
         now,
         database: params.options,

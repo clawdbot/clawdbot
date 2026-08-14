@@ -147,6 +147,7 @@ export function resolveSubagentCapabilityStore(
   opts?: {
     cfg?: OpenClawConfig;
     store?: SessionCapabilityStore;
+    agentId?: string;
   },
 ): SessionCapabilityStore | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -315,6 +316,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
   opts?: {
     cfg?: OpenClawConfig;
     store?: SessionCapabilityStore;
+    agentId?: string;
   },
 ): PersistedSubagentToolPolicyEnvelope | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -365,6 +367,7 @@ export function resolveStoredSubagentCapabilities(
   opts?: {
     cfg?: OpenClawConfig;
     store?: SessionCapabilityStore;
+    agentId?: string;
   },
 ) {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -377,6 +380,7 @@ export function resolveStoredSubagentCapabilities(
     const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
       cfg: opts?.cfg,
       store: opts?.store,
+      agentId: opts?.agentId,
     });
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });
   }
@@ -394,6 +398,7 @@ export function resolveStoredSubagentCapabilities(
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
     cfg: opts?.cfg,
     store: depthStore,
+    agentId: opts?.agentId,
   });
   if (!isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, store, entry })) {
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });

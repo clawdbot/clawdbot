@@ -20,7 +20,7 @@ import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { ChannelType, MessageType, type User } from "../internal/discord.js";
 import {
@@ -750,8 +750,7 @@ export async function preflightDiscordMessage(
   const systemText = resolveDiscordSystemEvent(message, systemLocation);
   if (systemText) {
     logDebug(`[discord-preflight] drop: system event`);
-    enqueueSystemEvent(systemText, {
-      sessionKey: effectiveRoute.sessionKey,
+    enqueueRoutedSystemEvent(systemText, effectiveRoute, {
       contextKey: `discord:system:${messageChannelId}:${message.id}`,
     });
     return null;

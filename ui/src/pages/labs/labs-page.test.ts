@@ -112,6 +112,7 @@ describe("LabsPage", () => {
     expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     expect(page.textContent).toContain("Swarm");
+    expect(page.textContent).toContain("Host Desktop");
     expect(page.textContent).toContain("Cloud Worker Desktop");
     expect(codeModeToggle(page).checked).toBe(true);
 
@@ -201,6 +202,12 @@ describe("LabsPage", () => {
       note: "labs: update auditMessages",
     },
     {
+      label: "Host Desktop",
+      sourceConfig: { desktop: { host: { enabled: false } } },
+      expectedPatch: { desktop: { host: { enabled: true } } },
+      note: "labs: update hostDesktop",
+    },
+    {
       label: "Cloud Worker Desktop",
       sourceConfig: { cloudWorkers: { desktop: false } },
       expectedPatch: { cloudWorkers: { desktop: true } },
@@ -257,10 +264,11 @@ describe("LabsPage", () => {
     const rows = [...page.querySelectorAll(".settings-row")];
 
     const restartRows = rows.filter((row) => row.textContent?.includes("restart"));
-    expect(restartRows).toHaveLength(2);
+    expect(restartRows).toHaveLength(3);
     expect(restartRows.map((row) => row.textContent)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Message audit metadata"),
+        expect.stringContaining("Host Desktop"),
         expect.stringContaining("Cloud Worker Desktop"),
       ]),
     );

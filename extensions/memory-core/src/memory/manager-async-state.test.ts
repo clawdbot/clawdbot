@@ -21,28 +21,26 @@ describe("memory manager async state", () => {
     await closePromise;
   });
 
-  it("reports pending sync failures during close", async () => {
+  it.each([
+    {
+      name: "pending sync",
+      pendingKey: "pendingSync" as const,
+      error: new Error("sync failed"),
+    },
+    {
+      name: "pending provider initialization",
+      pendingKey: "pendingProviderInit" as const,
+      error: new Error("provider init failed"),
+    },
+  ])("reports $name failures during close", async ({ pendingKey, error }) => {
     const onError = vi.fn();
-    const syncError = new Error("sync failed");
 
     await awaitPendingManagerWork({
-      pendingSync: Promise.reject(syncError),
+      [pendingKey]: Promise.reject(error),
       onError,
     });
 
-    expect(onError).toHaveBeenCalledWith(syncError);
-  });
-
-  it("reports pending provider initialization failures during close", async () => {
-    const onError = vi.fn();
-    const providerError = new Error("provider init failed");
-
-    await awaitPendingManagerWork({
-      pendingProviderInit: Promise.reject(providerError),
-      onError,
-    });
-
-    expect(onError).toHaveBeenCalledWith(providerError);
+    expect(onError).toHaveBeenCalledWith(error);
   });
 
   it("does not report errors for completed pending close work", async () => {
@@ -67,5 +65,46 @@ describe("memory manager async state", () => {
       onError: vi.fn(),
     });
     expect(syncMock).not.toHaveBeenCalled();
+  });
+
+  it("reports background search sync failures", async () => {
+    const syncError = new Error("sync failed");
+    const onError = vi.fn();
+
+    await startAsyncSearchSync({
+      enabled: true,
+      dirty: false,
+      sessionsDirty: true,
+      sync: vi.fn(async () => {
+        throw syncError;
+      }),
+      onError,
+    });
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(syncError));
+  });
+
+  it("waits for ordinary dirty sync", async () => {
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    });
+    const syncMock = vi.fn(async () => await pendingSync);
+    let settled = false;
+
+    const searchSync = startAsyncSearchSync({
+      enabled: true,
+      dirty: true,
+      sessionsDirty: false,
+      sync: syncMock,
+      onError: vi.fn(),
+    }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(syncMock).toHaveBeenCalledWith({ reason: "search" }));
+    expect(settled).toBe(false);
+    releaseSync();
+    await searchSync;
   });
 });

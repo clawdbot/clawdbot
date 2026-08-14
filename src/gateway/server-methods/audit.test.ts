@@ -290,6 +290,45 @@ describe("audit gateway methods", () => {
       executionId: "execution-1",
       decisionLimit: 20,
     });
+
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: "1",
+      decisionCursor: "1",
+      decisionLimit: 25,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 1,
+      executionLimit: 50,
+      decisionCursor: "1",
+      decisionLimit: 25,
+    });
+
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: "001",
+      decisionCursor: "001",
+      decisionLimit: 25,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 1,
+      executionLimit: 50,
+      decisionCursor: "001",
+      decisionLimit: 25,
+    });
+
+    await runAuditHandler("audit.run.inspect", {
+      executionId: "execution-1",
+      decisionCursor: "1",
+      decisionLimit: 20,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      executionId: "execution-1",
+      decisionCursor: "1",
+      decisionLimit: 20,
+    });
   });
 
   it("rejects malformed run inspection before storage access", async () => {
@@ -299,6 +338,11 @@ describe("audit gateway methods", () => {
     expect(
       await runAuditHandler("audit.run.inspect", { runId: "run-1", decisionCursor: "0" }),
     ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    for (const decisionCursor of ["-1", "1.5", "1a", "a:1:2x", "9007199254740992"]) {
+      expect(
+        await runAuditHandler("audit.run.inspect", { runId: "run-1", decisionCursor }),
+      ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    }
     expect(
       await runAuditHandler("audit.run.inspect", {
         runId: "run-1",
