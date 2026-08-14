@@ -1,12 +1,18 @@
+import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
+import type { ChatType } from "../../channels/chat-type.js";
+import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../get-reply-options.types.js";
-import type { FollowupRun } from "./queue.js";
+import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 
@@ -55,31 +61,31 @@ export type ReplyToolAuthorityRoute = Readonly<{
 
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
-  originatingChannel: FollowupRun["originatingChannel"];
-  messageProvider: FollowupRun["run"]["messageProvider"];
-  chatType: FollowupRun["run"]["chatType"];
-  agentAccountId: FollowupRun["run"]["agentAccountId"];
-  conversationToolPolicy: FollowupRun["run"]["conversationToolPolicy"];
-  groupId: FollowupRun["run"]["groupId"];
-  groupChannel: FollowupRun["run"]["groupChannel"];
-  groupSpace: FollowupRun["run"]["groupSpace"];
-  memberRoleIds: FollowupRun["run"]["memberRoleIds"];
-  spawnedBy: FollowupRun["run"]["spawnedBy"];
-  senderId: FollowupRun["run"]["senderId"];
-  senderName: FollowupRun["run"]["senderName"];
-  senderUsername: FollowupRun["run"]["senderUsername"];
-  senderE164: FollowupRun["run"]["senderE164"];
+  originatingChannel?: OriginatingChannelType;
+  messageProvider?: string;
+  chatType?: ChatType;
+  agentAccountId?: string;
+  conversationToolPolicy?: GroupToolPolicyConfig;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  memberRoleIds?: string[];
+  spawnedBy?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
   senderIsOwner: boolean;
-  inputProvenance: FollowupRun["run"]["inputProvenance"];
-  trustedInternalHandoff: FollowupRun["run"]["trustedInternalHandoff"];
-  scheduledToolPolicy: FollowupRun["run"]["scheduledToolPolicy"];
-  runtimePluginToolGrant: FollowupRun["run"]["runtimePluginToolGrant"];
-  toolsAllow: FollowupRun["toolsAllow"];
+  inputProvenance?: InputProvenance;
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  toolsAllow?: string[];
   disableTools: boolean;
   traceAuthorized: boolean;
-  approvalReviewerDeviceId: FollowupRun["run"]["approvalReviewerDeviceId"];
-  clientCaps: FollowupRun["run"]["clientCaps"];
-  toolBindings: FollowupRun["run"]["toolBindings"];
+  approvalReviewerDeviceId?: string;
+  clientCaps?: string[];
+  toolBindings?: Readonly<Record<string, unknown>>;
 }>;
 
 export type ReplyToolAuthorityProjector = (
