@@ -91,6 +91,7 @@ describe("worker environment service", () => {
       stop: vi.fn(async () => {}),
     };
     const nodeTunnelManager = {
+      bindWorkspaceBindingResolver: vi.fn(),
       status: () => "stopped" as const,
       start: vi.fn(async (request) => ({
         ...nodeHandle,
@@ -139,6 +140,79 @@ describe("worker environment service", () => {
         expectedBuild: expect.objectContaining({ bundleHash: "c".repeat(64) }),
       }),
     );
+  });
+
+  it("stops the node transport that owns a timed-out start", async () => {
+    support.testState.config.cloudWorkers!.profiles!.development!.provider = "device";
+    support.testState.config.cloudWorkers!.profiles!.development!.settings = {
+      device: "device-1",
+    };
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const pendingStart = new Promise<never>(() => {});
+    const sshStop = vi.fn(async () => {});
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: sshStop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const nodeTunnelManager = {
+      bindWorkspaceBindingResolver: vi.fn(),
+      status: () => "connecting" as const,
+      start: vi.fn(() => {
+        signalStarted();
+        return pendingStart;
+      }),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    };
+    const workerService = support.createService(
+      support.createProvider({
+        id: "device",
+        provision: async () => ({
+          leaseId: "device-lease",
+          node: { deviceId: "device-1" },
+        }),
+      }),
+      {
+        tunnelManager,
+        nodeTunnelManager,
+        resolveNodeWorkerBuild: async () => ({
+          bundleHash: "c".repeat(64),
+          openclawVersion: VERSION,
+          protocolFeatures: ["worker-heartbeat-v1"],
+        }),
+      },
+    );
+    const environment = await workerService.create("development", "device-tunnel-timeout");
+    const credential = await workerService.attachSession({
+      environmentId: environment.environmentId,
+      ownerEpoch: environment.ownerEpoch,
+      sessionId: "session-device",
+    });
+    const sshStopCallsBeforeStart = sshStop.mock.calls.length;
+    vi.useFakeTimers();
+
+    const starting = workerService.startTunnel({
+      environmentId: environment.environmentId,
+      ownerEpoch: credential.ownerEpoch,
+    });
+    const rejected = expect(starting).rejects.toMatchObject({
+      code: "provider_failure",
+      message: expect.stringContaining("did not connect within 3 minutes"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    await started;
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+
+    await rejected;
+    expect(nodeTunnelManager.stop).toHaveBeenCalledWith(
+      environment.environmentId,
+      credential.ownerEpoch,
+    );
+    expect(sshStop).toHaveBeenCalledTimes(sshStopCallsBeforeStart);
   });
 
   it("reconciles shared-host isolation for a persisted lease before tunnel startup", async () => {

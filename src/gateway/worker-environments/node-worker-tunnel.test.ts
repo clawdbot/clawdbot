@@ -7,11 +7,28 @@ import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
+
+const workspaceFallbackMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    syncWorkspace: vi.fn(),
+    quiesceWorkspace: vi.fn(async () => ({
+      assertActive: vi.fn(async () => {}),
+      resume: vi.fn(async () => {}),
+    })),
+    reconcileWorkspace: vi.fn(),
+  })),
+);
+
+vi.mock("./node-worker-workspace-fallback.js", () => ({
+  createNodeWorkerWorkspaceFallback: workspaceFallbackMock,
+}));
+
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
@@ -126,6 +143,109 @@ describe("node worker tunnel manager", () => {
     await expect(manager.start({ ...startRequest(), sessionId: "session-other" })).rejects.toThrow(
       "binding changed",
     );
+  });
+
+  it("restores workspace command authority from the durable owner epoch", async () => {
+    const record = environment();
+    const invoke = vi.fn(
+      async (request: Parameters<NodeWorkerSupervisorTransport["invoke"]>[0]) => {
+        expect(request.params).toMatchObject({
+          environmentId: "environment-1",
+          sessionId: "session-1",
+          generation: record.ownerEpoch,
+        });
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({
+            workspaceDir: "/node/workspace",
+            stdout: "restored",
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          }),
+        };
+      },
+    );
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: () => ({ ...transport(), invoke }),
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+    });
+    const resolveWorkspaceBinding = vi.fn(async () => ({
+      localPath: "/gateway/workspace",
+      manifestRef: `sha256:${"b".repeat(64)}`,
+      remoteWorkspaceDir: "/node/workspace",
+    }));
+    manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
+
+    const handle = await manager.start(startRequest());
+    await expect(
+      handle.runWorkspaceCommand({
+        argv: ["printf", "restored"],
+        transportRetry: "idempotent",
+      }),
+    ).resolves.toMatchObject({ stdout: "restored", workspaceDir: "/node/workspace" });
+    expect(resolveWorkspaceBinding).toHaveBeenCalledWith({
+      environmentId: "environment-1",
+      ownerEpoch: record.ownerEpoch,
+      sessionId: "session-1",
+    });
+    expect(workspaceFallbackMock).toHaveBeenCalledWith(expect.any(Function), {
+      localPath: "/gateway/workspace",
+      manifestRef: `sha256:${"b".repeat(64)}`,
+      remoteWorkspaceDir: "/node/workspace",
+    });
+  });
+
+  it("cancels a replacement start before it can install a late handle", async () => {
+    const record = environment();
+    const releaseLaunch = createDeferred<void>();
+    const launch: NodeWorkerLaunch = async (request): Promise<TerminalReceipt> =>
+      await new Promise<TerminalReceipt>((resolve) => {
+        request.signal?.addEventListener(
+          "abort",
+          () => {
+            void releaseLaunch.promise.then(() => {
+              resolve({
+                launchId: request.input.launchId,
+                planHash: "b".repeat(64),
+                environmentId: request.input.descriptor.admission.environmentId,
+                sessionId: request.input.descriptor.admission.sessionId,
+                ownerEpoch: request.input.descriptor.admission.ownerEpoch,
+                placementGeneration: request.input.placementGeneration,
+                runId: request.input.descriptor.assignment.runId,
+                state: "cancelled",
+                errorText: "node worker cancelled",
+              });
+            });
+          },
+          { once: true },
+        );
+      });
+    const launchNodeWorker = vi.fn(launch);
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: transport,
+      launchNodeWorker,
+      validateWorkerTurn: () => true,
+    });
+    const first = await manager.start(startRequest());
+    const launched = first.launchTurn({ plan: plan(), placementGeneration: 4, timeoutMs: 5_000 });
+    await vi.waitFor(() => expect(launchNodeWorker).toHaveBeenCalledOnce());
+    record.ownerEpoch = 3;
+    const replacement = manager.start({ ...startRequest(), ownerEpoch: 3 });
+
+    await manager.stop("environment-1", 3);
+    releaseLaunch.resolve();
+
+    await expect(replacement).rejects.toThrow("start was cancelled");
+    await expect(launched).resolves.toMatchObject({ code: 1, killed: true });
+    expect(manager.status("environment-1")).toBe("stopped");
   });
 
   it("keeps cancellation authorized until an active launch settles", async () => {

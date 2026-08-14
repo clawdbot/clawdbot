@@ -100,6 +100,29 @@ function credentialFreeHttpOrigin(raw: string): string | undefined {
   return parsed.href;
 }
 
+async function requiresWorkspaceTransfer(root: string): Promise<boolean> {
+  for (const marker of [".worktreeinclude", ".gitmodules"]) {
+    try {
+      await fs.lstat(path.join(root, marker));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  try {
+    return /\bfilter\s*=\s*lfs\b/u.test(
+      await fs.readFile(path.join(root, ".gitattributes"), "utf8"),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    return false;
+  }
+}
+
 async function inspectLocalGit(
   localPath: string,
   operation: "sync" | "reconcile",
@@ -119,13 +142,8 @@ async function inspectLocalGit(
   if (root !== canonicalPath) {
     return pending(operation, "plain-workspace");
   }
-  try {
-    await fs.lstat(path.join(root, ".worktreeinclude"));
+  if (await requiresWorkspaceTransfer(root)) {
     return pending(operation, "workspace-transfer-required");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
   }
   const [status, commit, rawOrigin] = await Promise.all([
     localGit(root, ["status", "--porcelain=v1", "--untracked-files=all"]),
@@ -191,14 +209,29 @@ async function inspectNodeGit(
   };
 }
 
-export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
+export function createNodeWorkerWorkspaceFallback(
+  exec: WorkspaceExec,
+  restore?: { localPath: string; manifestRef: string },
+) {
   let accepted: GitIdentity | undefined;
 
-  const assertUnchanged = async (operation: "sync" | "reconcile") => {
-    const identity = accepted;
-    if (!identity) {
+  const resolveAccepted = async (operation: "sync" | "reconcile"): Promise<GitIdentity> => {
+    if (accepted) {
+      return accepted;
+    }
+    if (!restore) {
       return pending(operation, "changed-results");
     }
+    const identity = await inspectLocalGit(restore.localPath, operation);
+    if (identity.manifestRef !== restore.manifestRef) {
+      return pending(operation, "changed-results");
+    }
+    accepted = identity;
+    return identity;
+  };
+
+  const assertUnchanged = async (operation: "sync" | "reconcile") => {
+    const identity = await resolveAccepted(operation);
     const [local, node] = await Promise.all([
       inspectLocalGit(identity.root, operation),
       inspectNodeGit(exec, operation),

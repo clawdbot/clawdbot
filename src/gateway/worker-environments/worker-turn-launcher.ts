@@ -123,7 +123,6 @@ async function executeWorkerTurn(params: {
       "Active worker bundle lacks the current execution-context capability; reprovision the worker before launch",
     );
   }
-  const bootstrapReceipt = environment.bootstrapReceipt;
   let manifestAccepted = false;
   let workspaceConflict:
     | { paths: string[]; stagedResultRef: string; totalCount: number; summary: string }

@@ -81,6 +81,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
     }
     let startup: Promise<WorkerTunnelHandle> | undefined;
+    let stopStartup: (() => Promise<void>) | undefined;
     await withLock(request.environmentId, async () => {
       stopping = options.isStopping();
       if (stopping) {
@@ -139,6 +140,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             protocolFeatures: [...record.bootstrapReceipt.protocolFeatures],
           },
         });
+        stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;
       }
       if (!record.sshEndpoint) {
@@ -162,6 +164,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         sharedHost: record.sharedHost,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),
       });
+      stopStartup = async () => await tunnels.stop(record.environmentId, record.ownerEpoch);
     });
     if (!startup) {
       throw serviceError("invalid_state", "Worker tunnel failed to start");
@@ -178,10 +181,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (error !== timeoutError) {
         throw error;
       }
-      // Stop can itself block on an unkillable SSH child; detach it (rejection observed,
+      // Stop can itself block on an unkillable transport child; detach it (rejection observed,
       // entry stays manager-tracked) so the deadline error is returned on time. Epoch-fenced
       // so a stale timed-out attempt can never tear down a newer owner's tunnel.
-      void tunnels?.stop(request.environmentId, request.ownerEpoch).catch(() => undefined);
+      void stopStartup?.().catch(() => undefined);
       throw timeoutError;
     }
   };
