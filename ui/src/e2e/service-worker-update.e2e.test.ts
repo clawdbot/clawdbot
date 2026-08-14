@@ -322,6 +322,12 @@ describe("Control UI service-worker production update E2E", () => {
         );
       });
       await gateway.setOnline(false);
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean })
+          | null;
+        return panel?.available === false;
+      });
       await rename(outDir, previousOutDir);
       await rename(nextOutDir, outDir);
       await rm(previousOutDir, { force: true, recursive: true });

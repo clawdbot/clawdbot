@@ -338,8 +338,10 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
         const controlUiBuildFresh = !(
           isSameOriginGateway(nextConnection.gatewayUrl) &&
+          (exactBuildIdentityAvailable || everConnected) &&
           controlUiBuildDiffersFrom({
             version: hello.server?.version,
             buildId: hello.server?.buildId,

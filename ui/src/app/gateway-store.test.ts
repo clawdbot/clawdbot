@@ -179,6 +179,22 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("reconnecting");
   });
 
+  it("keeps legacy version fallback on reconnect instead of first admission", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const legacyHello = {
+      ...HELLO,
+      server: { version: "2026.7.20", connId: "legacy-conn" },
+    };
+
+    current().opts.onHello?.(legacyHello);
+    expect(gateway.snapshot.phase).toBe("connected");
+
+    current().opts.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
+    current().opts.onHello?.(legacyHello);
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+  });
+
   it("does not compare a separately hosted Control UI with a remote gateway build", () => {
     const settings = { ...loadSettings(), gatewayUrl: "wss://remote.example/ws" };
     const { gateway, current } = createStore({ settings });
