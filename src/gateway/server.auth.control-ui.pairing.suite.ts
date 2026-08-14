@@ -215,7 +215,7 @@ export function registerControlUiPairingSuite(): void {
     if (!tailscaleEndpoint) {
       throw new Error("expected managed Tailscale listener");
     }
-    const ws2 = await openTailscaleWs(tailscaleEndpoint.port);
+    const ws2 = await openTailscaleWs(tailscaleEndpoint);
     try {
       const nonce2 = await readConnectChallengeNonce(ws2);
       const mismatched = await connectReq(ws2, {

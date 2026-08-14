@@ -161,7 +161,7 @@ describe("gateway identity scope grants", () => {
         if (!endpoint) {
           throw new Error("expected managed Tailscale listener");
         }
-        const ws = await openTailscaleWs(endpoint.port, {
+        const ws = await openTailscaleWs(endpoint, {
           origin: BROWSER_ORIGIN,
           "tailscale-user-login": verifiedIdentity,
         });

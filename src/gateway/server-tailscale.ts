@@ -11,13 +11,14 @@ import {
   hasTailscaleFunnelRouteForPort,
 } from "../infra/tailscale.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
+import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
   resetOnExit?: boolean;
   port: number;
-  backendPort?: number;
+  backend?: GatewayTailscaleIngressEndpoint;
   preserveFunnel?: boolean;
   serviceName?: string;
   controlUiBasePath?: string;
@@ -26,24 +27,25 @@ export async function startGatewayTailscaleExposure(params: {
   if (params.tailscaleMode === "off") {
     return null;
   }
-  if (!params.backendPort) {
+  if (!params.backend) {
     throw new Error("Managed Tailscale ingress failed to start");
   }
+  const backendTarget = `http://[${params.backend.host}]:${params.backend.port}`;
   const serviceName =
     params.tailscaleMode === "serve" ? params.serviceName?.trim() || undefined : undefined;
   const effectiveMode = params.tailscaleMode;
   let clearPublishedOrigin: (() => void) | undefined;
 
-  const applyRoute = async (port: number) => {
+  const applyRoute = async (target: string) => {
     if (params.tailscaleMode === "serve") {
       if (serviceName) {
-        await enableTailscaleServe(port, undefined, serviceName);
+        await enableTailscaleServe(target, undefined, serviceName);
       } else {
-        await enableTailscaleServe(port);
+        await enableTailscaleServe(target);
       }
       return;
     }
-    await enableTailscaleFunnel(port);
+    await enableTailscaleFunnel(target);
   };
   const clearRoute = async () => {
     if (params.tailscaleMode === "serve") {
@@ -79,7 +81,7 @@ export async function startGatewayTailscaleExposure(params: {
   }
 
   try {
-    await applyRoute(params.backendPort);
+    await applyRoute(backendTarget);
     const host = await (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
     ).catch(() => null);
@@ -115,18 +117,13 @@ export async function startGatewayTailscaleExposure(params: {
     try {
       if (params.resetOnExit) {
         await clearRoute();
-      } else {
-        // Background routes persist by product contract. Shutdown calls this after the
-        // private listener closes, then restores the stable configured Gateway port.
-        await applyRoute(params.port);
       }
     } catch (err) {
       params.logTailscale.warn(
         `${params.tailscaleMode} cleanup failed: ${formatErrorMessage(err)}`,
       );
-      // A reset clears the node-wide Serve/Funnel configuration. Never use it as
-      // fallback for a failed persistent-route restore: a concurrent operator
-      // update or an unrelated handler must survive this Gateway's shutdown.
+      // Cleanup is best-effort during shutdown; startup will reclaim the same
+      // owned endpoint without disturbing unrelated Tailscale routes.
     }
   };
 }

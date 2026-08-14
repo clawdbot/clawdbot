@@ -15,6 +15,11 @@ export const PROXY_ATTRIBUTION_GUIDANCE =
 
 export type GatewayTailscaleIngressMode = "serve" | "funnel";
 
+export type GatewayTailscaleIngressEndpoint = {
+  host: "::1";
+  port: number;
+};
+
 export type GatewayIngressTransport =
   | { kind: "ordinary" }
   | { kind: "managed-tailscale"; mode: GatewayTailscaleIngressMode };

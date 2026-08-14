@@ -21,6 +21,7 @@ export async function listenGatewayHttpServer(params: {
   httpServer: HttpServer;
   bindHost: string;
   port: number;
+  ipv6Only?: boolean;
   retryEaddrinuse?: boolean;
   serviceName?: string;
   endpointScheme?: "http" | "https" | "ws" | "wss";
@@ -29,6 +30,7 @@ export async function listenGatewayHttpServer(params: {
     httpServer,
     bindHost,
     port,
+    ipv6Only = false,
     retryEaddrinuse = true,
     serviceName = "gateway",
     endpointScheme = "ws",
@@ -48,7 +50,11 @@ export async function listenGatewayHttpServer(params: {
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
-        httpServer.listen(port, bindHost);
+        if (ipv6Only) {
+          httpServer.listen({ host: bindHost, port, ipv6Only: true });
+        } else {
+          httpServer.listen(port, bindHost);
+        }
       });
       return; // bound successfully
     } catch (err) {

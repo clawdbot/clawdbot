@@ -49,7 +49,7 @@ export async function startGatewayServerCore(
       // controls cleanup for a route this Gateway run actually applied.
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
-            prepareManagedTailscaleIngress: async ({ port: backendPort }) => {
+            prepareManagedTailscaleIngress: async (backend) => {
               const { startGatewayTailscaleExposure } = await import("./server-tailscale.js");
               const cleanup = await startGatewayTailscaleExposure({
                 tailscaleMode: gatewayKernel.tailscaleMode,
@@ -57,7 +57,7 @@ export async function startGatewayServerCore(
                 serviceName: gatewayKernel.tailscaleConfig.serviceName,
                 preserveFunnel: gatewayKernel.tailscaleConfig.preserveFunnel ?? false,
                 port,
-                backendPort,
+                backend,
                 controlUiBasePath: gatewayKernel.controlUiBasePath,
                 logTailscale,
               });

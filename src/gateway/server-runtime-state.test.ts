@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
       httpServer: { address: () => unknown };
       bindHost: string;
       port?: number;
+      ipv6Only?: boolean;
       retryEaddrinuse?: boolean;
     }) => {},
   ),
@@ -390,40 +391,37 @@ describe("createGatewayRuntimeState", () => {
 
   it("claims managed Tailscale routing before ordinary ingress starts listening", async () => {
     const events: string[] = [];
-    mocks.listenGatewayHttpServer.mockImplementation(async ({ httpServer, port }) => {
-      events.push(port === 0 ? "private-listener" : "ordinary-listener");
-      if (port === 0) {
-        vi.spyOn(httpServer, "address").mockReturnValue({
-          address: "127.0.0.1",
-          family: "IPv4",
-          port: 19000,
-        });
-      }
+    mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
+    mocks.listenGatewayHttpServer.mockImplementation(async ({ bindHost }) => {
+      events.push(bindHost === "::1" ? "private-listener" : "ordinary-listener");
+    });
+    const prepareManagedTailscaleIngress = vi.fn(async () => {
+      events.push("tailscale-route");
     });
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
       port: 18789,
       tailscaleMode: "serve",
-      prepareManagedTailscaleIngress: async () => {
-        events.push("tailscale-route");
-      },
+      prepareManagedTailscaleIngress,
     });
 
     await runtimeState.startListening();
 
     expect(events).toEqual(["private-listener", "tailscale-route", "ordinary-listener"]);
+    expect(prepareManagedTailscaleIngress).toHaveBeenCalledWith({ host: "::1", port: 18789 });
+    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        bindHost: "::1",
+        port: 18789,
+        ipv6Only: true,
+        retryEaddrinuse: false,
+      }),
+    );
+    expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1"]);
   });
 
   it("leaves ordinary ingress closed when managed Tailscale routing fails", async () => {
     const routeFailure = new Error("route claim failed");
-    mocks.listenGatewayHttpServer.mockImplementation(async ({ httpServer, port }) => {
-      if (port === 0) {
-        vi.spyOn(httpServer, "address").mockReturnValue({
-          address: "127.0.0.1",
-          family: "IPv4",
-          port: 19000,
-        });
-      }
-    });
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
       port: 18789,
       tailscaleMode: "serve",
@@ -435,7 +433,12 @@ describe("createGatewayRuntimeState", () => {
     await expect(runtimeState.startListening()).rejects.toBe(routeFailure);
     expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
     expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
-      expect.objectContaining({ port: 0, serviceName: "Tailscale gateway ingress" }),
+      expect.objectContaining({
+        bindHost: "::1",
+        port: 18789,
+        ipv6Only: true,
+        serviceName: "Tailscale gateway ingress",
+      }),
     );
     expect(runtimeState.httpBindHosts).toEqual([]);
   });

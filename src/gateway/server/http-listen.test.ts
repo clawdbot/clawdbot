@@ -19,9 +19,11 @@ type ListenOutcome = { kind: "error"; code: string } | { kind: "listening" };
 function createFakeHttpServer(outcomes: ListenOutcome[]) {
   class FakeHttpServer extends EventEmitter {
     public closeCalls = 0;
+    public listenCalls: unknown[][] = [];
     private attempt = 0;
 
-    listen(_port: number, _hostValue: string) {
+    listen(...args: unknown[]) {
+      this.listenCalls.push(args);
       const outcome = outcomes[this.attempt] ?? { kind: "listening" };
       this.attempt += 1;
       setImmediate(() => {
@@ -115,5 +117,18 @@ describe("listenGatewayHttpServer", () => {
     ).rejects.toBeInstanceOf(GatewayLockError);
 
     expect(fake.closeCalls).toBe(0);
+  });
+
+  it("binds managed IPv6 ingress as a single-stack listener", async () => {
+    const fake = createFakeHttpServer([{ kind: "listening" }]);
+
+    await listenGatewayHttpServer({
+      httpServer: fake as unknown as HttpServer,
+      bindHost: "::1",
+      port: 18789,
+      ipv6Only: true,
+    });
+
+    expect(fake.listenCalls).toEqual([[{ host: "::1", port: 18789, ipv6Only: true }]]);
   });
 });

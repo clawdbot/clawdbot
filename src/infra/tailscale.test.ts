@@ -8,7 +8,9 @@ const {
   getTailnetHostnameAfterServe,
   readTailscaleWhoisIdentity,
   enableTailscaleServe,
+  enableTailscaleFunnel,
   disableTailscaleServe,
+  disableTailscaleFunnel,
   hasTailscaleFunnelRouteForPort,
 } = tailscale;
 const tailscaleBin = "tailscale";
@@ -249,7 +251,21 @@ describe("tailscale helpers", () => {
     );
   });
 
-  it("disableTailscaleServe uses fallback", async () => {
+  it.each([
+    ["serve", enableTailscaleServe],
+    ["funnel", enableTailscaleFunnel],
+  ] as const)("passes an explicit managed IPv6 backend to Tailscale %s", async (_mode, enable) => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await enable("http://[::1]:18789" as never, exec as never);
+
+    expectExecCall(exec, 1, tailscaleBin, [_mode, "--bg", "--yes", "http://[::1]:18789"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+  });
+
+  it("disableTailscaleServe uses targeted root removal with fallback", async () => {
     const exec = vi
       .fn()
       .mockRejectedValueOnce(new Error("permission denied"))
@@ -258,10 +274,33 @@ describe("tailscale helpers", () => {
     await disableTailscaleServe(exec as never);
 
     expect(exec).toHaveBeenCalledTimes(2);
-    expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "reset"], {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    });
+    expectExecCall(
+      exec,
+      2,
+      "sudo",
+      ["-n", tailscaleBin, "serve", "--bg", "--yes", "--https=443", "--set-path=/", "off"],
+      {
+        maxBuffer: 200_000,
+        timeoutMs: 15_000,
+      },
+    );
+  });
+
+  it("disableTailscaleFunnel removes only the owned root route", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await disableTailscaleFunnel(exec as never);
+
+    expectExecCall(
+      exec,
+      1,
+      tailscaleBin,
+      ["funnel", "--bg", "--yes", "--https=443", "--set-path=/", "off"],
+      {
+        maxBuffer: 200_000,
+        timeoutMs: 15_000,
+      },
+    );
   });
 
   it("disableTailscaleServe disables only the configured service name", async () => {
