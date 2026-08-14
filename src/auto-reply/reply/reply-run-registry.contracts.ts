@@ -146,8 +146,6 @@ export type ReplyMessageInjectionTarget = {
   /** Tool authority proven when the active owner was captured for injection. */
   readonly toolAuthorityFingerprint?: string;
   readonly originatingLeafEntryId: string | null | undefined;
-  /** Tool authority captured with the exact active operation. */
-  readonly toolAuthorityFingerprint?: string;
 };
 
 type ReplyMessageInjectionRejectionReason =
