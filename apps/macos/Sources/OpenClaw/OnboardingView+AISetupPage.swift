@@ -108,6 +108,36 @@ extension OnboardingView {
         }
     }
 
+    func resumeVerifiedPendingSystemAgent(
+        modelRef: String,
+        activationOwnershipFingerprint: String?)
+    {
+        self.prepareSystemAgentHandoff()
+        self.aiSetup.reuseConfiguredInferenceVerification(
+            modelRef: modelRef,
+            activationOwnershipFingerprint: activationOwnershipFingerprint)
+        if let page = self.pageOrder.firstIndex(of: self.aiPageIndex) {
+            self.currentPage = page
+        }
+    }
+
+    func resumeFailedPendingSystemAgent(
+        modelRef: String,
+        status: String?,
+        error: String?,
+        activationOwnershipFingerprint: String?)
+    {
+        self.prepareSystemAgentHandoff()
+        self.aiSetup.reuseConfiguredInferenceVerificationFailure(
+            modelRef: modelRef,
+            status: status,
+            error: error,
+            activationOwnershipFingerprint: activationOwnershipFingerprint)
+        if let page = self.pageOrder.firstIndex(of: self.aiPageIndex) {
+            self.currentPage = page
+        }
+    }
+
     func waitForPendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
         if let page = pageOrder.firstIndex(of: aiPageIndex) {

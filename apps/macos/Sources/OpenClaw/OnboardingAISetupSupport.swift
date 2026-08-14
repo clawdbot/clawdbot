@@ -202,7 +202,8 @@ extension OnboardingAISetupModel {
     var ownsInferenceTransition: Bool {
         (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
             self.phase == .testing || self.manualTesting || self.providerWizardKind != nil ||
-            self.authBusy || self.connected || self.pendingActivationVerification
+            self.authBusy || self.providerAuthReconciliationPending || self.connected ||
+            self.pendingActivationVerification
     }
 
     static func prepareOptions(

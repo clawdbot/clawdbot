@@ -13,9 +13,18 @@ final class OnboardingConfiguredGatewayProbe {
         let identity: String?
     }
 
+    struct VerificationProof: Equatable {
+        let activationOwnershipFingerprint: String?
+    }
+
     enum Outcome: Equatable {
-        case configured(modelRef: String, route: BoundRoute)
-        case verificationFailed(modelRef: String, status: String?, error: String?, route: BoundRoute)
+        case configured(modelRef: String, verification: VerificationProof?, route: BoundRoute)
+        case verificationFailed(
+            modelRef: String,
+            status: String?,
+            error: String?,
+            verification: VerificationProof,
+            route: BoundRoute)
         case missing(route: BoundRoute)
         case authIssue(RemoteGatewayAuthIssue)
         case unavailable
@@ -23,7 +32,9 @@ final class OnboardingConfiguredGatewayProbe {
 
         var boundRoute: BoundRoute? {
             switch self {
-            case let .configured(_, route), let .verificationFailed(_, _, _, route), let .missing(route):
+            case let .configured(_, _, route),
+                 let .verificationFailed(_, _, _, _, route),
+                 let .missing(route):
                 route
             case .authIssue, .unavailable, .superseded:
                 nil
@@ -146,7 +157,7 @@ final class OnboardingConfiguredGatewayProbe {
             // A pending activation receipt has its own route- and owner-bound
             // verifier. Avoid paying for a second turn before reconciliation.
             guard verifyConfiguredInference else {
-                return .configured(modelRef: model, route: boundRoute)
+                return .configured(modelRef: model, verification: nil, route: boundRoute)
             }
 
             guard let supportsVerification = await self.gateway.supportsServerMethod(
@@ -157,7 +168,7 @@ final class OnboardingConfiguredGatewayProbe {
             // Released Gateways predate the live verifier. Preserve their
             // config-only handoff until they are upgraded.
             guard supportsVerification else {
-                return .configured(modelRef: model, route: boundRoute)
+                return .configured(modelRef: model, verification: nil, route: boundRoute)
             }
             let verificationData = try await gateway.request(
                 method: "openclaw.setup.verify",
@@ -175,9 +186,15 @@ final class OnboardingConfiguredGatewayProbe {
                     modelRef: model,
                     status: verification.status,
                     error: verification.error,
+                    verification: VerificationProof(
+                        activationOwnershipFingerprint: lease.route.activationOwnershipFingerprint),
                     route: boundRoute)
             }
-            return .configured(modelRef: model, route: boundRoute)
+            return .configured(
+                modelRef: model,
+                verification: VerificationProof(
+                    activationOwnershipFingerprint: lease.route.activationOwnershipFingerprint),
+                route: boundRoute)
         } catch is CancellationError {
             guard self.isCurrent(attempt) else { return .superseded }
             return await self.gateway.isCurrentServerLease(lease) ? .superseded : .unavailable

@@ -185,22 +185,22 @@ extension OnboardingView {
             self.schedulePendingActivationRecheckIfNeeded(pendingState)
 
             switch outcome {
-            case let .configured(modelRef, _):
+            case let .configured(modelRef, verification, _):
                 self.handleConfiguredGatewayProbeSuccess(
                     modelRef: modelRef,
+                    verification: verification,
                     pendingState: pendingState,
                     expectedPendingState: expectedPendingState,
                     systemAgentResumePending: systemAgentResumePending,
                     expectedMode: expectedMode)
-            case let .verificationFailed(modelRef, status, error, _):
+            case let .verificationFailed(modelRef, status, error, verification, _):
                 self.handleConfiguredGatewayVerificationFailure(
                     modelRef: modelRef,
                     status: status,
                     error: error,
+                    verification: verification,
                     pendingState: pendingState,
-                    expectedPendingState: expectedPendingState,
-                    expectedRouteIdentity: expectedRouteIdentity,
-                    expectedActivationOwner: expectedActivationOwner)
+                    expectedPendingState: expectedPendingState)
             case .missing:
                 self.handleMissingConfiguredGatewayInference(
                     pendingState: pendingState,
@@ -219,6 +219,7 @@ extension OnboardingView {
 
     private func handleConfiguredGatewayProbeSuccess(
         modelRef: String,
+        verification: OnboardingConfiguredGatewayProbe.VerificationProof?,
         pendingState: OnboardingSystemAgentResumeStore.PendingState,
         expectedPendingState: OnboardingSystemAgentResumeStore.PendingState,
         systemAgentResumePending: Bool,
@@ -229,7 +230,7 @@ extension OnboardingView {
             // A live setup/verification already owns this marker. A reconnect
             // must not downgrade connected state or fork a second resume operation.
             guard !self.aiSetup.connected else { return }
-            self.resumePendingSystemAgent(modelRef: modelRef)
+            self.reconcilePendingSystemAgent(modelRef: modelRef, verification: verification)
             return
         case .verified:
             // Inference was observed, but the dropped activation can still be
@@ -240,7 +241,7 @@ extension OnboardingView {
             // A concurrent probe can clear an expired marker while the dispatched
             // activation is still returning. Keep its handoff and prove inference.
             if self.aiSetup.pendingActivationVerification {
-                self.resumePendingSystemAgent(modelRef: modelRef)
+                self.reconcilePendingSystemAgent(modelRef: modelRef, verification: verification)
                 return
             }
             // A receipt that existed before agents.list was allowed to defer
@@ -262,35 +263,45 @@ extension OnboardingView {
         AppNavigationActions.openDashboard()
     }
 
+    private func reconcilePendingSystemAgent(
+        modelRef: String,
+        verification: OnboardingConfiguredGatewayProbe.VerificationProof?)
+    {
+        if let verification {
+            self.resumeVerifiedPendingSystemAgent(
+                modelRef: modelRef,
+                activationOwnershipFingerprint: verification.activationOwnershipFingerprint)
+        } else {
+            self.resumePendingSystemAgent(modelRef: modelRef)
+        }
+    }
+
     private func handleConfiguredGatewayVerificationFailure(
         modelRef: String,
         status: String?,
         error: String?,
+        verification: OnboardingConfiguredGatewayProbe.VerificationProof,
         pendingState: OnboardingSystemAgentResumeStore.PendingState,
-        expectedPendingState: OnboardingSystemAgentResumeStore.PendingState,
-        expectedRouteIdentity: String?,
-        expectedActivationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?)
+        expectedPendingState: OnboardingSystemAgentResumeStore.PendingState)
     {
         // A configured model is not usable when its live turn fails. An ambiguous
         // activation receipt retains mutation ownership; other recovery is read-only.
         guard !self.aiSetup.ownsInferenceTransition else { return }
         switch pendingState {
         case .activating, .completed:
-            self.resumePendingSystemAgent(modelRef: modelRef)
+            self.resumeFailedPendingSystemAgent(
+                modelRef: modelRef,
+                status: status,
+                error: error,
+                activationOwnershipFingerprint: verification.activationOwnershipFingerprint)
         case .verified:
             self.waitForPendingInferenceSetup()
         case .activationExpired:
-            guard expectedPendingState != .none,
-                  let expectedRouteIdentity,
-                  OnboardingSystemAgentResumeStore.clear(
-                      ifOwnedBy: expectedRouteIdentity,
-                      activationOwner: expectedActivationOwner,
-                      defaults: self.systemAgentDefaults)
-            else { return }
-            self.resumeConfiguredGatewayVerificationRecovery(
+            self.resumeFailedPendingSystemAgent(
                 modelRef: modelRef,
                 status: status,
-                error: error)
+                error: error,
+                activationOwnershipFingerprint: verification.activationOwnershipFingerprint)
         case .none:
             if self.aiSetup.pendingActivationVerification {
                 self.resumePendingSystemAgent(modelRef: modelRef)
@@ -316,7 +327,7 @@ extension OnboardingView {
     {
         // A route-bound transition can complete while agents.list is suspended.
         // Never let that stale absence reset connected inference or its receipt.
-        guard !self.aiSetup.connected else { return }
+        guard !self.aiSetup.ownsInferenceTransition else { return }
         switch pendingState {
         case .activating, .verified:
             self.waitForPendingInferenceSetup()

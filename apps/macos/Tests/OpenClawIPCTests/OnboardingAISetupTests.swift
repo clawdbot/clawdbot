@@ -824,14 +824,21 @@ struct OnboardingAISetupTests {
         #expect(view.aiSetup.configuredGatewayVerificationFailure?.error == "expired login")
     }
 
-    @Test func `reconnect probe preserves active provider reauthentication`() async throws {
+    @Test(arguments: [false, true])
+    func `reconnect probe preserves active provider reauthentication`(
+        missingModel: Bool) async throws
+    {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredVerifyAuthReconnect"))
         let url = try #require(URL(string: "ws://localhost:18789"))
+        let agentsResponses = AISetupSocketGeneration()
         let harness = AISetupHarness(
             url: url,
             handler: { _, request, _ in
                 switch request.method {
-                case "agents.list": configuredModelResponse(id: request.id)
+                case "agents.list":
+                    missingModel && agentsResponses.claim() > 0
+                        ? missingConfiguredModelResponse(id: request.id)
+                        : configuredModelResponse(id: request.id)
                 case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
                 case "openclaw.setup.detect": reauthenticationDetectedSetupResponse(id: request.id)
                 case "openclaw.setup.auth.start":
@@ -877,17 +884,89 @@ struct OnboardingAISetupTests {
         // Reconnect snapshots enter through this same route-bound probe.
         let reconnectProbe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
         await reconnectProbe.value
-        let requests = await waitForAISetupRequests(harness.recorder, count: 6)
+        let requests = await waitForAISetupRequests(
+            harness.recorder,
+            count: missingModel ? 5 : 6)
         await settleQueuedAISetupTasks()
 
-        #expect(requests.methods.suffix(2) == [
-            "agents.list",
-            "openclaw.setup.verify",
-        ])
+        let expectedReconnectMethods = missingModel
+            ? ["agents.list"]
+            : ["agents.list", "openclaw.setup.verify"]
+        #expect(requests.methods.suffix(expectedReconnectMethods.count) == expectedReconnectMethods)
         #expect(!requests.methods.contains("wizard.cancel"))
         #expect(view.aiSetup.activeAuthOption?.id == option.id)
         #expect(view.aiSetup._test_authSessionID == authSessionID)
         #expect(view.aiSetup.ownsInferenceTransition)
+    }
+
+    @Test func `provider auth reconciliation retains ownership across reconnect`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingProviderAuthReconcileReconnect"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let detections = AISetupSocketGeneration()
+        let reconciliationGate = AISetupRequestGate()
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list": configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
+                case "openclaw.setup.detect":
+                    if detections.claim() == 0 {
+                        return reauthenticationDetectedSetupResponse(id: request.id)
+                    }
+                    await reconciliationGate.wait()
+                    return persistedDetectedSetupResponse(id: request.id)
+                case "openclaw.setup.auth.start":
+                    wizardDoneResponse(
+                        id: request.id,
+                        sessionID: request.params["sessionId"] as? String ?? "auth-session")
+                default: nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: [
+                        "openclaw.setup.verify",
+                        "openclaw.setup.auth.start",
+                    ]))
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(
+            state: state,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+        view.onboardingVisible = true
+
+        let initialProbe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await initialProbe.value
+        _ = await waitForAISetupRequests(harness.recorder, count: 3)
+        await settleQueuedAISetupTasks()
+
+        view.aiSetup.startProviderAuth(try #require(view.aiSetup.authOptions.first))
+        await reconciliationGate.waitUntilStarted()
+        #expect(view.aiSetup.activeAuthOption == nil)
+        #expect(view.aiSetup.ownsInferenceTransition)
+
+        let reconnectProbe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await reconnectProbe.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 7)
+        #expect(requests.methods.suffix(2) == [
+            "agents.list",
+            "openclaw.setup.verify",
+        ])
+        #expect(!view.aiSetup.connected)
+        #expect(view.aiSetup.ownsInferenceTransition)
+
+        await reconciliationGate.release()
+        for _ in 0..<400 where !view.aiSetup.connected {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(view.aiSetup.connected)
     }
 
     @Test(arguments: [false, true])
@@ -941,6 +1020,78 @@ struct OnboardingAISetupTests {
             #expect(pendingState(defaults) == .completed)
         } else {
             #expect(isPending(defaults))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `receipt created during configured verification reuses the live result`(
+        verificationSucceeds: Bool) async throws
+    {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredVerifyMidflightReceipt"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let verificationGate = AISetupRequestGate()
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list": configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify":
+                    await verificationGate.wait()
+                    return verificationSucceeds
+                        ? verifiedSetupResponse(id: request.id)
+                        : rejectedSetupVerificationResponse(id: request.id)
+                default: nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.verify"]))
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(
+            state: state,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+        view.onboardingVisible = true
+        let route = try #require(await harness.gateway.captureRoute())
+        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
+            id: "midflight-receipt",
+            routeFingerprint: try #require(route.activationOwnershipFingerprint))
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await verificationGate.waitUntilStarted()
+        markPending(
+            defaults,
+            for: "local",
+            owner: activationOwner,
+            timeoutMs: 30000)
+        await verificationGate.release()
+        await probe.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 2)
+        await settleQueuedAISetupTasks()
+
+        #expect(requests.methods == [
+            "agents.list",
+            "openclaw.setup.verify",
+        ])
+        #expect(storedActivationOwner(defaults) == activationOwner)
+        if verificationSucceeds {
+            guard case .verified = pendingState(defaults) else {
+                Issue.record("expected the exact mid-flight receipt to retain verified ownership")
+                return
+            }
+            #expect(view.aiSetup.waitingForPendingActivationDeadline)
+        } else {
+            guard case .activating = pendingState(defaults) else {
+                Issue.record("expected the failed turn to retain the exact activation receipt")
+                return
+            }
+            #expect(view.aiSetup.pendingActivationVerification)
         }
     }
 

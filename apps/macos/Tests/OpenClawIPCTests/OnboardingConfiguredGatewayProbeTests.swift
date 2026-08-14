@@ -353,7 +353,7 @@ private func runOnboardingProbe(
 private func configuredModel(
     _ outcome: OnboardingConfiguredGatewayProbe.Outcome) -> String?
 {
-    guard case let .configured(modelRef, _) = outcome else { return nil }
+    guard case let .configured(modelRef, _, _) = outcome else { return nil }
     return modelRef
 }
 
@@ -392,7 +392,7 @@ struct OnboardingConfiguredGatewayProbeTests {
 
         let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
 
-        guard case let .verificationFailed(modelRef, status, error, _) = outcome else {
+        guard case let .verificationFailed(modelRef, status, error, _, _) = outcome else {
             Issue.record("expected configured inference verification failure")
             return
         }
@@ -609,7 +609,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             connectionMode: .remote,
             attempt: attempt,
             routeIdentity: "remote:id:gateway-a")
-        guard case let .configured(_, route) = outcome else {
+        guard case let .configured(_, _, route) = outcome else {
             Issue.record("expected configured route")
             return
         }
@@ -633,7 +633,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             connectionMode: .remote,
             attempt: firstAttempt,
             routeIdentity: "remote:id:gateway-a")
-        guard case let .configured(_, firstRoute) = first else {
+        guard case let .configured(_, _, firstRoute) = first else {
             Issue.record("expected first configured route")
             return
         }
@@ -644,7 +644,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             connectionMode: .remote,
             attempt: secondAttempt,
             routeIdentity: "remote:id:gateway-b")
-        guard case let .configured(_, secondRoute) = second else {
+        guard case let .configured(_, _, secondRoute) = second else {
             Issue.record("expected replacement configured route")
             return
         }
@@ -681,10 +681,11 @@ struct OnboardingConfiguredGatewayProbeTests {
     @Test func `invalidation during final success route validation supersedes result`() async throws {
         let configGate = OnboardingProbeConfigReadGate(blockedRead: 4)
         let url = try #require(URL(string: "ws://example.invalid"))
+        let recorder = OnboardingProbeMethodRecorder()
         let fixture = onboardingProbeFixture(
             url: url,
-            tokenProvider: { await configGate.snapshotToken() })
-        let session = fixture.session
+            tokenProvider: { await configGate.snapshotToken() },
+            recorder: recorder)
         let probe = fixture.probe
 
         let attempt = probe.beginProbe()
@@ -694,17 +695,18 @@ struct OnboardingConfiguredGatewayProbeTests {
         await configGate.release()
 
         #expect(await result.value == .superseded)
-        #expect(session.latestTask()?.snapshotSendCount() == 2)
+        #expect(await recorder.snapshot() == ["health", "agents.list"])
     }
 
     @Test func `invalidation during final error route validation supersedes result`() async throws {
         let configGate = OnboardingProbeConfigReadGate(blockedRead: 3)
         let url = try #require(URL(string: "ws://example.invalid"))
+        let recorder = OnboardingProbeMethodRecorder()
         let fixture = onboardingProbeFixture(
             url: url,
             tokenProvider: { await configGate.snapshotToken() },
-            reply: .error)
-        let session = fixture.session
+            reply: .error,
+            recorder: recorder)
         let probe = fixture.probe
 
         let attempt = probe.beginProbe()
@@ -714,7 +716,7 @@ struct OnboardingConfiguredGatewayProbeTests {
         await configGate.release()
 
         #expect(await result.value == .superseded)
-        #expect(session.latestTask()?.snapshotSendCount() == 2)
+        #expect(await recorder.snapshot() == ["health", "agents.list"])
     }
 
     @Test func `route replacement supersedes an in-flight probe failure`() async throws {

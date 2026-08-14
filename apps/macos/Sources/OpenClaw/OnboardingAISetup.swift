@@ -99,7 +99,7 @@ final class OnboardingAISetupModel {
     @ObservationIgnored private var authSessionID: String?
     @ObservationIgnored private var authAttemptID = UUID()
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
-    @ObservationIgnored private var providerAuthReconciliationPending = false
+    @ObservationIgnored private(set) var providerAuthReconciliationPending = false
 
     init(
         gateway: GatewayConnection = .shared,
@@ -235,11 +235,61 @@ final class OnboardingAISetupModel {
             pendingVerification = nil
         }
         guard isCurrentAttempt(context), !Task.isCancelled else { return .superseded }
-        if outcome == .freshSetupAllowed, isCurrentAttempt(context) {
-            self.resetForGatewayChange(clearPendingHandoff: false)
-            self.startIfNeeded()
+        return self.finishPendingVerificationOutcome(outcome, context: context)
+    }
+
+    /// Reuse a successful live turn from the exact configured-route probe when
+    /// a receipt appeared while that turn was in flight. Receipt ownership and
+    /// the route credential fingerprint remain mandatory; this only removes the
+    /// duplicate provider request.
+    @discardableResult
+    func reuseConfiguredInferenceVerification(
+        modelRef: String,
+        activationOwnershipFingerprint: String?) -> PendingVerificationOutcome
+    {
+        self.resumeConfiguredInference(modelRef: modelRef)
+        guard self.pendingActivationVerification,
+              let context = self.captureAttemptContext()
+        else { return .superseded }
+        if let ownershipFailure = self.pendingActivationOwnershipFailure(
+            context: context,
+            currentFingerprint: activationOwnershipFingerprint)
+        {
+            return self.finishPendingVerificationOutcome(ownershipFailure, context: context)
         }
-        return outcome
+        let outcome = self.acceptPendingConfiguredInferenceVerification(
+            modelRef: modelRef,
+            context: context)
+        return self.finishPendingVerificationOutcome(outcome, context: context)
+    }
+
+    /// Apply a failed turn from the same exact probe without immediately
+    /// spending another provider request. The receipt remains authoritative and
+    /// can retry after its activation window changes.
+    @discardableResult
+    func reuseConfiguredInferenceVerificationFailure(
+        modelRef: String,
+        status: String?,
+        error: String?,
+        activationOwnershipFingerprint: String?) -> PendingVerificationOutcome
+    {
+        self.resumeConfiguredInference(modelRef: modelRef)
+        guard self.pendingActivationVerification,
+              let context = self.captureAttemptContext()
+        else { return .superseded }
+        if let ownershipFailure = self.pendingActivationOwnershipFailure(
+            context: context,
+            currentFingerprint: activationOwnershipFingerprint)
+        {
+            return self.finishPendingVerificationOutcome(ownershipFailure, context: context)
+        }
+        self.phase = .ready
+        self.detectError = Self.failure(
+            label: "Configured AI",
+            status: status,
+            error: error)
+        let outcome = self.pendingVerificationFailureOutcome(context: context)
+        return self.finishPendingVerificationOutcome(outcome, context: context)
     }
 
     private func performPendingConfiguredInferenceVerification(
@@ -264,48 +314,14 @@ final class OnboardingAISetupModel {
               !Task.isCancelled,
               await self.gateway.isCurrentServerLease(lease)
         else { return .superseded }
-        if let activationOwner = pendingActivationOwner {
-            if activationOwner.isUnbound {
-                // Unbound receipts never resume across relaunch or verification
-                // retry; a fresh activation is the only safe continuation.
-                self.pendingActivationVerification = false
-                clearPendingHandoff(ifOwnedBy: context)
-                return .freshSetupAllowed
-            }
-            guard let currentFingerprint = await gateway.activationOwnershipFingerprint(
+        if self.pendingActivationOwner != nil {
+            let currentFingerprint = await gateway.activationOwnershipFingerprint(
                 ifCurrentServerLease: lease)
-            else {
-                self.phase = .ready
-                self.detectError = Self.transportFailure(
-                    "Secure storage is unavailable, so OpenClaw cannot verify which Gateway completed AI setup.")
-                return .notConnected
-            }
-            guard activationOwner.routeFingerprint == currentFingerprint else {
-                switch OnboardingSystemAgentResumeStore.pendingState(
-                    for: context.routeIdentity,
-                    defaults: self.defaults)
-                {
-                case let .activating(deadline), let .verified(deadline):
-                    // Replacement auth cannot verify this owner, but the old
-                    // activation may still mutate the same route. Keep its lease.
-                    self.pendingActivationVerification = false
-                    self.beginPendingActivationDeadlineWait(
-                        deadline: deadline,
-                        routeIdentity: context.routeIdentity)
-                    return .notConnected
-                case .activationExpired, .completed, .none:
-                    // No live mutation remains to overlap. Retire only this
-                    // owner, then let the replacement credentials start fresh.
-                    OnboardingSystemAgentResumeStore.clear(
-                        ifOwnedBy: context.routeIdentity,
-                        activationOwner: activationOwner,
-                        defaults: self.defaults)
-                    self.pendingActivationVerification = false
-                    self.phase = .ready
-                    self.detectError = Self.transportFailure(
-                        "The Gateway authentication changed while AI setup was finishing. Testing it again.")
-                    return .freshSetupAllowed
-                }
+            if let ownershipFailure = self.pendingActivationOwnershipFailure(
+                context: context,
+                currentFingerprint: currentFingerprint)
+            {
+                return ownershipFailure
             }
         }
         do {
@@ -320,54 +336,9 @@ final class OnboardingAISetupModel {
             else { return .superseded }
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             if result.ok, let modelRef = result.modelRef {
-                let pendingState = OnboardingSystemAgentResumeStore.pendingState(
-                    for: context.routeIdentity,
-                    defaults: self.defaults)
-                switch pendingState {
-                case let .activating(deadline), let .verified(deadline):
-                    // This proves inference works, but not that the dropped
-                    // activation stopped mutating. Preserve its deadline.
-                    OnboardingSystemAgentResumeStore.markVerified(
-                        ifOwnedBy: context.routeIdentity,
-                        activationOwner: self.pendingActivationOwner,
-                        defaults: self.defaults)
-                    self.pendingActivationVerification = false
-                    self.detectError = nil
-                    self.beginPendingActivationDeadlineWait(
-                        deadline: deadline,
-                        routeIdentity: context.routeIdentity)
-                    return .notConnected
-                case .activationExpired, .none:
-                    if self.pendingActivationRequiresFreshActivation {
-                        self.pendingActivationVerification = false
-                        clearPendingHandoff(ifOwnedBy: context)
-                        return .freshSetupAllowed
-                    }
-                case .completed:
-                    guard let receiptOwner = self.pendingActivationOwner, !receiptOwner.isUnbound
-                    else {
-                        // Ownerless and unbound receipts carry no auth binding,
-                        // so they can belong to replaced credentials on this
-                        // route. Never let one authorize a handoff — repeat a
-                        // fresh activation instead.
-                        self.pendingActivationVerification = false
-                        clearPendingHandoff(ifOwnedBy: context)
-                        return .freshSetupAllowed
-                    }
-                    finishConnected(
-                        kind: "existing-model",
-                        activationOwner: self.pendingActivationOwner,
-                        requireExistingReceipt: true)
-                    if self.connected {
-                        return .connected
-                    }
-                    // The receipt owner changed while verification was in flight.
-                    // Adopt it only for a fresh verification; this result cannot attest it.
-                    self.retainCompletedReceiptForRetry(context: context)
-                    return .notConnected
-                }
-                self.acceptVerifiedPendingInference(modelRef: modelRef)
-                return self.connected ? .connected : .superseded
+                return self.acceptPendingConfiguredInferenceVerification(
+                    modelRef: modelRef,
+                    context: context)
             }
             self.phase = .ready
             self.detectError = Self.failure(
@@ -383,6 +354,117 @@ final class OnboardingAISetupModel {
             self.detectError = Self.transportFailure(error.localizedDescription)
             return self.pendingVerificationFailureOutcome(context: context)
         }
+    }
+
+    private func finishPendingVerificationOutcome(
+        _ outcome: PendingVerificationOutcome,
+        context: AttemptContext) -> PendingVerificationOutcome
+    {
+        if outcome == .freshSetupAllowed, self.isCurrentAttempt(context) {
+            self.resetForGatewayChange(clearPendingHandoff: false)
+            self.startIfNeeded()
+        }
+        return outcome
+    }
+
+    private func pendingActivationOwnershipFailure(
+        context: AttemptContext,
+        currentFingerprint: String?) -> PendingVerificationOutcome?
+    {
+        guard let activationOwner = self.pendingActivationOwner else { return nil }
+        if activationOwner.isUnbound {
+            // Unbound receipts never resume across relaunch or verification
+            // retry; a fresh activation is the only safe continuation.
+            self.pendingActivationVerification = false
+            self.clearPendingHandoff(ifOwnedBy: context)
+            return .freshSetupAllowed
+        }
+        guard let currentFingerprint else {
+            self.phase = .ready
+            self.detectError = Self.transportFailure(
+                "Secure storage is unavailable, so OpenClaw cannot verify which Gateway completed AI setup.")
+            return .notConnected
+        }
+        guard activationOwner.routeFingerprint == currentFingerprint else {
+            switch OnboardingSystemAgentResumeStore.pendingState(
+                for: context.routeIdentity,
+                defaults: self.defaults)
+            {
+            case let .activating(deadline), let .verified(deadline):
+                // Replacement auth cannot verify this owner, but the old
+                // activation may still mutate the same route. Keep its lease.
+                self.pendingActivationVerification = false
+                self.beginPendingActivationDeadlineWait(
+                    deadline: deadline,
+                    routeIdentity: context.routeIdentity)
+                return .notConnected
+            case .activationExpired, .completed, .none:
+                // No live mutation remains to overlap. Retire only this owner,
+                // then let the replacement credentials start fresh.
+                OnboardingSystemAgentResumeStore.clear(
+                    ifOwnedBy: context.routeIdentity,
+                    activationOwner: activationOwner,
+                    defaults: self.defaults)
+                self.pendingActivationVerification = false
+                self.phase = .ready
+                self.detectError = Self.transportFailure(
+                    "The Gateway authentication changed while AI setup was finishing. Testing it again.")
+                return .freshSetupAllowed
+            }
+        }
+        return nil
+    }
+
+    private func acceptPendingConfiguredInferenceVerification(
+        modelRef: String,
+        context: AttemptContext) -> PendingVerificationOutcome
+    {
+        let pendingState = OnboardingSystemAgentResumeStore.pendingState(
+            for: context.routeIdentity,
+            defaults: self.defaults)
+        switch pendingState {
+        case let .activating(deadline), let .verified(deadline):
+            // This proves inference works, but not that the dropped activation
+            // stopped mutating. Preserve its exact owner and deadline.
+            OnboardingSystemAgentResumeStore.markVerified(
+                ifOwnedBy: context.routeIdentity,
+                activationOwner: self.pendingActivationOwner,
+                defaults: self.defaults)
+            self.pendingActivationVerification = false
+            self.detectError = nil
+            self.beginPendingActivationDeadlineWait(
+                deadline: deadline,
+                routeIdentity: context.routeIdentity)
+            return .notConnected
+        case .activationExpired, .none:
+            if self.pendingActivationRequiresFreshActivation {
+                self.pendingActivationVerification = false
+                self.clearPendingHandoff(ifOwnedBy: context)
+                return .freshSetupAllowed
+            }
+        case .completed:
+            guard let receiptOwner = self.pendingActivationOwner, !receiptOwner.isUnbound
+            else {
+                // Ownerless and unbound receipts carry no auth binding, so they
+                // can belong to replaced credentials on this route.
+                self.pendingActivationVerification = false
+                self.clearPendingHandoff(ifOwnedBy: context)
+                return .freshSetupAllowed
+            }
+            self.finishConnected(
+                kind: "existing-model",
+                activationOwner: self.pendingActivationOwner,
+                requireExistingReceipt: true)
+            if self.connected {
+                return .connected
+            }
+            // The receipt owner changed while verification was in flight. Adopt
+            // it only for a fresh verification; this result cannot attest it.
+            self.retainCompletedReceiptForRetry(context: context)
+            return .notConnected
+        }
+        self.acceptVerifiedPendingInference(modelRef: modelRef)
+        return self.connected ? .connected : .superseded
     }
 
     private func pendingVerificationFailureOutcome(
