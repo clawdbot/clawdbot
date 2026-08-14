@@ -150,6 +150,7 @@ describe("Claw MCP removal", () => {
     expect(unsetMcpServer).toHaveBeenCalledWith({
       name: "docs",
       expectedServer: sourceServer,
+      recordIndependentOwner: false,
     });
     expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
   });
@@ -240,6 +241,7 @@ describe("Claw MCP removal", () => {
       expect(unsetMcpServer).toHaveBeenCalledWith({
         name: "docs",
         expectedServer: sourceServer,
+        recordIndependentOwner: false,
       });
       expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
     });

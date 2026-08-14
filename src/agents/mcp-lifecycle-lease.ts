@@ -5,23 +5,20 @@ const MCP_LIFECYCLE_LEASE_SCOPE = "core:claw-mcp-lifecycle";
 const MCP_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const MCP_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
-type ClawMcpLifecycleLeaseOptions = Pick<
-  OpenClawStateDatabaseOptions,
-  "env" | "path" | "database"
-> & {
+type McpLifecycleLeaseOptions = Pick<OpenClawStateDatabaseOptions, "env" | "path" | "database"> & {
   signal?: AbortSignal;
 };
 
 /** Serialize ownership decisions and global config mutations for one MCP server. */
-export async function withClawMcpLifecycleLease<T>(
+export async function withMcpLifecycleLease<T>(
   name: string,
-  options: ClawMcpLifecycleLeaseOptions,
+  options: McpLifecycleLeaseOptions,
   run: () => Promise<T>,
 ): Promise<T> {
   return await withOpenClawStateLease(
     {
       scope: MCP_LIFECYCLE_LEASE_SCOPE,
-      key: name,
+      key: name.trim(),
       database: {
         scope: "shared",
         options: {
@@ -44,3 +41,5 @@ export async function withClawMcpLifecycleLease<T>(
     },
   );
 }
+
+export const withClawMcpLifecycleLease = withMcpLifecycleLease;

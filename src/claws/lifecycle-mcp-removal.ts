@@ -1,5 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
+import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,7 +8,6 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import { ClawRemoveError } from "./lifecycle-delete-support.js";
 import type { RemovedMcpServer } from "./lifecycle-remove-contract.js";
 import type { ClawStatusRecord } from "./lifecycle-status.js";
-import { withClawMcpLifecycleLease } from "./mcp-lifecycle-lease.js";
 import {
   deleteClawMcpServerRef,
   digestClawMcpServer,
@@ -88,7 +88,11 @@ export async function removeClawMcpServers(params: {
         );
       }
       try {
-        const result = await unsetMcpServer({ name: server.name, expectedServer });
+        const result = await unsetMcpServer({
+          name: server.name,
+          expectedServer,
+          recordIndependentOwner: false,
+        });
         if (!result.ok) {
           throw new Error(result.error);
         }
