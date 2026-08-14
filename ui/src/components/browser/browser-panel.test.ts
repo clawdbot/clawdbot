@@ -172,4 +172,17 @@ describe("normalizeBrowserUrlDraft", () => {
 
     expect(panel.browserPanelIsOpen()).toBe(false);
   });
+
+  it("treats an embedded panel as open while the side panel owns visibility", async () => {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      embedded: boolean;
+      browserPanelIsOpen: () => boolean;
+      updateComplete: Promise<unknown>;
+    };
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.browserPanelIsOpen()).toBe(true);
+  });
 });

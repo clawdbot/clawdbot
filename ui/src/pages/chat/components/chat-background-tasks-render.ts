@@ -3,43 +3,10 @@ import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { isActiveTask, partitionTasks } from "../../../lib/tasks/data.ts";
+import { partitionTasks } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { renderTaskRow } from "./chat-background-task-row.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
-
-/** Active-count badge shown on the collapsed-rail toggles; 0 until the task
- * list has loaded for the pane's session. */
-function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
-  return props?.tasks?.filter(isActiveTask).length ?? 0;
-}
-
-export function renderBackgroundTasksToggle(
-  backgroundTasks: BackgroundTasksProps | undefined,
-): TemplateResult | typeof nothing {
-  if (!backgroundTasks) {
-    return nothing;
-  }
-  const expanded = !backgroundTasks.collapsed;
-  const label = expanded ? t("chat.backgroundTasks.collapse") : t("chat.backgroundTasks.show");
-  const activeCount = backgroundTasksActiveCount(backgroundTasks);
-  return html`
-    <openclaw-tooltip .content=${label}>
-      <button
-        class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
-        type="button"
-        aria-label=${label}
-        aria-expanded=${String(expanded)}
-        @click=${backgroundTasks.onToggleCollapsed}
-      >
-        ${icons.listChecks}
-        ${!expanded && activeCount > 0
-          ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true">${activeCount}</span>`
-          : nothing}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
 
 function renderTaskRows(
   tasks: readonly TaskSummary[],
@@ -58,10 +25,10 @@ function renderTaskRows(
 
 export function renderBackgroundTasksRail(
   backgroundTasks: BackgroundTasksProps | undefined,
+  options: { embedded?: boolean } = {},
 ): TemplateResult | typeof nothing {
-  // Collapsed rails render nothing at all — no icon strip. Reopening happens
-  // through renderBackgroundTasksToggle.
-  if (!backgroundTasks || backgroundTasks.collapsed) {
+  // Standalone collapsed rails render nothing; the shared panel menu reopens them.
+  if (!backgroundTasks || (backgroundTasks.collapsed && !options.embedded)) {
     return nothing;
   }
   const { active, recent } = partitionTasks(backgroundTasks.tasks ?? []);
@@ -88,28 +55,30 @@ export function renderBackgroundTasksRail(
       class="chat-tasks-rail"
       aria-label=${t("chat.backgroundTasks.label")}
     >
-      <div class="rail-header chat-tasks-rail__header">
-        <div class="rail-header__copy chat-tasks-rail__title">
-          <span class="rail-header__eyebrow chat-tasks-rail__eyebrow"
-            >${backgroundTasks.sessionKey}</span
-          >
-          <strong class="rail-header__title">${t("chat.backgroundTasks.title")}</strong>
-        </div>
-        <div class="rail-header__actions chat-tasks-rail__actions">
-          <openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
-            <button
-              class="rail-header__action chat-tasks-rail__refresh"
-              type="button"
-              aria-label=${t("chat.backgroundTasks.refresh")}
-              ?disabled=${backgroundTasks.loading || !backgroundTasks.connected}
-              @click=${backgroundTasks.onRefresh}
-            >
-              ${icons.refresh}
-            </button>
-          </openclaw-tooltip>
-          ${collapseButton}
-        </div>
-      </div>
+      ${options.embedded
+        ? nothing
+        : html`<div class="rail-header chat-tasks-rail__header">
+            <div class="rail-header__copy chat-tasks-rail__title">
+              <span class="rail-header__eyebrow chat-tasks-rail__eyebrow"
+                >${backgroundTasks.sessionKey}</span
+              >
+              <strong class="rail-header__title">${t("chat.backgroundTasks.title")}</strong>
+            </div>
+            <div class="rail-header__actions chat-tasks-rail__actions">
+              <openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
+                <button
+                  class="rail-header__action chat-tasks-rail__refresh"
+                  type="button"
+                  aria-label=${t("chat.backgroundTasks.refresh")}
+                  ?disabled=${backgroundTasks.loading || !backgroundTasks.connected}
+                  @click=${backgroundTasks.onRefresh}
+                >
+                  ${icons.refresh}
+                </button>
+              </openclaw-tooltip>
+              ${collapseButton}
+            </div>
+          </div>`}
       ${!backgroundTasks.connected
         ? html`<div class="chat-tasks-rail__state">${t("tasksPage.disconnected")}</div>`
         : nothing}

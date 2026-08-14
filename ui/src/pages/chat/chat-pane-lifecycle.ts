@@ -13,9 +13,14 @@ import {
 import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  isTerminalPanelShortcut,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
-import { resolveChatPaneObserverRunId } from "../../lib/observer-digest.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -47,17 +52,16 @@ import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { invalidateChatMetadataCache, refreshPageChat } from "./chat-state-refresh.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
-import { toggleSessionWorkspace } from "./components/chat-session-workspace.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitInitialUserMessageHandoff } from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { closeSlot, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -264,6 +268,29 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   protected readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    const togglePanelSlot = (slot: SidebarSlotId) => {
+      const state = this.state;
+      if (!state) {
+        return;
+      }
+      const visible =
+        state.sidebarLayout.open === true &&
+        state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+      state.updateSidebarLayout(
+        visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
+      );
+    };
+    if (
+      this.active &&
+      this.presented &&
+      !event.defaultPrevented &&
+      this.state?.terminalAvailable &&
+      isTerminalPanelShortcut(event)
+    ) {
+      event.preventDefault();
+      togglePanelSlot("terminal");
+      return;
+    }
     if (
       this.active &&
       this.presented &&
@@ -279,7 +306,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         return;
       }
       event.preventDefault();
-      toggleSessionWorkspace(state);
+      togglePanelSlot("workspace");
       return;
     }
 
@@ -436,6 +463,50 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     chatState.addCleanup(() =>
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
     );
+    const panelToggleEvents = [
+      [TERMINAL_PANEL_TOGGLE_EVENT, "terminal", "openclaw-terminal-panel"],
+      [BROWSER_PANEL_TOGGLE_EVENT, "browser", "openclaw-browser-panel"],
+      [DESKTOP_PANEL_TOGGLE_EVENT, "desktop", "openclaw-desktop-panel"],
+    ] as const;
+    const panelToggleCleanups = panelToggleEvents.map(([eventName, slot, tagName]) => {
+      const listener = (event: Event) => {
+        const state = this.state;
+        if (!state || !this.active || !this.presented) {
+          return;
+        }
+        const detail = event instanceof CustomEvent ? event.detail : null;
+        if (detail?.open === false) {
+          this.pendingPanelToggleRequests.delete(slot);
+          state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
+          return;
+        }
+        this.pendingPanelToggleRequests.set(slot, event);
+        state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
+        void Promise.all([
+          customElements.whenDefined("openclaw-chat-sidebar-region"),
+          customElements.whenDefined(tagName),
+        ])
+          .then(() => this.updateComplete)
+          .then(async () => {
+            if (this.pendingPanelToggleRequests.get(slot) !== event) {
+              return;
+            }
+            const region = this.renderRoot.querySelector<
+              HTMLElementTagNameMap["openclaw-chat-sidebar-region"]
+            >("openclaw-chat-sidebar-region");
+            await region?.updateComplete;
+            region?.deliverPanelEvent(slot, event);
+            this.pendingPanelToggleRequests.delete(slot);
+            this.requestUpdate();
+          });
+      };
+      window.addEventListener(eventName, listener);
+      return () => window.removeEventListener(eventName, listener);
+    });
+    chatState.addCleanup(() => {
+      panelToggleCleanups.forEach((cleanup) => cleanup());
+      this.pendingPanelToggleRequests.clear();
+    });
     // Interactive widget prompts bubble from the widget iframe; a listener on
     // the pane element keeps split-view routing correct — the prompt reaches
     // only the pane that owns the frame.
@@ -578,16 +649,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
-    const selectedSessionRow = this.state ? selectedChatSessionRow(this.state) : undefined;
-    // Active runs count even without a digest; the rail owns observer restoration.
-    const observerRunId = resolveChatPaneObserverRunId({
-      localRunId: this.state?.chatRunId ?? null,
-      session: selectedSessionRow,
-      digest: null,
-    });
-    if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
-      this.ensureSessionRail();
-    }
   }
 
   override disconnectedCallback() {

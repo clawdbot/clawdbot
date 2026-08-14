@@ -167,35 +167,6 @@ export const boardChatDockLayout = createDockPanelLayout({
   defaultWidth: 420,
 });
 
-export const chatWorkspaceRailLayout = createDockPanelLayout({
-  storageKey: "openclaw.control.chat-workspace-rail.v1",
-  minHeight: 180,
-  minWidth: 260,
-  defaultDock: "right",
-  supportedDocks: ["right"],
-  defaultHeight: 320,
-  defaultWidth: 280,
-});
-
-export const chatTasksRailLayout = createDockPanelLayout({
-  storageKey: "openclaw.control.chat-tasks-rail.v1",
-  minHeight: 180,
-  minWidth: 270,
-  defaultDock: "right",
-  supportedDocks: ["right"],
-  defaultHeight: 320,
-  defaultWidth: 330,
-});
-
-export const chatCompanionRailLayout = createDockPanelLayout({
-  storageKey: "openclaw.control.chat-companion-rail.v1",
-  minHeight: 180,
-  minWidth: 300,
-  defaultDock: "right",
-  supportedDocks: ["right"],
-  defaultHeight: 320,
-  defaultWidth: 400,
-});
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 export const CHAT_HISTORY_INTENT_EDGE_PX = 300;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;

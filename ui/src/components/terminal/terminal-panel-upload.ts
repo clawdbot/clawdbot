@@ -311,6 +311,7 @@ export class TerminalPanelUploadController {
 
 export function renderTerminalPanelActions(params: {
   fullscreen: boolean;
+  embedded?: boolean;
   dock: "bottom" | "right" | "main";
   upload: TerminalPanelUploadController;
   sessionPicker: unknown;
@@ -339,55 +340,54 @@ export function renderTerminalPanelActions(params: {
     </button>
     ${params.fullscreen
       ? nothing
-      : html`${params.sessionPicker}<span
-            class="tp-dock-modes"
-            role="group"
-            aria-label=${t("terminal.dockMode")}
-            ><button
-              class="rail-header__action tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
-              type="button"
-              title=${t("terminal.dockBottom")}
-              aria-label=${t("terminal.dockBottom")}
-              @click=${() => params.onDock("bottom")}
-            >
-              ${icons.panelBottomOpen}
-            </button>
-            <button
-              class="rail-header__action tp-icon ${params.dock === "right" ? "is-active" : ""}"
-              type="button"
-              title=${t("terminal.dockRight")}
-              aria-label=${t("terminal.dockRight")}
-              @click=${() => params.onDock("right")}
-            >
-              ${icons.panelRightOpen}</button
-            ><button
-              class="rail-header__action tp-icon ${params.dock === "main" ? "is-active" : ""}"
-              type="button"
-              title=${t("terminal.dockMain")}
-              aria-label=${t("terminal.dockMain")}
-              @click=${() => params.onDock("main")}
-            >
-              ${icons.columns2}
-            </button>
-          </span>
-          <button
-            class="rail-header__action tp-icon tp-open-fullscreen"
-            type="button"
-            title=${t("terminal.openFullscreen")}
-            aria-label=${t("terminal.openFullscreen")}
-            @click=${params.onOpenFullscreen}
-          >
-            ${icons.maximize}
-          </button>
-          <button
-            class="rail-header__action tp-icon"
-            type="button"
-            title=${t("terminal.hide")}
-            aria-label=${t("terminal.hide")}
-            @click=${params.onHide}
-          >
-            ${icons.x}
-          </button>`}
+      : html`${params.sessionPicker}${params.embedded
+          ? nothing
+          : html`<span class="tp-dock-modes" role="group" aria-label=${t("terminal.dockMode")}
+                ><button
+                  class="rail-header__action tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
+                  type="button"
+                  title=${t("terminal.dockBottom")}
+                  aria-label=${t("terminal.dockBottom")}
+                  @click=${() => params.onDock("bottom")}
+                >
+                  ${icons.panelBottomOpen}
+                </button>
+                <button
+                  class="rail-header__action tp-icon ${params.dock === "right" ? "is-active" : ""}"
+                  type="button"
+                  title=${t("terminal.dockRight")}
+                  aria-label=${t("terminal.dockRight")}
+                  @click=${() => params.onDock("right")}
+                >
+                  ${icons.panelRightOpen}</button
+                ><button
+                  class="rail-header__action tp-icon ${params.dock === "main" ? "is-active" : ""}"
+                  type="button"
+                  title=${t("terminal.dockMain")}
+                  aria-label=${t("terminal.dockMain")}
+                  @click=${() => params.onDock("main")}
+                >
+                  ${icons.columns2}
+                </button>
+              </span>
+              <button
+                class="rail-header__action tp-icon tp-open-fullscreen"
+                type="button"
+                title=${t("terminal.openFullscreen")}
+                aria-label=${t("terminal.openFullscreen")}
+                @click=${params.onOpenFullscreen}
+              >
+                ${icons.maximize}
+              </button>
+              <button
+                class="rail-header__action tp-icon"
+                type="button"
+                title=${t("terminal.hide")}
+                aria-label=${t("terminal.hide")}
+                @click=${params.onHide}
+              >
+                ${icons.x}
+              </button>`}`}
   </div>`;
 }
 

@@ -17,6 +17,11 @@ export const browserPanelStyles = css`
     right: var(--oc-terminal-reserve-right, 0px);
     bottom: var(--oc-terminal-reserve-bottom, 0px);
   }
+  .bp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
   .bp-actions {
     flex: none;
   }

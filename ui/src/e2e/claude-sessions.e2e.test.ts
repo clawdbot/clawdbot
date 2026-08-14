@@ -542,14 +542,19 @@ suite.define(() => {
       });
 
       await openClaudeCatalogTerminal(page);
-      const open = await gateway.waitForRequest("terminal.open");
-      expect(open.params).toMatchObject({
-        catalog: {
-          catalogId: "claude",
-          hostId: "gateway:local",
-          threadId: "claude-terminal-session",
-        },
-      });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("terminal.open")).map((request) => request.params),
+        )
+        .toContainEqual(
+          expect.objectContaining({
+            catalog: {
+              catalogId: "claude",
+              hostId: "gateway:local",
+              threadId: "claude-terminal-session",
+            },
+          }),
+        );
       const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
@@ -611,14 +616,20 @@ suite.define(() => {
 
       await page.clock.install();
       await openClaudeCatalogTerminal(page);
-      await gateway.waitForRequest("terminal.open");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("terminal.open")).map((request) => request.params),
+        )
+        .toContainEqual(
+          expect.objectContaining({ catalog: expect.objectContaining({ catalogId: "claude" }) }),
+        );
       await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
       await page.clock.runFor(30_001);
 
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
       expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
-      expect(await page.locator(".tabstrip-tab").count()).toBe(0);
+      expect(await page.locator("openclaw-terminal-panel .tabstrip-tab").count()).toBe(0);
     });
   });
 

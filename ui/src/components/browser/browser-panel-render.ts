@@ -320,14 +320,19 @@ export function renderBrowserPanelChrome(
   onDockChange: (dock: BrowserPanelDock) => void,
   onClose: () => void,
   resizer: TemplateResult | typeof nothing,
+  embedded = false,
 ) {
-  const style = dock === "bottom" ? `height:${height}px` : `width:${width}px`;
+  const style = embedded ? nothing : dock === "bottom" ? `height:${height}px` : `width:${width}px`;
   return html`
-    <section class="bp bp--${dock}" style=${style} aria-label=${t("browser.title")}>
-      ${resizer}
+    <section
+      class="bp bp--${embedded ? "embedded" : dock}"
+      style=${style}
+      aria-label=${t("browser.title")}
+    >
+      ${embedded ? nothing : resizer}
       <header class="rail-header bp-header">
         ${renderTabStrip(controller)}
-        ${renderHeaderActions(controller, dock, onDockChange, onClose)}
+        ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
       </header>
       ${renderToolbar(controller)} ${renderAnnotateBar(controller)}
       ${controller.errorText

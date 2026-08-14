@@ -521,7 +521,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${compactSessionActions ? nothing : html`${props.panelActions} ${props.discussionAction}`}
+        ${props.panelActions} ${compactSessionActions ? nothing : props.discussionAction}
         ${props.catalog || compactSessionActions
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}

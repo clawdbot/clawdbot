@@ -60,6 +60,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) documentSource: string | null = null;
   @property({ attribute: false }) documentSession: string | null = null;
   @property({ type: Boolean }) documentControl = false;
+  /** Hosted by the chat side panel, which owns visibility and geometry. */
+  @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
@@ -113,11 +115,13 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    if (!this.embedded) {
+      window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    }
     this.dockLayout.setSuppressed(this.suppressed);
     if (this.documentMode && this.available) {
       void this.refreshEnvironments();
-    } else if (this.dockLayout.open) {
+    } else if (this.embedded || this.dockLayout.open) {
       void this.refreshEnvironments();
     }
   }
@@ -130,6 +134,13 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if (changed.has("embedded")) {
+      if (this.embedded) {
+        window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      } else {
+        window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      }
+    }
     if (changed.has("suppressed")) {
       const restored = this.dockLayout.setSuppressed(this.suppressed);
       if (this.suppressed) {
@@ -150,6 +161,12 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (this.documentMode && (gatewayAvailabilityChanged || documentPresentationChanged)) {
       if (!this.available) {
         this.documentSourceResolved = false;
+        this.returnToPicker();
+      } else {
+        void this.refreshEnvironments();
+      }
+    } else if (this.embedded && gatewayAvailabilityChanged) {
+      if (!this.available) {
         this.returnToPicker();
       } else {
         void this.refreshEnvironments();
@@ -659,24 +676,32 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         onClose: () => this.onDocumentClose?.(),
       });
     }
-    if (!this.dockLayout.open) {
+    if (!this.embedded && !this.dockLayout.open) {
       return nothing;
     }
     const dock = this.dockLayout.dock;
-    const style = this.fullscreenMode.active
+    const style = this.embedded
       ? ""
-      : dock === "bottom"
-        ? `height:${this.dockLayout.height}px`
-        : `width:${this.dockLayout.width}px`;
+      : this.fullscreenMode.active
+        ? ""
+        : dock === "bottom"
+          ? `height:${this.dockLayout.height}px`
+          : `width:${this.dockLayout.width}px`;
     return html`
-      <section class="bp bp--${dock}" style=${style} aria-label=${t("desktop.title")}>
-        ${this.dockLayout.renderResizer("bp", t("desktop.resize"))}
-        ${renderDesktopPanelHeader({
-          dock,
-          fullscreenControl: this.fullscreenMode.renderButton(),
-          onDock: (nextDock) => this.dockLayout.setDock(nextDock),
-          onClose: () => this.closePanel(),
-        })}
+      <section
+        class="bp bp--${this.embedded ? "embedded" : dock}"
+        style=${style}
+        aria-label=${t("desktop.title")}
+      >
+        ${this.embedded ? nothing : this.dockLayout.renderResizer("bp", t("desktop.resize"))}
+        ${this.embedded
+          ? nothing
+          : renderDesktopPanelHeader({
+              dock,
+              fullscreenControl: this.fullscreenMode.renderButton(),
+              onDock: (nextDock) => this.dockLayout.setDock(nextDock),
+              onClose: () => this.closePanel(),
+            })}
         <div class="desktop-content">
           ${notice}
           ${this.state === "picker"

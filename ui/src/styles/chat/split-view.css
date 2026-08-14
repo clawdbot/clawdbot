@@ -663,10 +663,7 @@ openclaw-chat-pane {
 @container (max-width: 800px) {
   .chat-pane__split-down,
   .chat-pane__split-right,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-session-diff-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-tasks-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-workspace-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-session-discussion-toggle,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__dock-caret,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,

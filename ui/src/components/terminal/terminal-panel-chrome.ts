@@ -13,6 +13,7 @@ type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 export function renderTerminalPanelToolbar(
   fullscreen: boolean,
+  embedded: boolean,
   dock: TerminalDock,
   uploadController: TerminalPanelUploadController,
   sessionPicker: TemplateResult,
@@ -22,6 +23,7 @@ export function renderTerminalPanelToolbar(
 ): TemplateResult {
   return renderTerminalPanelActions({
     fullscreen,
+    embedded,
     dock,
     upload: uploadController,
     sessionPicker,

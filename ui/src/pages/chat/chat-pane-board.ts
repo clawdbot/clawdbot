@@ -41,12 +41,10 @@ import { renderChatResizableDivider } from "./components/chat-resizable-divider.
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
-  detachPanelToColumn,
   fitSidebarLayout,
   openSlot,
   resizeColumn,
   type SidebarLayout,
-  type SidebarSide,
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
@@ -60,35 +58,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
         : layout;
     state.updateSidebarLayout(fitted);
-  }
-
-  protected commitSidebarPanelMove(
-    layout: SidebarLayout,
-    panelId: string,
-    targetSide: SidebarSide,
-    board: ResolvedBoardView,
-  ): void {
-    const panel = layout.columns
-      .flatMap((column) => column.panels)
-      .find((candidate) => candidate.id === panelId);
-    if (panel?.slot !== "chat" || board.dock === targetSide) {
-      this.commitSidebarLayout(layout);
-      this.commitSidebarMovedPanelActive(panelId);
-      return;
-    }
-    if (!board.provider.canMutate) {
-      return;
-    }
-    this.commitSidebarLayout(layout);
-    this.commitSidebarMovedPanelActive(panelId);
-    this.handleBoardDockChange(targetSide);
-  }
-
-  // A move activates the panel in its destination column, but the collapsed layout
-  // reads a separate persisted selection. Without this the narrow view foregrounds
-  // a stale panel after a drag, and the stale choice survives reload.
-  private commitSidebarMovedPanelActive(panelId: string): void {
-    this.state?.updateSidebarActivePanel(panelId);
   }
 
   protected commitSidebarColumnResize(
@@ -125,28 +94,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return true;
     }
     const beforeOpen = state.sidebarLayout;
-    let layout = openSlot(beforeOpen, "chat", dock);
-    const chatColumn = layout.columns.find((column) =>
-      column.panels.some((panel) => panel.slot === "chat"),
-    );
-    if (chatColumn && chatColumn.side !== dock) {
-      const panel = chatColumn.panels.find((candidate) => candidate.slot === "chat");
-      if (panel) {
-        layout = detachPanelToColumn(layout, panel.id, dock, 0);
-      }
-    }
+    let layout = openSlot(beforeOpen, "chat");
     const chatPanel = layout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "chat");
     if (chatPanel) {
       layout = activatePanel(layout, chatPanel.id);
     }
-    const newColumn = layout.columns.find(
-      (column) => !beforeOpen.columns.some((current) => current.id === column.id),
-    );
     const fitted =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(layout, this.paneWidth, newColumn?.id) ?? layout)
+        ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
         : layout;
     state.updateSidebarLayout(fitted);
     if (chatPanel) {

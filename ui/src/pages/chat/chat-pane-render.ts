@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
+import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -30,16 +31,7 @@ import {
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
-import {
-  SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
-  WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
-  chatMainWidth,
-} from "./chat-pane-shared.ts";
-import {
-  renderSidebarRegion,
-  resolveSidebarLayoutForBoard,
-  restoreHiddenSidebarChat,
-} from "./chat-pane-sidebar-layout.ts";
+import { renderSidebarRegion, resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   dismissChatError,
   resolveAssistantAttachmentAuthToken,
@@ -54,6 +46,7 @@ import {
   selectedChatSessionRow,
 } from "./chat-state-route.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
+import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { detailSlotOpen, renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
@@ -61,8 +54,10 @@ import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pu
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  renderSessionWorkspaceRail,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
+import type { SidebarPanelTemplates } from "./components/chat-sidebar-region-types.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -70,9 +65,8 @@ import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
   closeSlot,
-  detachPanelToColumn,
-  mergePanelIntoColumn,
-  type SidebarSide,
+  openSlot,
+  setSidebarExpanded,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
 import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
@@ -121,10 +115,25 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const board = this.resolveBoardView();
     const sidebarLayout = resolveSidebarLayoutForBoard({
       board,
-      hasDetail: state.sidebarContent !== null,
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
+    const hasPanelSlot = (slot: SidebarSlotId) =>
+      sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+    const openPanelSlot = (slot: SidebarSlotId) => {
+      state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
+      if (slot === "companion") {
+        this.setSessionObserverVisibility(true);
+      }
+    };
+    const closePanelSlot = (slot: SidebarSlotId) => {
+      if (slot === "companion") {
+        this.setSessionObserverVisibility(false);
+      }
+      state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
+    };
+    const togglePanelSlot = (slot: SidebarSlotId) =>
+      hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
       resolveControlUiServerQueueMode(
@@ -213,33 +222,36 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const chatLayoutWidth = this.chatLayoutWidth(sidebarLayout);
-    const sessionWorkspace = createSessionWorkspaceProps(state, {
+    const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
       draftScope: this.presentationId,
-      narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
+      expanded: hasPanelSlot("workspace"),
+      narrowLayout: false,
     });
-    const railSideDocked =
-      !sessionWorkspace.collapsed &&
-      !sessionWorkspace.narrowLayout &&
-      sessionWorkspace.dock !== "bottom";
-    // The workspace claims the first side slot; tasks need room for both columns.
-    const backgroundTasks = createBackgroundTasksProps(state, {
-      narrowLayout:
-        chatLayoutWidth <
-        WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH +
-          (railSideDocked ? this.workspaceRailLayout.width + 4 : 0),
+    const sessionWorkspace = {
+      ...sessionWorkspaceBase,
+      collapsed: !hasPanelSlot("workspace"),
+      narrowLayout: false,
+      onToggleCollapsed: () => togglePanelSlot("workspace"),
+      onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
+      onToggleBrowser: state.browserPanelAvailable ? () => togglePanelSlot("browser") : undefined,
+      onToggleDesktop: isDesktopPanelAvailable(gatewaySnapshot)
+        ? () => togglePanelSlot("desktop")
+        : undefined,
+    };
+    const backgroundTasksBase = createBackgroundTasksProps(state, {
+      narrowLayout: false,
       openTaskId:
         state.sidebarContent?.kind === "task" && detailSlotOpen(sidebarLayout)
           ? state.sidebarContent.taskId
           : undefined,
       onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
     });
-    const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
-    const conversationWidth = chatMainWidth(
-      chatLayoutWidth,
-      railSideDocked ? this.workspaceRailLayout.width : null,
-      tasksSideDocked ? this.tasksRailLayout.width : null,
-    );
+    const backgroundTasks = {
+      ...backgroundTasksBase,
+      collapsed: !hasPanelSlot("tasks"),
+      narrowLayout: false,
+      onToggleCollapsed: () => togglePanelSlot("tasks"),
+    };
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -298,31 +310,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
-      observerDigest: catalogKey ? null : observerDigest,
-      sessionRailReady: !catalogKey && this.sessionRailReady,
-      observerRunId: catalogKey ? null : observerRunId,
-      observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
-      observerLastReadAt: selectedSession?.lastReadAt,
-      sessionRailCompanion: catalogKey
-        ? undefined
-        : this.sessionCompanionThreads.view(state.sessionKey, currentAgentId),
-      ...this.sessionRailCommandProps(state.sessionKey),
-      sessionRailMode: this.selectedSessionRailMode(state.sessionKey),
-      sessionRailDocked: !catalogKey && conversationWidth >= SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
-      companionRail: this.companionRailColumn(),
-      onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
-      onSessionRailDraftChange: (draft) =>
-        this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
-      onSessionRailClear: () => void this.clearSessionCompanion(),
-      onSessionRailModeChange: (mode) => {
-        if (state.sessionKey !== this.sessionRailModeSessionKey || mode !== this.sessionRailMode) {
-          this.sessionRailModeSessionKey = state.sessionKey;
-          this.sessionRailMode = mode;
-        }
-      },
-      // Catalog chats never render this rail, but hide/show from any surface must
-      // still reach the gateway.
-      onObserverVisibilityChange: this.setSessionObserverVisibility,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
@@ -435,10 +422,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
             effortAccess: mutationAccess.effort,
             onModelSetup: () => this.context.navigate("model-setup"),
           }),
-      sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
-      workspaceRail: this.workspaceRailColumn(),
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
-      tasksRail: this.tasksRailColumn(),
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
@@ -625,8 +609,64 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       ${board.face === "dashboard" ? header : nothing}${boardPrimary}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
-    const panelTemplates = {
+    const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+    const panelTemplates: SidebarPanelTemplates = {
       chat,
+      workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
+      tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
+      companion: html`<openclaw-chat-session-rail
+        embedded
+        .sessionKey=${state.sessionKey}
+        .digest=${observerDigest ?? null}
+        .running=${Boolean(observerRunId)}
+        .activeRunId=${observerRunId ?? null}
+        .startedAt=${selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined}
+        .lastReadAt=${selectedSession?.lastReadAt}
+        .planStatus=${state.planStatus ?? null}
+        .pullRequests=${this.sessionPullRequests}
+        .companion=${this.sessionCompanionThreads.view(state.sessionKey, currentAgentId)}
+        .connected=${state.connected}
+        .onSubmit=${(question: string) => void this.submitSessionCompanionQuestion(question)}
+        .onDraftChange=${(draft: string) =>
+          this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId)}
+        .onClear=${() => void this.clearSessionCompanion()}
+        .onVisibilityChange=${this.setSessionObserverVisibility}
+      ></openclaw-chat-session-rail>`,
+      ...(state.terminalAvailable
+        ? {
+            terminal: html`<openclaw-terminal-panel
+              embedded
+              .deferInitialRestore=${this.pendingPanelToggleRequests.has("terminal")}
+              .client=${state.connected ? state.client : null}
+              .available=${state.terminalAvailable}
+              .agentId=${currentAgentId}
+              .themeMode=${document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+              .basePath=${state.basePath}
+            ></openclaw-terminal-panel>`,
+          }
+        : {}),
+      ...(state.browserPanelAvailable
+        ? {
+            browser: html`<openclaw-browser-panel
+              embedded
+              data-chat-autotype-exempt
+              .client=${state.connected ? state.client : null}
+              .available=${state.browserPanelAvailable}
+              .basePath=${state.basePath}
+              .authToken=${resolveAssistantAttachmentAuthToken(state)}
+            ></openclaw-browser-panel>`,
+          }
+        : {}),
+      ...(desktopAvailable
+        ? {
+            desktop: html`<openclaw-desktop-panel
+              embedded
+              data-chat-autotype-exempt
+              .client=${state.connected ? state.client : null}
+              .available=${desktopAvailable}
+            ></openclaw-desktop-panel>`,
+          }
+        : {}),
       ...(state.sidebarContent
         ? {
             detail: renderChatDetailSlot({
@@ -666,45 +706,36 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         if (slot === "discussion") {
           this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim());
         }
-        state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
+        closePanelSlot(slot);
       },
-      detachPanel: (panelId: string, side: SidebarSide, columnIndex: number) => {
-        const moved = restoreHiddenSidebarChat({
-          activatedPanelId: panelId,
-          movedLayout: detachPanelToColumn(sidebarLayout, panelId, side, columnIndex),
-          renderedLayout: sidebarLayout,
-          storedLayout: state.sidebarLayout,
-        });
-        this.commitSidebarPanelMove(moved, panelId, side, board);
-      },
-      mergePanel: (panelId: string, targetColumnId: string, panelIndex: number) => {
-        const target = sidebarLayout.columns.find((column) => column.id === targetColumnId);
-        const merged = restoreHiddenSidebarChat({
-          activatedPanelId: panelId,
-          movedLayout: mergePanelIntoColumn(sidebarLayout, panelId, targetColumnId, panelIndex),
-          renderedLayout: sidebarLayout,
-          storedLayout: state.sidebarLayout,
-        });
-        if (target) {
-          this.commitSidebarPanelMove(merged, panelId, target.side, board);
-        }
-      },
+      openSlot: openPanelSlot,
       resizeColumn: (columnId: string, width: number) => {
         this.commitSidebarColumnResize(sidebarLayout, columnId, width);
       },
+      setExpanded: (expanded: boolean) =>
+        state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
+      setOpen: (open: boolean) => this.setChatSidePanelOpen(open),
     };
+    const availableSlots: SidebarSlotId[] = [
+      "detail",
+      ...(state.terminalAvailable ? (["terminal"] as const) : []),
+      ...(state.browserPanelAvailable ? (["browser"] as const) : []),
+      "workspace",
+      "companion",
+      "tasks",
+      ...(desktopAvailable ? (["desktop"] as const) : []),
+      ...(discussion ? (["discussion"] as const) : []),
+      ...(board.hasBoard ? (["chat"] as const) : []),
+    ];
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
+      availableSlots,
       callbacks: sidebarCallbacks,
       discussionOpenUrl: discussion?.openUrl ?? null,
-      focusPanelId: state.sidebarFocusPanelId,
-      focusVersion: state.sidebarFocusVersion,
       layout: sidebarLayout,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      panelMutationEnabled: { chat: Boolean(board.activeTabId) && board.provider.canMutate },
       panelTemplates,
       primary,
-      sessionKey: state.sessionKey,
     });
     return html`${content}${renderChatImageLightbox(
       state.imageLightbox,

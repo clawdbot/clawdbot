@@ -48,6 +48,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ attribute: false }) basePath = "";
   /** Bearer credential for the assistant-media screenshot fetch. */
   @property({ attribute: false }) authToken: string | null = null;
+  /** Hosted by the chat side panel, which owns visibility and geometry. */
+  @property({ type: Boolean }) embedded = false;
 
   private readonly browserPanelController = new BrowserPanelController(this);
   private readonly dockLayout = new DockLayoutController(this, {
@@ -56,6 +58,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     isAvailable: () => this.available,
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
+  private embeddedRefreshScheduled = false;
   private readonly viewportResizeObserver = new ResizeObserver((entries) => {
     const entry = entries[0];
     if (entry) {
@@ -71,7 +74,9 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
 
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    if (!this.embedded) {
+      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    }
     // A settings takeover can already own the viewport when the panel mounts.
     // Suppress before the restored open state refreshes a dock nobody can see.
     this.dockLayout.setSuppressed(this.suppressed);
@@ -88,11 +93,24 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if (changed.has("embedded")) {
+      if (this.embedded) {
+        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      } else {
+        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      }
+    }
     if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
       void this.browserPanelController.refreshAll();
     }
     this.browserPanelController.synchronizeHostProperties(changed);
-    if (changed.has("client") || changed.has("available")) {
+    if (
+      this.embedded &&
+      this.available &&
+      (changed.has("embedded") || changed.has("client") || changed.has("available"))
+    ) {
+      this.scheduleEmbeddedRefresh();
+    } else if (changed.has("client") || changed.has("available")) {
       if (!this.available && this.dockLayout.open) {
         // Surface disappeared (disconnect/scope loss): hide without persisting
         // so the open preference survives a reconnect.
@@ -118,7 +136,20 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   browserPanelIsOpen(): boolean {
-    return this.dockLayout.open;
+    return this.embedded || this.dockLayout.open;
+  }
+
+  private scheduleEmbeddedRefresh(): void {
+    if (this.embeddedRefreshScheduled) {
+      return;
+    }
+    this.embeddedRefreshScheduled = true;
+    queueMicrotask(() => {
+      this.embeddedRefreshScheduled = false;
+      if (this.isConnected && this.embedded && this.available) {
+        void this.browserPanelController.refreshAll();
+      }
+    });
   }
 
   toggle(): void {
@@ -172,7 +203,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   override render() {
-    if (!this.available || !this.dockLayout.open) {
+    if (!this.available || (!this.embedded && !this.dockLayout.open)) {
       return nothing;
     }
     return renderBrowserPanelChrome(
@@ -183,6 +214,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       (dock) => this.setDock(dock),
       () => this.closePanel(),
       this.dockLayout.renderResizer("bp", t("browser.resize")),
+      this.embedded,
     );
   }
 }

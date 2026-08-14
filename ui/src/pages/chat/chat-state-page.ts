@@ -370,20 +370,17 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
-    let opened = openSlot(state.sidebarLayout, "detail", "right");
+    let opened = openSlot(state.sidebarLayout, "detail");
     const detailPanel = opened.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "detail");
     if (detailPanel) {
       opened = activatePanel(opened, detailPanel.id);
     }
-    const newColumn = opened.columns.find(
-      (column) => !state.sidebarLayout.columns.some((current) => current.id === column.id),
-    );
     const availableWidth = page.getBoundingClientRect?.().width ?? 0;
     const fitted =
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(opened, availableWidth, newColumn?.id) ?? opened)
+        ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
     state.sidebarContent = content;
     state.updateSidebarLayout(fitted);

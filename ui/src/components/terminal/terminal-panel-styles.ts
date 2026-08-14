@@ -24,6 +24,11 @@ export const terminalPanelStyles = css`
   .tp--fullscreen {
     inset: 0;
   }
+  .tp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
   .tp-dock-modes {
     display: flex;
     align-items: center;

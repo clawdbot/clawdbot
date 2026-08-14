@@ -1,12 +1,13 @@
-import type { TemplateResult } from "lit";
-import type { SidebarSide, SidebarSlotId } from "../sidebar-layout.ts";
+import { nothing, type TemplateResult } from "lit";
+import type { SidebarSlotId } from "../sidebar-layout.ts";
 
-export type SidebarPanelTemplates = Partial<Record<SidebarSlotId, TemplateResult>>;
+export type SidebarPanelTemplates = Partial<Record<SidebarSlotId, TemplateResult | typeof nothing>>;
 
 export type SidebarRegionCallbacks = {
   activatePanel: (panelId: string) => void;
   closeSlot: (slot: SidebarSlotId) => void;
-  detachPanel: (panelId: string, side: SidebarSide, columnIndex: number) => void;
-  mergePanel: (panelId: string, targetColumnId: string, panelIndex: number) => void;
+  openSlot: (slot: SidebarSlotId) => void;
   resizeColumn: (columnId: string, width: number) => void;
+  setExpanded: (expanded: boolean) => void;
+  setOpen: (open: boolean) => void;
 };

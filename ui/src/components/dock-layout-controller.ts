@@ -262,6 +262,15 @@ export const dockPanelStyles = css`
     color: var(--text, #d7dae0);
     font-family: var(--font-body);
   }
+  :host([embedded]) {
+    position: static;
+    z-index: auto;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
+  }
   :is(.bp, .tp) {
     position: fixed;
     display: flex;

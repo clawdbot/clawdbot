@@ -11,8 +11,6 @@ import {
   requestSessionCompanionState,
   resetSessionCompanion,
 } from "./chat-session-companion.ts";
-import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
-import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
 import {
   ChatSessionRailElement,
@@ -38,35 +36,6 @@ function input(overrides: Partial<SessionRailInput> = {}): SessionRailInput {
     digest: digest(),
     hasCompanionActivity: false,
     ...overrides,
-  };
-}
-
-function backgroundTasksToggleProps(): BackgroundTasksProps {
-  return {
-    sessionKey: "agent:main:run",
-    statusRowId: "status-row",
-    collapsed: true,
-    narrowLayout: false,
-    connected: true,
-    canCancel: false,
-    loading: false,
-    error: null,
-    tasks: null,
-    subagentActivity: {
-      rows: [],
-      overflowWorking: 0,
-      taskIds: new Set<string>(),
-      nextExpiryAt: null,
-    },
-    taskDetails: new Map(),
-    taskDetailErrors: new Map(),
-    taskDetailLoadingIds: new Set(),
-    cancellingTaskIds: new Set(),
-    finishedCollapsed: true,
-    onToggleCollapsed: () => {},
-    onToggleFinished: () => {},
-    onRefresh: () => {},
-    onCancel: () => {},
   };
 }
 
@@ -719,21 +688,6 @@ describe("ChatSessionRailElement", () => {
     });
     expect(withoutDigest.querySelector(".chat-session-rail--expanded")).not.toBeNull();
     expect(withoutDigest.querySelector(".chat-session-rail__digest")).toBeNull();
-  });
-
-  it("gives the header toggle a glyph of its own, not the background-tasks one", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    render(renderSessionRailToggle({ mode: "hidden", onToggle: () => {} }), host);
-    const railGlyph = host.querySelector(".chat-session-rail-toggle svg")?.innerHTML;
-    const tasksHost = document.createElement("div");
-    document.body.append(tasksHost);
-    render(renderBackgroundTasksToggle(backgroundTasksToggleProps()), tasksHost);
-    const tasksGlyph = tasksHost.querySelector(".chat-tasks-toggle svg")?.innerHTML;
-
-    expect(railGlyph?.trim()).toBeTruthy();
-    expect(tasksGlyph?.trim()).toBeTruthy();
-    expect(railGlyph).not.toBe(tasksGlyph);
   });
 
   it("reports the open panel to assistive technology", () => {

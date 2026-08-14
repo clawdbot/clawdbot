@@ -1,5 +1,5 @@
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { routeIdFromPath, type RouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   COMMAND_PALETTE_TARGET_EVENT,
@@ -352,7 +352,11 @@ export class ShellChromeOwner {
       this.togglePalette();
       return;
     }
-    if (!isOptionalElementDefined(host.terminalPanelElement) && isTerminalPanelShortcut(event)) {
+    if (
+      !isSessionRouteId(host.routeState.routeId) &&
+      !isOptionalElementDefined(host.terminalPanelElement) &&
+      isTerminalPanelShortcut(event)
+    ) {
       event.preventDefault();
       this.handleDeferredTerminalToggle(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
       return;
@@ -471,7 +475,10 @@ export class ShellChromeOwner {
 
   readonly handleDeferredTerminalToggle = (event: Event): void => {
     const host = this.host;
-    if (isOptionalElementDefined(host.terminalPanelElement)) {
+    if (
+      isSessionRouteId(host.routeState.routeId) ||
+      isOptionalElementDefined(host.terminalPanelElement)
+    ) {
       return;
     }
     const context = host.context;
@@ -487,7 +494,10 @@ export class ShellChromeOwner {
 
   readonly handleDeferredBrowserToggle = (event: Event): void => {
     const host = this.host;
-    if (isOptionalElementDefined(host.browserPanelElement)) {
+    if (
+      isSessionRouteId(host.routeState.routeId) ||
+      isOptionalElementDefined(host.browserPanelElement)
+    ) {
       return;
     }
     const snapshot = host.context?.gateway?.snapshot;
@@ -498,6 +508,9 @@ export class ShellChromeOwner {
 
   readonly handleDeferredDesktopToggle = (event: Event): void => {
     const host = this.host;
+    if (isSessionRouteId(host.routeState.routeId)) {
+      return;
+    }
     const context = host.context;
     if (!context || !isDesktopPanelAvailable(context.gateway.snapshot)) {
       event.stopImmediatePropagation();

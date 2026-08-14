@@ -928,6 +928,19 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     });
   });
 
+  it("leaves panel toggle events to the active chat pane on session routes", () => {
+    const terminalElement = createLazyElementSpec("session terminal panel");
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
+    shell.terminalPanelElement = terminalElement;
+    shell.routeState = { routeId: "chat" };
+
+    shell.handleDeferredTerminalToggle(
+      new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
+    );
+
+    expect(customElements.get(terminalElement.tagName)).toBeUndefined();
+  });
+
   it("opens approvals after the modal module loads on demand", async () => {
     const element = createLazyElementSpec("exec approval modal");
     const show = vi.fn();

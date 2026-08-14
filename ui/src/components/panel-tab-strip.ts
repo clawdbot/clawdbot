@@ -89,20 +89,26 @@ export function renderPanelTabStrip(params: {
   onNew: () => void;
   newLabel: string;
   newDisabled?: boolean;
+  newControl?: TemplateResult;
 }) {
-  const newButton = (slotted: boolean) => html`
-    <button
-      slot=${slotted ? "nav" : nothing}
-      class="rail-header__action tabstrip-new"
-      type="button"
-      ?disabled=${params.newDisabled}
-      title=${params.newLabel}
-      aria-label=${params.newLabel}
-      @click=${params.onNew}
-    >
-      ${icons.plus}
-    </button>
-  `;
+  const newButton = (slotted: boolean) =>
+    params.newControl
+      ? html`<span slot=${slotted ? "nav" : nothing} class="tabstrip-new-control"
+          >${params.newControl}</span
+        >`
+      : html`
+          <button
+            slot=${slotted ? "nav" : nothing}
+            class="rail-header__action tabstrip-new"
+            type="button"
+            ?disabled=${params.newDisabled}
+            title=${params.newLabel}
+            aria-label=${params.newLabel}
+            @click=${params.onNew}
+          >
+            ${icons.plus}
+          </button>
+        `;
   if (params.tabs.length === 0) {
     // Web Awesome 3.10 dereferences its first tab when an empty group becomes
     // visible. Keep the new-session control outside the group until one exists.
@@ -317,6 +323,11 @@ export const panelTabStripStyles = css`
     opacity: 1;
   }
   .tabstrip-new {
+    flex: none;
+    align-self: center;
+  }
+  .tabstrip-new-control {
+    display: inline-flex;
     flex: none;
     align-self: center;
   }

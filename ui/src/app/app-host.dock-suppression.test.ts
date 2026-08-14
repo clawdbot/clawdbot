@@ -120,10 +120,12 @@ describe("OpenClaw shell dock suppression", () => {
     const container = document.createElement("div");
     const desktopAvailable = () =>
       (
-        container.querySelector("openclaw-desktop-panel") as HTMLElement & {
-          available: boolean;
-        }
-      ).available;
+        container.querySelector("openclaw-desktop-panel") as
+          | (HTMLElement & {
+              available: boolean;
+            })
+          | null
+      )?.available ?? false;
 
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
@@ -161,14 +163,9 @@ describe("OpenClaw shell dock suppression", () => {
 
     shell.routeState = { routeId: "chat" };
     renderLit(shell.render(), container);
-    expect(
-      (
-        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          suppressed: boolean;
-        }
-      ).suppressed,
-    ).toBe(false);
-    expect(desktopAvailable()).toBe(true);
+    expect(container.querySelector("openclaw-terminal-panel")).toBeNull();
+    expect(container.querySelector("openclaw-browser-panel")).toBeNull();
+    expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
 
     shell.routeState = {
       routeId: "new-session",
