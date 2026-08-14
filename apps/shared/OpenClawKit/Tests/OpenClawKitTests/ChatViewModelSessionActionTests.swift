@@ -36,9 +36,31 @@ private actor LegacyForkTransportState {
 private final class LegacyForkTransport: @unchecked Sendable, OpenClawChatTransport {
     let state = LegacyForkTransportState()
 
+    func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
+        throw CancellationError()
+    }
+
+    func sendMessage(
+        sessionKey _: String,
+        message _: String,
+        thinking _: String,
+        idempotencyKey _: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        throw CancellationError()
+    }
+
     func forkSession(parentKey: String) async throws -> String {
         await self.state.record(parentKey)
         return "legacy-child"
+    }
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        false
+    }
+
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { $0.finish() }
     }
 }
 
