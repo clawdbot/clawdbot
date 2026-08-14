@@ -651,4 +651,3 @@ describe("buildTeamsFileInfoCard", () => {
     });
   });
 });
-
