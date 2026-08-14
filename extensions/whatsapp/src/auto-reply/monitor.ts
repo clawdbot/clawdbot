@@ -1,6 +1,7 @@
 // Whatsapp plugin module implements monitor behavior.
 import type { WAMessageKey } from "baileys";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
@@ -264,6 +265,8 @@ export async function monitorWebChannel(
               replyLogger,
               baseMentionConfig,
               account,
+              buildContext: (tuning.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+                .buildContext,
             });
             return (await (listenerFactory ?? attachWebInboxToSocket)({
               cfg,

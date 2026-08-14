@@ -259,11 +259,15 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (sessionNamespace) {
     return sessionNamespace;
   }
+  // uirouter matches static paths case-insensitively (pathKey lowercases), so
+  // this pre-gate must too — otherwise /Usage is rewritten to /chat before the
+  // router, which would have matched it, ever starts.
+  const routePathKey = routePath.toLowerCase();
   for (const routeId of APP_ROUTE_IDS) {
     const definition = APP_ROUTE_DEFINITIONS[routeId];
     const paths: readonly string[] =
       "aliases" in definition ? [definition.path, ...definition.aliases] : [definition.path];
-    if (paths.some((candidate) => normalizePath(candidate) === routePath)) {
+    if (paths.some((candidate) => normalizePath(candidate) === routePathKey)) {
       return routeId;
     }
   }

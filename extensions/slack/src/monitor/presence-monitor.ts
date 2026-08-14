@@ -3,7 +3,7 @@ import { type WebClient, WebAPIRateLimitedError } from "@slack/web-api";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackTarget } from "../target-parsing.js";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
@@ -146,7 +146,7 @@ export function createSlackPresenceMonitor(params: {
   log?: (message: string) => void;
   error?: (message: string) => void;
   nowMs?: () => number;
-  enqueue?: typeof enqueueSystemEvent;
+  enqueue?: typeof enqueueRoutedSystemEvent;
   wake?: typeof requestHeartbeat;
 }): SlackPresenceMonitor {
   const resolveClient = params.resolveClient ?? (() => params.client);
@@ -156,7 +156,7 @@ export function createSlackPresenceMonitor(params: {
   const targets = new Map<string, PresenceTarget>();
   const presenceByUser = new Map<string, Presence>();
   const nowMs = params.nowMs ?? Date.now;
-  const enqueue = params.enqueue ?? enqueueSystemEvent;
+  const enqueue = params.enqueue ?? enqueueRoutedSystemEvent;
   const wake = params.wake ?? requestHeartbeat;
   let pollOffset = 0;
   let timer: NodeJS.Timeout | undefined;
@@ -250,8 +250,7 @@ export function createSlackPresenceMonitor(params: {
     if (!reserved) {
       return;
     }
-    const queued = enqueue(formatSlackPresenceEvent(target, userId), {
-      sessionKey: target.sessionKey,
+    const queued = enqueue(formatSlackPresenceEvent(target, userId), target, {
       contextKey: `slack:presence-active:${params.accountId}:${workspaceKey}:${userId}`,
       deliveryContext: {
         channel: "slack",

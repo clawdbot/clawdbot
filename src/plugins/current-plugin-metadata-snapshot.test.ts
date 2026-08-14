@@ -284,10 +284,10 @@ describe("current plugin metadata snapshot", () => {
       () => {
         expect(
           getCurrentPluginMetadataSnapshot({
-            allowWorkspaceScopedSnapshot: true,
             requireDefaultDiscoveryContext: true,
           }),
         ).toBe(snapshot);
+        expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
       },
       { config },
     );

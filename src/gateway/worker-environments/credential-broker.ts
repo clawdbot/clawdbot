@@ -31,7 +31,7 @@ type WorkerCredentialBrokerOptions = {
   prepareInstallation: (
     install: WorkerInstallationArtifact["install"],
   ) => Promise<WorkerInstallationArtifact>;
-  tunnelManager?: WorkerTunnelManager;
+  tunnelManager?: Pick<WorkerTunnelManager, "stop">;
   workerCredentialTtlMs?: number;
   generateWorkerCredential?: (bytes: number) => string;
   liveEvents?: Pick<WorkerLiveEventReceiver, "bindSession" | "rotateCredential">;

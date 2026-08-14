@@ -421,6 +421,7 @@ describe("audit event worker", () => {
       });
     } finally {
       clearSink();
+      await writer.ready;
       await writer.stop();
     }
 
@@ -630,6 +631,7 @@ describe("audit event worker", () => {
     const schemaStartedAt = performance.now();
     expect(schemaWriter.recordExecutionIdentity(captureWork(envelope))).toBe(true);
     expect(performance.now() - schemaStartedAt).toBeLessThan(250);
+    await schemaWriter.ready;
     await schemaWriter.stop();
     expect(schemaErrors).toContain("audit execution identity persistence failed");
 
@@ -663,6 +665,7 @@ describe("audit event worker", () => {
     const insertStartedAt = performance.now();
     expect(insertWriter.recordExecutionIdentity(captureWork(envelope))).toBe(true);
     expect(performance.now() - insertStartedAt).toBeLessThan(250);
+    await insertWriter.ready;
     await insertWriter.stop();
     expect(insertErrors).toContain("audit execution identity persistence failed");
     expect(JSON.stringify(insertErrors)).not.toContain("raw-trigger-secret");
@@ -742,6 +745,7 @@ describe("audit event worker", () => {
         ),
       ),
     ).toBe(true);
+    await writer.ready;
     await writer.stop();
     expect(errors).toContain("audit execution identity envelope could not be queued");
     expect(errors).toContain("audit execution identity envelope rejected");

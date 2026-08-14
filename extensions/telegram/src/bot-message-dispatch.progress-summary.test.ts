@@ -320,6 +320,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
+        expect(replyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
         await replyOptions?.onItemEvent?.({
           kind: "preamble",
           itemId: "commentary-1",

@@ -9,14 +9,14 @@ import {
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
-import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
+import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
 import { loadPendingDelivery, type QueuedDelivery } from "./delivery-queue-storage.js";
 import {
   enqueueDelivery,
   enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,
@@ -158,7 +158,7 @@ export async function stageAndEnqueueOutboundDelivery(
             staged.mediaStageId,
           );
       if (!queued.created) {
-        cancelDeliveryQueueMediaStage(staged.mediaStageId);
+        cancelDeliveryQueueMediaRetention(staged.mediaStageId);
         await releaseSpoolArtifacts(staged.artifacts);
       }
       return {
@@ -175,7 +175,7 @@ export async function stageAndEnqueueOutboundDelivery(
       ...(initialProducerClaim ? { producerClaimId: initialProducerClaim.producerClaimId } : {}),
     };
   } catch (err) {
-    cancelDeliveryQueueMediaStage(staged.mediaStageId);
+    cancelDeliveryQueueMediaRetention(staged.mediaStageId);
     await releaseSpoolArtifacts(staged.artifacts);
     throw err;
   }

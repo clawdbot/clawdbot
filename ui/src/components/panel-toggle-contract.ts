@@ -8,6 +8,7 @@ export const UI_COMMAND_EVENT = "openclaw:ui-command";
 export type UiCommandDetail = UiCommandParams;
 
 export type TerminalPanelToggleDetail = {
+  agentId?: string | null;
   dock?: "bottom" | "right";
   open?: boolean;
   terminalSessionId?: string;

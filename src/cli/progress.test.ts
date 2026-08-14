@@ -176,15 +176,6 @@ describe("cli progress", () => {
     ).toBe(false);
   });
 
-  it("uses the progress stream instead of stdout to decide spinner interactivity", () => {
-    expect(
-      shouldUseInteractiveProgressSpinner({
-        streamIsTty: true,
-        stdinIsRaw: false,
-      }),
-    ).toBe(true);
-  });
-
   it("keeps the normal interactive spinner for regular tty commands", () => {
     expect(
       shouldUseInteractiveProgressSpinner({

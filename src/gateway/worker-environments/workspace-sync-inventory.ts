@@ -187,6 +187,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   outputPath: string;
   signal: AbortSignal;
   timeoutMs: number;
+  maxOutputBytes?: number;
 }): Promise<void> {
   const [command, ...args] = params.argv;
   if (!command) {
@@ -198,13 +199,17 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let terminationTimer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
+  let outputError: Error | undefined;
+  let outputBytes = 0;
+  let outputWrite = Promise.resolve();
   try {
     if (params.signal.aborted) {
       throw new Error("Worker workspace file enumeration was aborted");
     }
+    const boundedOutput = params.maxOutputBytes !== undefined;
     const child = spawn(command, args, {
       env: workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
-      stdio: [input?.fd ?? "ignore", output.fd, "pipe"],
+      stdio: [input?.fd ?? "ignore", boundedOutput ? "pipe" : output.fd, "pipe"],
       ...(process.platform !== "win32" ? { detached: true } : {}),
       windowsHide: true,
     });
@@ -253,6 +258,38 @@ export async function runWorkspaceInventoryCommandToFile(params: {
         }, COMMAND_KILL_GRACE_MS + 1_000);
         terminationTimer.unref?.();
       };
+      if (boundedOutput) {
+        const childStdout = child.stdout;
+        if (!childStdout) {
+          finish({ code: null, error: new Error("Worker workspace command has no stdout pipe") });
+          return;
+        }
+        childStdout.on("data", (value: Buffer | Uint8Array) => {
+          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+          outputBytes += chunk.byteLength;
+          if (outputBytes > params.maxOutputBytes!) {
+            outputError = workspaceInventoryError(
+              `Cloud workspace pack exceeds the ${params.maxOutputBytes} byte limit`,
+            );
+            terminate();
+            return;
+          }
+          childStdout.pause();
+          outputWrite = outputWrite
+            .then(async () => {
+              await output.writeFile(chunk);
+              childStdout.resume();
+            })
+            .catch((error: unknown) => {
+              outputError = error instanceof Error ? error : new Error(String(error));
+              terminate();
+            });
+        });
+        childStdout.once("error", (error) => {
+          outputError = error;
+          terminate();
+        });
+      }
       child.once("error", (error) => finish({ code: null, error }));
       child.once("close", (code) => finish({ code }));
       abort = terminate;
@@ -263,6 +300,10 @@ export async function runWorkspaceInventoryCommandToFile(params: {
         terminate();
       }
     });
+    await outputWrite;
+    if (outputError) {
+      throw outputError;
+    }
     if (result.error) {
       throw result.error;
     }
@@ -304,7 +345,7 @@ async function writeEligibleGitFiles(params: {
     if (buffered.length === 0) {
       return;
     }
-    await output.write(buffered.join(""));
+    await output.writeFile(buffered.join(""));
     buffered = [];
     bufferedBytes = 0;
   };

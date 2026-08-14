@@ -1,5 +1,7 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
+import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -12,10 +14,13 @@ import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
   bindDeviceWorkerAvailability,
+  bindDeviceWorkerReconciliation,
   createDeviceWorkerRuntime,
   DEVICE_WORKER_PROVIDER_ID,
 } from "./worker-environments/device-provider.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
+import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
+import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
@@ -45,6 +50,8 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerTunnelManager?: WorkerTunnelManager;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
+  bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
+  handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
 };
 
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
@@ -104,6 +111,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { createWorkerSessionPlacementGate },
     { createWorkerTranscriptCommitter },
     { createWorkerTunnelManager },
+    { createNodeWorkerTunnelManager },
+    { createNodeWorkspaceTransferService },
+    { createNodeWorkspaceTransferHttpCallback },
     { createWorkerSessionToolExecutor },
     { resolveWorkerProvider },
   ] = await Promise.all([
@@ -112,6 +122,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/placement-worker-gate.js"),
     import("./worker-environments/transcript-commit.js"),
     import("./worker-environments/tunnel.js"),
+    import("./worker-environments/node-worker-tunnel.js"),
+    import("./worker-environments/node-workspace-transfer-service.js"),
+    import("./worker-environments/node-workspace-transfer-http.js"),
     import("./worker-environments/worker-session-tool-executor.js"),
     import("../plugins/worker-provider-registry.js"),
   ]);
@@ -165,12 +178,24 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const workerTunnelManager = createWorkerTunnelManager({
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
+  const nodeWorkspaceTransfer = createNodeWorkspaceTransferService({
+    getOwner: (environmentId) => params.startup.store.getTransferOwner(environmentId),
+  });
+  const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
+    gatewayDeviceId: loadOrCreateProcessDeviceIdentity().deviceId,
+    getEnvironment: (environmentId) => params.startup.store.get(environmentId),
+    getTransport: () => deviceRuntime.getNodeTransport(),
+    launchNodeWorker: async (request) => await deviceRuntime.launchNodeWorker(request),
+    validateWorkerTurn: (binding) => placementGate.validateWorkerTurn(binding),
+    workspaceTransfer: nodeWorkspaceTransfer,
+  });
   let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
     throw new Error("Worker session tools are unavailable");
   };
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
+  const workerEnvironmentLog = params.log.child("worker-environments");
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
     store: params.startup.store,
     getConfig: getRuntimeConfig,
@@ -185,6 +210,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       return build ? structuredClone(build) : undefined;
     },
     tunnelManager: workerTunnelManager,
+    nodeTunnelManager: nodeWorkerTunnelManager,
     resolveWorkerGateway: params.resolveWorkerGateway,
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,
@@ -230,10 +256,37 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         { signal, resolveIdentity },
       );
     },
-    logger: params.log.child("worker-environments"),
+    logger: workerEnvironmentLog,
   });
   const workerEnvironmentService = workerEnvironmentServiceBase;
   bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.isAvailable);
+  bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
+    const environmentIds = params.startup.store
+      .listForReconcile()
+      .filter((record) => {
+        const settings = record.profileSnapshot.settings;
+        const profileDeviceId = isRecord(settings) ? settings.device : undefined;
+        return (
+          record.providerId === DEVICE_WORKER_PROVIDER_ID &&
+          typeof profileDeviceId === "string" &&
+          profileDeviceId.trim() === deviceId
+        );
+      })
+      .map((record) => record.environmentId);
+    for (const environmentId of environmentIds) {
+      params.startup.store.revokeEnvironmentCredential(environmentId);
+    }
+    await Promise.all(
+      environmentIds.map(async (environmentId) => {
+        await workerEnvironmentService.reconcileEnvironment(environmentId).catch(() => {
+          workerEnvironmentLog.warn(
+            `Device worker reconcile failed (${deviceId}, ${environmentId}); periodic cleanup will retry`,
+          );
+        });
+      }),
+    );
+    return environmentIds;
+  });
   executeSessionTool = createWorkerSessionToolExecutor({
     placements: params.startup.placementStore,
     environments: workerEnvironmentService,
@@ -247,5 +300,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       dispatchChild = dispatch;
     },
     bindDeviceNodeControl: deviceRuntime.bindNodeTransport,
+    bindNodeWorkspaceBindingResolver: (resolver) =>
+      nodeWorkerTunnelManager.bindWorkspaceBindingResolver(resolver),
+    handleNodeWorkspaceTransferRequest:
+      createNodeWorkspaceTransferHttpCallback(nodeWorkspaceTransfer),
   };
 }

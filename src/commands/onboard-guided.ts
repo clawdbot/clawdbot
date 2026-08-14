@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isUnconfiguredConfigSource } from "../cli/fresh-install-config.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
@@ -16,6 +17,7 @@ import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
+import { promptFirstOnboardingAgent, showSessionMigrationWarnings } from "./onboard-first-agent.js";
 import {
   activationLines,
   formatSetupCandidateFailure,
@@ -41,6 +43,7 @@ export type GuidedOnboardingDeps = {
     workspace: string,
     runtime: RuntimeEnv,
     acceptRisk: boolean,
+    agentName?: string,
   ) => Promise<void>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<string | void>;
@@ -64,27 +67,38 @@ export type GuidedOnboardingDeps = {
 
 export type GuidedAccessMode = "full" | "guarded";
 
-type GuidedOnboardingHandoff = { workspace: string; next: "browser" | "hatch" | "chat" };
+type GuidedOnboardingHandoff = {
+  workspace: string;
+  next: "browser" | "hatch" | "chat";
+  agentName?: string;
+};
 
 async function openSystemAgentChat(
   deps: GuidedOnboardingDeps,
   workspace: string,
   runtime: RuntimeEnv,
   acceptRisk: boolean,
+  agentName?: string,
 ): Promise<void> {
   const runChat =
     deps.runSystemAgentChat ??
-    (async (setupWorkspace: string, chatRuntime: RuntimeEnv, riskAccepted: boolean) => {
+    (async (
+      setupWorkspace: string,
+      chatRuntime: RuntimeEnv,
+      riskAccepted: boolean,
+      setupAgentName?: string,
+    ) => {
       const { runConversationalOnboarding } = await import("./onboard-interactive.js");
       await runConversationalOnboarding(
         {
           workspace: setupWorkspace,
+          ...(setupAgentName ? { agentName: setupAgentName } : {}),
           ...(riskAccepted ? { acceptRisk: true } : {}),
         },
         chatRuntime,
       );
     });
-  await runChat(workspace, runtime, acceptRisk);
+  await runChat(workspace, runtime, acceptRisk, agentName);
 }
 
 async function persistRiskAcknowledgement(config: OpenClawConfig): Promise<string | undefined> {
@@ -170,6 +184,8 @@ async function runGuidedOnboardingFlow(
   if (!onboardingSecurityAcknowledgedAt) {
     throw new Error("Local onboarding requires its persisted security acknowledgement.");
   }
+  const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(snapshot);
+  const firstAgent = await promptFirstOnboardingAgent(hasAuthoredRoster, opts.agentName, prompter);
 
   // Reset removes config but keeps SQLite. Only the original, pre-acknowledgement
   // snapshot distinguishes a new installation from an interrupted previous run.
@@ -494,7 +510,7 @@ async function runGuidedOnboardingFlow(
         (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
       await runMemoryImport({ config: persistedConfig, prompter, runtime });
     }
-    return { workspace, next: "chat" };
+    return { workspace, next: "chat", ...(firstAgent ? { agentName: firstAgent.name } : {}) };
   }
 
   // Setup apply installs and restarts the machine-level Gateway service.
@@ -531,6 +547,17 @@ async function runGuidedOnboardingFlow(
         t("wizard.setup.workspaceConflictTitle"),
       );
     }
+    if (firstAgent) {
+      const { ensureOnboardingAgent } = await import("./onboard-agent.js");
+      const created = await ensureOnboardingAgent({
+        config: persistedConfig,
+        workspace: appliedWorkspace,
+        baseConfig: persistedConfig,
+        firstAgent,
+      });
+      persistedConfig = created.config;
+      await showSessionMigrationWarnings(prompter, created.sessionMigrationWarnings);
+    }
   } else {
     // Announced default: apply the same setup plan the conversational "yes"
     // would, then hand off to the hatch instead of parking in the OpenClaw chat.
@@ -549,19 +576,12 @@ async function runGuidedOnboardingFlow(
         }
         assertLocalSetupOwner(ownerSnapshot.sourceConfig ?? ownerSnapshot.config);
       }
-      const { ensureOnboardingAgent } = await import("./onboard-agent.js");
-      // Only fresh-file creation is a side effect here. Pre-roster authored persistence
-      // remains doctor-owned; the injected main roster is intentionally not flattened.
-      await ensureOnboardingAgent({
-        config: existingConfig,
-        workspace,
-        baseConfig: existingConfig,
-      });
       const applySetup =
         deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
       const applied = await withConsoleSubsystemsSuppressed(() =>
         applySetup({
           workspace,
+          ...(firstAgent ? { firstAgent } : {}),
           ...(allowWorkspaceChange ? { allowWorkspaceChange: true } : {}),
           ...(resumingSetup ? { resume: true } : {}),
           ...(localSetup?.status === "pending"
@@ -604,7 +624,7 @@ async function runGuidedOnboardingFlow(
         }),
         t("wizard.guided.aiAccessTitle"),
       );
-      return { workspace, next: "chat" };
+      return { workspace, next: "chat", ...(firstAgent ? { agentName: firstAgent.name } : {}) };
     }
   }
   if (wantsDiscovery) {
@@ -731,5 +751,5 @@ export async function runGuidedOnboarding(
   }
   // Chat handoff: legacy remote-gateway flow, or local recovery after a
   // failed setup apply — the conversational chat can finish interactively.
-  await openSystemAgentChat(deps, handoff.workspace, runtime, true);
+  await openSystemAgentChat(deps, handoff.workspace, runtime, true, handoff.agentName);
 }

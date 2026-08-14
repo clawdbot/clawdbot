@@ -78,6 +78,15 @@ Full repo-backed scenario suite:
 pnpm openclaw qa suite
 ```
 
+The isolated `channel-participant-identity-inspection` scenario enables
+execution identity before startup, exercises DM, group, senderless, same- and
+mixed-participant collect paths, proves an ingress rejection creates no audit
+rows, and compares JSON plus human CLI inspection across Gateway restart:
+
+```bash
+pnpm openclaw qa suite --scenario channel-participant-identity-inspection
+```
+
 Runs scenarios in parallel against the QA gateway lane. See [QA overview](/concepts/qa-e2e-automation) for scenarios, profiles, and provider modes.
 
 Docker-backed QA site (gateway + QA Lab debugger UI in one stack):

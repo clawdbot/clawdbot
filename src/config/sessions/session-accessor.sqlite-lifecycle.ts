@@ -51,6 +51,7 @@ import {
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
+  getSessionKysely,
   resolveSqliteReadScope,
   resolveSqliteStoreScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -299,6 +300,9 @@ async function deleteSqliteSessionEntryLifecycleLocked(
     if (!current) {
       return null;
     }
+    if (!shouldDeleteSqliteSessionEntryLifecycle(database, current.entry, params)) {
+      return null;
+    }
     if (current.entry.modelSelectionLocked === true && !allowLockedEntryRemoval) {
       throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
     }
@@ -379,6 +383,9 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         readLifecycleTargetSnapshot(database, params.target),
         "delete session entry",
       );
+      if (!shouldDeleteSqliteSessionEntryLifecycle(database, prepared.current.entry, params)) {
+        return null;
+      }
       const referencedAfterDelete = readReferencedSessionIdsAfterTargetMutation(
         database,
         params.target,
@@ -416,6 +423,11 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           readLifecycleTargetSnapshot(transactionDb, params.target),
           "delete session entry",
         );
+        if (
+          !shouldDeleteSqliteSessionEntryLifecycle(transactionDb, prepared.current.entry, params)
+        ) {
+          return;
+        }
         const fenceAtDelete = collectAdmissionProtectedSessionIds({
           database: transactionDb,
           storePath: params.storePath,
@@ -452,7 +464,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         "delete session entry",
       );
       const transactionEntry = transactionSnapshot.primary?.entry;
-      if (!shouldDeleteSqliteSessionEntryLifecycle(transactionEntry, params)) {
+      if (!shouldDeleteSqliteSessionEntryLifecycle(transactionDb, transactionEntry, params)) {
         return;
       }
       const archivedTranscripts = deleteMaterializedSessionStatePlans(
@@ -553,6 +565,7 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
 /** Applies prepared full-row replacements in one validated SQLite transaction. */
 
 function shouldDeleteSqliteSessionEntryLifecycle(
+  database: OpenClawAgentDatabase,
   entry: SessionEntry | undefined,
   params: DeleteSessionEntryLifecycleParams,
 ): entry is SessionEntry {
@@ -581,6 +594,24 @@ function shouldDeleteSqliteSessionEntryLifecycle(
   }
   if (params.expectedUpdatedAt !== undefined && entry.updatedAt !== params.expectedUpdatedAt) {
     return false;
+  }
+  if (params.expectedTranscript) {
+    const expectedTranscript = params.expectedTranscript;
+    const rows = executeSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("transcript_events")
+        .select("event_json")
+        .where("session_id", "=", expectedTranscript.sessionId)
+        .orderBy("seq", "asc"),
+    ).rows;
+    if (
+      entry.sessionId !== expectedTranscript.sessionId ||
+      rows.length !== expectedTranscript.eventJson.length ||
+      rows.some((row, index) => row.event_json !== expectedTranscript.eventJson[index])
+    ) {
+      return false;
+    }
   }
   return true;
 }

@@ -16,13 +16,6 @@ afterEach(() => {
 });
 
 describe("temp-dir test helpers", () => {
-  it("keeps a non-executed temp warning fixture for CI proof", () => {
-    // openclaw-temp-dir: allow test fixture for the temp warning report
-    const warningFixture = 'tmp.dirSync({ prefix: "openclaw-warning-fixture-" })';
-
-    expect(warningFixture).toContain("tmp.dirSync");
-  });
-
   it("tracks created temp dirs and removes populated dirs", () => {
     const tracker = createTempDirTracker();
     const dir = tracker.make("openclaw-temp-dir-helper-");

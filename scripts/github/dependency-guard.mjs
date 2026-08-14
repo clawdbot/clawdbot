@@ -792,27 +792,6 @@ async function main() {
     return;
   }
 
-  const dependencyGraphChanges = await api.paginate(
-    `/repos/${owner}/${repo}/dependency-graph/compare/${pullRequest.base?.sha}...${pullRequest.head?.sha}`,
-  );
-  if (isRemovalOnlyDependencyGraphChange(dependencyGraphChanges)) {
-    if (mode === "detect") {
-      await setOutput("autoscrub", "false");
-    }
-    await upsertComment(
-      existingGuardComment,
-      renderRemovalOnlyDependencyComment({
-        dependencyGraphChanges,
-        headSha: pullRequest.head?.sha,
-      }),
-    );
-    await writeSummary(
-      "## Dependency Guard\n\nDependency removals are informational and do not require security approval.",
-    );
-    console.log("Dependency removals detected; guard is informational.");
-    return;
-  }
-
   const { isSecurityMember, isRepositoryAdmin } = createGuardApproverChecks({
     api,
     owner,
@@ -864,6 +843,27 @@ async function main() {
       ].join("\n"),
     );
     console.log("Dependency graph change noted for trusted actor; guard is informational.");
+    return;
+  }
+
+  const dependencyGraphChanges = await api.paginate(
+    `/repos/${owner}/${repo}/dependency-graph/compare/${pullRequest.base?.sha}...${pullRequest.head?.sha}`,
+  );
+  if (isRemovalOnlyDependencyGraphChange(dependencyGraphChanges)) {
+    if (mode === "detect") {
+      await setOutput("autoscrub", "false");
+    }
+    await upsertComment(
+      existingGuardComment,
+      renderRemovalOnlyDependencyComment({
+        dependencyGraphChanges,
+        headSha: pullRequest.head?.sha,
+      }),
+    );
+    await writeSummary(
+      "## Dependency Guard\n\nDependency removals are informational and do not require security approval.",
+    );
+    console.log("Dependency removals detected; guard is informational.");
     return;
   }
 

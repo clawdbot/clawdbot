@@ -12,7 +12,6 @@ import {
   applyPersistentOperation,
   assertConfigWriteDoesNotBypassInferenceVerification,
   createNoExitRuntime,
-  executePluginInstall,
   executeSetDefaultModel,
   executeSetup,
   formatChannelDocsUrl,
@@ -30,6 +29,7 @@ import {
   type ExecuteOptions,
 } from "./operations-execution-helpers.js";
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
+import { executePluginInstall } from "./plugin-install.js";
 
 const loadOverviewModule = async () => await import("./overview.js");
 

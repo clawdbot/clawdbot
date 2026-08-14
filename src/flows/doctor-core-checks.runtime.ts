@@ -1101,6 +1101,8 @@ export async function collectRuntimeToolSchemaFindings(
           config: cfg,
           agentId,
           agentDir: resolveAgentDir(cfg, agentId),
+          readOnly: true,
+          providerDiscoveryProviderIds: [],
         });
         const modelRef = resolveDefaultModelForAgent({
           cfg,

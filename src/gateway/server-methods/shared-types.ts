@@ -52,7 +52,10 @@ import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
-import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
+import type {
+  WorkerPlacementDiskSpaceReader,
+  WorkerSessionPlacementReader,
+} from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
 import type {
   WorkerEnvironmentServiceContract,
@@ -69,6 +72,11 @@ import type { TrustedSessionCreation } from "./session-creation-provenance.js";
  * Shared gateway request types used by every server-method module.
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+/** Trusted in-process spawn control plane that already owns this run's task row.
+    Gateway CLI tracking only covers runs nobody else records, so a marked run
+    must never get a second row. */
+export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
@@ -110,7 +118,7 @@ export type GatewayClient = {
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
-    agentRunTracking?: "plugin_subagent";
+    agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-owned tool suppression for a plugin-created durable subagent run. */
     pluginSubagentDisableTools?: true;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
@@ -352,6 +360,8 @@ type GatewayResidentBridgeContext = {
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService>;
+  /** Process-local health samples fenced to the exact active placement owner. */
+  workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */

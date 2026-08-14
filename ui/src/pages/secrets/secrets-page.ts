@@ -31,7 +31,12 @@ class SecretsPage extends OpenClawLightDomElement {
 
   @state() private store = createInitialSecretsStoreState();
   @state() private dialogMode: SecretsDialogMode = null;
-  @state() private draft: SecretsStoreDraft = { name: "", value: "", kind: "env" };
+  @state() private draft: SecretsStoreDraft = {
+    name: "",
+    value: "",
+    kind: "env",
+    allowedHosts: "",
+  };
   @state() private secretKindOverridden = false;
   @state() private bulkOpen = false;
   @state() private bulkRaw = "";
@@ -113,7 +118,7 @@ class SecretsPage extends OpenClawLightDomElement {
     this.notice = null;
     this.formError = null;
     this.secretKindOverridden = false;
-    this.draft = { name: "", value: "", kind: "env" };
+    this.draft = { name: "", value: "", kind: "env", allowedHosts: "" };
     this.dialogMode = "add";
   }
 
@@ -128,6 +133,7 @@ class SecretsPage extends OpenClawLightDomElement {
       name: entry.name,
       value: entry.kind === "env" ? entry.value : "",
       kind: entry.kind,
+      allowedHosts: entry.kind === "secret" ? (entry.allowedHosts ?? []).join("\n") : "",
     };
     this.dialogMode = "edit";
   }
@@ -304,6 +310,7 @@ class SecretsPage extends OpenClawLightDomElement {
       onCloseDialog: () => this.closeDialog(),
       onDraftNameChange: (name) => this.changeDraftName(name),
       onDraftValueChange: (value) => this.patchDraft({ value }),
+      onDraftAllowedHostsChange: (allowedHosts) => this.patchDraft({ allowedHosts }),
       onDraftSecretChange: (secret) => {
         this.secretKindOverridden = true;
         this.patchDraft({ kind: secret ? "secret" : "env" });

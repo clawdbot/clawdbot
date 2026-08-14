@@ -116,7 +116,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
     const compact = createNodeTestShardBundles({
       includeReleaseOnlyPluginShards: false,
-      compact: true,
+      compactMode: "push",
     });
 
     const expectWriter = (plan: Array<Pick<NodeTestShard, "groups" | "shardName">>) => {
@@ -229,13 +229,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ).toBe(true);
     expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
     expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
-    expect(bundled.slice(0, 6).map((shard) => shard.shardName)).toEqual([
+    expect(bundled.slice(0, 7).map((shard) => shard.shardName)).toEqual([
       "core-unit-fast-1",
       "core-unit-fast-2",
       "core-tooling-1",
       "core-tooling-2",
       "core-tooling-3",
       "core-tooling-4",
+      "core-tooling-5",
     ]);
     expect(bundled.find((shard) => shard.shardName === "core-unit-fast-1")?.runner).toBe(
       DEFAULT_NODE_TEST_RUNNER,
@@ -268,16 +269,58 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
   });
 
-  it("compacts pull-request shards into isolated groups inside fewer jobs", () => {
+  it("keeps push compacts lean while preserving pull-request fallback coverage", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const compact = createNodeTestShardBundles({
       includeReleaseOnlyPluginShards: false,
-      compact: true,
+      compactMode: "push",
     });
+    const pullRequestCompact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "pull-request",
+    });
+    const githubCompact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "push",
+      runnerBackend: "github",
+    });
+    const githubPullRequestCompact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "pull-request",
+      runnerBackend: "github",
+    });
+    const hybridCompact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "push",
+      runnerBackend: "hybrid",
+    });
+    const hybridPullRequestCompact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+    });
+    const pushExcludedShardNames = new Set([
+      "core-runtime-tui-pty",
+      "core-tooling-1",
+      "core-tooling-2",
+      "core-tooling-3",
+      "core-tooling-4",
+      "core-tooling-5",
+      "core-tooling-isolated",
+    ]);
 
-    // Rebalancing may change ownership, but the compact plan stays within the
-    // CI workflow's 28-worker cap.
-    expect(compact).toHaveLength(28);
+    // Pushes retain three lanes of headroom under the workflow's 28-worker cap.
+    expect(compact).toHaveLength(25);
+    expect(pullRequestCompact).toHaveLength(32);
+    expect(githubCompact).toHaveLength(64);
+    expect(githubPullRequestCompact).toHaveLength(71);
+    expect(hybridCompact).toEqual(githubCompact);
+    expect(hybridPullRequestCompact).toEqual(githubPullRequestCompact);
+    expect(githubPullRequestCompact.length).toBeLessThanOrEqual(96);
+    expect(Math.max(...githubCompact.map((shard) => shard.predictedSeconds ?? Infinity))).toBe(209);
+    expect(
+      Math.max(...githubPullRequestCompact.map((shard) => shard.predictedSeconds ?? Infinity)),
+    ).toBe(209);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
@@ -296,9 +339,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "core-runtime-media-ui",
       "core-unit-src-security",
     ]) {
-      expect(jobOf(`${prefix}-1`)).toBeGreaterThanOrEqual(0);
-      expect(jobOf(`${prefix}-2`)).toBeGreaterThanOrEqual(0);
-      expect(jobOf(`${prefix}-1`)).not.toBe(jobOf(`${prefix}-2`));
+      const jobs = [1, 2, 3].map((stripe) => jobOf(`${prefix}-${stripe}`));
+      expect(jobs.every((job) => job >= 0)).toBe(true);
+      expect(new Set(jobs).size).toBe(jobs.length);
     }
     // Cheap stripes may legally co-locate in one bin; only existence matters.
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
@@ -306,8 +349,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Spawn/signal-timing suites never mix with regular groups, and every
     // compact bin runs serially: overlapping Vitest runs flake timing-
     // sensitive tests on both runner classes.
-    const exclusiveGroupRe = /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$/u;
-    for (const shard of compact) {
+    const exclusiveGroupRe =
+      /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$/u;
+    for (const shard of [...pullRequestCompact, ...githubPullRequestCompact]) {
       const exclusiveCount = shard.groups.filter((group) =>
         exclusiveGroupRe.test(group.shard_name),
       ).length;
@@ -317,10 +361,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(shard.planConcurrency).toBe(1);
     }
     expect(
-      compact.filter((shard) =>
+      pullRequestCompact.filter((shard) =>
         shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
       ).length,
     ).toBeGreaterThan(0);
+    expect(
+      compact.some((shard) =>
+        shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
+      ),
+    ).toBe(false);
     const expectedEmbeddedAgentGroupNames = [
       "agentic-agents-embedded-base",
       "agentic-agents-embedded-incomplete-turn",
@@ -328,18 +377,68 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "agentic-agents-embedded-run",
     ];
     const compactGroups = compact.flatMap((shard) => shard.groups);
+    const pullRequestCompactGroups = pullRequestCompact.flatMap((shard) => shard.groups);
     const expectedGroupNames = base.flatMap((shard) =>
       shard.shardName === "agentic-agents-embedded"
         ? expectedEmbeddedAgentGroupNames
         : [shard.shardName],
     );
     expect(compactGroups.map((group) => group.shard_name).toSorted()).toEqual(
+      expectedGroupNames.filter((name) => !pushExcludedShardNames.has(name)).toSorted(),
+    );
+    expect(pullRequestCompactGroups.map((group) => group.shard_name).toSorted()).toEqual(
       expectedGroupNames.toSorted(),
     );
-    // Both plans carry the same split stripes now; compact bundling must also
-    // preserve include-pattern coverage exactly.
+    const hostedOwnerNames = (plan: typeof githubCompact) =>
+      new Set(
+        plan.flatMap((shard) =>
+          shard.groups.map((group) => group.shard_name.replace(/-hosted-\d+$/u, "")),
+        ),
+      );
+    expect(hostedOwnerNames(githubCompact)).toEqual(
+      new Set(compactGroups.map((group) => group.shard_name)),
+    );
+    expect(hostedOwnerNames(githubPullRequestCompact)).toEqual(
+      new Set(pullRequestCompactGroups.map((group) => group.shard_name)),
+    );
+    const groupsWith = (plan: typeof githubCompact, shardName: string) =>
+      plan.find((shard) => shard.groups.some((group) => group.shard_name === shardName))?.groups;
+    const hostedAgentSupportGroups = githubCompact
+      .flatMap((shard) => shard.groups)
+      .filter((group) => group.shard_name.startsWith("agentic-agents-support-hosted-"));
+    expect(hostedAgentSupportGroups).toHaveLength(2);
+    expect(
+      hostedAgentSupportGroups
+        .flatMap((group) => group.includePatterns ?? [])
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(
+      globSync(agentVitestProjectOwners.support.include, {
+        exclude: agentVitestProjectOwners.support.exclude,
+      })
+        .map(toRepoPath)
+        .toSorted((left, right) => left.localeCompare(right)),
+    );
+    expect(
+      groupsWith(compact, "agentic-agents-support")?.map((group) => group.shard_name),
+    ).toContain("agentic-agents-embedded-overflow-compaction");
+    for (const shardName of pushExcludedShardNames) {
+      expect(compactGroups.some((group) => group.shard_name === shardName)).toBe(false);
+      expect(pullRequestCompactGroups.some((group) => group.shard_name === shardName)).toBe(true);
+    }
+    // Pushes omit only the explicit low-signal families; PR fallback retains
+    // their include-pattern coverage when special setup prevents targeting.
     expect(
       compactGroups
+        .flatMap((group) => group.includePatterns ?? [])
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(
+      base
+        .filter((shard) => !pushExcludedShardNames.has(shard.shardName))
+        .flatMap((shard) => shard.includePatterns ?? [])
+        .toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(
+      pullRequestCompactGroups
         .flatMap((group) => group.includePatterns ?? [])
         .toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(
@@ -349,7 +448,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       true,
     );
     expect(
-      compact
+      pullRequestCompact
         .flatMap((shard) => shard.groups)
         .find((group) => group.shard_name === "core-runtime-tui-pty")?.env,
     ).toEqual({
@@ -366,7 +465,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
     for (const prefix of ["agentic-gateway-core", "core-runtime-media-ui"]) {
-      for (const suffix of ["1", "2"]) {
+      for (const suffix of ["1", "2", "3"]) {
         expect(
           compact
             .flatMap((shard) => shard.groups)
@@ -400,9 +499,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       (shard) => !shard.requiresDist && shard.checkName.startsWith("checks-node-compact-small-"),
     );
     const distJobs = compact.filter((shard) => shard.requiresDist);
-    expect(largeJobs).toHaveLength(9);
-    expect(smallJobs).toHaveLength(17);
-    expect(distJobs).toHaveLength(2);
+    expect(largeJobs).toHaveLength(12);
+    expect(smallJobs).toHaveLength(12);
+    expect(distJobs).toHaveLength(1);
     const regularSmallJobs = smallJobs.filter((shard) =>
       shard.groups.every((group) => !exclusiveGroupRe.test(group.shard_name)),
     );
@@ -422,19 +521,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .filter((shard) => !routed8VcpuCheckNames.includes(shard.checkName))
         .every((shard) => shard.runner === BUNDLED_NODE_TEST_RUNNER),
     ).toBe(true);
-    // The refreshed hosted estimates give every regular bin one known tail
-    // anchor. Stale hints paired two slow groups in each runner class.
-    const largeTailAnchors = [
-      "core-unit-src-security-1",
-      "core-unit-src-security-2",
-      "agentic-gateway-core-1",
-      "agentic-gateway-core-2",
-      "core-runtime-media-ui-1",
-      "core-runtime-media-ui-2",
-      "agentic-agents-support",
-      "agentic-gateway-methods",
-      "core-unit-fast-isolated",
-    ];
+    // The refreshed hosted estimates give every regular small bin one known
+    // tail anchor. Stale hints paired two slow groups in each bin.
     const smallTailAnchors = [
       "agentic-control-plane-auth-node",
       "agentic-control-plane-agent-chat",
@@ -450,12 +538,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "auto-reply-reply-agent-runner",
     ];
     expect(
-      largeJobs.map(
-        (shard) =>
-          shard.groups.filter((group) => largeTailAnchors.includes(group.shard_name)).length,
-      ),
-    ).toEqual(Array.from({ length: largeTailAnchors.length }, () => 1));
-    expect(
       regularSmallJobs.map(
         (shard) =>
           shard.groups.filter((group) => smallTailAnchors.includes(group.shard_name)).length,
@@ -464,7 +546,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(compact).toEqual(
       createNodeTestShardBundles({
         includeReleaseOnlyPluginShards: false,
-        compact: true,
+        compactMode: "push",
       }),
     );
     const embeddedAgentGroups = compact
@@ -498,7 +580,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compact.some((shard) => shard.groups.some((group) => group.shard_name === "core-tooling")),
     ).toBe(false);
     expect(
-      compact
+      pullRequestCompact
         .flatMap((shard) => shard.groups)
         .find((group) => group.shard_name === "core-tooling-isolated"),
     ).toEqual(
@@ -512,15 +594,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // The docker helper config rides with the isolated shard on both plans;
     // no standalone core-tooling-docker group remains.
     expect(
-      compact
+      pullRequestCompact
         .flatMap((shard) => shard.groups)
         .some((group) => group.shard_name === "core-tooling-docker"),
     ).toBe(false);
-    const toolingGroups = compact
+    const toolingGroups = pullRequestCompact
       .flatMap((shard) => shard.groups)
       .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
     const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
-    expect(toolingGroups).toHaveLength(4);
+    expect(toolingGroups).toHaveLength(5);
     expect(
       toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
     ).toBe(true);
@@ -567,6 +649,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shardName: "core-unit-src-security-2",
       },
       {
+        configs: ["test/vitest/vitest.unit-src.config.ts"],
+        requiresDist: false,
+        shardName: "core-unit-src-security-3",
+      },
+      {
         configs: ["test/vitest/vitest.unit-security.config.ts"],
         requiresDist: false,
         shardName: "core-unit-src-security-support",
@@ -579,7 +666,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ]);
   });
 
-  it("partitions each giant compact group across two deterministic stripes", () => {
+  it("partitions each giant compact group across three deterministic stripes", () => {
     const env = { ...process.env, OPENCLAW_VITEST_INCLUDE_FILE: undefined };
     const cases = [
       {
@@ -629,7 +716,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap((config) => listMatchedTestFiles(config))
         .toSorted((a, b) => a.localeCompare(b));
 
-      expect(stripes.map((stripe) => stripe.shardName)).toEqual([`${prefix}-1`, `${prefix}-2`]);
+      expect(stripes.map((stripe) => stripe.shardName)).toEqual([
+        `${prefix}-1`,
+        `${prefix}-2`,
+        `${prefix}-3`,
+      ]);
       expect(stripes.every((stripe) => (stripe.includePatterns?.length ?? 0) > 0)).toBe(true);
       expect(new Set(actual).size).toBe(actual.length);
       expect(actual).toEqual(expected);
@@ -681,7 +772,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
 
     const stripes = toolingShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
-    expect(stripes).toHaveLength(4);
+    expect(stripes).toHaveLength(5);
     for (const stripe of stripes) {
       expect(stripe.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
       expect(stripe.requiresDist).toBe(false);
@@ -926,6 +1017,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "core-runtime-media-ui-2",
+      },
+      {
+        configs: ["test/vitest/vitest.ui.config.ts"],
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "core-runtime-media-ui-3",
       },
       {
         configs: [
@@ -1312,7 +1409,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       runner: DEFAULT_NODE_TEST_RUNNER,
     });
     expect(gatewayCoreShards).toEqual(
-      [1, 2].map((stripe) => ({
+      [1, 2, 3].map((stripe) => ({
         checkName: `checks-node-agentic-gateway-core-${stripe}`,
         shardName: `agentic-gateway-core-${stripe}`,
         configs: [
@@ -1410,6 +1507,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(shardNames).not.toContain("agentic-plugins");
     expect(shardNames).toContain("agentic-gateway-core-1");
     expect(shardNames).toContain("agentic-gateway-core-2");
+    expect(shardNames).toContain("agentic-gateway-core-3");
     expect(shardNames).toContain("agentic-gateway-methods");
     expect(shardNames).toContain("agentic-plugin-sdk");
   });

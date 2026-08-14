@@ -364,11 +364,24 @@ describe("gateway role enforcement", () => {
       expect(invokeRes.ok).toBe(false);
       expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
 
-      nodeClient = await connectNodeClientWithPairing({
+      nodeClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-role-enforcement",
         displayName: "node-role-enforcement",
+      });
+
+      const unsupportedEvent = await nodeClient.request<{
+        ok: boolean;
+        event?: string;
+        handled?: boolean;
+        reason?: string;
+      }>("node.event", { event: "test.unsupported", payload: { ok: true } });
+      expect(unsupportedEvent).toEqual({
+        ok: true,
+        event: "test.unsupported",
+        handled: false,
+        reason: "unsupported_event",
       });
 
       const binsPayload = await nodeClient.request("skills.bins", {});
