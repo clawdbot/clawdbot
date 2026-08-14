@@ -6,7 +6,7 @@
     <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पिछला %1$s"</string>
     <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अगला %1$s"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नियंत्रण"</string>
-    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलें"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"वॉच ऑडियो विफल रहा"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलकर लिखें"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"लाइव"</string>
@@ -31,7 +31,7 @@
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कनेक्ट हो रहा है"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सोच रहा है"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टाइप कर रहा है"</string>
-    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"भेज रहा है"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"भेजा जा रहा है"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट काम कर रहा है"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"त्रुटि"</string>
     <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"तैयार"</string>
@@ -60,7 +60,7 @@
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट, सत्र और चैट पढ़े जा रहे हैं"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन तैयार है"</string>
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway कनेक्ट है"</string>
-    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ऑफ़लाइन है"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ऑफ़लाइन"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जोड़े गए फ़ोन पर OpenClaw में Gateway को फिर से कनेक्ट करें।"</string>
     <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन पर OpenClaw खोलें"</string>
     <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"घड़ी कभी भी स्वयं Gateway को शुरू या प्रमाणित नहीं करती है।"</string>
@@ -74,7 +74,7 @@
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अपडेट आवश्यक है"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन और घड़ी, दोनों पर OpenClaw अपडेट करें।"</string>
     <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"रीफ़्रेश करें"</string>
-    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फिर से प्रयास करें"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पुनः प्रयास करें"</string>
     <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw के जवाब"</string>
     <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब दें"</string>
     <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw का जवाब"</string>

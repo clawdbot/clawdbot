@@ -5102,6 +5102,7 @@ export const en: TranslationMap = {
       showMore: "Show more",
       unknownDate: "Unknown date",
       toolSender: "Tool",
+      fullContentLoadExhausted: "Could not load the full message.",
       voiceNote: "Voice note",
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",

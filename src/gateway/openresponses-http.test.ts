@@ -29,6 +29,21 @@ import {
   testState,
 } from "./test-helpers.js";
 
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  );
+  fetchWithSsrFGuardMock.mockImplementation(actual.fetchWithSsrFGuard);
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+  };
+});
+
 installGatewayTestHooks({ scope: "suite" });
 
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
@@ -71,6 +86,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   openResponsesTesting.resetResponseSessionState();
+  fetchWithSsrFGuardMock.mockClear();
 });
 
 async function startServer(port: number, opts?: { openResponsesEnabled?: boolean }) {
@@ -1261,6 +1277,33 @@ describe("OpenResponses HTTP API (e2e)", () => {
       testState.agentsConfig = undefined;
       resetConfigRuntimeState();
     }
+  });
+
+  it("dispatches printable URL input_file text when Content-Type is absent", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(Buffer.from("headerless URL file text"), { status: 200 }),
+      release,
+      finalUrl: "https://example.com/notes",
+    });
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(enabledPort, {
+      model: "openclaw",
+      input: buildUrlInputMessage({
+        kind: "input_file",
+        url: "https://example.com/notes",
+      }),
+    });
+    const body = await res.text();
+
+    expect(res.status, body).toBe(200);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const prompt = (firstAgentOpts() as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
+    expect(prompt).toContain("headerless URL file text");
+    expect(prompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
   });
 
   it("streams OpenResponses SSE events", async () => {

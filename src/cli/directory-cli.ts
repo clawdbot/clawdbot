@@ -185,9 +185,22 @@ export function registerDirectoryCli(program: Command) {
     printDirectoryList({ title: params.title, emptyMessage: params.emptyMessage, entries: result });
   };
 
+  const runDirectoryAction = async (opts: { json?: unknown }, action: () => Promise<void>) => {
+    try {
+      await action();
+    } catch (err) {
+      if (opts.json) {
+        defaultRuntime.writeJson({ error: String(err) });
+      } else {
+        defaultRuntime.error(danger(String(err)));
+      }
+      defaultRuntime.exit(1);
+    }
+  };
+
   withChannel(directory.command("self").description("Show the current account user")).action(
-    async (opts) => {
-      try {
+    (opts) =>
+      runDirectoryAction(opts, async () => {
         const { cfg, channelId, accountId, plugin } = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
@@ -217,19 +230,15 @@ export function registerDirectoryCli(program: Command) {
             rows: buildRows([result]),
           }).trimEnd(),
         );
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    },
+      }),
   );
 
   const peers = directory.command("peers").description("Peer directory (contacts/users)");
   withChannel(peers.command("list").description("List peers"))
     .option("--query <text>", "Optional search query")
     .option("--limit <n>", "Limit results")
-    .action(async (opts) => {
-      try {
+    .action((opts) =>
+      runDirectoryAction(opts, async () => {
         await runDirectoryList({
           opts,
           action: "listPeers",
@@ -237,18 +246,15 @@ export function registerDirectoryCli(program: Command) {
           title: "Peers",
           emptyMessage: "No peers found.",
         });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
+      }),
+    );
 
   const groups = directory.command("groups").description("Group directory");
   withChannel(groups.command("list").description("List groups"))
     .option("--query <text>", "Optional search query")
     .option("--limit <n>", "Limit results")
-    .action(async (opts) => {
-      try {
+    .action((opts) =>
+      runDirectoryAction(opts, async () => {
         await runDirectoryList({
           opts,
           action: "listGroups",
@@ -256,11 +262,8 @@ export function registerDirectoryCli(program: Command) {
           title: "Groups",
           emptyMessage: "No groups found.",
         });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
+      }),
+    );
 
   withChannel(
     groups
@@ -269,8 +272,8 @@ export function registerDirectoryCli(program: Command) {
       .requiredOption("--group-id <id>", "Group id"),
   )
     .option("--limit <n>", "Limit results")
-    .action(async (opts) => {
-      try {
+    .action((opts) =>
+      runDirectoryAction(opts, async () => {
         const limit = parseLimit(opts.limit);
         const { cfg, channelId, accountId, plugin } = await resolve({
           channel: opts.channel as string | undefined,
@@ -300,9 +303,6 @@ export function registerDirectoryCli(program: Command) {
           emptyMessage: "No group members found.",
           entries: result,
         });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
+      }),
+    );
 }
