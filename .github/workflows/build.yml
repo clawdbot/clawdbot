@@ -1,0 +1,209 @@
+name: Build → save → scp → load → redeploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '构建目标：openclaw / hermes / both'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - openclaw
+          - hermes
+          - both
+      version:
+        description: '镜像版本标签（默认 stable，与 compose 对齐）'
+        required: false
+        default: 'stable'
+      compose_tag:
+        description: 'compose 里引用的 openclaw tag（retag 目标）'
+        required: false
+        default: 'stable'
+      compose_dir:
+        description: 'WSL 中 docker-compose 所在目录'
+        required: false
+        default: '/home/tutu/OpenClaw_Genesis'
+      compose_file:
+        description: 'compose 文件名（-f 指定）'
+        required: false
+        default: 'docker-compose-v9.2.yml'
+      autoredeploy:
+        description: 'load 完成后自动 retag + compose up -d 重建容器'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+  push:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/build.yml'
+      - 'patches/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ship
+  cancel-in-progress: false
+
+jobs:
+  build-ship:
+    runs-on: self-hosted
+    timeout-minutes: 120
+    steps:
+      # ========== 0. 清理磁盘（仅 GitHub 云主机需要；自托管 runner 跳过，避免误删本机目录） ==========
+      - name: Free disk space
+        if: runner.environment == 'github-hosted'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Resolve inputs
+        id: inputs
+        run: |
+          echo "target=${{ github.event.inputs.target || 'both' }}" >> "$GITHUB_OUTPUT"
+          echo "version=${{ github.event.inputs.version || 'stable' }}" >> "$GITHUB_OUTPUT"
+          echo "compose_tag=${{ github.event.inputs.compose_tag || 'stable' }}" >> "$GITHUB_OUTPUT"
+          echo "compose_dir=${{ github.event.inputs.compose_dir || '/home/tutu/OpenClaw_Genesis' }}" >> "$GITHUB_OUTPUT"
+          echo "compose_file=${{ github.event.inputs.compose_file || 'docker-compose-v9.2.yml' }}" >> "$GITHUB_OUTPUT"
+          echo "autoredeploy=${{ github.event.inputs.autoredeploy || 'true' }}" >> "$GITHUB_OUTPUT"
+          echo "owner=${{ github.repository_owner }}" >> "$GITHUB_OUTPUT"
+
+      # ================= 1. OpenClaw =================
+      - name: Checkout OpenClaw source (official upstream)
+        if: steps.inputs.outputs.target == 'openclaw' || steps.inputs.outputs.target == 'both'
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          path: openclaw-src
+
+      # 对齐本地镜像行为：移除 --config.offline=true（离线模式会禁用远程 skill 下载）
+      - name: Patch OpenClaw Dockerfile
+        if: steps.inputs.outputs.target == 'openclaw' || steps.inputs.outputs.target == 'both'
+        run: |
+          sed -i 's/--config.offline=true//g' openclaw-src/Dockerfile
+          echo "patch applied to openclaw-src/Dockerfile"
+
+      - name: Build OpenClaw image
+        if: steps.inputs.outputs.target == 'openclaw' || steps.inputs.outputs.target == 'both'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./openclaw-src
+          file: ./openclaw-src/Dockerfile
+          load: true
+          tags: ghcr.io/${{ steps.inputs.outputs.owner }}/openclaw:${{ steps.inputs.outputs.version }}
+          build-args: NODE_OPTIONS=--max_old_space_size=4096
+
+      # ================= 2. Hermes =================
+      - name: Checkout Hermes source (official upstream)
+        if: steps.inputs.outputs.target == 'hermes' || steps.inputs.outputs.target == 'both'
+        uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: main
+          path: hermes-src
+
+      - name: Build Hermes image
+        if: steps.inputs.outputs.target == 'hermes' || steps.inputs.outputs.target == 'both'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./hermes-src
+          file: ./hermes-src/Dockerfile
+          load: true
+          tags: nousresearch/hermes-agent:latest
+
+      # ================= 3. docker save + 压缩 =================
+      - name: docker save + gzip
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          if [[ "${{ steps.inputs.outputs.target }}" == "openclaw" || "${{ steps.inputs.outputs.target }}" == "both" ]]; then
+            docker save "ghcr.io/${{ steps.inputs.outputs.owner }}/openclaw:${{ steps.inputs.outputs.version }}" \
+              | gzip -1 > "out/openclaw-${{ steps.inputs.outputs.version }}.tar.gz"
+          fi
+          if [[ "${{ steps.inputs.outputs.target }}" == "hermes" || "${{ steps.inputs.outputs.target }}" == "both" ]]; then
+            docker save "nousresearch/hermes-agent:latest" \
+              | gzip -1 > "out/hermes-agent-${{ steps.inputs.outputs.version }}.tar.gz"
+          fi
+          echo "=== 打包产物 ==="
+          ls -lah out/
+          du -sh out/
+
+      # ================= 4. scp 传输到 Windows =================
+      # 依赖仓库 Secrets（Settings → Secrets and variables → Actions）：
+      #   WINDOWS_HOST / WINDOWS_PORT / WINDOWS_USER / WINDOWS_PATH
+      # 认证方式：SSH 公钥（runner 私钥 /home/tutu/.ssh/id_ed25519 已配对 Windows
+      #   administrators_authorized_keys），不再使用密码认证。
+      - name: scp transfer to Windows host
+        run: |
+          set -euo pipefail
+          HOST="${{ secrets.WINDOWS_HOST }}"
+          PORT="${{ secrets.WINDOWS_PORT }}"; PORT="${PORT:-22}"
+          USER="${{ secrets.WINDOWS_USER }}"
+          DEST="${{ secrets.WINDOWS_PATH }}"
+
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$PORT" "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          echo ">>> scp $(ls out/*.tar.gz | wc -l) 个镜像包到 $USER@$HOST:$DEST ..."
+          scp -P "$PORT" -o StrictHostKeyChecking=accept-new \
+            out/*.tar.gz \
+            "$USER@$HOST:$DEST"
+          echo ">>> 传输完成"
+
+      # ================= 5. 远端 WSL docker load =================
+      # 流程：Windows OpenSSH → wsl -d Ubuntu-22.04 → docker load
+      - name: docker load on WSL (via Windows ssh)
+        run: |
+          set -euo pipefail
+          HOST="${{ secrets.WINDOWS_HOST }}"
+          PORT="${{ secrets.WINDOWS_PORT }}"; PORT="${PORT:-22}"
+          USER="${{ secrets.WINDOWS_USER }}"
+          # Windows 路径转 WSL 路径：C:\Users\huado\docker-images -> /mnt/c/Users/huado/docker-images
+          WSL_PATH=$(echo "${{ secrets.WINDOWS_PATH }}" | sed 's|\\|/|g; s|^C:|/mnt/c|; s|^D:|/mnt/d|')
+
+          ssh -p "$PORT" -o StrictHostKeyChecking=accept-new \
+            "$USER@$HOST" \
+            "wsl -d Ubuntu-22.04 -- bash -lc 'set -e; cd \"$WSL_PATH\"; for f in *.tar.gz; do echo \"== docker load \$f ==\"; docker load -i \"\$f\"; done'"
+          echo ">>> 远端 docker load 完成"
+
+      # ================= 5b. retag + compose up -d（自动收尾） =================
+      # 用 base64 传递远端脚本，彻底避开引号嵌套问题
+      - name: retag & compose up -d on WSL
+        if: steps.inputs.outputs.autoredeploy == 'true'
+        run: |
+          set -euo pipefail
+          HOST="${{ secrets.WINDOWS_HOST }}"
+          PORT="${{ secrets.WINDOWS_PORT }}"; PORT="${PORT:-22}"
+          USER="${{ secrets.WINDOWS_USER }}"
+          TARGET="${{ steps.inputs.outputs.target }}"
+          OWNER="${{ steps.inputs.outputs.owner }}"
+          VERSION="${{ steps.inputs.outputs.version }}"
+          COMPOSE_TAG="${{ steps.inputs.outputs.compose_tag }}"
+          COMPOSE_DIR="${{ steps.inputs.outputs.compose_dir }}"
+          COMPOSE_FILE="${{ steps.inputs.outputs.compose_file }}"
+
+          REMOTE_SCRIPT="set -e
+          if [ \"$TARGET\" = \"openclaw\" ] || [ \"$TARGET\" = \"both\" ]; then
+            echo '== retag openclaw =='
+            docker tag ghcr.io/$OWNER/openclaw:$VERSION ghcr.io/$OWNER/openclaw:$COMPOSE_TAG
+          fi
+          cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILE up -d
+          echo REDEPLOY_DONE"
+          B64=$(printf '%s' "$REMOTE_SCRIPT" | base64 -w0)
+
+          ssh -p "$PORT" -o StrictHostKeyChecking=accept-new \
+            "$USER@$HOST" \
+            "wsl -d Ubuntu-22.04 -- bash -lc 'echo $B64 | base64 -d | bash'"
+          echo ">>> retag + compose up -d 完成"
