@@ -110,6 +110,7 @@ export type SlackMonitorContext = {
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
+  typingIndicatorDelayMs: number;
   mediaMaxBytes: number;
 
   logger: ReturnType<typeof getChildLogger>;
@@ -205,6 +206,7 @@ export function createSlackMonitorContext(params: {
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
+  typingIndicatorDelayMs: number;
   mediaMaxBytes: number;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
@@ -546,6 +548,7 @@ export function createSlackMonitorContext(params: {
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
+    typingIndicatorDelayMs: params.typingIndicatorDelayMs,
     mediaMaxBytes: params.mediaMaxBytes,
     logger,
     shouldDropMismatchedSlackEvent,

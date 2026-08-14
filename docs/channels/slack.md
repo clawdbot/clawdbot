@@ -1584,6 +1584,7 @@ Resolution order:
 Notes:
 
 - Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
+- `typingIndicatorDelayMs` delays both the reaction and Slack's thread typing status. If the run finishes before the delay, no typing indicator appears. Set it at `channels.slack.typingIndicatorDelayMs` or `channels.slack.accounts.<accountId>.typingIndicatorDelayMs`.
 - The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
 ## Voice input
