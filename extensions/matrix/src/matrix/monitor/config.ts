@@ -424,7 +424,13 @@ async function resolveMatrixMonitorRoomsConfig(params: {
       unresolved.push(entry);
       continue;
     }
-    if (cleaned.startsWith("!") && cleaned.includes(":")) {
+    // Matrix room IDs always start with "!"; modern homeservers (e.g.
+    // Continuwuity) issue server-less IDs with no ":server" suffix. Exact IDs
+    // are matched verbatim for admission — no resolution, no server part
+    // needed — matching the group resolver, which accepts any "!"-prefixed
+    // target as an exact ID. Requiring ":" here silently dropped modern room
+    // IDs from the admission list (#122739).
+    if (cleaned.startsWith("!")) {
       if (!nextRooms[cleaned]) {
         nextRooms[cleaned] = roomConfig;
       }

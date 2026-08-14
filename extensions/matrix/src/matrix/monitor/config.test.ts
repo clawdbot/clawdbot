@@ -336,4 +336,32 @@ describe("resolveMatrixMonitorConfig", () => {
       inputs: ["Alice"],
     });
   });
+
+  it("admits server-less (modern) room IDs as exact keys without resolving them (#122739)", async () => {
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async () => []);
+
+    // Modern homeservers (e.g. Continuwuity) issue room IDs with no ":server"
+    // suffix. These are valid exact IDs — admission matches them verbatim and
+    // needs no resolution, exactly like the group resolver accepts any
+    // "!"-prefixed target as an exact ID.
+    const roomId = "!kyPsk-bXS5fEmaIzUxZHgs6QVNyVjlbTSjy_ZkN48Ss";
+    const result = await resolveMatrixMonitorConfig({
+      cfg: createConfig(),
+      accountId: "ops",
+      roomsConfig: {
+        [roomId]: { enabled: true },
+      },
+      runtime,
+      resolveTargets,
+    });
+
+    expect(result.roomsConfig).toEqual({
+      [roomId]: { enabled: true },
+    });
+    expect(resolveTargets).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "matrix rooms must be room IDs or aliases (example: !room:server or #alias:server). Unresolved entries are ignored.",
+    );
+  });
 });
