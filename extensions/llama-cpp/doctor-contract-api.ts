@@ -7,7 +7,7 @@ import {
 import {
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
-} from "./src/llama-server-install.js";
+} from "./src/llama-server-assets.js";
 
 const LEGACY_BASE_URL = "local://llama-cpp";
 const PROVIDER_PATH = "models.providers.llama-cpp";
