@@ -92,11 +92,9 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
       const detail = await readGoogleApiErrorDetail(response);
       throw new Error(`Google OAuth token request failed (${response.status}): ${detail}`);
     }
-    const payload = await readProviderJsonResponse<unknown>(
-      response,
-      "Google OAuth token",
-      { maxBytes: GOOGLE_OAUTH_TOKEN_JSON_MAX_BYTES },
-    );
+    const payload = await readProviderJsonResponse<unknown>(response, "Google OAuth token", {
+      maxBytes: GOOGLE_OAUTH_TOKEN_JSON_MAX_BYTES,
+    });
     if (!isRecord(payload)) {
       throw new Error("Google OAuth token response was malformed");
     }
@@ -109,7 +107,9 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
       accessToken,
       expiresAt: resolveGoogleMeetTokenExpiresAt(payload.expires_in),
       refreshToken:
-        typeof payload.refresh_token === "string" ? payload.refresh_token.trim() || undefined : undefined,
+        typeof payload.refresh_token === "string"
+          ? payload.refresh_token.trim() || undefined
+          : undefined,
       scope: typeof payload.scope === "string" ? payload.scope.trim() || undefined : undefined,
       tokenType:
         typeof payload.token_type === "string" ? payload.token_type.trim() || undefined : undefined,
