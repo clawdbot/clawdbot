@@ -19,11 +19,33 @@ type DiscordTranscriptsVoiceManager = NonNullable<
 
 const tempDirs = createTempDirTracker();
 
-function createTool(params: { accountId: string; config: OpenClawConfig; stateDir: string }) {
+const resolveAccessTarget = async (guildId: string, channelId: string) => ({
+  guild: { id: guildId, name: guildId },
+  channelName: channelId,
+  channelSlug: channelId,
+  scope: "channel" as const,
+});
+
+function createTool(params: {
+  accountId: string;
+  caller:
+    | { kind: "operator"; source: "channel-owner" | "local" | "scheduled" }
+    | {
+        kind: "channel";
+        channel: string;
+        accountId?: string;
+        senderId: string;
+        groupSpace?: string;
+        roleIds: readonly string[];
+      };
+  config: OpenClawConfig;
+  stateDir: string;
+}) {
   return createTranscriptsTool({
     agentId: "main",
     agentAccountId: params.accountId,
     agentChannel: "discord",
+    caller: params.caller,
     config: params.config,
     stateDir: params.stateDir,
   });
@@ -66,6 +88,8 @@ describe("transcripts tool with the registered Discord provider", () => {
       manager: {
         join: accountAJoin,
         leave: accountALeave,
+        resolveAccessTarget: ({ guildId, channelId }: { guildId: string; channelId: string }) =>
+          resolveAccessTarget(guildId, channelId),
       } as unknown as DiscordTranscriptsVoiceManager,
     });
     setDiscordTranscriptsVoiceManager({
@@ -73,21 +97,64 @@ describe("transcripts tool with the registered Discord provider", () => {
       manager: {
         join: accountBJoin,
         leave: accountBLeave,
+        resolveAccessTarget: ({ guildId, channelId }: { guildId: string; channelId: string }) =>
+          resolveAccessTarget(guildId, channelId),
       } as unknown as DiscordTranscriptsVoiceManager,
     });
     const config = {
       channels: {
         discord: {
           accounts: {
-            "account-a": { token: "token-a", voice: { enabled: true } },
+            "account-a": {
+              token: "token-a",
+              allowFrom: ["discord:allowed"],
+              voice: { enabled: true },
+            },
             "account-b": { token: "token-b", voice: { enabled: true } },
           },
         },
       },
       transcripts: { enabled: true },
     } satisfies OpenClawConfig;
-    const ownerTool = createTool({ accountId: "account-a", config, stateDir });
-    const otherAccountTool = createTool({ accountId: "account-b", config, stateDir });
+    const ownerTool = createTool({
+      accountId: "account-a",
+      caller: {
+        kind: "channel",
+        channel: "discord",
+        accountId: "account-a",
+        senderId: "allowed",
+        groupSpace: "guild-a",
+        roleIds: [],
+      },
+      config,
+      stateDir,
+    });
+    const otherAccountTool = createTool({
+      accountId: "account-b",
+      caller: {
+        kind: "channel",
+        channel: "discord",
+        accountId: "account-b",
+        senderId: "allowed",
+        groupSpace: "guild-a",
+        roleIds: [],
+      },
+      config,
+      stateDir,
+    });
+    const deniedSameAccountTool = createTool({
+      accountId: "account-a",
+      caller: {
+        kind: "channel",
+        channel: "discord",
+        accountId: "account-a",
+        senderId: "blocked",
+        groupSpace: "guild-a",
+        roleIds: [],
+      },
+      config,
+      stateDir,
+    });
 
     const startResult = await ownerTool.execute("start-account-bound", {
       action: "start",
@@ -106,10 +173,7 @@ describe("transcripts tool with the registered Discord provider", () => {
     expect(accountBJoin).not.toHaveBeenCalled();
     await expect(storeFor(stateDir).readSession("account-bound")).resolves.toMatchObject({
       source: { accountId: "account-a" },
-      metadata: {
-        ownerAccountId: "account-a",
-        ownerChannel: "discord",
-      },
+      metadata: { agentId: "main" },
     });
 
     await expect(
@@ -124,11 +188,80 @@ describe("transcripts tool with the registered Discord provider", () => {
     expect(accountBLeave).not.toHaveBeenCalled();
 
     await expect(
+      deniedSameAccountTool.execute("status-denied-sender", { action: "status" }),
+    ).resolves.toMatchObject({ details: { active: [] } });
+    await expect(
+      deniedSameAccountTool.execute("summarize-denied-sender", {
+        action: "summarize",
+        sessionId: "account-bound",
+      }),
+    ).rejects.toThrow("transcripts session not found: account-bound");
+    await expect(
+      deniedSameAccountTool.execute("stop-denied-sender", {
+        action: "stop",
+        sessionId: "account-bound",
+      }),
+    ).rejects.toThrow("transcripts session not found: account-bound");
+    expect(accountALeave).not.toHaveBeenCalled();
+
+    await expect(
       ownerTool.execute("stop-owner-account", {
         action: "stop",
         sessionId: "account-bound",
       }),
     ).resolves.toMatchObject({ details: { sessionId: "account-bound" } });
     expect(accountALeave).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a Discord sender that the voice command policy denies", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-discord-provider-denied-");
+    const join = vi.fn(async () => ({ ok: true, message: "joined" }));
+    setDiscordTranscriptsVoiceManager({
+      accountId: "account-a",
+      manager: {
+        join,
+        resolveAccessTarget: ({ guildId, channelId }: { guildId: string; channelId: string }) =>
+          resolveAccessTarget(guildId, channelId),
+      } as unknown as DiscordTranscriptsVoiceManager,
+    });
+    const config = {
+      channels: {
+        discord: {
+          accounts: {
+            "account-a": {
+              token: "token-a",
+              allowFrom: ["discord:allowed"],
+              voice: { enabled: true },
+            },
+          },
+        },
+      },
+      transcripts: { enabled: true },
+    } satisfies OpenClawConfig;
+    const deniedTool = createTool({
+      accountId: "account-a",
+      caller: {
+        kind: "channel",
+        channel: "discord",
+        accountId: "account-a",
+        senderId: "blocked",
+        groupSpace: "guild-a",
+        roleIds: [],
+      },
+      config,
+      stateDir,
+    });
+
+    await expect(
+      deniedTool.execute("denied-sender", {
+        action: "start",
+        providerId: "discord-voice",
+        guildId: "guild-a",
+        channelId: "voice-a",
+        sessionId: "denied-sender",
+      }),
+    ).rejects.toThrow("not authorized");
+    expect(join).not.toHaveBeenCalled();
+    await expect(storeFor(stateDir).readSession("denied-sender")).resolves.toBeUndefined();
   });
 });

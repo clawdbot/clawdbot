@@ -758,6 +758,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             gatewayCallerAccountId: gatewayCaller.accountId,
             gatewayCallerChannel: gatewayCaller.channel,
             gatewayCallerLocal: gatewayCaller.local,
+            gatewayCallerScheduled: gatewayCaller.scheduled,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
             nativeChannelId: options?.nativeChannelId,

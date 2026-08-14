@@ -104,7 +104,7 @@ describe("resolveScheduledToolCallerContext", () => {
         accountId: "delivery",
         channel: "telegram",
       }),
-    ).toEqual({ accountId: "creator", channel: "discord" });
+    ).toEqual({ accountId: "creator", channel: "discord", scheduled: true });
   });
 
   it("makes an unprovable account-bound channel explicitly unavailable", () => {
@@ -120,7 +120,7 @@ describe("resolveScheduledToolCallerContext", () => {
         accountId: "delivery",
         channel: "telegram",
       }),
-    ).toEqual({ accountId: "creator", channel: null });
+    ).toEqual({ accountId: "creator", channel: null, scheduled: true });
   });
 
   it("keeps explicitly local scheduled authority on the local tool surface", () => {
@@ -136,6 +136,6 @@ describe("resolveScheduledToolCallerContext", () => {
         accountId: "delivery",
         channel: "discord",
       }),
-    ).toEqual({ accountId: "creator", channel: undefined, local: true });
+    ).toEqual({ accountId: "creator", channel: undefined, local: true, scheduled: true });
   });
 });

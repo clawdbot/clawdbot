@@ -6,6 +6,8 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptSourceLocator,
   TranscriptSourceProvider,
+  TranscriptToolAction,
+  TranscriptToolCaller,
   TranscriptsStartResult,
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
@@ -26,6 +28,8 @@ export type TranscriptsRuntimeContext = {
   agentId?: string;
   agentChannel?: string;
   agentAccountId?: string;
+  caller?: TranscriptToolCaller;
+  assertCallerActive?: () => void;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
@@ -130,10 +134,12 @@ function bindSourceToTurnAccount(params: {
   source: TranscriptSourceLocator;
 }): {
   source: TranscriptSourceLocator;
-  owner?: { ownerChannel: string; ownerAccountId: string };
 } {
-  const ownership = params.provider.accountOwnership;
+  const ownership = params.provider.accessControl;
   if (!ownership) {
+    return { source: params.source };
+  }
+  if (params.ctx.caller?.kind === "operator") {
     return { source: params.source };
   }
   const ownerChannel = ownership.channelId.trim().toLowerCase();
@@ -142,8 +148,8 @@ function bindSourceToTurnAccount(params: {
       `transcripts provider ${params.provider.id} has an invalid account owner channel`,
     );
   }
-  const channel = params.ctx.agentChannel?.trim().toLowerCase();
-  const accountId = params.ctx.agentAccountId?.trim();
+  const channel = params.ctx.caller?.channel?.trim().toLowerCase();
+  const accountId = params.ctx.caller?.accountId?.trim();
   if (!channel) {
     return { source: params.source };
   }
@@ -161,8 +167,34 @@ function bindSourceToTurnAccount(params: {
   // cannot redirect or later control another configured channel account.
   return {
     source: { ...params.source, accountId },
-    owner: { ownerChannel: channel, ownerAccountId: accountId },
   };
+}
+
+export async function authorizeTranscriptSource(params: {
+  action: TranscriptToolAction;
+  ctx: TranscriptsRuntimeContext;
+  provider: TranscriptSourceProvider;
+  source: TranscriptSourceLocator;
+}): Promise<void> {
+  params.ctx.assertCallerActive?.();
+  const ownership = params.provider.accessControl;
+  if (!ownership) {
+    return;
+  }
+  const caller = params.ctx.caller;
+  if (!caller) {
+    throw new Error("transcripts caller authorization is unavailable");
+  }
+  const authorization = await ownership.authorize({
+    action: params.action,
+    caller,
+    cfg: params.ctx.config,
+    source: params.source,
+  });
+  params.ctx.assertCallerActive?.();
+  if (!authorization.ok) {
+    throw new Error(authorization.error);
+  }
 }
 
 export function resolveTranscriptSourceOwnership(params: {
@@ -173,11 +205,13 @@ export function resolveTranscriptSourceOwnership(params: {
   configuredLifecycle?: boolean;
 }): {
   source: TranscriptSourceLocator;
-  owner?: { ownerChannel: string; ownerAccountId: string };
 } {
   const boundSource = bindSourceToTurnAccount(params);
-  const ownership = params.provider.accountOwnership;
-  const trustedAccountId = boundSource.owner?.ownerAccountId;
+  const ownership = params.provider.accessControl;
+  const trustedAccountId =
+    ownership && params.ctx.caller?.kind === "channel"
+      ? params.ctx.caller.accountId?.trim()
+      : undefined;
   const sourceForResolution = trustedAccountId
     ? { ...boundSource.source, accountId: trustedAccountId }
     : boundSource.source;
@@ -199,36 +233,12 @@ export function resolveTranscriptSourceOwnership(params: {
   const providerSource = ownership
     ? { ...sourceForResolution, accountId: resolvedAccountId }
     : sourceForResolution;
-  const configuredOwner = resolveConfiguredLifecycleOwner({
-    ownerChannel: ownership?.channelId.trim().toLowerCase(),
-    accountId: providerSource.accountId?.trim(),
-    configuredLifecycle: params.configuredLifecycle,
-    providerId: params.provider.id,
-  });
-  return {
-    source: providerSource,
-    owner: boundSource.owner ?? configuredOwner,
-  };
-}
-
-function resolveConfiguredLifecycleOwner(params: {
-  ownerChannel: string | undefined;
-  accountId: string | undefined;
-  configuredLifecycle: boolean | undefined;
-  providerId: string;
-}): { ownerChannel: string; ownerAccountId: string } | undefined {
-  if (!params.configuredLifecycle || !params.ownerChannel) {
-    return undefined;
-  }
-  if (!params.accountId) {
+  if (params.configuredLifecycle && ownership && !providerSource.accountId?.trim()) {
     throw new Error(
-      `transcripts provider ${params.providerId} could not resolve an account for configured auto-start`,
+      `transcripts provider ${params.provider.id} could not resolve an account for configured auto-start`,
     );
   }
-  return {
-    ownerChannel: params.ownerChannel,
-    ownerAccountId: params.accountId,
-  };
+  return { source: providerSource };
 }
 
 export function toolText(text: string, details?: Record<string, unknown>) {
@@ -288,7 +298,14 @@ export async function startTranscripts(params: {
     configuredLifecycle: params.configuredLifecycle,
   });
   const providerSource = resolvedSource.source;
-  const owner = resolvedSource.owner;
+  if (!params.configuredLifecycle) {
+    await authorizeTranscriptSource({
+      action: "start",
+      ctx: params.ctx,
+      provider,
+      source: providerSource,
+    });
+  }
   const session: TranscriptSessionDescriptor = {
     sessionId:
       readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
@@ -296,10 +313,7 @@ export async function startTranscripts(params: {
     title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
-    metadata: {
-      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-      ...owner,
-    },
+    metadata: params.ctx.agentId ? { agentId: params.ctx.agentId } : {},
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);

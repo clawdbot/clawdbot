@@ -116,6 +116,8 @@ export function createOpenClawTools(
     gatewayCallerChannel?: string | null;
     /** True only for explicit server-authored local scheduled provenance. */
     gatewayCallerLocal?: boolean;
+    /** True only for a validated scheduled tool policy. */
+    gatewayCallerScheduled?: boolean;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */

@@ -16,7 +16,97 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
   });
 
   it("declares Discord as its account ownership namespace", () => {
-    expect(discordVoiceTranscriptsSourceProvider.accountOwnership?.channelId).toBe("discord");
+    expect(discordVoiceTranscriptsSourceProvider.accessControl?.channelId).toBe("discord");
+  });
+
+  it("authorizes the resolved target with the native voice policy", async () => {
+    setDiscordTranscriptsVoiceManager({
+      accountId: "primary",
+      manager: {
+        resolveAccessTarget: vi.fn(async () => ({
+          guild: { id: "g1", name: "Guild One" },
+          channelName: "General Voice",
+          channelSlug: "general-voice",
+          scope: "channel",
+        })),
+      } as unknown as DiscordVoiceManager,
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            primary: {
+              token: "token-primary",
+              voice: { enabled: true },
+              groupPolicy: "allowlist",
+              guilds: {
+                "guild-one": { channels: { "*": { users: ["discord:u-owner"] } } },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await expect(
+      discordVoiceTranscriptsSourceProvider.accessControl?.authorize({
+        action: "start",
+        cfg,
+        caller: {
+          kind: "channel",
+          channel: "discord",
+          accountId: "primary",
+          senderId: "u-owner",
+          groupSpace: "g1",
+          roleIds: [],
+        },
+        source: {
+          providerId: "discord-voice",
+          accountId: "primary",
+          guildId: "g1",
+          channelId: "c1",
+        },
+      }),
+    ).resolves.toEqual({ ok: true, value: undefined });
+  });
+
+  it("rejects channel callers whose account or guild does not own the target", async () => {
+    const authorize = discordVoiceTranscriptsSourceProvider.accessControl?.authorize;
+    if (!authorize) {
+      throw new Error("expected Discord transcript access control");
+    }
+    const base = {
+      action: "start" as const,
+      cfg: {
+        channels: {
+          discord: {
+            accounts: { primary: { token: "token-primary", voice: { enabled: true } } },
+          },
+        },
+      },
+      caller: {
+        kind: "channel" as const,
+        channel: "discord",
+        accountId: "other",
+        senderId: "u-owner",
+        groupSpace: "g1",
+        roleIds: [],
+      },
+      source: {
+        providerId: "discord-voice",
+        accountId: "primary",
+        guildId: "g1",
+        channelId: "c1",
+      },
+    };
+
+    await expect(authorize(base)).resolves.toMatchObject({ ok: false });
+    await expect(
+      authorize({
+        ...base,
+        caller: { ...base.caller, accountId: "primary", groupSpace: "other-guild" },
+      }),
+    ).resolves.toMatchObject({ ok: false });
   });
 
   it("starts Discord voice in transcripts mode", async () => {
@@ -76,11 +166,12 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       },
     };
 
-    const accountResolution =
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+    const accountResolution = discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId(
+      {
         cfg,
         source,
-      });
+      },
+    );
     expect(accountResolution).toEqual({ ok: true, value: "work" });
     const result = await discordVoiceTranscriptsSourceProvider.start?.({
       cfg,
@@ -118,20 +209,20 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     };
 
     expect(
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({ cfg, source }),
+      discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({ cfg, source }),
     ).toEqual({
       ok: true,
       value: "primary",
     });
     expect(
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+      discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({
         cfg,
         source: { ...source, accountId: "work" },
       }),
     ).toEqual({ ok: true, value: "work" });
 
     expect(
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+      discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({
         cfg: {
           channels: {
             discord: {
@@ -160,14 +251,14 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
 
     expect(
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({ cfg, source }),
+      discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({ cfg, source }),
     ).toEqual({
       ok: false,
       error:
         "No Discord account has available credentials and voice enabled; configure credentials and enable voice for an account.",
     });
     expect(
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+      discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({
         cfg,
         source: { ...source, accountId: "primary" },
       }),
@@ -197,13 +288,13 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
 
     expect(
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({ cfg, source }),
+      discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({ cfg, source }),
     ).toEqual({
       ok: true,
       value: "primary",
     });
     expect(
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+      discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({
         cfg,
         source: { ...source, accountId: "work" },
       }),
@@ -233,7 +324,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       channels: { discord: { accounts: { work: unavailableAccount } } },
     } as unknown as OpenClawConfig;
     expect(
-      discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+      discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({
         cfg: unavailableOnly,
         source,
       }),
@@ -254,7 +345,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     const cfg = { channels: { discord: { accounts } } };
     const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
 
-    const ambiguous = discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+    const ambiguous = discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({
       cfg,
       source,
     });
@@ -264,7 +355,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     }
     expect(ambiguous.error).toContain("(+1)");
 
-    const rejected = discordVoiceTranscriptsSourceProvider.accountOwnership?.resolveAccountId({
+    const rejected = discordVoiceTranscriptsSourceProvider.accessControl?.resolveAccountId({
       cfg,
       source: { ...source, accountId: `${"z".repeat(200)}\nspoofed` },
     });

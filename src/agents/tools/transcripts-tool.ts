@@ -15,13 +15,17 @@ import {
 } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
-import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptToolCaller,
+} from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   activeSessions,
+  authorizeTranscriptSource,
   createTranscriptSessionId,
   readTranscriptStringParam,
   resolveTranscriptSourceOwnership,
@@ -51,60 +55,33 @@ function ownsTranscriptSession(
   ctx: TranscriptsRuntimeContext,
   session: TranscriptSessionDescriptor,
 ): boolean {
-  const channel = ctx.agentChannel?.trim().toLowerCase();
-  const isLocalMainOperator = ctx.agentId === "main" && !channel;
-  const isUnattributedLocalOperator = !ctx.agentId && !channel;
-  const provider = resolveSourceProvider(session.source.providerId, ctx);
-  const providerUsesAccountOwnership = Boolean(provider?.accountOwnership);
   const ownerAgentId = session.metadata?.agentId;
-  const ownerChannel = session.metadata?.ownerChannel;
-  const ownerAccountId = session.metadata?.ownerAccountId;
-  const hasOwnerChannel = typeof ownerChannel === "string";
-  const hasOwnerAccount = typeof ownerAccountId === "string";
-  if (hasOwnerChannel || hasOwnerAccount) {
-    if (typeof ownerAgentId === "string" && ownerAgentId !== ctx.agentId) {
-      return false;
-    }
-    if (hasOwnerChannel && hasOwnerAccount) {
-      if (channel === ownerChannel) {
-        return ctx.agentAccountId?.trim() === ownerAccountId;
-      }
-      if (channel) {
-        return false;
-      }
-      return typeof ownerAgentId === "string" || isLocalMainOperator || isUnattributedLocalOperator;
-    }
-    // Persisted ingress ownership remains authoritative if provider discovery
-    // later changes; only the channel-less local main agent may recover it.
-    return typeof ownerAgentId === "string" ? !channel : isLocalMainOperator;
-  }
-  if (!provider) {
-    // Without provider metadata, core cannot prove whether a legacy row
-    // belonged to a binding namespace. Keep recovery on the recorded agent's
-    // local surface, or local main for ownerless rows, instead of guessing.
-    return typeof ownerAgentId === "string"
-      ? ownerAgentId === ctx.agentId && !channel
-      : isLocalMainOperator;
-  }
-  if (!ctx.agentId) {
-    // The SDK permits a channel-less tool without an agent id; keep that local
-    // operator surface able to manage the ownerless captures it starts.
-    return !providerUsesAccountOwnership || !channel;
-  }
   if (typeof ownerAgentId === "string") {
-    if (ownerAgentId !== ctx.agentId) {
-      return false;
-    }
-    if (providerUsesAccountOwnership) {
-      // Historical source locators are not authorization facts. Without complete
-      // persisted ownership, only the recorded agent's local surface may act.
-      return !channel;
-    }
-    return true;
+    return ownerAgentId === ctx.agentId;
   }
-  // Shipped rows predate agent attribution. Treat them as operator-owned legacy
-  // state: main can curate them off-channel, but no channel account can claim them.
-  return ctx.agentId === "main" && (!providerUsesAccountOwnership || isLocalMainOperator);
+  // Shipped ownerless rows stay with main; provider access still decides whether
+  // the current caller may act on an account-bound canonical source.
+  return ctx.agentId ? ctx.agentId === "main" : ctx.caller?.kind === "operator";
+}
+
+async function canAccessTranscriptSession(
+  ctx: TranscriptsRuntimeContext,
+  session: TranscriptSessionDescriptor,
+  action: "status" | "stop" | "summarize",
+): Promise<boolean> {
+  if (!ownsTranscriptSession(ctx, session)) {
+    return false;
+  }
+  const provider = resolveSourceProvider(session.source.providerId, ctx);
+  if (!provider) {
+    return ctx.caller?.kind === "operator";
+  }
+  try {
+    await authorizeTranscriptSource({ action, ctx, provider, source: session.source });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const TranscriptsSchema = Type.Object(
@@ -205,7 +182,10 @@ async function stopTranscripts(params: {
     sameSessionIdentity(activeCandidate.session, resolvedSession);
   const selectedActive = directActive ?? (activeMatchesResolved ? activeCandidate : undefined);
   const session = selectedActive?.session ?? resolvedSession;
-  if (!session || (!params.lifecycleToken && !ownsTranscriptSession(params.ctx, session))) {
+  if (
+    !session ||
+    (!params.lifecycleToken && !(await canAccessTranscriptSession(params.ctx, session, "stop")))
+  ) {
     throw new Error(`transcripts session not found: ${sessionSelector}`);
   }
   const sessionId = session.sessionId;
@@ -330,6 +310,12 @@ async function importTranscripts(params: {
     source: requestedSource,
   });
   const providerSource = resolvedSource.source;
+  await authorizeTranscriptSource({
+    action: "import",
+    ctx: params.ctx,
+    provider,
+    source: providerSource,
+  });
   const session: TranscriptSessionDescriptor = {
     sessionId:
       readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
@@ -338,10 +324,7 @@ async function importTranscripts(params: {
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     stoppedAt: new Date().toISOString(),
-    metadata: {
-      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-      ...resolvedSource.owner,
-    },
+    metadata: params.ctx.agentId ? { agentId: params.ctx.agentId } : {},
   };
   const transcript = readTranscriptStringParam(params.rawParams, "transcript", {
     required: true,
@@ -387,7 +370,7 @@ async function summarizeExisting(params: {
     trim: true,
   });
   const entry = await params.store.readSessionEntry(sessionId);
-  if (!entry || !ownsTranscriptSession(params.ctx, entry.session)) {
+  if (!entry || !(await canAccessTranscriptSession(params.ctx, entry.session, "summarize"))) {
     throw new Error(`transcripts session not found: ${sessionId}`);
   }
   const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
@@ -414,15 +397,20 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
     ...listTranscriptSourceProviders(ctx.config).map((provider) => provider.id),
   ];
   const uniqueProviders = uniqueStrings(providers);
-  const active = [...activeSessions.values()]
-    .filter((entry) => ownsTranscriptSession(ctx, entry.session))
-    .map((entry) => ({
-      sessionId: entry.session.sessionId,
-      providerId: entry.providerId,
-      title: entry.session.title,
-      source: entry.session.source,
-      cleanupPending: entry.cleanupPending === true,
-    }));
+  const visibleEntries = (
+    await Promise.all(
+      [...activeSessions.values()].map(async (entry) =>
+        (await canAccessTranscriptSession(ctx, entry.session, "status")) ? entry : undefined,
+      ),
+    )
+  ).filter((entry) => entry !== undefined);
+  const active = visibleEntries.map((entry) => ({
+    sessionId: entry.session.sessionId,
+    providerId: entry.providerId,
+    title: entry.session.title,
+    source: entry.session.source,
+    cleanupPending: entry.cleanupPending === true,
+  }));
   return toolText(
     [
       `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
@@ -437,6 +425,8 @@ export function createTranscriptsTool(options?: {
   agentId?: string;
   agentChannel?: string;
   agentAccountId?: string;
+  caller?: TranscriptToolCaller;
+  assertCallerActive?: () => void;
   config?: OpenClawConfig;
   stateDir?: string;
   logger?: TranscriptsLogger;
@@ -448,6 +438,8 @@ export function createTranscriptsTool(options?: {
     ...(options?.agentId ? { agentId: options.agentId } : {}),
     ...(options?.agentChannel ? { agentChannel: options.agentChannel } : {}),
     ...(options?.agentAccountId ? { agentAccountId: options.agentAccountId } : {}),
+    ...(options?.caller ? { caller: options.caller } : {}),
+    ...(options?.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
   };
   return {
     name: "transcripts",

@@ -1340,6 +1340,7 @@ describe("createOpenClawCodingTools", () => {
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
       gatewayCallerChannel: "discord",
+      gatewayCallerScheduled: true,
     });
   });
 
@@ -1364,6 +1365,7 @@ describe("createOpenClawCodingTools", () => {
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
       gatewayCallerLocal: true,
+      gatewayCallerScheduled: true,
     });
   });
 

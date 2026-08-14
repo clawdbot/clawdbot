@@ -400,7 +400,9 @@ export async function buildDiscordMessageProcessContext(params: {
       id: messageChannelId,
       nativeChannelId: messageChannelId,
       label: fromLabel,
-      spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      spaceId: isGuildMessage
+        ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
+        : undefined,
       parentId: threadChannel ? threadParentId : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },

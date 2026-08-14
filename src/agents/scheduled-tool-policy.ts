@@ -19,11 +19,12 @@ export function resolveScheduledToolCallerContext(params: {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   accountId?: string;
   channel?: string;
-}): { accountId?: string; channel?: string | null; local?: true } {
+}): { accountId?: string; channel?: string | null; local?: true; scheduled?: true } {
   const policy = params.scheduledToolPolicy;
   const origin = policy?.mode === "account" ? policy.ownerOrigin : undefined;
   return {
     accountId: policy?.ownerAccountId ?? params.accountId,
+    ...(policy ? { scheduled: true as const } : {}),
     ...(origin?.kind === "local" ? { local: true as const } : {}),
     channel:
       origin?.kind === "external"
