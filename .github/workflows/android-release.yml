@@ -4,18 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Version tag (e.g., v2026.1.15)
-        required: true
+        description: 'Version tag (e.g., v2026.1.15) - 留空则构建当前分支'
+        required: false
         type: string
+        default: ''
 
 
 permissions:
-  actions: read
-  contents: write
-
-concurrency:
-  group: android-release-${{ inputs.tag }}
-  cancel-in-progress: false
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -26,7 +22,6 @@ jobs:
     name: Publish signed Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment: android-release
     steps:
       - name: Checkout release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -46,38 +41,7 @@ jobs:
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
 
-      - name: Create apps-signing read token
-        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
-        id: apps-signing-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          app-id: "2729701"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: openclaw
-          repositories: apps-signing
-          permission-contents: read
 
-      - name: Checkout encrypted Android signing assets
-        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          repository: openclaw/apps-signing
-          ref: main
-          path: apps/android/build/release-signing/apps-signing
-          token: ${{ steps.apps-signing-token.outputs.token }}
-          persist-credentials: false
-
-      - name: Materialize Android release signing
-        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
-        env:
-          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${MATCH_PASSWORD}" ]]; then
-            echo "Android release signing secrets are unavailable." >&2
-            exit 1
-          fi
-          node scripts/android-release-signing.mjs --mode materialize
 
       - name: Prepare and verify signed Android APK
         env:
