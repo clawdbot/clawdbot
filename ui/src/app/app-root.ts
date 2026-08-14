@@ -27,7 +27,6 @@ import {
 } from "./lazy-custom-element.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
-import { refreshControlUiServiceWorker } from "./service-worker-lifecycle.ts";
 import { isTerminalOnlyView } from "./terminal-document-mode.ts";
 
 export function resolveTerminalThemeMode(): "dark" | "light" {
@@ -72,7 +71,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private loginShowGatewayPassword = false;
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
-  @state() private reconnectWorkerRefreshPending = false;
+  @state() refreshPending = false;
 
   private readonly terminalOnly = isTerminalOnlyView(
     globalThis.location,
@@ -90,9 +89,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this);
   private loginGatewaySource: ApplicationContext["gateway"] | null = null;
   private loginConnectionClient: GatewayBrowserClient | null = null;
-  private loginGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
-  private gatewayEverConnected = false;
-  private reconnectWorkerRefreshGeneration = 0;
+  private gatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
 
   private get context(): ApplicationContext<RouteId> | undefined {
     return this.runtime?.context;
@@ -151,10 +148,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.runtime = undefined;
     this.loginGatewaySource = null;
     this.loginConnectionClient = null;
-    this.loginGatewayPhase = null;
-    this.gatewayEverConnected = false;
-    this.reconnectWorkerRefreshPending = false;
-    this.reconnectWorkerRefreshGeneration += 1;
+    this.gatewayPhase = null;
+    this.refreshPending = false;
     this.pendingGatewayUrl = null;
     this.resetLoginSensitivePresentation();
     super.disconnectedCallback();
@@ -165,15 +160,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (sourceChanged) {
       this.loginGatewaySource = gateway;
       this.loginConnectionClient = null;
-      this.loginGatewayPhase = null;
-      this.gatewayEverConnected = false;
-      this.reconnectWorkerRefreshPending = false;
-      this.reconnectWorkerRefreshGeneration += 1;
+      this.gatewayPhase = null;
+      this.refreshPending = false;
       this.resetLoginSensitivePresentation();
     }
     const snapshot = gateway.snapshot;
-    const previousPhase = this.loginGatewayPhase;
-    this.loginGatewayPhase = snapshot.phase;
+    const previousPhase = this.gatewayPhase;
+    this.gatewayPhase = snapshot.phase;
     const clientChanged = snapshot.client !== this.loginConnectionClient;
     if (clientChanged) {
       this.loginConnectionClient = snapshot.client;
@@ -184,30 +177,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (snapshot.phase === "connected") {
       this.loginGatePinned = false;
-      if (this.gatewayEverConnected && previousPhase !== "connected") {
-        this.beginReconnectWorkerRefresh(gateway);
+      if (previousPhase === "reconnecting") {
+        this.refreshPending = true;
+        void import("./sw-refresh.runtime.ts").then((runtime) =>
+          runtime.refreshWorker(this, gateway),
+        );
       }
-      this.gatewayEverConnected = true;
     }
-  }
-
-  private beginReconnectWorkerRefresh(gateway: ApplicationContext["gateway"]): void {
-    const generation = ++this.reconnectWorkerRefreshGeneration;
-    this.reconnectWorkerRefreshPending = true;
-    const releaseFence = () => {
-      if (
-        generation === this.reconnectWorkerRefreshGeneration &&
-        this.loginGatewaySource === gateway &&
-        gateway.snapshot.phase === "connected"
-      ) {
-        this.reconnectWorkerRefreshPending = false;
-      }
-    };
-    void refreshControlUiServiceWorker().then((replacementActivated) => {
-      if (!replacementActivated) {
-        releaseFence();
-      }
-    }, releaseFence);
   }
 
   private syncLoginConnection(gateway = this.context?.gateway) {
@@ -255,7 +231,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (this.terminalOnly) {
       const terminalAvailable =
         isTerminalAvailable(gatewaySnapshot, context.config.current.terminalEnabled ?? false) &&
-        !this.reconnectWorkerRefreshPending;
+        !this.refreshPending;
       const terminalOwner =
         context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId;
       const terminalAgentId = terminalOwner ? normalizeAgentId(terminalOwner) : null;
@@ -384,7 +360,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
           <openclaw-app-shell
             .runtime=${runtime}
             .onboarding=${this.onboarding}
-            .reconnectWorkerRefreshPending=${this.reconnectWorkerRefreshPending}
+            .refreshPending=${this.refreshPending}
           ></openclaw-app-shell>
         </openclaw-github-link-hovercard-provider>
       </openclaw-tooltip-provider>

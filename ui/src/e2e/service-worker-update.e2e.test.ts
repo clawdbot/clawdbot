@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
@@ -30,8 +30,8 @@ let browser: Browser;
 let outDir: string;
 let server: ControlUiE2eServer;
 
-async function findBuildAsset(buildId: string): Promise<BuildAsset> {
-  const assetsDir = path.join(outDir, "assets");
+async function findBuildAsset(buildId: string, buildDir = outDir): Promise<BuildAsset> {
+  const assetsDir = path.join(buildDir, "assets");
   for (const fileName of await readdir(assetsDir)) {
     if (!fileName.endsWith(".js")) {
       continue;
@@ -47,8 +47,8 @@ async function findBuildAsset(buildId: string): Promise<BuildAsset> {
   throw new Error(`Production Control UI output did not contain build id ${buildId}`);
 }
 
-async function holdReplacementWorkerInstalling(delayMs: number): Promise<void> {
-  const workerPath = path.join(outDir, "sw.js");
+async function holdReplacementWorkerInstalling(buildDir: string, delayMs: number): Promise<void> {
+  const workerPath = path.join(buildDir, "sw.js");
   const source = await readFile(workerPath, "utf8");
   const install =
     "event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)));";
@@ -186,7 +186,11 @@ describe("Control UI service-worker production update E2E", () => {
     await browser?.close();
     await server?.close();
     if (outDir) {
-      await rm(outDir, { force: true, recursive: true });
+      await Promise.all(
+        [outDir, `${outDir}-next`, `${outDir}-previous`].map((dir) =>
+          rm(dir, { force: true, recursive: true }),
+        ),
+      );
     }
   });
 
@@ -251,9 +255,11 @@ describe("Control UI service-worker production update E2E", () => {
         .poll(() => page.evaluate(() => caches.keys()))
         .toContain(`openclaw-control-${buildA}`);
 
-      await buildProductionControlUiE2e(outDir, buildB);
-      await holdReplacementWorkerInstalling(1_200);
-      const assetB = await findBuildAsset(buildB);
+      const nextOutDir = `${outDir}-next`;
+      const previousOutDir = `${outDir}-previous`;
+      await buildProductionControlUiE2e(nextOutDir, buildB);
+      await holdReplacementWorkerInstalling(nextOutDir, 1_200);
+      const assetB = await findBuildAsset(buildB, nextOutDir);
       expect(assetB.path).not.toBe(assetA.path);
       expect(assetB.sha256).not.toBe(assetA.sha256);
 
@@ -264,6 +270,9 @@ describe("Control UI service-worker production update E2E", () => {
         );
       });
       await gateway.setOnline(false);
+      await rename(outDir, previousOutDir);
+      await rename(nextOutDir, outDir);
+      await rm(previousOutDir, { force: true, recursive: true });
       // The production preview serves static files directly instead of applying
       // the Gateway's deep-link canonicalization before returning index.html.
       await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));

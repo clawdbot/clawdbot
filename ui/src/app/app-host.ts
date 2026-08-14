@@ -123,7 +123,7 @@ class OpenClawShell
 {
   @property({ attribute: false }) runtime: ApplicationRuntime | undefined;
   @property({ attribute: false }) onboarding = false;
-  @property({ attribute: false }) reconnectWorkerRefreshPending = false;
+  @property({ attribute: false }) refreshPending = false;
 
   @state() navDrawerOpen = false;
   @state() desktopNavigationExpanded = false;

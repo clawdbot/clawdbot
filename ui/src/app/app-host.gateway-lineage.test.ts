@@ -10,11 +10,11 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
-import { refreshControlUiServiceWorker } from "./service-worker-lifecycle.ts";
 import { loadSettings } from "./settings.ts";
+import { refreshWorker } from "./sw-refresh.runtime.ts";
 
-vi.mock("./service-worker-lifecycle.ts", () => ({
-  refreshControlUiServiceWorker: vi.fn(async () => false),
+vi.mock("./sw-refresh.runtime.ts", () => ({
+  refreshWorker: vi.fn(),
 }));
 
 const HELLO: GatewayHelloOk = {
@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("Control UI Gateway target lineage", () => {
-  it("keeps a replacement fenced and releases a current worker", async () => {
+  it("checks the incumbent worker before reconnect surfaces resume", async () => {
     let snapshot = {
       client: {} as GatewayBrowserClient,
       phase: "connected",
@@ -77,14 +77,8 @@ describe("Control UI Gateway target lineage", () => {
       },
       connection: { gatewayUrl: "ws://gateway.test", token: "", password: "" },
     } as ApplicationGateway;
-    let releaseRefresh: ((replacementActivated: boolean) => void) | undefined;
-    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        releaseRefresh = resolve;
-      }),
-    );
     const app = document.createElement("openclaw-app") as unknown as {
-      reconnectWorkerRefreshPending: boolean;
+      refreshPending: boolean;
       synchronizeGateway: (gateway: ApplicationGateway) => void;
     };
 
@@ -94,23 +88,8 @@ describe("Control UI Gateway target lineage", () => {
     snapshot = { ...snapshot, client: {} as GatewayBrowserClient, phase: "connected" };
     app.synchronizeGateway(gateway);
 
-    expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce();
-    expect(app.reconnectWorkerRefreshPending).toBe(true);
-    releaseRefresh?.(false);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(app.reconnectWorkerRefreshPending).toBe(false);
-
-    vi.mocked(refreshControlUiServiceWorker).mockResolvedValueOnce(true);
-    snapshot = { ...snapshot, client: null, phase: "reconnecting" };
-    app.synchronizeGateway(gateway);
-    snapshot = { ...snapshot, client: {} as GatewayBrowserClient, phase: "connected" };
-    app.synchronizeGateway(gateway);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(refreshControlUiServiceWorker).toHaveBeenCalledTimes(2);
-    expect(app.reconnectWorkerRefreshPending).toBe(true);
+    await vi.waitFor(() => expect(refreshWorker).toHaveBeenCalledOnce());
+    expect(app.refreshPending).toBe(true);
   });
 
   it("returns to the login gate when a newly selected Gateway's first attempt fails", () => {
