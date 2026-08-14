@@ -1006,6 +1006,22 @@ describe("maybeCompactCodexAppServerSession", () => {
       },
     });
     fake.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: { last: { totalTokens: 999 } },
+      },
+    });
+    fake.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: { last: { totalTokens: 321 } },
+      },
+    });
+    fake.emit({
       method: "item/completed",
       params: {
         threadId: "thread-1",
@@ -1026,8 +1042,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
-    expect(result.result?.tokensAfter).toBeUndefined();
-    expect(compactDetails(result).tokenUsageSource).toBeUndefined();
+    expect(result.result?.tokensAfter).toBe(321);
     expect(compactDetails(result).signal).toBe("thread/compact/start");
   });
 
