@@ -18,6 +18,10 @@ import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import {
+  claimResponsesCompactRequest,
+  type OpenAIResponsesCompactEndpointResult,
+} from "./openai-responses-compact-request.js";
+import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
   type OpenAIResponsesReplayMode,
@@ -157,32 +161,6 @@ export function createOpenAIResponsesClient(
   });
 }
 
-type OpenAIResponsesCompactEndpointResult = {
-  item: { type: "compaction"; id?: string; encrypted_content: string };
-  usage: Record<string, unknown> & { input_tokens: number; output_tokens: number };
-  model: Model;
-  replayMetadata: ReturnType<typeof buildOpenAIResponsesReasoningReplayMetadata>;
-};
-
-type ResponsesCompactRequestController = {
-  claimed: boolean;
-  resolve(result: OpenAIResponsesCompactEndpointResult): void;
-  reject(error: unknown): void;
-};
-
-const COMPACT_REQUEST = Symbol("openaiResponsesCompactRequest");
-
-function claimResponsesCompactRequest(options: object | undefined) {
-  const controller = options
-    ? (Reflect.get(options, COMPACT_REQUEST) as ResponsesCompactRequestController | undefined)
-    : undefined;
-  if (controller?.claimed === false) {
-    controller.claimed = true;
-    return controller;
-  }
-  return undefined;
-}
-
 async function postOpenAIResponsesCompaction(params: {
   client: ReturnType<typeof createOpenAIResponsesClient>;
   model: Model;
@@ -222,35 +200,6 @@ async function postOpenAIResponsesCompaction(params: {
       sessionId: params.options?.sessionId,
     }),
   } as OpenAIResponsesCompactEndpointResult;
-}
-
-/** Run a compact-endpoint request through the session's prepared stream stack. */
-export async function requestPreparedOpenAIResponsesCompaction(
-  streamFn: StreamFn,
-  model: Model,
-  context: Context,
-  options: OpenAIResponsesOptions,
-): Promise<OpenAIResponsesCompactEndpointResult> {
-  const preparedOptions = { ...options };
-  let resolveResult!: (result: OpenAIResponsesCompactEndpointResult) => void;
-  let rejectResult!: (error: unknown) => void;
-  const result = new Promise<OpenAIResponsesCompactEndpointResult>((resolve, reject) => {
-    resolveResult = resolve;
-    rejectResult = reject;
-  });
-  const controller = { claimed: false, resolve: resolveResult, reject: rejectResult };
-  Reflect.set(preparedOptions, COMPACT_REQUEST, controller);
-  const stream = await Promise.resolve(
-    streamFn(model, context, preparedOptions as Parameters<StreamFn>[2]),
-  );
-  if (!controller.claimed) {
-    throw new Error("Prepared stream did not reach an OpenAI Responses transport");
-  }
-  try {
-    return await result;
-  } finally {
-    await stream.result().catch(() => undefined);
-  }
 }
 
 type ResponsesPricingOptions = Pick<

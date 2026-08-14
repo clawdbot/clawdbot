@@ -12,7 +12,6 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   requestPreparedOpenAIResponsesCompaction: requestPreparedCompactionMock,
 }));
 
-import { buildOpenAIResponsesReasoningReplayMetadata } from "@openclaw/ai/transports";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
 const model = {
@@ -78,9 +77,14 @@ beforeEach(() => {
     item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
     usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
     model,
-    replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
-      sessionId: "session-1",
-    }),
+    replayMetadata: {
+      v: 1,
+      source: "openai-responses",
+      provider: "xai",
+      api: "openai-responses",
+      model: "grok-4.5",
+      baseUrlHash: "test-base-url",
+    },
   });
 });
 
