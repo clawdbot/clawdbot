@@ -156,10 +156,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected resolveBoardProvider(): BoardProvider {
-    const sessionKey = resolveSessionKey(
-      this.state?.sessionKey ?? this.sessionKey,
-      this.context?.gateway.snapshot.hello,
-    );
+    const sessionKey = this.resolveBoardSessionKey();
     if (this.boardProvider) {
       this.releaseBoardProviderLease();
       return this.boardProvider;

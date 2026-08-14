@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -16,8 +15,10 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
 
@@ -56,20 +57,36 @@ export async function resolveAgentDeliveryPhase(params: {
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
   onRunObserved?: (runId: string) => void;
 }): Promise<AgentDeliveryPhaseResult | undefined> {
-  const activeSessionAgentId =
-    params.resolvedSessionKey === "global" && params.resolvedSessionAgentId
-      ? params.resolvedSessionAgentId
-      : params.resolvedSessionKey
-        ? resolveAgentIdFromSessionKey(params.resolvedSessionKey)
-        : (params.agentId ?? resolveDefaultAgentId(params.cfgForAgent ?? params.cfg));
+  const activeSessionAgentId = params.resolvedSessionAgentId
+    ? params.resolvedSessionAgentId
+    : params.resolvedSessionKey
+      ? resolveAgentIdFromSessionKey(params.resolvedSessionKey, params.agentId)
+      : params.agentId;
+  if (!activeSessionAgentId) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required for this session"),
+    );
+    return undefined;
+  }
 
   if (params.onRunObserved) {
     params.onRunObserved(params.runId);
+    const compatibilityOwnerAgentId = params.resolvedSessionKey
+      ? tryResolveSessionCompatibilityOwnerAgentId(
+          params.cfgForAgent ?? params.cfg,
+          params.resolvedSessionKey,
+        )
+      : undefined;
     for (const [activeRunId, active] of params.context.chatAbortControllers) {
       const sameSession = active.sessionKey === params.resolvedSessionKey;
-      const sameSelectedGlobalAgent =
-        params.resolvedSessionKey === "global" ? active.agentId === activeSessionAgentId : true;
-      if (activeRunId !== params.runId && sameSession && sameSelectedGlobalAgent) {
+      const activeOwner = resolveChatRunOwnerAgentId({
+        agentId: active.agentId,
+        sessionKey: active.sessionKey,
+        defaultAgentId: compatibilityOwnerAgentId,
+      });
+      if (activeRunId !== params.runId && sameSession && activeOwner === activeSessionAgentId) {
         params.onRunObserved(activeRunId);
       }
     }

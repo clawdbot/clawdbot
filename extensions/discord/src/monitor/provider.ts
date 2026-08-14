@@ -59,7 +59,7 @@ export type MonitorDiscordOpts = {
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 function logDiscordStartupPhase(
   params: Omit<Parameters<typeof logDiscordStartupPhaseBase>[0], "isVerbose">,

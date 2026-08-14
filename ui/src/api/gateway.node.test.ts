@@ -15,29 +15,24 @@ import {
 } from "../lib/nodes/index.ts";
 import * as nodes from "../lib/nodes/index.ts";
 import {
+  migrateCloudSessionRecoveryScope,
   readCloudSessionRecovery,
   writeCloudSessionRecovery,
 } from "../lib/sessions/cloud-recovery.ts";
-import { requestSessionCompanionAnswer } from "../pages/chat/chat-session-companion.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
-const recoveryMigrationRuntimeLoad = vi.hoisted(() => {
-  let release = () => {};
-  let markStarted = () => {};
-  const started = new Promise<void>((resolve) => {
-    markStarted = resolve;
-  });
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { markStarted, pending, release, started };
-});
+const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
+  loaded: vi.fn(),
+  migrate: vi.fn(),
+}));
 
-vi.mock("../lib/sessions/cloud-recovery-migration.runtime.ts", async (importOriginal) => {
-  recoveryMigrationRuntimeLoad.markStarted();
-  await recoveryMigrationRuntimeLoad.pending;
-  return await importOriginal();
+vi.mock("../lib/sessions/cloud-recovery-migration.runtime.ts", () => {
+  recoveryMigrationRuntimeMock.loaded();
+  return {
+    default: (gatewayUrl: string, sourceScope: string, destinationScope: string) =>
+      recoveryMigrationRuntimeMock.migrate(gatewayUrl, sourceScope, destinationScope),
+  };
 });
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -413,6 +408,8 @@ describe("GatewayBrowserClient", () => {
     wsInstances.length = 0;
     loadOrCreateDeviceIdentityMock.mockReset();
     signDevicePayloadMock.mockClear();
+    recoveryMigrationRuntimeMock.loaded.mockClear();
+    recoveryMigrationRuntimeMock.migrate.mockImplementation(migrateCloudSessionRecoveryScope);
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "device-1",
       privateKey: "private-key", // pragma: allowlist secret
@@ -457,7 +454,6 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
-      GATEWAY_CLIENT_CAPS.SESSION_COMPANION_PROGRESS,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
@@ -720,7 +716,7 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
-  it("correlates companion accepted progress with final and error responses", async () => {
+  it("settles a companion ask from one final response", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -733,87 +729,24 @@ describe("GatewayBrowserClient", () => {
       payload: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
     });
 
-    const prepared = vi.fn();
-    const answer = requestSessionCompanionAnswer(
-      client,
-      "agent:main:main",
-      "What changed?",
-      prepared,
+    const answer = client.request(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "What changed?" },
+      { timeoutMs: 70_000 },
     );
-    const answerFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
-    expect(answerFrame.method).toBe("sessions.companion.ask");
-    ws.emitMessage({
-      type: "res",
-      id: answerFrame.id,
-      ok: true,
-      payload: { status: "accepted", empty: false },
-    });
-    expect(prepared).toHaveBeenCalledOnce();
-    ws.emitMessage({
-      type: "res",
-      id: answerFrame.id,
-      ok: true,
-      payload: { answer: "The fix changed.", ts: 4 },
-    });
-    await expect(answer).resolves.toEqual({ answer: "The fix changed.", ts: 4 });
-
-    const failedPrepared = vi.fn();
-    const failed = requestSessionCompanionAnswer(
-      client,
-      "agent:main:main",
-      "Retry?",
-      failedPrepared,
-    );
-    const failedFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
-    ws.emitMessage({
-      type: "res",
-      id: failedFrame.id,
-      ok: true,
-      payload: { status: "accepted", empty: false },
-    });
-    ws.emitMessage({
-      type: "res",
-      id: failedFrame.id,
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "history unavailable",
-        details: { reason: "context-unavailable" },
-        retryable: true,
-      },
-    });
-    expect(failedPrepared).toHaveBeenCalledOnce();
-    await expect(failed).rejects.toMatchObject({
-      details: { reason: "context-unavailable" },
-      retryable: true,
-    });
-  });
-
-  it("accepts a legacy single final companion response without progress", async () => {
-    const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
-      token: "shared-auth-token",
-    });
-    const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
-    });
-
-    const prepared = vi.fn();
-    const answer = requestSessionCompanionAnswer(client, "agent:main:main", "Legacy?", prepared);
-    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("sessions.companion.ask");
     ws.emitMessage({
       type: "res",
       id: frame.id,
       ok: true,
-      payload: { answer: "Still works.", ts: 5 },
+      payload: { answer: "The companion was simplified.", ts: 4 },
     });
 
-    await expect(answer).resolves.toEqual({ answer: "Still works.", ts: 5 });
-    expect(prepared).not.toHaveBeenCalled();
+    await expect(answer).resolves.toEqual({
+      answer: "The companion was simplified.",
+      ts: 4,
+    });
   });
 
   it("tracks inbound activity and delegates forced reconnect to the shared socket", async () => {
@@ -1150,6 +1083,13 @@ describe("GatewayBrowserClient", () => {
     useNodeFakeTimers();
     const sessionStorage = createStorageMock();
     vi.stubGlobal("sessionStorage", sessionStorage);
+    const digest = createDeferred<ArrayBuffer>();
+    const digestMock = vi.fn(() => digest.promise);
+    let requestId = 0;
+    vi.stubGlobal("crypto", {
+      randomUUID: () => `req-recovery-${++requestId}`,
+      subtle: { digest: digestMock },
+    });
     const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
     const recovery = {
       sessionKey: "agent:cloud:stale",
@@ -1185,13 +1125,35 @@ describe("GatewayBrowserClient", () => {
         },
       },
     });
-    await recoveryMigrationRuntimeLoad.started;
+    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+    expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
     expect(onRecoveryScopeChange).not.toHaveBeenCalled();
 
     firstWs.emitClose(1006, "socket lost");
     await vi.advanceTimersByTimeAsync(800);
     const secondWs = getLatestWebSocket();
-    const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-current");
+    secondWs.emitOpen();
+
+    digest.resolve(Uint8Array.from(createHash("sha256").update(STORED_CRED).digest()).buffer);
+    await vi.waitFor(() => expect(recoveryMigrationRuntimeMock.loaded).toHaveBeenCalledOnce());
+
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+    expect(recoveryMigrationRuntimeMock.migrate).not.toHaveBeenCalled();
+    expect(client.recoveryScopeReady).toBe(false);
+    expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(
+      recovery,
+    );
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
+
+    secondWs.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-current", ts: 1_800_000_000_000 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const secondConnect = parseLatestConnectFrame(secondWs);
     secondWs.emitMessage({
       type: "res",
       id: secondConnect.id,
@@ -1208,11 +1170,13 @@ describe("GatewayBrowserClient", () => {
         },
       },
     });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
-
-    recoveryMigrationRuntimeLoad.release();
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(recoveryMigrationRuntimeMock.migrate).toHaveBeenCalledExactlyOnceWith(
+      DEFAULT_GATEWAY_URL,
+      legacyScope,
+      "server-current",
+    );
+    expect(client.recoveryScopeReady).toBe(true);
     expect(client.recoveryScope).toBe("server-current");
     expect(
       readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
@@ -1224,6 +1188,7 @@ describe("GatewayBrowserClient", () => {
       readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
     ).toEqual({ ...recovery, recoveryScope: "server-current" });
     client.stop();
+    expect(client.recoveryScopeReady).toBe(false);
   });
 
   it("keeps stale credential recovery isolated across a shared-browser principal switch", async () => {
@@ -1264,8 +1229,6 @@ describe("GatewayBrowserClient", () => {
         },
       },
     });
-    recoveryMigrationRuntimeLoad.release();
-
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScope).toBe(principalScope);
     expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(

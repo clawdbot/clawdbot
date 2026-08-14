@@ -222,7 +222,7 @@ diff --git a/src/example.ts b/src/example.ts
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
 - Viewer HTML and metadata are ephemeral SQLite plugin blobs. The URL token is returned to the caller while SQLite stores only its SHA-256 hash.
 - Rendered PNG/PDF files remain temporary materializations in `$TMPDIR/openclaw-diffs` because delivery APIs require a file path. No JSON metadata sidecars are written or imported.
-- Default viewer URLs use loopback (`127.0.0.1`) unless you set plugin `viewerBaseUrl`, pass `baseUrl`, or use `gateway.bind=custom` + `gateway.customBindHost`.
+- Default viewer URLs use `gateway.publicOrigin` when configured, then the existing bind-aware Gateway fallback. Plugin `viewerBaseUrl` and per-call `baseUrl` take precedence.
 - If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw `127.0.0.1` viewer requests without forwarded client-IP headers fail closed by design.
 - In that topology, prefer `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set plugin `viewerBaseUrl` (or pass a proxy/public `baseUrl`) when you need a shareable viewer URL.
 - Remote viewer misses are throttled to reduce token-guess abuse.

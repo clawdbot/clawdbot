@@ -1,6 +1,9 @@
 // Push gateway methods send APNs/web-push test notifications and manage web
 // push subscriptions/VAPID public-key access for UI clients.
-import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -26,7 +29,6 @@ import {
   resolveVapidKeys,
 } from "../../infra/push-web.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
-import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const pushHandlers: GatewayRequestHandlers = {
@@ -46,8 +48,8 @@ export const pushHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const title = normalizeTrimmedString(params.title) ?? "OpenClaw";
-    const body = normalizeTrimmedString(params.body) ?? `Push test for node ${nodeId}`;
+    const title = normalizeOptionalString(params.title) ?? "OpenClaw";
+    const body = normalizeOptionalString(params.body) ?? `Push test for node ${nodeId}`;
 
     await respondUnavailableOnThrow(respond, async () => {
       const registration = await loadApnsRegistration(nodeId);
@@ -187,8 +189,8 @@ export const pushHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const title = normalizeTrimmedString(params.title) ?? "OpenClaw";
-    const body = normalizeTrimmedString(params.body) ?? "Web push test notification";
+    const title = normalizeOptionalString(params.title) ?? "OpenClaw";
+    const body = normalizeOptionalString(params.body) ?? "Web push test notification";
 
     await respondUnavailableOnThrow(respond, async () => {
       const results = await broadcastWebPush({ title, body });

@@ -7,6 +7,11 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  executeGitCommand as runGit,
+  requireGitCommand as requireGit,
+  requireGitCommandBuffer as requireGitBuffer,
+} from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -19,9 +24,6 @@ import {
   listGitWorktrees,
   worktreePathExists,
   removeEmptyParents,
-  requireGit,
-  requireGitBuffer,
-  runGit,
   type GitResult,
 } from "./git.js";
 import { worktreeNameAllocationFamily } from "./name.js";
@@ -127,9 +129,16 @@ async function nameIsUnavailable(
 ): Promise<boolean> {
   const worktreePath = path.join(root, name);
   const registered = findRegistryWorktreeByPath(env, worktreePath);
-  if (owner.ownerId && registered && worktreeOwnerMatches(registered, owner)) {
-    // Let createForRepository reuse or restore the caller's existing record.
-    // Treating it as a collision can create a second checkout for one owner.
+  if (
+    owner.ownerId &&
+    registered &&
+    registered.removedAt === undefined &&
+    worktreeOwnerMatches(registered, owner)
+  ) {
+    // Let createForRepository reuse the caller's live checkout; a collision here
+    // could mint a second checkout for one owner. Removed records stay collisions:
+    // restore is explicit-name/id only, so a generated name (title slug or random
+    // crustacean) must never silently resurrect a retired checkout.
     return false;
   }
   if (registered || (await worktreePathExists(worktreePath))) {
@@ -765,6 +774,11 @@ export class ManagedWorktreeService {
     return records.filter((record) => record.removedAt === undefined || record.snapshotRef);
   }
 
+  /** Returns persisted worktree facts without probing paths or mutating lifecycle state. */
+  listRegistryRecords(): ManagedWorktreeRecord[] {
+    return listRegistryWorktrees(this.env);
+  }
+
   findLiveByOwner(
     ownerKind: ManagedWorktreeOwnerKind,
     ownerId: string,
@@ -786,6 +800,22 @@ export class ManagedWorktreeService {
     return {
       canonicalRoot: resolved.repoRoot,
       sourceRoot: resolved.sourceRoot,
+    };
+  }
+
+  /** Resolves the repository facts shared by managed worktrees and project discovery. */
+  async resolveRepositoryIdentity(repoRoot: string): Promise<{
+    checkoutRoot: string;
+    repoRoot: string;
+    originUrl: string;
+    fingerprint: string;
+  }> {
+    const resolved = await resolveRepository(repoRoot);
+    return {
+      checkoutRoot: resolved.sourceRoot,
+      repoRoot: resolved.repoRoot,
+      originUrl: resolved.originUrl,
+      fingerprint: resolved.fingerprint,
     };
   }
 

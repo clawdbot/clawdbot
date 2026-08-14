@@ -13,7 +13,7 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it("searches GitHub, clones a remote project with progress, and starts its session", async () => {
+  it("keeps GitHub selection inert and clones only when the session starts", async () => {
     await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -50,7 +50,7 @@ suite.define(() => {
         "worktrees.branches",
       ],
       methodResponses: {
-        "projects.list": { sequence: [{ projects: [] }, { projects: [clonedProject] }] },
+        "projects.list": { projects: [] },
         "projects.searchRemote": {
           credential: "missing",
           projects: [
@@ -76,8 +76,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
-      const trigger = page.locator("#new-session-place-trigger");
-      const place = page.locator("wa-popover.new-session-page__place-popover");
+      const trigger = page.locator("#new-session-project-trigger");
+      const place = page.locator("wa-popover.new-session-page__project-popover");
       await trigger.click();
       const search = place.getByRole("searchbox", {
         name: "Search projects or paste a Git URL",
@@ -89,24 +89,20 @@ suite.define(() => {
       await place.getByText("GH_TOKEN is not configured; public GitHub results only.").waitFor();
       await place.getByRole("button", { name: /openclaw\/openclaw/u }).click();
 
-      const addRequest = await gateway.waitForRequest("projects.add");
-      expect(addRequest.params).toEqual({ gitUrl: "https://github.com/openclaw/openclaw.git" });
-      await place.getByRole("status").getByText("Cloning project…").waitFor();
-      await captureProjectUiProof(page, "project-cloning.png");
-      await gateway.resolveDeferred("projects.add", clonedProject);
-
-      await expect.poll(async () => (await gateway.getRequests("projects.list")).length).toBe(2);
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("OpenClaw");
-      expect(await trigger.getAttribute("data-project-id")).toBe("openclaw");
-      await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
-        .toEqual({
-          repoRoot: "/state/projects/fingerprint/openclaw",
-          includeRepositoryStatus: true,
-        });
+      expect(await gateway.getRequests("projects.add")).toHaveLength(0);
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        "openclaw/openclaw",
+      );
+      expect(await trigger.getAttribute("data-project-id")).toBeNull();
 
       await page.locator(".new-session-page__message").fill("inspect the cloned project");
       await page.getByRole("button", { name: "Start session" }).click();
+      const addRequest = await gateway.waitForRequest("projects.add");
+      expect(addRequest.params).toEqual({ gitUrl: "https://github.com/openclaw/openclaw.git" });
+      await captureProjectUiProof(page, "project-cloning.png");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await gateway.resolveDeferred("projects.add", clonedProject);
+
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",

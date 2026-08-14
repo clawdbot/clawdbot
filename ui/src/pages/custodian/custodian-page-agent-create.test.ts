@@ -117,7 +117,7 @@ describe("custodian new-agent flow", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
   });
 
-  it("does not start new-agent chat with read-only operator access", async () => {
+  it("does not misreport limited access as an outdated Gateway", async () => {
     const request = vi.fn();
     const { context } = createContext(request);
     context.gateway.snapshot.hello = {
@@ -125,10 +125,11 @@ describe("custodian new-agent flow", () => {
       auth: { role: "operator", scopes: ["operator.read"] },
     };
 
-    await mountPage(context);
+    const page = await mountPage(context);
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
+    expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("refreshes the roster and opens the created agent hatch session", async () => {

@@ -3,6 +3,7 @@ import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import { isDeviceWorkerAvailable } from "./worker-environments/device-provider.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -15,15 +16,19 @@ afterEach(async () => {
 });
 
 test(
-  "profiles-disabled startup publishes lightweight placement ownership to real session RPCs",
+  "profiles-disabled startup publishes core worker placement ownership to real session RPCs",
   { timeout: 30_000 },
   async () => {
     // The shared server harness defaults to its minimal mode, which deliberately skips all
-    // worker stores. Exercise the production startup path while keeping profiles unconfigured.
+    // worker stores. Exercise the production startup path while keeping plugin profiles unconfigured;
+    // the core device provider still owns the worker service.
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     harness = await startGatewayServerHarness();
     const context = getFallbackGatewayContext();
-    expect(context?.workerEnvironmentService).toBeUndefined();
+    expect(context?.workerEnvironmentService).toBeDefined();
+    await expect(
+      isDeviceWorkerAvailable(context?.workerEnvironmentService, "missing-device"),
+    ).resolves.toBe(false);
     const placements = context?.workerSessionPlacementService as
       | WorkerSessionPlacementStore
       | undefined;
@@ -99,7 +104,7 @@ test(
       lifecycleRevision: resetLifecycleRevision,
     });
     expect(placements.get(resetSessionId)).toBeUndefined();
-    expect(getFallbackGatewayContext()?.workerEnvironmentService).toBeUndefined();
+    expect(getFallbackGatewayContext()?.workerEnvironmentService).toBeDefined();
     ws.close();
   },
 );

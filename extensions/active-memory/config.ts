@@ -9,6 +9,7 @@ import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -132,11 +133,6 @@ function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawCo
   );
 }
 
-function normalizePromptConfigText(value: unknown): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? text : undefined;
-}
-
 function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
   const raw = asOptionalRecord(pluginConfig);
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
@@ -239,8 +235,8 @@ function normalizePluginConfig(
     fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
-    promptOverride: normalizePromptConfigText(raw.promptOverride),
-    promptAppend: normalizePromptConfigText(raw.promptAppend),
+    promptOverride: normalizeOptionalString(raw.promptOverride),
+    promptAppend: normalizeOptionalString(raw.promptAppend),
     timeoutMs: clampInt(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,

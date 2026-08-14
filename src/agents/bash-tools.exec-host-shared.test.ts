@@ -348,6 +348,24 @@ describe("sendExecApprovalFollowupResult", () => {
 
     expect(firstExecApprovalFollowupCall()?.expectedSessionId).toBe("session-original");
   });
+
+  it("forwards the prepared agent owner to the followup dispatch", async () => {
+    sendExecApprovalFollowup.mockResolvedValue(true);
+
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-bare-owner",
+        agentId: "research",
+        sessionKey: "global",
+      },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn },
+    );
+
+    expect(sendExecApprovalFollowup).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research", sessionKey: "global" }),
+    );
+  });
 });
 
 describe("isExecApprovalFollowupSessionRebound", () => {

@@ -486,7 +486,7 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
             <div class="settings-group">
               ${hiddenCatalogIds.map((catalogId) =>
                 renderSettingsRow({
-                  title: catalogId,
+                  title: props.hiddenSessionCatalogLabels.get(catalogId) ?? catalogId,
                   description: t("quickSettings.personal.browserOnly"),
                   control: html`<button
                     type="button"

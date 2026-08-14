@@ -327,8 +327,8 @@ const subagentRestorer = createSubagentRegistryRestorer({
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
   resumeRun: (runId) => resumeSubagentRun(runId),
-  listSwarmRunsForGroup: (groupId, requesterSessionKey) =>
-    listSwarmRunsForGroup(groupId, requesterSessionKey),
+  listSwarmRunsForGroup: (groupId, requesterSessionKey, requesterAgentId) =>
+    listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),
   startQueuedSubagentRun: (runId, gatewayRunId, lifecycleGeneration) =>
     subagentRunManager.startQueuedSubagentRun(runId, gatewayRunId, lifecycleGeneration),
   terminateAcceptedRestoredCollectorRun: ({

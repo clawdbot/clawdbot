@@ -1,14 +1,59 @@
 // Keeps fake-terminal test-only logs and opaque-session fixtures independently bounded.
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
+import {
+  waitForFixtureLogEntry,
+  type FixtureLogEntry,
+} from "./tui-pty-harness-assertion-test-support.js";
 import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-support.js";
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
+import { startPty, type PtyRun } from "./tui-pty-test-support.js";
 
 export * from "./tui-pty-harness-assertion-test-support.js";
+
+const activeRuns: PtyRun[] = [];
+const OUTPUT_TIMEOUT_MS = 2_000;
+const EXIT_TIMEOUT_MS = 4_000;
+
+export async function disposeActiveTuiFixtures(): Promise<void> {
+  for (const run of activeRuns.splice(0)) {
+    await run.dispose();
+  }
+}
+
+export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
+  const scriptPath = await writeTuiPtyFixtureScript(tempDir);
+  const logPath = path.join(tempDir, "fixture-log.jsonl");
+  const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
+    activeRuns,
+    cwd: process.cwd(),
+    env: {
+      OPENCLAW_THEME: "dark",
+      OPENCLAW_TUI_PTY_LOG_PATH: logPath,
+      NO_COLOR: undefined,
+      ...opts.env,
+    },
+    exitTimeoutMs: EXIT_TIMEOUT_MS,
+    outputTimeoutMs: OUTPUT_TIMEOUT_MS,
+  });
+
+  return {
+    run,
+    logPath,
+    waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
+      await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
+    cleanup: async () => {
+      await run.dispose();
+      await rm(tempDir, { recursive: true, force: true });
+    },
+  };
+}
 
 export async function writeTuiPtyFixtureScript(dir: string) {
   // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
@@ -47,6 +92,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const dynamicCommandDescription = process.env.OPENCLAW_TUI_PTY_DYNAMIC_COMMAND_DESCRIPTION;
       const thinkingLabel = process.env.OPENCLAW_TUI_PTY_THINKING_LABEL;
       const safeThinkingLabel = process.env.OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL;
+      const liveReplyHistory: unknown[] = [];
+      let liveReplySequence = 0;
       const thinkingLevels = [
         ...(thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : []),
         ...(safeThinkingLabel ? [{ id: "fixture-thinking-safe", label: safeThinkingLabel }] : []),
@@ -155,6 +202,71 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
+          if (opts.message.startsWith("live reply dedupe proof: ")) {
+            const reply = opts.message.endsWith("first") ? "TUI_LIVE_FIRST" : "TUI_LIVE_SECOND";
+            const userSequence = ++liveReplySequence;
+            const assistantSequence = ++liveReplySequence;
+            const userMessage = {
+              role: "user",
+              content: [{ type: "text", text: opts.message }],
+              __openclaw: {
+                id: "live-user-" + userSequence,
+                idempotencyKey: runId + ":user",
+                seq: userSequence,
+              },
+            };
+            const assistantMessage = {
+              role: "assistant",
+              content: [{ type: "text", text: reply }],
+              __openclaw: { id: "live-assistant-" + assistantSequence, seq: assistantSequence },
+            };
+            liveReplyHistory.push(userMessage, assistantMessage);
+            queueMicrotask(() => {
+              this.onEvent?.({
+                event: "session.message",
+                payload: {
+                  sessionKey: opts.sessionKey,
+                  message: userMessage,
+                  messageId: userMessage.__openclaw.id,
+                  messageSeq: userSequence,
+                },
+              });
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  seq: assistantSequence,
+                  state: "delta",
+                  message: { role: "assistant", content: [{ type: "text", text: reply }] },
+                },
+              });
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  seq: assistantSequence + 1,
+                  state: "final",
+                  message: { role: "assistant", content: [{ type: "text", text: reply }] },
+                },
+              });
+              this.onEvent?.({
+                event: "session.message",
+                payload: {
+                  sessionKey: opts.sessionKey,
+                  message: assistantMessage,
+                  messageId: assistantMessage.__openclaw.id,
+                  messageSeq: assistantSequence,
+                },
+              });
+              this.onEvent?.({
+                event: "sessions.changed",
+                payload: { sessionKey: opts.sessionKey, runId, phase: "end" },
+              });
+            });
+            return { runId };
+          }
           if (opts.message === "tui error redaction proof") {
             const escape = String.fromCharCode(27);
             throw new Error("gateway down", {
@@ -342,6 +454,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           record("loadHistory", { sessionKey });
           const gapHistory = loadGapHistory(sessionKey);
           if (gapHistory) { return gapHistory; }
+          if (liveReplyHistory.length > 0) {
+            return { messages: [...liveReplyHistory] };
+          }
           const rapidSwitchMarker = sessionKey.endsWith("switch-a")
             ? "A"
             : sessionKey.endsWith("switch-b")

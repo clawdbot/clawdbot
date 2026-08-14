@@ -38,16 +38,19 @@ export type PreparedAgentRunAdmission = Readonly<{
   close: () => void;
 }>;
 
-const delegatedAuthorityLeases = new WeakMap<
-  AdmittedRunContext,
-  { authority: AgentRunDelegatedAuthority; closed: boolean }
->();
+type DelegatedAuthorityLease = {
+  authority: AgentRunDelegatedAuthority;
+  foregroundClosed: boolean;
+  retained: boolean;
+};
+
+const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
 
 function bindAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
 ): AgentRunDelegatedAuthority {
   const authority = claimAgentRunDelegatedAuthority(context.operationalRunInstance);
-  delegatedAuthorityLeases.set(context, { authority, closed: false });
+  delegatedAuthorityLeases.set(context, { authority, foregroundClosed: false, retained: false });
   return authority;
 }
 
@@ -56,7 +59,7 @@ export function getAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
 ): AgentRunDelegatedAuthority | undefined {
   const lease = delegatedAuthorityLeases.get(context);
-  return lease && !lease.closed && validateAgentRunDelegatedAuthority(lease.authority)
+  return lease && !lease.foregroundClosed && validateAgentRunDelegatedAuthority(lease.authority)
     ? lease.authority
     : undefined;
 }
@@ -64,11 +67,43 @@ export function getAdmittedRunDelegatedAuthority(
 /** Idempotently compare-releases the authority captured by this admission. */
 export function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext): boolean {
   const lease = delegatedAuthorityLeases.get(context);
-  if (!lease || lease.closed) {
+  if (!lease || lease.foregroundClosed) {
     return false;
   }
-  lease.closed = true;
-  return releaseAgentRunDelegatedAuthority(lease.authority);
+  lease.foregroundClosed = true;
+  if (!lease.retained) {
+    releaseAgentRunDelegatedAuthority(lease.authority);
+  }
+  return true;
+}
+
+/** Internal relay claim; it never revives the ordinary foreground lookup. */
+export function retainAdmittedRunDelegatedAuthority(
+  context: AdmittedRunContext,
+): (() => void) | undefined {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease || lease.retained || !validateAgentRunDelegatedAuthority(lease.authority)) {
+    return undefined;
+  }
+  lease.retained = true;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    lease.retained = false;
+    if (lease.foregroundClosed) {
+      releaseAgentRunDelegatedAuthority(lease.authority);
+    }
+  };
+}
+
+export function isRetainedAdmittedRunDelegatedAuthorityActive(
+  context: AdmittedRunContext,
+): boolean {
+  const lease = delegatedAuthorityLeases.get(context);
+  return Boolean(lease?.retained && validateAgentRunDelegatedAuthority(lease.authority));
 }
 
 type ExecutionIdentityRecoveryAdmission = Readonly<{

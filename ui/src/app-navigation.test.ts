@@ -94,6 +94,7 @@ describe("navigationIconForRoute", () => {
       custodian: "lobster",
       activity: "activity",
       apps: "layoutGrid",
+      portals: "monitor",
       approvals: "badgeCheck",
       workboard: "kanban",
       dashboards: "layoutDashboard",
@@ -216,6 +217,7 @@ describe("titleForRoute", () => {
       custodian: "OpenClaw",
       activity: "Activity",
       apps: "Apps",
+      portals: "Portals",
       approvals: "Approvals",
       workboard: "Workboard",
       dashboards: "Dashboards",
@@ -266,6 +268,7 @@ describe("subtitleForRoute", () => {
       custodian: "System setup and care.",
       activity: "Browser-local tool activity summaries.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
+      portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
       dashboards: "Sessions that open on their dashboard face.",
@@ -311,6 +314,7 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("apps")).toBe("/apps");
+    expect(pathForRoute("portals")).toBe("/portals");
     expect(pathForRoute("dashboards")).toBe("/dashboards");
     expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
@@ -349,6 +353,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/apps")).toBe("apps");
+    expect(routeIdFromPath("/portals")).toBe("portals");
     expect(routeIdFromPath("/dashboards")).toBe("dashboards");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
@@ -515,6 +520,18 @@ describe("plugin tabs route", () => {
 
 describe("SIDEBAR_NAV_ROUTES", () => {
   it("all routes are unique", () => {
+    expect(SIDEBAR_NAV_ROUTES).toEqual([
+      "workboard",
+      "dashboards",
+      "usage",
+      "cron",
+      "tasks",
+      "sessions",
+      "activity",
+      "plugins",
+      "apps",
+      "portals",
+    ]);
     expect(new Set(SIDEBAR_NAV_ROUTES).size).toBe(SIDEBAR_NAV_ROUTES.length);
   });
 

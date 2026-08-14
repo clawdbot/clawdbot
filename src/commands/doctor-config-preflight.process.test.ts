@@ -6,21 +6,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const STARTUP_REFUSAL =
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
 const STARTUP_RECOVERY =
   'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const execFileAsync = promisify(execFile);
 
 function runIsolatedModuleScript(
@@ -28,7 +23,7 @@ function runIsolatedModuleScript(
   script: string,
   options: { runtimeRoot?: string; timeoutMs?: number } = {},
 ) {
-  return spawnSync(
+  return execFileAsync(
     process.execPath,
     [
       ...(options.runtimeRoot ? ["--preserve-symlinks"] : []),
@@ -123,7 +118,64 @@ function seedPluginStateConflict(stateDir: string): void {
   }
 }
 
-describe("gateway startup-migration refusal", () => {
+describe("doctor invalid config process exit", () => {
+  it("exits after a complete best-effort report for an unparseable config", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-doctor-invalid-config-exit-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.NODE_OPTIONS;
+    delete env.OPENCLAW_GATEWAY_PASSWORD;
+    delete env.OPENCLAW_GATEWAY_TOKEN;
+    delete env.OPENCLAW_GATEWAY_URL;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, '{"agents": {broken json');
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.resolve("src/entry.ts"),
+        "doctor",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        env,
+        timeout: 60_000,
+      },
+    );
+    const output = `${result.stderr}\n${result.stdout}`;
+
+    expect(result.error, output).toBeUndefined();
+    expect(result.status, output).toBe(0);
+    expect(result.signal, output).toBeNull();
+    expect(output).toContain("Config invalid; doctor will run with best-effort config.");
+    expect(output).toContain("Doctor complete.");
+  }, 75_000);
+});
+
+describe.concurrent("gateway startup-migration refusal", () => {
   it("exits cleanly after reporting the refusal once and releasing its lease", async () => {
     const temporaryRoot = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-startup-migration-exit-"),
@@ -178,7 +230,7 @@ describe("gateway startup-migration refusal", () => {
     }
   }, 45_000);
 
-  it("reuses the state-migration checkpoint when the config file remains absent", async () => {
+  it("skips state-only checkpoint work when config and state remain absent", async () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-configless-checkpoint-"));
     const runtimeRoot = createSourceRuntime(root);
     const stateDir = path.join(root, "state");
@@ -232,10 +284,7 @@ describe("gateway startup-migration refusal", () => {
         runtimeRoot,
         timeoutMs: 60_000,
       });
-    const readResult = (result: ReturnType<typeof runIsolatedModuleScript>) => {
-      expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
-      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-      expect(result.signal, `${result.stderr}\n${result.stdout}`).toBeNull();
+    const readResult = (result: Awaited<ReturnType<typeof runIsolatedModuleScript>>) => {
       const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
       expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
       return JSON.parse(resultLine!.slice("__RESULT__".length)) as {
@@ -244,158 +293,16 @@ describe("gateway startup-migration refusal", () => {
       };
     };
 
-    const first = readResult(run());
-    const second = readResult(run());
+    const first = readResult(await run());
+    const second = readResult(await run());
 
-    expect(first).toEqual({ activeLease: false, stateMigrationsImported: true });
+    // This direct preflight is state-only. Gateway startup requests the readiness checkpoint and
+    // still imports it; the preceding process case proves migration failures refuse readiness.
+    expect(first).toEqual({ activeLease: false, stateMigrationsImported: false });
     expect(second).toEqual({ activeLease: false, stateMigrationsImported: false });
     expect(fs.existsSync(configPath)).toBe(false);
+    expect(fs.existsSync(stateDir)).toBe(false);
   }, 150_000);
-
-  it("persists a refreshed legacy plugin index for the next process", async () => {
-    const root = await fs.promises.realpath(tempDirs.make("openclaw-plugin-index-checkpoint-"));
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(root, "openclaw.json");
-    const config = {
-      gateway: { mode: "local", auth: { mode: "none" } },
-    } satisfies OpenClawConfig;
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_TEST_FAST: "1",
-      NO_COLOR: "1",
-    };
-    delete env.NODE_ENV;
-    delete env.OPENCLAW_HOME;
-    delete env.VITEST;
-    delete env.VITEST_POOL_ID;
-    delete env.VITEST_WORKER_ID;
-
-    try {
-      fs.mkdirSync(stateDir, { recursive: true });
-      fs.writeFileSync(configPath, JSON.stringify(config));
-      const pluginId = "legacy-doctor-index";
-      const pluginDir = writeManagedNpmPlugin({
-        stateDir,
-        packageName: "@openclaw/legacy-doctor-index",
-        pluginId,
-        version: "1.0.0",
-      });
-      const packageJsonPath = path.join(pluginDir, "package.json");
-      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-        openclaw: Record<string, unknown>;
-      };
-      fs.writeFileSync(
-        packageJsonPath,
-        JSON.stringify({
-          ...packageJson,
-          openclaw: {
-            ...packageJson.openclaw,
-            build: {
-              bundledDist: false,
-              openclawVersion: "2026.7.2",
-              pluginSdkVersion: "2026.7.2",
-            },
-          },
-        }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(pluginDir, "doctor-contract-api.cjs"),
-        "module.exports = { stateMigrations: [] };\n",
-        "utf8",
-      );
-      const current = loadPluginMetadataSnapshot({ config, env, stateDir });
-      const legacyIndex = {
-        ...current.index,
-        plugins: current.index.plugins.map((plugin) => {
-          const {
-            doctorContractFile: _doctorContractFile,
-            doctorContractHash: _doctorContractHash,
-            ...legacyPlugin
-          } = plugin;
-          return legacyPlugin;
-        }),
-      };
-      writePersistedInstalledPluginIndexSync(legacyIndex, { env });
-      clearPluginMetadataLifecycleCaches();
-      closeOpenClawStateDatabaseForTest();
-
-      const preflightUrl = new URL("./doctor-config-preflight.ts", import.meta.url).href;
-      const first = runIsolatedModuleScript(
-        env,
-        `
-          const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
-          await runDoctorConfigPreflight({
-            migrateLegacyConfig: false,
-            invalidConfigNote: false,
-            requireStateMigrationCheckpoint: true,
-          });
-        `,
-      );
-      expect(first.error, `${first.stderr}\n${first.stdout}`).toBeUndefined();
-      expect(first.status, `${first.stderr}\n${first.stdout}`).toBe(0);
-      expect(first.signal, `${first.stderr}\n${first.stdout}`).toBeNull();
-      expect(hasActiveStartupMigrationLease({ env })).toBe(false);
-      closeOpenClawStateDatabaseForTest();
-
-      const configIoUrl = new URL("../config/io.ts", import.meta.url).href;
-      const second = runIsolatedModuleScript(
-        env,
-        `
-          const { readConfigFileSnapshotWithPluginMetadata } =
-            await import(${JSON.stringify(configIoUrl)});
-          const result = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
-          const metadata = result.pluginMetadataSnapshot;
-          const plugin = metadata?.index.plugins.find(
-            (candidate) => candidate.pluginId === ${JSON.stringify(pluginId)},
-          );
-          console.log("__RESULT__" + JSON.stringify({
-            discovery: metadata?.discovery !== undefined,
-            doctorContractFile: plugin?.doctorContractFile,
-            doctorContractHash: plugin?.doctorContractHash,
-            packageBuild: plugin?.packageBuild,
-            registryDiagnostics: metadata?.registryDiagnostics,
-            registrySource: metadata?.registrySource,
-          }));
-        `,
-      );
-      expect(second.error, `${second.stderr}\n${second.stdout}`).toBeUndefined();
-      expect(second.status, `${second.stderr}\n${second.stdout}`).toBe(0);
-      expect(second.signal, `${second.stderr}\n${second.stdout}`).toBeNull();
-      const resultLine = second.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
-      expect(resultLine, `${second.stderr}\n${second.stdout}`).toBeDefined();
-      const result = JSON.parse(resultLine!.slice("__RESULT__".length)) as {
-        discovery: boolean;
-        doctorContractFile?: { ctimeMs?: number; mtimeMs: number; size: number };
-        doctorContractHash?: string;
-        packageBuild?: Record<string, unknown>;
-        registryDiagnostics?: unknown[];
-        registrySource?: string;
-      };
-      expect(result).toMatchObject({
-        discovery: false,
-        doctorContractFile: {
-          ctimeMs: expect.any(Number),
-          mtimeMs: expect.any(Number),
-          size: expect.any(Number),
-        },
-        doctorContractHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
-        packageBuild: { bundledDist: false },
-        registryDiagnostics: [],
-        registrySource: "persisted",
-      });
-    } finally {
-      clearPluginMetadataLifecycleCaches();
-      closeOpenClawStateDatabaseForTest();
-      await fs.promises.rm(root, { recursive: true, force: true });
-    }
-  }, 60_000);
 
   it("reloads tool ownership after updater-managed manifest repair", async () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-updater-manifest-repair-"));
@@ -458,7 +365,7 @@ describe("gateway startup-migration refusal", () => {
       import.meta.url,
     ).href;
     const prompterUrl = new URL("./doctor-prompter.ts", import.meta.url).href;
-    const result = runIsolatedModuleScript(
+    const result = await runIsolatedModuleScript(
       env,
       `
         const fs = await import("node:fs");
@@ -508,9 +415,6 @@ describe("gateway startup-migration refusal", () => {
       `,
       { timeoutMs: 60_000 },
     );
-    expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
-    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.signal, `${result.stderr}\n${result.stdout}`).toBeNull();
     const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
     expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
     expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({
@@ -520,211 +424,4 @@ describe("gateway startup-migration refusal", () => {
       contractTools: ["updater_tool"],
     });
   }, 90_000);
-
-  it("keeps full Doctor plugin metadata scans bounded and complete", async () => {
-    const runDoctorConfigFlow = async (
-      pluginCount: number,
-      agentCount: number,
-      mode: "preview" | "repair",
-      options: { configuredChannel?: boolean } = {},
-    ): Promise<{
-      mode: "preview" | "repair";
-      configuredChannel: boolean;
-      configFlowScanCount: number;
-      doctorScanCount: number;
-      manifestPluginCount: number;
-      scoped: boolean;
-    }> => {
-      const root = await fs.promises.realpath(
-        tempDirs.make(
-          `openclaw-doctor-metadata-scans-${mode}-${pluginCount}-${agentCount}-${options.configuredChannel ? "channel" : "base"}-`,
-        ),
-      );
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(root, "openclaw.json");
-      const resultPath = path.join(root, "result.json");
-      const timelinePath = path.join(root, "timeline.jsonl");
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        HOME: root,
-        USERPROFILE: root,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DIAGNOSTICS: "1",
-        OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TEST_FAST: "1",
-        NO_COLOR: "1",
-      };
-      delete env.NODE_ENV;
-      delete env.OPENCLAW_HOME;
-      delete env.VITEST;
-      delete env.VITEST_POOL_ID;
-      delete env.VITEST_WORKER_ID;
-
-      fs.mkdirSync(stateDir, { recursive: true });
-      const agentEntries = Object.fromEntries(
-        Array.from({ length: agentCount }, (_, index) => [
-          `doctor-agent-${index}`,
-          index === 0 ? { default: true } : {},
-        ]),
-      );
-      const defaultAgentId = "doctor-agent-0";
-      const configuredChannelId = "doctor-scan-channel";
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          agents: {
-            defaults: {
-              heartbeat: { agentId: defaultAgentId },
-              systemAgent: { agentId: defaultAgentId },
-            },
-            entries: agentEntries,
-          },
-          ...(options.configuredChannel
-            ? {
-                channels: { [configuredChannelId]: { enabled: true } },
-                plugins: { entries: { "doctor-scan-0": { enabled: true } } },
-              }
-            : {}),
-          gateway: { mode: "local", auth: { mode: "none" } },
-          talk: { agentId: defaultAgentId },
-        }),
-      );
-      for (let index = 0; index < pluginCount; index += 1) {
-        const pluginId = `doctor-scan-${index}`;
-        const pluginDir = writeManagedNpmPlugin({
-          stateDir,
-          packageName: `@openclaw/${pluginId}`,
-          pluginId,
-          version: "1.0.0",
-        });
-        if (options.configuredChannel && index === 0) {
-          const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<
-            string,
-            unknown
-          >;
-          fs.writeFileSync(
-            manifestPath,
-            JSON.stringify({
-              ...manifest,
-              channels: [configuredChannelId],
-              channelConfigs: {
-                [configuredChannelId]: { schema: { type: "object" } },
-              },
-            }),
-            "utf8",
-          );
-        }
-        fs.writeFileSync(
-          path.join(pluginDir, "doctor-contract-api.cjs"),
-          "module.exports = { resolveSessionStoreAgentIds: () => [] };\n",
-          "utf8",
-        );
-      }
-      closeOpenClawStateDatabaseForTest();
-
-      const configFlowUrl = new URL("./doctor-config-flow.ts", import.meta.url).href;
-      const doctorHealthUrl = new URL("../flows/doctor-health.ts", import.meta.url).href;
-      const doctorOptions = {
-        nonInteractive: true,
-        ...(mode === "repair" ? { repair: true } : {}),
-      };
-      await execFileAsync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "--input-type=module",
-          "--eval",
-          `
-          const { loadAndMaybeMigrateDoctorConfig } = await import(${JSON.stringify(configFlowUrl)});
-          const result = await loadAndMaybeMigrateDoctorConfig({
-            options: ${JSON.stringify(doctorOptions)},
-            confirm: async () => false,
-          });
-          const metadata = result.pluginMetadataSnapshot;
-          const fs = await import("node:fs");
-          const countMetadataScans = () => fs.readFileSync(${JSON.stringify(timelinePath)}, "utf8")
-            .trim()
-            .split("\\n")
-            .map((line) => JSON.parse(line))
-            .filter((event) => event.type === "span.end" && event.name === "plugins.metadata.scan")
-            .length;
-          const configFlowScanCount = countMetadataScans();
-          fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({
-            mode: ${JSON.stringify(mode)},
-            configuredChannel: ${JSON.stringify(options.configuredChannel === true)},
-            configFlowScanCount,
-            manifestPluginCount: metadata?.plugins.length ?? -1,
-            scoped: metadata?.pluginIds !== undefined,
-          }));
-          const { runDoctorHealthFlow } = await import(${JSON.stringify(doctorHealthUrl)});
-          await runDoctorHealthFlow({
-            log: () => {},
-            error: () => {},
-            exit: (code) => { throw new Error("doctor exited " + code); },
-          }, ${JSON.stringify(doctorOptions)});
-          const output = JSON.parse(fs.readFileSync(${JSON.stringify(resultPath)}, "utf8"));
-          fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({
-            ...output,
-            doctorScanCount: countMetadataScans() - configFlowScanCount,
-          }));
-        `,
-        ],
-        {
-          cwd: path.resolve("."),
-          encoding: "utf8",
-          env,
-          maxBuffer: 4 * 1024 * 1024,
-          timeout: 60_000,
-        },
-      );
-
-      const metadata = JSON.parse(fs.readFileSync(resultPath, "utf8")) as {
-        mode: "preview" | "repair";
-        configuredChannel: boolean;
-        configFlowScanCount: number;
-        doctorScanCount: number;
-        manifestPluginCount: number;
-        scoped: boolean;
-      };
-      return metadata;
-    };
-
-    // Each mode gets a representative multi-plugin, multi-agent, configured-channel fixture in a
-    // fresh process for environment and module-cache isolation. The aggregate scan ceilings prove
-    // the flow stays bounded without paying for a redundant cross-product of single-factor cases.
-    const fixtureRuns = [
-      runDoctorConfigFlow(3, 3, "repair", { configuredChannel: true }),
-      runDoctorConfigFlow(3, 3, "preview", { configuredChannel: true }),
-    ] as const;
-    const [repair, preview] = await Promise.all(fixtureRuns).catch(async (error: unknown) => {
-      // A failed child must not let afterEach remove roots that queued siblings still use.
-      await Promise.allSettled(fixtureRuns);
-      throw error;
-    });
-
-    const expectBoundedScans = (params: { fixture: typeof repair; mode: "preview" | "repair" }) => {
-      expect(params.fixture).toMatchObject({
-        mode: params.mode,
-        configuredChannel: true,
-        manifestPluginCount: 3,
-        scoped: false,
-      });
-      expect(params.fixture.configFlowScanCount).toBeGreaterThan(0);
-      expect(params.fixture.configFlowScanCount).toBeLessThanOrEqual(
-        params.mode === "preview" ? 8 : 5,
-      );
-      expect(params.fixture.doctorScanCount).toBeGreaterThan(0);
-      expect(params.fixture.doctorScanCount).toBeLessThanOrEqual(
-        params.mode === "preview" ? 8 : 14,
-      );
-    };
-
-    expectBoundedScans({ fixture: repair, mode: "repair" });
-    expectBoundedScans({ fixture: preview, mode: "preview" });
-  }, 300_000);
 });

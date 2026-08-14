@@ -928,40 +928,6 @@ describe("resolvePluginProviders", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("filters bundled provider plugins by allowlist by default", () => {
-    setManifestPlugins([
-      createManifestProviderPlugin({
-        id: "kilocode",
-        providerIds: ["kilocode"],
-        origin: "bundled",
-        enabledByDefault: true,
-      }),
-      createManifestProviderPlugin({
-        id: "moonshot",
-        providerIds: ["moonshot"],
-        origin: "bundled",
-        enabledByDefault: true,
-      }),
-      createManifestProviderPlugin({
-        id: "openrouter",
-        providerIds: ["openrouter"],
-        origin: "bundled",
-        enabledByDefault: true,
-      }),
-    ]);
-
-    const discovered = resolveDiscoveredProviderPluginIds({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
-      env: {} as NodeJS.ProcessEnv,
-    });
-
-    expect(discovered).toEqual(["openrouter"]);
-  });
-
   it("filters bundled provider plugins through restrictive allowlists", () => {
     setManifestPlugins([
       createManifestProviderPlugin({

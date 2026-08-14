@@ -567,7 +567,7 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-async function resolveStartupInstallStatus(fetchGit: boolean) {
+async function resolveStartupInstallStatus(checkDevGit: boolean) {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
@@ -583,8 +583,9 @@ async function resolveStartupInstallStatus(fetchGit: boolean) {
   const status = await checkUpdateStatus({
     root,
     timeoutMs: 2500,
-    fetchGit,
+    fetchGit: checkDevGit,
     includeRegistry: false,
+    ...(checkDevGit ? { useDetachedDevUpstream: true } : {}),
     ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
   });
   return { root, status, installReceipt };
@@ -1121,10 +1122,11 @@ export async function runGatewayUpdateCheck(params: {
         reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
       });
     }
-    const hasTrackedMain = git.branch === DEV_BRANCH && git.upstreamSource === "tracking";
+    const hasTrackedDevUpstream =
+      (git.branch === DEV_BRANCH || git.branch === "HEAD") && git.upstreamSource === "tracking";
     const hasReceiptBackedDetachedHead = git.branch === "HEAD" && git.upstreamSource === "receipt";
     const canRunTrackedDevCampaign =
-      (hasTrackedMain || hasReceiptBackedDetachedHead) && git.ahead === 0;
+      (hasTrackedDevUpstream || hasReceiptBackedDetachedHead) && git.ahead === 0;
     if (shouldRunAutoUpdate && canRunTrackedDevCampaign) {
       const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
       const recentAttempt =

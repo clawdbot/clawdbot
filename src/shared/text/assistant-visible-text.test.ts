@@ -39,6 +39,11 @@ describe("stripAssistantInternalScaffolding", () => {
       expected: "Visible",
     },
     {
+      name: "strips internal reflection tags",
+      input: ["<internal>", "private reflection", "</internal>", "Visible"].join("\n"),
+      expected: "Visible",
+    },
+    {
       name: "strips relevant-memories scaffolding blocks",
       input: [
         "<relevant-memories>",
@@ -985,6 +990,12 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantFinalAnswerText("Before <think>literal tag text after")).toBe(
       "Before <think>literal tag text after",
     );
+  });
+
+  it("never recovers unclosed internal reflection from final-answer prose", () => {
+    expect(
+      sanitizeAssistantFinalAnswerText("Visible prefix <thinking><internal>private reflection"),
+    ).toBe("Visible prefix");
   });
 });
 

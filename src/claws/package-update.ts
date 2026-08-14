@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
@@ -77,7 +77,7 @@ export async function applyClawPackageUpdate(
       try {
         await revert();
       } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
+        failures.push(coerceErrorMessage(error));
       }
     }
     if (externalMutations.length > 0) {
@@ -271,7 +271,7 @@ export async function applyClawPackageUpdate(
   } catch (error) {
     if (externalMutations.length > 0) {
       throw new ClawPackageUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; package artifact outcome requires reconciliation`,
+        `${coerceErrorMessage(error)}; package artifact outcome requires reconciliation`,
         true,
       );
     }
@@ -279,12 +279,12 @@ export async function applyClawPackageUpdate(
       await rollback();
     } catch (rollbackError) {
       throw new ClawPackageUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; rollback incomplete: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${coerceErrorMessage(error)}; rollback incomplete: ${coerceErrorMessage(rollbackError)}`,
         externalMutations.length > 0,
       );
     }
     throw new ClawPackageUpdateError(
-      error instanceof Error ? error.message : String(error),
+      coerceErrorMessage(error),
       error instanceof ClawPackageUpdateError ? error.partial : false,
     );
   }

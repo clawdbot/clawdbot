@@ -453,6 +453,10 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
       shouldHandleSlackPluginViaForwarding(params)
     );
   }
+  const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
+  if (turnSourceChannel && turnSourceChannel !== "slack") {
+    return false;
+  }
   if (
     !doesApprovalRequestSelectChannelAccount({
       ...params,

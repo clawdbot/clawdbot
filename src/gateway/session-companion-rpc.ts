@@ -1,4 +1,3 @@
-import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -13,10 +12,31 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
-import { registerSessionCompanionProgress } from "./session-companion-progress.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
+
+function resolveCompanionTarget(
+  params: { sessionKey: string; agentId?: string | undefined },
+  context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
+) {
+  const cfg = context.getRuntimeConfig();
+  const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
+  if (!requested.ok) {
+    return requested;
+  }
+  return {
+    ok: true as const,
+    agentId: requested.agentId,
+    sessionKey: resolveSessionStoreKey({
+      cfg,
+      sessionKey: params.sessionKey,
+      storeAgentId: requested.agentId,
+    }),
+  };
+}
 
 export const sessionCompanionHandlers: GatewayRequestHandlers = {
-  "sessions.companion.ask": async ({ params, respond, client, context }) => {
+  "sessions.companion.ask": async ({ params, respond, client, context, signal }) => {
     if (!validateSessionsCompanionAskParams(params)) {
       respond(
         false,
@@ -28,7 +48,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, question } = params as SessionsCompanionAskParams;
+    const { sessionKey, agentId, question } = params as SessionsCompanionAskParams;
     if (!question.trim()) {
       respond(
         false,
@@ -53,20 +73,18 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const unregisterProgress = client.connect.caps?.includes(
-      GATEWAY_CLIENT_CAPS.SESSION_COMPANION_PROGRESS,
-    )
-      ? registerSessionCompanionProgress({
-          connId: client.connId,
-          sessionKey,
-          listener: (prepared) => respond(true, { status: "accepted", ...prepared }),
-        })
-      : undefined;
+    const target = resolveCompanionTarget({ sessionKey, agentId }, context);
+    if (!target.ok) {
+      respond(false, undefined, target.error);
+      return;
+    }
     try {
       const result = await context.sessionCompanion.ask({
-        sessionKey,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
         question,
         connId: client.connId,
+        ...(signal ? { signal } : {}),
       });
       respond(true, result);
     } catch (error) {
@@ -99,8 +117,6 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
         }),
       );
-    } finally {
-      unregisterProgress?.();
     }
   },
   "sessions.companion.state": ({ params, respond, context }) => {
@@ -123,8 +139,19 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey } = params as SessionsCompanionStateParams;
-    respond(true, context.sessionCompanion.state(sessionKey));
+    const { sessionKey, agentId } = params as SessionsCompanionStateParams;
+    const target = resolveCompanionTarget({ sessionKey, agentId }, context);
+    if (!target.ok) {
+      respond(false, undefined, target.error);
+      return;
+    }
+    respond(
+      true,
+      context.sessionCompanion.state({
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+      }),
+    );
   },
 
   "sessions.companion.reset": ({ params, respond, context }) => {
@@ -147,8 +174,16 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey } = params as SessionsCompanionResetParams;
-    context.sessionCompanion.reset(sessionKey);
+    const { sessionKey, agentId } = params as SessionsCompanionResetParams;
+    const target = resolveCompanionTarget({ sessionKey, agentId }, context);
+    if (!target.ok) {
+      respond(false, undefined, target.error);
+      return;
+    }
+    context.sessionCompanion.reset({
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+    });
     respond(true, { ok: true });
   },
 };

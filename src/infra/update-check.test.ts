@@ -627,7 +627,7 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus", () => {
-  it("uses a matching receipt upstream only for the detached installed revision", async () => {
+  it("resolves detached dev tracking before matching update receipts", async () => {
     await withTestDir({ prefix: "openclaw-update-check-receipt-fallback-" }, async (base) => {
       const sourceRoot = path.join(base, "source");
       const localRoot = path.join(base, "local");
@@ -650,8 +650,13 @@ describe("checkUpdateStatus", () => {
           includeRegistry: false,
           fetchGit: params.fetch ?? false,
           timeoutMs: 5000,
+          useDetachedDevUpstream: true,
           ...(params.fallback ? { gitUpstreamFallback: params.fallback } : {}),
         });
+
+      expect((await readStatus()).git?.upstream).toBe("origin/main");
+      await runGit(localRoot, "branch", "--unset-upstream", "main");
+      expect((await readStatus()).git?.upstream).toBeNull();
 
       const current = await readStatus({ fetch: true, fallback });
       expect(current.git).toMatchObject({

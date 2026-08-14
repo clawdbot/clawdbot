@@ -75,7 +75,7 @@ import {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,
   loadSessionEntry,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
@@ -627,7 +627,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
+    const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
       opts.sessionKey,
       { ...loadOptions, includeStoreChildEntries: true },
     );
@@ -807,7 +807,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
     await this.ready;
-    if (loadSessionEntryReadOnly(key, opts).entry?.incognito === true) {
+    if (loadGatewaySessionEntryReadOnly(key, opts).entry?.incognito === true) {
       throw new Error("Incognito sessions cannot reset in place.");
     }
     const result = await performGatewaySessionReset({

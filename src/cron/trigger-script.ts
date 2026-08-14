@@ -47,8 +47,8 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
-  buildCronAgentDefaultsConfig,
   resolveCronActiveRuntimeConfig,
+  resolveCronAgentConfig,
 } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import {
@@ -122,14 +122,10 @@ async function prepareTriggerRuntime(params: {
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
   const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
-  const agentDefaults = buildCronAgentDefaultsConfig({
-    defaults: params.runtimeConfig.agents?.defaults,
+  const { agentDefaults, cfgWithAgentDefaults: config } = resolveCronAgentConfig({
+    config: params.runtimeConfig,
     agentConfigOverride,
   });
-  const config: OpenClawConfig = {
-    ...params.runtimeConfig,
-    agents: Object.assign({}, params.runtimeConfig.agents, { defaults: agentDefaults }),
-  };
   const workspaceDirRaw = resolveAgentWorkspaceDir(config, agentId);
   const agentDir = resolveAgentDir(config, agentId);
   const workspace = await ensureAgentWorkspace({

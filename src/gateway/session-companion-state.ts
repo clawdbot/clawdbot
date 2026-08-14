@@ -1,7 +1,7 @@
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
 
 export type SessionCompanionContextMessage = {
-  role: "assistant" | "summary" | "user";
+  role: "assistant" | "user";
   text: string;
   ts: number;
 };

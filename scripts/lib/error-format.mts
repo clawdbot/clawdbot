@@ -12,6 +12,11 @@ export function coerceErrorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
 }
 
+/** Preserve Error values and stringify every other value without workspace dependencies. */
+export function toStringifiedError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
 /** Preserve structured non-Error failures without requiring built workspace packages. */
 export function toErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {

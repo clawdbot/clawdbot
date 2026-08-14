@@ -8,7 +8,7 @@ import {
 } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseBooleanValue, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildQaAgenticParityComparison,
   buildQaRuntimeParityReport,
@@ -238,20 +238,11 @@ function parseQaModelThinkingOverrides(entries: readonly string[] | undefined) {
 }
 
 function parseQaBooleanModelOption(label: string, value: string) {
-  switch (value.trim().toLowerCase()) {
-    case "1":
-    case "on":
-    case "true":
-    case "yes":
-      return true;
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return false;
-    default:
-      throw new Error(`${label} fast must be one of true, false, on, off, yes, no, 1, 0`);
+  const parsed = parseBooleanValue(value);
+  if (parsed === undefined) {
+    throw new Error(`${label} fast must be one of true, false, on, off, yes, no, 1, 0`);
   }
+  return parsed;
 }
 
 function parseQaPositiveIntegerOption(label: string, value: number | undefined) {
@@ -1745,8 +1736,4 @@ export async function runQaProviderServerCommand(
   await runInterruptibleServer(standaloneCommand.serverLabel, server);
 }
 
-export const testing = {
-  resolveRepoRelativeOutputDir,
-};
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

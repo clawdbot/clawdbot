@@ -9,13 +9,14 @@ struct TerminalHubScreenTests {
         url: URL,
         token: String? = nil,
         password: String? = nil,
+        tls: GatewayTLSParams? = nil,
         allowStoredDeviceAuth: Bool = true,
         deviceAuthGatewayID: String? = nil) -> GatewayConnectConfig
     {
         GatewayConnectConfig(
             url: url,
             stableID: "manual|gateway.example.com|443",
-            tls: nil,
+            tls: tls,
             token: token,
             bootstrapToken: nil,
             password: password,
@@ -67,6 +68,17 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"token\":\"secret-token\"") == true)
         #expect(script?.contains("\"password\":\"fallback-password\"") == true)
         #expect(script?.contains("\"gatewayUrl\":\"wss:\\/\\/gateway.example.com:8443\"") == true)
+    }
+
+    @Test func `auth user script canonicalizes an explicit default port`() throws {
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:443")),
+            token: "secret-token")
+
+        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+
+        #expect(script?.contains("\"https:\\/\\/gateway.example.com\"") == true)
+        #expect(script?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
     }
 
     @Test func `auth user script falls back to stored operator token`() throws {
@@ -137,6 +149,83 @@ struct TerminalHubScreenTests {
         #expect(
             TerminalHubScreen.webContentIdentity(config: config, storedOperatorToken: "token-a") !=
                 TerminalHubScreen.webContentIdentity(config: config, storedOperatorToken: "token-b"))
+    }
+
+    @Test func `web content identity changes with the accepted TLS pin`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+        let first = Self.makeConfig(
+            url: url,
+            tls: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: "first",
+                allowTOFU: false,
+                storeKey: "gateway"))
+        let second = Self.makeConfig(
+            url: url,
+            tls: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: "second",
+                allowTOFU: false,
+                storeKey: "gateway"))
+
+        #expect(
+            TerminalHubScreen.webContentIdentity(config: first, storedOperatorToken: nil) !=
+                TerminalHubScreen.webContentIdentity(config: second, storedOperatorToken: nil))
+    }
+
+    @Test func `authenticated Control UI origin rejects authority changes`() throws {
+        let controlURL = try #require(URL(string: "https://gateway.example.com/control"))
+        let defaultPortURL = try #require(URL(string: "https://GATEWAY.example.com:443/chat"))
+        let alternatePortURL = try #require(URL(string: "https://gateway.example.com:8443/chat"))
+        let alternateHostURL = try #require(URL(string: "https://replacement.example.com/chat"))
+        let insecureURL = try #require(URL(string: "http://gateway.example.com/chat"))
+        let expected = try #require(GatewayTLSAuthority(url: controlURL))
+
+        #expect(expected == GatewayTLSAuthority(url: defaultPortURL))
+        #expect(expected != GatewayTLSAuthority(url: alternatePortURL))
+        #expect(expected != GatewayTLSAuthority(url: alternateHostURL))
+        #expect(expected != GatewayTLSAuthority(url: insecureURL))
+    }
+
+    @Test func `authenticated Control UI canonicalizes IPv6 authorities`() throws {
+        let controlURL = try #require(URL(string: "https://[2001:db8::1]:8443/control"))
+        let expected = try #require(GatewayTLSAuthority(url: controlURL))
+
+        #expect(expected.serialized == "https://[2001:db8::1]:8443")
+        #expect(expected.matches(host: "2001:DB8::1", port: 8443))
+        #expect(expected.matches(host: "[2001:db8::1]", port: 8443))
+        #expect(!expected.matches(host: "2001:db8::2", port: 8443))
+        #expect(!expected.matches(host: "2001:db8::1", port: 443))
+    }
+
+    @Test func `authenticated Control UI navigation keeps the main frame on its origin`() throws {
+        let controlURL = try #require(URL(string: "https://gateway.example.com/control"))
+        let sameOriginURL = try #require(URL(string: "https://gateway.example.com/chat?session=main"))
+        let alternateHostURL = try #require(URL(string: "https://replacement.example.com/chat"))
+        let alternatePortURL = try #require(URL(string: "https://gateway.example.com:8443/chat"))
+        let embeddedURL = try #require(URL(string: "https://discussion.example.com/embed/thread/a/b"))
+        let unknownFrameURL = try #require(URL(string: "https://gateway.example.com/chat"))
+        let coordinator = try AuthenticatedControlUIWebViewCoordinator(
+            url: controlURL,
+            tls: nil)
+
+        #expect(coordinator.allowsNavigation(to: sameOriginURL, isMainFrame: true))
+        #expect(!coordinator.allowsNavigation(to: alternateHostURL, isMainFrame: true))
+        #expect(!coordinator.allowsNavigation(to: alternatePortURL, isMainFrame: true))
+        #expect(coordinator.allowsNavigation(to: embeddedURL, isMainFrame: false))
+        #expect(!coordinator.allowsNavigation(to: unknownFrameURL, isMainFrame: nil))
+    }
+
+    @Test func `authenticated Control UI TLS authority uses the normalized page authority`() throws {
+        let controlURL = try #require(URL(string: "https://Gateway.Example.com/control"))
+        let coordinator = try AuthenticatedControlUIWebViewCoordinator(
+            url: controlURL,
+            tls: nil)
+
+        #expect(coordinator.matchesExpectedAuthority(host: "gateway.example.com", port: 0))
+        #expect(coordinator.matchesExpectedAuthority(host: "gateway.example.com", port: 443))
+        #expect(!coordinator.matchesExpectedAuthority(host: "gateway.example.com", port: 8443))
+        #expect(!coordinator.matchesExpectedAuthority(host: "replacement.example.com", port: 443))
     }
 
     @Test func `auth user script is omitted without credentials`() throws {

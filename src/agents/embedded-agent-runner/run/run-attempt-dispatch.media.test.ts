@@ -220,6 +220,44 @@ describe("plugin harness prompt media", () => {
     }
   });
 
+  it("delivers readable images when an unresolved attachment is hydration-suppressed", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-mixed-media-"));
+    const imagePath = path.join(workspaceDir, "present.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    try {
+      const result = await preparePluginHarnessPromptImages({
+        runParams: {
+          agentId: "main",
+          config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+          images: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+          imageOrder: ["inline"],
+          media: [
+            { path: imagePath, contentType: "image/png" },
+            {
+              path: path.join(workspaceDir, "missing.png"),
+              contentType: "image/png",
+              hydrationSuppressed: true,
+            },
+          ],
+          sessionId: "session-mixed",
+        },
+        runtime: {
+          model: { input: ["text", "image"] },
+          sessionId: "session-mixed",
+          workspaceDir,
+        },
+        pluginHarnessOwnsTransport: true,
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      expect(result.imageOrder).toEqual(["inline"]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces an unsuppressed identity-less inline fact with no image block", async () => {
     await expect(
       preparePluginHarnessPromptImages({

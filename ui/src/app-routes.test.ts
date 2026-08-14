@@ -12,6 +12,7 @@ describe("application router registration", () => {
 
   it("registers every route id exactly once", () => {
     const routeIds = router.routes.map((route) => route.id);
+    expect(routeIds).toContain("portals");
     expect([...routeIds].toSorted()).toEqual([...APP_ROUTE_IDS].toSorted());
   });
 

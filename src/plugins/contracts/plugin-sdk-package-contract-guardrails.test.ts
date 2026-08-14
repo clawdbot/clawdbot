@@ -6,13 +6,13 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
+  packagedPrivatePluginSdkRuntimeEntrypoints,
   privateLocalOnlyPluginSdkEntrypoints,
   pluginSdkEntrypoints,
   publicPluginOwnedSdkEntrypoints,
   publicPluginSdkEntrypoints,
-  reservedBundledPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
-} from "../../plugin-sdk/entrypoints.js";
+} from "../../../scripts/lib/plugin-sdk-entries.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -225,12 +225,6 @@ function collectPluginOwnedSdkEntrypoints(): string[] {
       ),
     )
     .toSorted();
-}
-
-function resolvePluginOwnerFromEntrypoint(entrypoint: string): string | undefined {
-  return collectBundledPluginIds().find(
-    (pluginId) => entrypoint === pluginId || entrypoint.startsWith(`${pluginId}-`),
-  );
 }
 
 function collectClassificationOverlaps(classifications: Record<string, readonly string[]>) {
@@ -549,65 +543,6 @@ function collectWorkspaceCodeFiles(): string[] {
   return files;
 }
 
-function collectCrossOwnerReservedSdkImports(): Array<{
-  file: string;
-  specifier: string;
-  owner?: string;
-}> {
-  const leaks: Array<{ file: string; specifier: string; owner?: string }> = [];
-  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
-  const importPattern =
-    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g;
-
-  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
-    const repoRelativePath = toRepoRelativePath(file);
-    const pluginId = repoRelativePath.split("/")[1];
-    const source = fs.readFileSync(file, "utf8");
-    for (const match of source.matchAll(importPattern)) {
-      const subpath = match[1];
-      if (!subpath || !reserved.has(subpath)) {
-        continue;
-      }
-      const owner = resolvePluginOwnerFromEntrypoint(subpath);
-      if (owner === pluginId) {
-        continue;
-      }
-      leaks.push({
-        file: repoRelativePath,
-        specifier: `openclaw/plugin-sdk/${subpath}`,
-        owner,
-      });
-    }
-  }
-  return leaks;
-}
-
-function collectReservedSdkSubpathImports(): string[] {
-  const imports = new Set<string>();
-  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
-  const importPatterns = [
-    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
-    /\bimport\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']\s*\)/g,
-    /\bvi\.(?:mock|doMock)\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
-  ];
-
-  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
-    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
-      const source = fs.readFileSync(file, "utf8");
-      for (const importPattern of importPatterns) {
-        for (const match of source.matchAll(importPattern)) {
-          const subpath = match[1];
-          if (subpath && reserved.has(subpath)) {
-            imports.add(subpath);
-          }
-        }
-      }
-    }
-  }
-
-  return [...imports].toSorted();
-}
-
 function hasWildcardReexport(entrypoint: string): boolean {
   const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`), "utf8");
   return /^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
@@ -642,14 +577,9 @@ function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<strin
 
 describe("plugin-sdk package contract guardrails", () => {
   let deprecatedTestAliasImports: string[] = [];
-  let unusedReservedSdkSubpaths: string[] = [];
 
   beforeAll(() => {
     deprecatedTestAliasImports = collectDeprecatedTestAliasImports();
-    const usedReserved = new Set(collectReservedSdkSubpathImports());
-    unusedReservedSdkSubpaths = reservedBundledPluginSdkEntrypoints.filter(
-      (entrypoint) => !usedReserved.has(entrypoint),
-    );
   });
 
   it("lists package guardrail scan inputs from git without walking roots", () => {
@@ -678,15 +608,13 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
-    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
     const packageExports = collectPluginSdkPackageExports();
+    const typedPackageExports = collectTypedPluginSdkPackageExports();
 
-    expect(packageExports.filter((entrypoint) => !localOnly.has(entrypoint))).toEqual(
-      [...publicPluginSdkEntrypoints].toSorted(),
+    expect(packageExports).toEqual(
+      [...publicPluginSdkEntrypoints, ...packagedPrivatePluginSdkRuntimeEntrypoints].toSorted(),
     );
-    expect(
-      publicPluginSdkEntrypoints.filter((entrypoint) => !packageExports.includes(entrypoint)),
-    ).toEqual([]);
+    expect([...typedPackageExports].toSorted()).toEqual([...publicPluginSdkEntrypoints].toSorted());
   });
 
   it("keeps Vitest-backed SDK test helpers local-only", () => {
@@ -715,50 +643,43 @@ describe("plugin-sdk package contract guardrails", () => {
 
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
-    const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
     const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
     const localOnly = new Set<string>(privateLocalOnlyPluginSdkEntrypoints);
-    const unknownReserved = [...reserved].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unknownSupported = [...supported].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unknownLocalOnly = [...localOnly].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unclassifiedBundledFacades = collectBundledFacadeSdkEntrypoints().filter(
-      (entrypoint) =>
-        !reserved.has(entrypoint) && !supported.has(entrypoint) && !localOnly.has(entrypoint),
+      (entrypoint) => !supported.has(entrypoint) && !localOnly.has(entrypoint),
     );
-    const unreservedPrivateSurfaces = collectPrivateBundledSdkSurfaceEntrypoints().filter(
-      (entrypoint) => !reserved.has(entrypoint) && !localOnly.has(entrypoint),
+    const unclassifiedPrivateSurfaces = collectPrivateBundledSdkSurfaceEntrypoints().filter(
+      (entrypoint) => !localOnly.has(entrypoint),
     );
 
     expect({
-      unknownReserved,
       unknownSupported,
       unknownLocalOnly,
       unclassifiedBundledFacades,
-      unreservedPrivateSurfaces,
+      unclassifiedPrivateSurfaces,
     }).toEqual({
-      unknownReserved: [],
       unknownSupported: [],
       unknownLocalOnly: [],
       unclassifiedBundledFacades: [],
-      unreservedPrivateSurfaces: [],
+      unclassifiedPrivateSurfaces: [],
     });
   });
 
   it("keeps plugin-owned SDK subpaths explicitly classified and documented", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
-    const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
     const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
     const publicOwned = new Set<string>(publicPluginOwnedSdkEntrypoints);
     const localOnly = new Set<string>(privateLocalOnlyPluginSdkEntrypoints);
     const documented = collectDocumentedSdkSubpaths();
     const pluginOwnedEntrypoints = collectPluginOwnedSdkEntrypoints();
-    const classified = new Set([...reserved, ...supported, ...publicOwned, ...localOnly]);
+    const classified = new Set([...supported, ...publicOwned, ...localOnly]);
 
     const unknownPublicOwned = [...publicOwned].filter(
       (entrypoint) => !entrypoints.has(entrypoint),
     );
     const classificationOverlaps = collectClassificationOverlaps({
-      reserved: reservedBundledPluginSdkEntrypoints,
       supported: supportedBundledFacadeSdkEntrypoints,
       publicOwned: publicPluginOwnedSdkEntrypoints,
       localOnly: privateLocalOnlyPluginSdkEntrypoints,
@@ -896,14 +817,6 @@ describe("plugin-sdk package contract guardrails", () => {
 
   it("keeps real tests off the deprecated plugin-sdk test-utils alias", () => {
     expect(deprecatedTestAliasImports).toStrictEqual([]);
-  });
-
-  it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
-    expect(collectCrossOwnerReservedSdkImports()).toStrictEqual([]);
-  });
-
-  it("keeps reserved SDK compatibility subpaths actively used", () => {
-    expect(unusedReservedSdkSubpaths).toStrictEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

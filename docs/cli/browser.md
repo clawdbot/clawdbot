@@ -154,13 +154,26 @@ openclaw browser extension cdp --json
   challenge/complete binding. It never prints the relay key or an authorization
   header by default.
 
+Automatic local bootstrap connects through the local Gateway's exact
+`/browser/extension` route so the first authenticated extension connection
+starts the lazy browser-control service. Keep `openclaw gateway run` or the
+managed Gateway service running; no separate browser request or prewarm is
+needed. Local OpenClaw and mcporter calls still use the profile relay port
+reported by `extension pair` or `extension cdp` after that wakeup. Browser-node
+pairings continue to use the relay on the browser-node host, while explicit
+`--gateway-url` pairings remain direct-remote and manual-only.
+
+The advanced manual `extension pair` command without `--gateway-url` retains
+the host-local `/extension` relay URL. It does not wake Browser control, so the
+selected profile relay must already be running before the extension connects.
+
 `extension cdp --legacy-bearer` is a temporary migration escape hatch. It
 prints the old Bearer header with a warning only while
 `browser.extensionRelay.allowLegacyAuth=true`; otherwise it exits with an error
 without printing a credential. Use `--json` for machine output; warnings remain
 on stderr so stdout stays valid JSON.
 
-Setup, security model, and migration steps: [Chrome extension](/tools/chrome-extension).
+Setup, security model, and recovery steps: [Chrome extension](/tools/chrome-extension).
 
 If the extension already attempted automatic setup before the native host
 existed, Chromium retains that miss for the running browser process. Restart

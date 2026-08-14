@@ -161,10 +161,12 @@ export function createService(
       | "executeInference"
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
+      | "resolveNodeWorkerBuild"
       | "resolveWorkerGateway"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
+      | "nodeTunnelManager"
       | "placementStore"
       | "workerCredentialTtlMs"
     >
@@ -174,7 +176,7 @@ export function createService(
     store: testState.store,
     getConfig: () => testState.config,
     resolveProvider: (providerId) =>
-      testState.providersEnabled && providerId === "fake" ? provider : undefined,
+      testState.providersEnabled && providerId === provider.id ? provider : undefined,
     prepareInstallation: testState.prepareInstallation,
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),

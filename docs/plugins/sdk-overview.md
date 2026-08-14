@@ -158,6 +158,22 @@ Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
 
+Commands may also declare a bounded client presentation action for parsed no-argument
+invocations:
+
+```ts
+clientPresentation: {
+  when: "no-arguments",
+  action: { kind: "device-pairing" },
+}
+```
+
+The action union is closed and intentionally does not accept routes, callbacks,
+URLs, or arbitrary client data. Supporting clients handle the action only when
+they can complete it; otherwise the command follows its normal remote path.
+This metadata expresses presentation intent, not authorization: the Gateway
+remains authoritative for every RPC the client flow performs.
+
 Guidance entries may be legacy strings, which apply to every prompt surface, or
 structured entries:
 
@@ -619,10 +635,10 @@ For an end-to-end authoring guide, see
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                                             |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Declare accepted host-added lifecycle fields with `info.acceptedHostParams`; undeclared engines receive the legacy field set through 2026-08-12, then receive all current host fields. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                     |
+| Method                                     | What it registers                                                                                                                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields; undeclared engines receive all current host fields. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                  |
 
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and

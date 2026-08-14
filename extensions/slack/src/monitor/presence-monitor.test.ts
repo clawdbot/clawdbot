@@ -111,6 +111,7 @@ describe("Slack presence monitor", () => {
     expect(enqueue).toHaveBeenCalledOnce();
     expect(enqueue).toHaveBeenCalledWith(
       expect.stringContaining("retrieve relevant memory and wiki context"),
+      expect.objectContaining({ agentId: "main", sessionKey: "agent:main:slack:channel:D123" }),
       expect.objectContaining({
         deliveryContext: {
           channel: "slack",
@@ -179,8 +180,8 @@ describe("Slack presence monitor", () => {
 
     expect(enqueue).toHaveBeenCalledWith(
       expect.stringContaining('channel_id="CNEW"'),
+      expect.objectContaining({ agentId: "main", sessionKey: "session:new" }),
       expect.objectContaining({
-        sessionKey: "session:new",
         deliveryContext: expect.objectContaining({
           to: "channel:CNEW",
           threadId: "2.000",
@@ -227,6 +228,7 @@ describe("Slack presence monitor", () => {
     expect(enqueue).toHaveBeenCalledTimes(2);
     expect(enqueue).toHaveBeenCalledWith(
       expect.stringContaining('team_id="T11111111"'),
+      expect.objectContaining({ agentId: "main" }),
       expect.objectContaining({
         deliveryContext: expect.objectContaining({
           to: "team:T11111111:user:U12345678",
@@ -235,6 +237,7 @@ describe("Slack presence monitor", () => {
     );
     expect(enqueue).toHaveBeenCalledWith(
       expect.stringContaining('team_id="T22222222"'),
+      expect.objectContaining({ agentId: "main" }),
       expect.objectContaining({
         deliveryContext: expect.objectContaining({
           to: "team:T22222222:user:U12345678",

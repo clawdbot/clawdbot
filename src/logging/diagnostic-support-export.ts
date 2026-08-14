@@ -10,6 +10,7 @@ import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
 import {
   readDiagnosticStabilityBundleFileSync,
@@ -209,24 +210,15 @@ function safeScalar(value: unknown): unknown {
 function resolveBonjourEnvOverride(
   env: NodeJS.ProcessEnv,
 ): NonNullable<ConfigShape["discovery"]>["bonjourEnvOverride"] {
-  const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim().toLowerCase();
+  const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim();
   if (!raw) {
     return "unset";
   }
-  switch (raw) {
-    case "1":
-    case "true":
-    case "yes":
-    case "on":
-      return "force-disabled";
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return "force-enabled";
-    default:
-      return "unrecognized";
+  const disabled = parseBooleanValue(raw);
+  if (disabled === true) {
+    return "force-disabled";
   }
+  return disabled === false ? "force-enabled" : "unrecognized";
 }
 
 function sortedObjectKeys(value: unknown): string[] {

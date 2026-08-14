@@ -8,8 +8,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveDefaultAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
@@ -27,11 +27,7 @@ import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
-} from "../../../routing/session-key.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
@@ -207,12 +203,21 @@ function resolveDisplaySessionKey(params: {
 
 const pendingSessionMemoryWrites = new Set<Promise<void>>();
 
+function requireSessionMemoryAgentId(event: Parameters<HookHandler>[0]): string {
+  const agentId = normalizeOptionalString(event.context?.agentId);
+  if (!agentId) {
+    throw new Error("Session memory hook contract requires context.agentId");
+  }
+  return agentId;
+}
+
 export async function flushSessionMemoryWritesForTest(): Promise<void> {
   await Promise.allSettled(pendingSessionMemoryWrites);
 }
 
 async function saveSessionMemoryNow(
   event: Parameters<HookHandler>[0],
+  agentId: string,
   capturedEvents?: TranscriptEvent[],
 ): Promise<void> {
   try {
@@ -224,10 +229,6 @@ async function saveSessionMemoryNow(
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
-    const agentId =
-      typeof context.agentId === "string" && context.agentId.trim()
-        ? context.agentId.trim()
-        : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
     const contextStorePath =
       typeof context.storePath === "string" && context.storePath.trim()
         ? context.storePath.trim()
@@ -303,7 +304,7 @@ async function saveSessionMemoryNow(
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
-        slug = await generateSlugViaLLM({ sessionContent, cfg, model: slugModel });
+        slug = await generateSlugViaLLM({ sessionContent, cfg, agentId, model: slugModel });
         log.debug("Generated slug", { slug });
       }
     }
@@ -381,6 +382,7 @@ const saveSessionToMemory: HookHandler = (event) => {
   if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
     return undefined;
   }
+  const agentId = requireSessionMemoryAgentId(event);
 
   let capturedEvents: TranscriptEvent[] | undefined;
   try {
@@ -396,10 +398,6 @@ const saveSessionToMemory: HookHandler = (event) => {
         : undefined;
     if (sessionId) {
       const cfg = context.cfg as OpenClawConfig | undefined;
-      const agentId =
-        typeof context.agentId === "string" && context.agentId.trim()
-          ? context.agentId.trim()
-          : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
       const storePath =
         typeof context.storePath === "string" && context.storePath.trim()
           ? context.storePath.trim()
@@ -420,9 +418,9 @@ const saveSessionToMemory: HookHandler = (event) => {
     // so the async writer falls back to the authoritative transcript rows.
   }
   const writePromise = isAutoReset
-    ? saveSessionMemoryNow(event, capturedEvents)
+    ? saveSessionMemoryNow(event, agentId, capturedEvents)
     : runWithGatewayIndependentRootWorkContinuation(() =>
-        saveSessionMemoryNow(event, capturedEvents),
+        saveSessionMemoryNow(event, agentId, capturedEvents),
       );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {

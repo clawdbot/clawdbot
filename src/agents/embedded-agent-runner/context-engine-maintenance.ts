@@ -382,11 +382,15 @@ async function runDeferredTurnMaintenanceWorker(
       const task = findTaskByRunIdForOwner({
         runId: params.runId,
         callerOwnerKey: params.sessionKey,
+        callerAgentId: params.agentId,
+        config: params.config,
       });
       if (task) {
         cancelTaskByIdForOwner({
           taskId: task.taskId,
           callerOwnerKey: params.sessionKey,
+          callerAgentId: params.agentId,
+          config: params.config,
           endedAt: Date.now(),
           terminalSummary: "Deferred maintenance cancelled during shutdown.",
         });
@@ -454,11 +458,15 @@ function scheduleDeferredTurnMaintenance(
     updateTaskNotifyPolicyForOwner({
       taskId: existingTask.taskId,
       callerOwnerKey: sessionKey,
+      callerAgentId: params.agentId,
+      config: params.config,
       notifyPolicy: "silent",
     });
     cancelTaskByIdForOwner({
       taskId: existingTask.taskId,
       callerOwnerKey: sessionKey,
+      callerAgentId: params.agentId,
+      config: params.config,
       endedAt: Date.now(),
       terminalSummary: "Superseded by refreshed deferred maintenance task.",
     });
@@ -486,6 +494,8 @@ function scheduleDeferredTurnMaintenance(
     cancelTaskByIdForOwner({
       taskId: task.taskId,
       callerOwnerKey: sessionKey,
+      callerAgentId: params.agentId,
+      config: params.config,
       endedAt: Date.now(),
       terminalSummary: `Deferred maintenance could not be scheduled: ${errorMessage}`,
     });

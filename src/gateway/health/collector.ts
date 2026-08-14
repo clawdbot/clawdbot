@@ -1,14 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
@@ -29,12 +30,12 @@ import {
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
+import { buildContextEngineHealthSummary } from "./context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
 import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
-  ContextEngineHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
@@ -55,28 +56,11 @@ const debugHealth = (
   }
 };
 
-function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefined {
-  const quarantined: ContextEngineHealthSummary["quarantined"] = [];
-  for (const entry of listContextEngineQuarantines()) {
-    const summary: ContextEngineHealthSummary["quarantined"][number] = {
-      engineId: entry.engineId,
-      operation: entry.operation,
-      reason: entry.reason,
-      failedAt: entry.failedAt.getTime(),
-    };
-    if (entry.owner) {
-      summary.owner = entry.owner;
-    }
-    quarantined.push(summary);
-  }
-  return quarantined.length > 0 ? { quarantined } : undefined;
-}
-
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const entries = listAgentEntries(cfg);
   const seen = new Set<string>();
   const ordered: Array<{ id: string; name?: string }> = [];
@@ -96,10 +80,10 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
     ordered.push({ id, name: typeof entry.name === "string" ? entry.name : undefined });
   }
 
-  if (!seen.has(defaultAgentId)) {
+  if (defaultAgentId && !seen.has(defaultAgentId)) {
     ordered.unshift({ id: defaultAgentId });
   }
-  if (ordered.length === 0) {
+  if (ordered.length === 0 && defaultAgentId) {
     ordered.push({ id: defaultAgentId });
   }
 
@@ -218,15 +202,24 @@ export async function collectGatewayHealthSnapshot(params: {
       sessions,
     });
   }
-  const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
-  const heartbeatSeconds = defaultAgent?.heartbeat.everyMs
-    ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
+  const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
+  const configuredHeartbeatAgentId = normalizeOptionalString(
+    cfg.agents?.defaults?.heartbeat?.agentId,
+  );
+  const heartbeatSummaryAgent =
+    (configuredHeartbeatAgentId
+      ? agents.find((agent) => agent.agentId === normalizeAgentId(configuredHeartbeatAgentId))
+      : undefined) ??
+    agents.find((agent) => agent.heartbeat.enabled) ??
+    summaryAgent;
+  const heartbeatSeconds = heartbeatSummaryAgent?.heartbeat.everyMs
+    ? Math.round(heartbeatSummaryAgent.heartbeat.everyMs / 1000)
     : 0;
   const sessions =
-    defaultAgent?.sessions ??
+    summaryAgent?.sessions ??
     (await buildHealthSessionSummary(
-      resolveSessionStorePathCore(cfg.session?.store, { agentId: defaultAgentId }),
-      defaultAgentId,
+      resolveSessionStorePathCore(cfg.session?.store, { agentId: summaryAgent?.agentId }),
+      summaryAgent?.agentId,
     ));
 
   const start = Date.now();
@@ -247,7 +240,9 @@ export async function collectGatewayHealthSnapshot(params: {
       cfg,
       accountIds,
     });
-    const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+    const boundAccounts = defaultAgentId
+      ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+      : [];
     const preferredAccountId = resolvePreferredAccountId({
       accountIds,
       defaultAccountId,
@@ -411,7 +406,7 @@ export async function collectGatewayHealthSnapshot(params: {
     channelOrder,
     channelLabels,
     heartbeatSeconds,
-    defaultAgentId,
+    ...(defaultAgentId ? { defaultAgentId } : {}),
     agents,
     sessions: {
       path: sessions.path,

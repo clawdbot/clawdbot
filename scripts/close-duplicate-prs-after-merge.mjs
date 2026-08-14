@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "./lib/record-shared.mjs";
-function normalizeStringifiedOptionalString(value) {
+function normalizeDuplicatePrListInput(value) {
   if (
     typeof value !== "string" &&
     typeof value !== "number" &&
@@ -29,7 +29,7 @@ each duplicate has either a shared referenced issue or overlapping changed hunks
  * Parses comma-separated PR numbers from CLI/env input.
  */
 export function parsePrNumberList(value) {
-  const text = normalizeStringifiedOptionalString(value) ?? "";
+  const text = normalizeDuplicatePrListInput(value) ?? "";
   return [
     ...new Set(
       text

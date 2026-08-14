@@ -101,10 +101,12 @@
     "@anthropic-ai/sdk": "0.115.0",
     "@google/genai": "2.13.0",
     "@mistralai/mistralai": "2.5.0",
-    "@openclaw/normalization-core": "workspace:*",
     "openai": "6.49.0",
     "partial-json": "0.1.7",
     "typebox": "1.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/normalization-core": "workspace:*"
   },
   "engines": {
     "node": ">=22.19.0"

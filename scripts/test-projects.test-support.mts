@@ -84,6 +84,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
+import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { createExtensionTestProcessTargetChunks } from "./lib/extension-test-plan.mts";
 import {
@@ -541,6 +542,13 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
       "src/plugins/contracts/tts.contract.test.ts",
     ],
   ],
+  [
+    "extensions/slack/src/monitor/enterprise-install.ts",
+    [
+      "extensions/slack/src/monitor/enterprise-install.test.ts",
+      "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
+    ],
+  ],
 ]);
 const DOCS_CONFIG_EXAMPLES_TEST_TARGET = "src/config/docs-config-examples.test.ts";
 const RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS = ["src/plugins/bundled-plugin-metadata.test.ts"];
@@ -711,7 +719,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "packages/memory-host-sdk/src/host/embedding-defaults.ts",
-    ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
+    ["extensions/memory-core/src/memory/embeddings.test.ts"],
   ],
   ["src/auto-reply/reply/dispatch-from-config.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
@@ -1000,12 +1008,12 @@ export function isTestFileTarget(arg: string) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
-function isTestSupportFileTarget(arg: string) {
+export function isTestSupportFileTarget(arg: string) {
   if (/(?:^|\/)(?:test-helpers|test-support)(?:\/|$)/u.test(arg)) {
     return true;
   }
   const basename = path.posix.basename(arg).replace(/\.[cm]?[jt]sx?$/u, "");
-  return /(?:^|[._-])test-(?:helpers|support)(?:[._-]|$)/u.test(basename);
+  return /(?:^|[._-])(?:suite|test-(?:helpers|support))(?:[._-]|$)/u.test(basename);
 }
 
 function isLikelyFileTarget(arg: string) {
@@ -1232,6 +1240,9 @@ function resolveExactSourceDirectoryTestTargets(targetArg: string, cwd: string) 
   if (!isExactSourceDirectoryTarget(relative)) {
     return null;
   }
+  if (isCanonicalAgentOwnerDirectoryTarget(targetArg, cwd)) {
+    return [targetArg];
+  }
   const prefix = `${relative}/`;
   const lightTargets = uniqueOrdered([
     ...getUnitFastTestFiles(),
@@ -1239,6 +1250,20 @@ function resolveExactSourceDirectoryTestTargets(targetArg: string, cwd: string) 
     ...commandsLightTestFiles,
   ]).filter((file) => file.startsWith(prefix));
   return lightTargets.length > 0 ? [...lightTargets, targetArg] : null;
+}
+
+function isCanonicalAgentOwnerDirectoryTarget(targetArg: string, cwd: string) {
+  if (!isExistingDirectoryTarget(targetArg, cwd)) {
+    return false;
+  }
+  const kind = classifyTarget(targetArg, cwd);
+  if (kind === agentVitestProjectOwners.all.kind) {
+    return false;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd).replace(/\/+$/u, "");
+  return Object.values(agentVitestProjectOwners).some(
+    (owner) => owner.kind === kind && isPathAtOrUnder(relative, owner.root),
+  );
 }
 
 /**
@@ -1466,15 +1491,25 @@ function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGr
     return cachedImportGraphGrepMatches.get(cacheKey) ?? null;
   }
 
-  const result = spawnSync(
-    "git",
+  const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
+  const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
+  let result = spawnSync(
+    "rg",
     [
-      "grep",
-      "-l",
+      "--files-with-matches",
       "--fixed-strings",
+      "--hidden",
+      "--no-ignore",
+      ...extensions.flatMap((ext) => ["--glob", `*${ext}`]),
+      "--glob",
+      "!**/node_modules/**",
+      "--glob",
+      "!**/dist/**",
+      "--glob",
+      "!**/vendor/**",
       term,
       "--",
-      ...(tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS),
+      ...roots,
     ],
     {
       cwd,
@@ -1482,6 +1517,24 @@ function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGr
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  if (result.error || (result.status !== 0 && result.status !== 1)) {
+    result = spawnSync(
+      "git",
+      [
+        "grep",
+        "-l",
+        "--fixed-strings",
+        term,
+        "--",
+        ...(tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS),
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  }
   if (result.status === 1) {
     cachedImportGraphGrepMatches.set(cacheKey, []);
     return [];
@@ -1490,16 +1543,19 @@ function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGr
     cachedImportGraphGrepMatches.set(cacheKey, null);
     return null;
   }
+  const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
   const matches = result.stdout
     .split("\n")
     .map((line) => normalizePathPattern(line.trim()))
     .filter(
       (line) =>
         line.length > 0 &&
+        trackedFiles.has(line) &&
         (tooling
           ? TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => line.endsWith(ext))
           : isImportableGraphFile(line)),
-    );
+    )
+    .toSorted((left, right) => left.localeCompare(right));
   cachedImportGraphGrepMatches.set(cacheKey, matches);
   return matches;
 }
@@ -2212,7 +2268,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
-  [/^\.github\/actions\/setup-node-env\/verify-importers\.mjs$/u, [workflowGuards]],
   [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mts$/u, ["test-projects"]],
@@ -2296,9 +2351,9 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "test/extension-import-boundaries.test.ts",
       "test/plugin-extension-import-boundary.test.ts",
       "test/architecture-smells.test.ts",
-      "test/web-provider-boundary.test.ts",
       "test/test-helper-extension-import-boundary.test.ts",
       "extension-import-boundary-checker",
+      "web-fetch-provider-boundary",
       "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
     ],
   ],
@@ -2901,8 +2956,7 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
 }
 
 function shouldUseBroadChangedTargets(env = process.env) {
-  const value = env[BROAD_CHANGED_ENV_KEY]?.trim().toLowerCase();
-  return ["1", "true", "yes", "on"].includes(value ?? "");
+  return parsePermissiveBooleanToken(env[BROAD_CHANGED_ENV_KEY]) === true;
 }
 
 function isRoutableChangedTarget(changedPath: string) {
@@ -3153,6 +3207,11 @@ function classifyTarget(arg: string, cwd: string) {
   if (agentVitestProjectOwners.embeddedIncompleteTurn.include.includes(relative)) {
     return agentVitestProjectOwners.embeddedIncompleteTurn.kind;
   }
+  // Explicit isolation ownership wins over inferred unit-fast eligibility.
+  // Otherwise a thin wrapper can move a stateful tooling test into a shared worker.
+  if (isToolingIsolatedTestFile(relative)) {
+    return "toolingIsolated";
+  }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
@@ -3241,9 +3300,6 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (isBoundaryTestFile(relative)) {
     return "boundary";
-  }
-  if (isToolingIsolatedTestFile(relative)) {
-    return "toolingIsolated";
   }
   if (relative === TOOLING_DOCKER_TEST_TARGET) {
     return "toolingDocker";
@@ -3648,6 +3704,7 @@ export function buildVitestRunPlans(
     const useCliTargetArgs =
       kind === "e2e" ||
       kind === "packageDocker" ||
+      grouped.every((targetArg) => isCanonicalAgentOwnerDirectoryTarget(targetArg, cwd)) ||
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>

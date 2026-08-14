@@ -11,6 +11,7 @@ import {
   applySessionDefaults,
   applyTalkConfigNormalization,
 } from "./defaults.js";
+import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
@@ -85,5 +86,5 @@ export function materializeRuntimeConfig(
     normalizeConfigPaths(next);
   }
   normalizeExecSafeBinProfilesInConfig(next);
-  return asRuntimeConfig(next);
+  return asRuntimeConfig(inheritLegacyDefaultAgentId(config, next));
 }

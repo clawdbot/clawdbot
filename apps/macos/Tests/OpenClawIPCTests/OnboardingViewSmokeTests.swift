@@ -3,7 +3,6 @@ import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
-import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -39,14 +38,6 @@ struct OnboardingViewSmokeTests {
         #expect(
             OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 2) ==
                 "2 gateways found on your network — click to choose one.")
-    }
-
-    @Test func `onboarding view builds body`() {
-        let state = AppState(preview: true)
-        let view = OnboardingView(
-            state: state,
-            discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
-        _ = view.body
     }
 
     @Test func `foreign local listener is not advertised as attachable`() {

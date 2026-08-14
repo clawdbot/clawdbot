@@ -6,14 +6,10 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  isValidAgentId,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
@@ -169,7 +165,10 @@ export async function maybeSpawnVisibleSession(params: {
     completionOwnerKey: params.options?.completionOwnerKey,
   });
   const requesterKey = ownership.controllerSessionKey;
-  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, { cfg });
+  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
+    cfg,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
   const maxDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxDepth) {
@@ -186,9 +185,11 @@ export async function maybeSpawnVisibleSession(params: {
       error: `Invalid agentId "${params.requestedAgentId}". Use agents_list.`,
     };
   }
-  const requesterAgentId = normalizeAgentId(
-    params.options?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterKey)?.agentId,
-  );
+  const requesterAgentId = resolveSessionAgentId({
+    config: cfg,
+    sessionKey: requesterKey,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??

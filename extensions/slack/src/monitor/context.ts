@@ -18,6 +18,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
+import { buildSlackChannelIdCandidates } from "../group-policy.js";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
@@ -36,7 +37,7 @@ import {
   type SlackSuggestedPromptsInput,
   updateSlackSuggestedPrompts,
 } from "./suggested-prompts.js";
-import { createSlackSystemEventSessionKeyResolver } from "./system-event-session.js";
+import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
 export {
   buildSlackAssistantThreadMetadata,
@@ -58,6 +59,7 @@ type SlackChannelCacheEntry = {
   metadataLoaded: boolean;
 };
 
+type SlackUserInfo = { name?: string; error?: unknown };
 const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
 const SLACK_USER_CACHE_MAX_ENTRIES = 2048;
 const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
@@ -108,14 +110,15 @@ export type SlackMonitorContext = {
 
   logger: ReturnType<typeof getChildLogger>;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
-  resolveSlackSystemEventSessionKey: (params: {
+  resolveSlackSystemEventRoute: (params: {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
     threadTs?: string | null;
     eventScope?: SlackEventScope;
-  }) => string;
+  }) => { agentId: string; sessionKey: string };
   isChannelAllowed: (params: {
+    teamId?: string;
     channelId?: string;
     channelName?: string;
     channelType?: SlackMessageEvent["channel_type"];
@@ -135,7 +138,7 @@ export type SlackMonitorContext = {
     channelId: string | null | undefined,
     eventScope?: SlackEventScope,
   ) => SlackMessageEvent["channel_type"] | undefined;
-  resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<{ name?: string }>;
+  resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<SlackUserInfo>;
   setSlackThreadStatus: (params: {
     channelId: string;
     threadTs?: string;
@@ -274,12 +277,11 @@ export function createSlackMonitorContext(params: {
     return id ? readLruMapEntry(channelCache, scopedKey(id, eventScope))?.info.type : undefined;
   };
 
-  const resolveSlackSystemEventSessionKey = createSlackSystemEventSessionKeyResolver({
+  const resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
     cfg: params.cfg,
     accountId: params.accountId,
     getTeamId: () => ctx.teamId,
     mainKey: params.mainKey,
-    sessionScope: params.sessionScope,
     threadInheritParent: params.threadInheritParent,
     recallSlackChannelType,
   });
@@ -338,8 +340,8 @@ export function createSlackMonitorContext(params: {
       const entry = { name };
       writeLruMapEntry(userCache, cacheKey, entry, SLACK_USER_CACHE_MAX_ENTRIES);
       return entry;
-    } catch {
-      return {};
+    } catch (error) {
+      return { error };
     }
   };
 
@@ -374,6 +376,7 @@ export function createSlackMonitorContext(params: {
     });
 
   const isChannelAllowed = (p: {
+    teamId?: string;
     channelId?: string;
     channelName?: string;
     channelType?: SlackMessageEvent["channel_type"];
@@ -392,7 +395,9 @@ export function createSlackMonitorContext(params: {
 
     if (isGroupDm && groupDmChannels.length > 0) {
       const candidates = [
-        p.channelId,
+        ...buildSlackChannelIdCandidates(p.channelId, p.teamId, {
+          allowUnscoped: params.installationIdentity?.kind !== "enterprise",
+        }),
         p.channelName ? `#${p.channelName}` : undefined,
         p.channelName,
         p.channelName ? normalizeSlackSlug(p.channelName) : undefined,
@@ -409,6 +414,8 @@ export function createSlackMonitorContext(params: {
 
     if (isRoom && p.channelId) {
       const channelConfig = resolveSlackChannelConfig({
+        teamId: p.teamId,
+        allowUnscoped: params.installationIdentity?.kind !== "enterprise",
         channelId: p.channelId,
         channelName: p.channelName,
         channels: params.channelsConfig,
@@ -433,7 +440,7 @@ export function createSlackMonitorContext(params: {
       if (shouldDrop) {
         if (explicitlyDisabled) {
           const reason = "channel_not_allowed";
-          const warningKey = `${params.accountId}:${p.channelId}:${reason}`;
+          const warningKey = `${params.accountId}:${p.teamId ? `${p.teamId}:` : ""}${p.channelId}:${reason}`;
           if (!channelDenialWarnings.peek(warningKey)) {
             channelDenialWarnings.check(warningKey);
             logger.warn(
@@ -536,7 +543,7 @@ export function createSlackMonitorContext(params: {
     mediaMaxBytes: params.mediaMaxBytes,
     logger,
     shouldDropMismatchedSlackEvent,
-    resolveSlackSystemEventSessionKey,
+    resolveSlackSystemEventRoute,
     isChannelAllowed,
     resolveChannelName,
     rememberSlackChannelType,

@@ -6,7 +6,7 @@ import type {
   SessionCatalog,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayAgentRow, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -14,6 +14,7 @@ import {
   normalizeChatModelProviderId,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
+import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -477,6 +478,13 @@ export class NewSessionModelControl {
     return this.restoringPreference;
   }
 
+  isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
+    return (
+      this.metadataState.hasSnapshot &&
+      isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
+    );
+  }
+
   private restorePreference(
     preference: NewSessionPreference | null | undefined,
     agent: GatewayAgentRow | undefined,
@@ -584,14 +592,10 @@ export class NewSessionModelControl {
       this.catalog,
     );
     const selectedTarget = resolveDraftModelTarget(this.selected, undefined, this.catalog);
-    const draftRow: GatewaySessionRow = {
-      key: sessionKey,
-      kind: "direct",
-      updatedAt: null,
-      ...(selectedTarget
-        ? { model: selectedTarget.model, modelProvider: selectedTarget.provider ?? undefined }
-        : {}),
-      ...(this.thinkingLevel ? { thinkingLevel: this.thinkingLevel } : {}),
+    const thinkingTarget = {
+      model: selectedTarget?.model,
+      modelProvider: selectedTarget?.provider ?? undefined,
+      thinkingLevel: this.thinkingLevel || undefined,
     };
     const thinkingDefaults = {
       ...sourceResult?.defaults,
@@ -639,7 +643,7 @@ export class NewSessionModelControl {
       showFastMode: false,
       stream: null,
       thinkingDefaults,
-      thinkingSession: draftRow,
+      thinkingSession: thinkingTarget,
       onModelSelect: (value) => {
         this.selectionGeneration += 1;
         this.restoringPreference = false;
@@ -659,6 +663,7 @@ export class NewSessionModelControl {
         this.thinkingLevel = value;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
+      onModelSetup: () => options.context?.navigate("model-setup"),
       onRequestUpdate: this.notify,
     });
   }

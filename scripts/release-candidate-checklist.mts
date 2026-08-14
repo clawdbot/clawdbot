@@ -26,6 +26,7 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
 import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
@@ -142,6 +143,8 @@ Options:
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
+  --plugin-sdk-api-acknowledgement <digest>
+                                      8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
@@ -201,6 +204,7 @@ export function parseArgs(argv: string[]) {
     workflowRef: "",
     fullReleaseRunId: "",
     npmPreflightRunId: "",
+    pluginSdkApiAcknowledgement: "",
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
     outputDir: "",
@@ -218,6 +222,7 @@ export function parseArgs(argv: string[]) {
           ["--repo", "repo"],
           ["--full-release-run", "fullReleaseRunId"],
           ["--npm-preflight-run", "npmPreflightRunId"],
+          ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
           ["--windows-node-tag", "windowsNodeTag"],
           ["--telegram-provider-mode", "telegramProviderMode"],
           ["--provider", "provider"],
@@ -257,6 +262,12 @@ export function parseArgs(argv: string[]) {
   }
   if (options.targetSha && !/^[a-f0-9]{40}$/u.test(options.targetSha)) {
     throw new Error("--target-sha must be a full lowercase commit SHA");
+  }
+  if (
+    options.pluginSdkApiAcknowledgement &&
+    !/^[a-f0-9]{8}$/u.test(options.pluginSdkApiAcknowledgement)
+  ) {
+    throw new Error("--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest");
   }
   if (options.tag.includes("-alpha.")) {
     if (!TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(options.workflowRef)) {
@@ -1407,6 +1418,7 @@ export function buildPublishCommand(
   const fields: Array<[string, string | number | undefined]> = [
     ["tag", options.tag],
     ["preflight_run_id", options.npmPreflightRunId],
+    ["plugin_sdk_api_acknowledgement", options.pluginSdkApiAcknowledgement],
     ["full_release_validation_run_id", options.fullReleaseRunId],
     ["full_release_validation_run_attempt", options.fullReleaseRunAttempt],
     ["npm_dist_tag", options.npmDistTag],
@@ -1828,6 +1840,7 @@ async function main() {
       tag: targetSha,
       preflight_only: "true",
       npm_dist_tag: options.npmDistTag,
+      plugin_sdk_api_acknowledgement: options.pluginSdkApiAcknowledgement,
     });
     candidateState = updateReleaseCandidateState(statePath, candidateState, "dispatching", {
       npmPreflightRunId: options.npmPreflightRunId,
@@ -1853,6 +1866,7 @@ async function main() {
   });
 
   const npmDir = join(options.outputDir, "npm-preflight");
+  const pluginSdkApiDir = join(options.outputDir, "plugin-sdk-api-evidence");
   const fullDir = join(options.outputDir, "full-release-validation");
   const npmArtifact = await downloadResolvedArtifact(
     options.repo,
@@ -1862,6 +1876,15 @@ async function main() {
     npmDir,
   );
   const npmArtifactName = npmArtifact.name;
+  if (!Number.isInteger(npmRun.runAttempt) || npmRun.runAttempt < 1) {
+    throw new Error(`OpenClaw npm preflight run ${options.npmPreflightRunId} has invalid attempt.`);
+  }
+  downloadArtifact(
+    options.repo,
+    options.npmPreflightRunId,
+    `plugin-sdk-api-release-diff-${options.npmPreflightRunId}-${npmRun.runAttempt}`,
+    pluginSdkApiDir,
+  );
   if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
     throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
   }
@@ -1869,6 +1892,15 @@ async function main() {
   downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
 
   const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
+  const immutablePluginSdkApiEvidence = readJson(
+    join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
+    "immutable Plugin SDK API evidence",
+  );
+  if (!isDeepStrictEqual(npmManifest.pluginSdkApi, immutablePluginSdkApiEvidence)) {
+    throw new Error(
+      "npm preflight manifest Plugin SDK API evidence does not match its immutable artifact",
+    );
+  }
   const fullManifest = readJson(
     join(fullDir, "full-release-validation-manifest.json"),
     "full validation manifest",
@@ -1894,6 +1926,12 @@ async function main() {
     tag: options.tag,
     targetSha,
     npmDistTag: options.npmDistTag,
+  });
+  const pluginSdkApiValidation = validatePluginSdkApiReleaseEvidence({
+    acknowledgement: options.pluginSdkApiAcknowledgement,
+    evidence: npmManifest.pluginSdkApi,
+    expectedHeadSha: targetSha,
+    expectedWorkflowSha: npmRun.headSha,
   });
   validateFullManifest(fullManifest, {
     targetSha,
@@ -1988,6 +2026,8 @@ async function main() {
     fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
     npmPreflightSource,
+    pluginSdkApi: npmManifest.pluginSdkApi,
+    pluginSdkApiValidation,
     artifacts: {
       npmPreflight: npmArtifactName,
       fullReleaseValidation: fullArtifactName,
@@ -2028,6 +2068,9 @@ async function main() {
           ]
         : []),
       `- npm preflight artifact: ${npmArtifactName}`,
+      `- Plugin SDK API evidence: ${pluginSdkApiValidation.status}${
+        pluginSdkApiValidation.digest ? ` (${pluginSdkApiValidation.digest})` : ""
+      }`,
       `- full release artifact: ${fullArtifactName}`,
       `- GitHub release notes: ${releaseNotesCheck.status} (${releaseNotesCheck.mode}, ${releaseNotesCheck.characters} characters, ${releaseNotesCheck.bytes} bytes)`,
       releaseNotesProvenance.status === "passed"

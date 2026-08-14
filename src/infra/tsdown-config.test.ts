@@ -111,6 +111,12 @@ describe("tsdown config", () => {
     const rootDir = process.cwd();
     const watchedPaths: string[] = [];
     const plugin = createStateSchemaInlinePlugin(rootDir);
+    let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
+    plugin.configureVitest({
+      experimental_defineCacheKeyGenerator: (generator) => {
+        cacheKeyGenerator = generator;
+      },
+    });
     const result = plugin.load.call(
       { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
       path.resolve(rootDir, schema.modulePath),
@@ -126,6 +132,10 @@ describe("tsdown config", () => {
     expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
     expect(schema.sourceValue).toBe(canonicalSql);
     expect(watchedPaths).toEqual([schemaPath]);
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, schema.modulePath) })).toBe(
+      canonicalSql,
+    );
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
   it("installs schema inlining only on the unified runtime graph", () => {

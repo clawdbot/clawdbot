@@ -977,7 +977,7 @@ jobs:
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
+    timeout-minutes: 90
     env:
       OPENCLAW_BUILD_PRIVATE_QA: "1"
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
@@ -1003,6 +1003,9 @@ jobs:
 
       - name: Install Playwright Chromium
         run: pnpm --dir ui exec playwright install --with-deps chromium
+
+      - name: Build sandbox image
+        run: scripts/sandbox-setup.sh
 
       - name: Run repo E2E suite
         run: pnpm test:e2e

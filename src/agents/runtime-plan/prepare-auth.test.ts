@@ -356,7 +356,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/explicit auth order.*no usable profiles/iu);
   });
 
-  it("keeps a generic user lock as a singleton despite cooldown", () => {
+  it("skips a cooldowned user pin and selects the next same-provider profile", () => {
     const store = authStore(
       {
         "xai:p1": apiKeyProfile("xai", "p1-key"),
@@ -376,11 +376,35 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     });
 
     expect(plan).toMatchObject({
-      forwardedAuthProfileId: "xai:p1",
-      forwardedAuthProfileSource: "user",
-      forwardedAuthProfileCandidateIds: ["xai:p1"],
+      forwardedAuthProfileId: "xai:p2",
+      forwardedAuthProfileSource: "auto",
+      forwardedAuthProfileCandidateIds: ["xai:p2"],
       selectedAuthMode: "api_key",
     });
+  });
+
+  it("prepares a user pin first and retains same-provider profile fallbacks", () => {
+    const prepared = prepareAgentRuntimeAuth({
+      provider: "xai",
+      modelId: "grok-4",
+      env: {},
+      authProfileStore: authStore(
+        {
+          "xai:p1": apiKeyProfile("xai", "p1-key"),
+          "xai:p2": apiKeyProfile("xai", "p2-key"),
+        },
+        { xai: ["xai:p2", "xai:p1"] },
+      ),
+      sessionAuthProfileId: "xai:p1",
+      sessionAuthProfileSource: "user",
+    });
+
+    const profileAttempts = prepared.attempts.filter((attempt) => attempt.kind === "profile");
+    expect(profileAttempts.map((attempt) => attempt.profileId)).toEqual(["xai:p1", "xai:p2"]);
+    expect(profileAttempts.map((attempt) => attempt.plan.forwardedAuthProfileSource)).toEqual([
+      "user",
+      "auto",
+    ]);
   });
 
   it("defers an ambiguous route when native Codex owns auth", () => {
@@ -778,7 +802,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/explicit auth order.*no usable profiles/iu);
   });
 
-  it("keeps a user-locked profile authoritative and rejects the wrong route class", () => {
+  it("does not cross to an incompatible auth route for a user pin", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
         ...openAIChatGptAuthFixture(),
@@ -800,7 +824,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
           "openai:platform": openAIApiKeyProfile("platform-key"),
         }),
       }),
-    ).toThrow(/requires subscription authentication/u);
+    ).toThrow(/no route-compatible authentication source/iu);
   });
 
   it("lets an explicit provider API key outrank automatic subscription profiles", () => {
@@ -1739,7 +1763,29 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(plan.modelRoute).toBeUndefined();
   });
 
-  it("rejects a user-locked non-OpenAI profile on the virtual Codex provider", () => {
+  it("keeps same-provider retries behind a user-pinned virtual Codex profile", () => {
+    const preparation = prepareAgentRuntimeAuth({
+      ...virtualCodexAuthFixture(),
+      authProfileStore: authStore(
+        {
+          "openai:p1": openAITokenProfile("p1-token"),
+          "openai:p2": openAIApiKeyProfile("p2-key"),
+        },
+        { openai: ["openai:p2", "openai:p1"] },
+      ),
+      sessionAuthProfileId: "openai:p1",
+      sessionAuthProfileSource: "user",
+    });
+
+    const profileAttempts = preparation.attempts.filter((attempt) => attempt.kind === "profile");
+    expect(profileAttempts.map((attempt) => attempt.profileId)).toEqual(["openai:p1", "openai:p2"]);
+    expect(profileAttempts.map((attempt) => attempt.plan.forwardedAuthProfileSource)).toEqual([
+      "user",
+      "auto",
+    ]);
+  });
+
+  it("rejects a user-pinned non-OpenAI profile on the virtual Codex provider", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
         ...virtualCodexAuthFixture(),
@@ -1752,7 +1798,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/not configured for openai/u);
   });
 
-  it("rejects unavailable user-locked OpenAI profiles on the virtual Codex provider", () => {
+  it("rejects unavailable user-pinned OpenAI profiles on the virtual Codex provider", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
         ...virtualCodexAuthFixture(),

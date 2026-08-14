@@ -175,6 +175,7 @@ describe("iMessage approval reaction poller", () => {
 
     expect(request).toHaveBeenCalledWith("chats.list", { limit: 50 }, { timeoutMs: 10_000 });
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(),
       approvalId: "exec-1",
       approvalKind: "exec",
@@ -407,6 +408,7 @@ describe("iMessage approval reaction poller", () => {
       { timeoutMs: 10_000 },
     );
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig("+15551239999"),
       approvalId: "exec-handle",
       approvalKind: "exec",
@@ -456,6 +458,7 @@ describe("iMessage approval reaction poller", () => {
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(APPROVER),
       approvalId: "exec-1",
       approvalKind: "exec",
@@ -563,6 +566,7 @@ describe("iMessage approval reaction poller", () => {
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(APPROVER),
       approvalId: "exec-1",
       approvalKind: "exec",

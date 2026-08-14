@@ -3093,7 +3093,6 @@ describe("runGatewayUpdate", () => {
       portableGitUsr,
     ]);
     expect(installEnv?.NPM_CONFIG_SCRIPT_SHELL).toBeUndefined();
-    expect(installEnv?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
   it("reports staged npm swap failures as global install failures", async () => {

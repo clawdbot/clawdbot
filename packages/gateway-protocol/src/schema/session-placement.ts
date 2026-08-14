@@ -65,6 +65,17 @@ const SessionPlacementAckProperties = {
   ),
 };
 
+export const SessionPlacementDiskSpaceSchema = closedObject({
+  status: Type.Union([Type.Literal("ok"), Type.Literal("warning"), Type.Literal("critical")]),
+  availableBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  totalBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  observedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+});
+
+const SessionPlacementDiskSpaceProperties = {
+  diskSpace: Type.Optional(SessionPlacementDiskSpaceSchema),
+};
+
 const WorkspaceResultConflictSchema = closedObject({
   paths: Type.Array(NonEmptyString, { minItems: 1, maxItems: 256 }),
   stagedResultRef: NonEmptyString,
@@ -105,6 +116,7 @@ function createWorkerOwnedSessionPlacementSchema<
     ...SessionPlacementWorkspaceProperties,
     ...SessionPlacementAckProperties,
     ...SessionPlacementConflictProperties,
+    ...SessionPlacementDiskSpaceProperties,
   });
 }
 
@@ -163,12 +175,22 @@ export const SessionPlacementSchema = Type.Union([
   FailedSessionPlacementSchema,
 ]);
 
-/** Requests one-way dispatch of an existing local session to a configured worker profile. */
-export const SessionsDispatchParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  profileId: NonEmptyString,
-});
+/** Requests one-way dispatch of an existing local session to exactly one worker target. */
+export const SessionsDispatchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    profileId: Type.Optional(NonEmptyString),
+    deviceId: Type.Optional(NonEmptyString),
+  },
+  {
+    additionalProperties: false,
+    oneOf: [
+      { required: ["profileId"], not: { required: ["deviceId"] } },
+      { required: ["deviceId"], not: { required: ["profileId"] } },
+    ],
+  },
+);
 
 /** Result returned once session dispatch reaches durable worker ownership. */
 export const SessionsDispatchResultSchema = closedObject({
@@ -200,6 +222,7 @@ export const SessionsReclaimResultSchema = Type.Object(
 
 export const SessionPlacementProtocolSchemas = {
   SessionPlacementState: SessionPlacementStateSchema,
+  SessionPlacementDiskSpace: SessionPlacementDiskSpaceSchema,
   LocalSessionPlacement: LocalSessionPlacementSchema,
   RequestedSessionPlacement: RequestedSessionPlacementSchema,
   ProvisioningSessionPlacement: ProvisioningSessionPlacementSchema,
@@ -218,6 +241,7 @@ export const SessionPlacementProtocolSchemas = {
 } as const;
 
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
+export type SessionPlacementDiskSpace = Static<typeof SessionPlacementDiskSpaceSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;

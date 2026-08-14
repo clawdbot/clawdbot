@@ -223,7 +223,7 @@ export function formatConfigUnsetMissingPathMessage(params: {
 }
 
 function isSchemaRecord(value: unknown): value is JsonSchemaRecord {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return isPlainRecord(value);
 }
 
 function schemaTypes(schema: JsonSchemaRecord): Set<string> {

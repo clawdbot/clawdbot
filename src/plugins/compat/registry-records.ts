@@ -2,29 +2,28 @@ import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
-  DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS,
+  PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
 import type { PluginCompatRecord } from "./types.js";
 
 export const PLUGIN_COMPAT_RECORDS = [
-  ...DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS,
+  ...PLUGIN_SDK_SUBPATH_RECORDS,
   ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
     code: "context-engine-legacy-host-param-default",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-07-29",
-    deprecated: "2026-07-29",
-    warningStarts: "2026-07-29",
-    removeAfter: "2026-08-12",
     replacement:
-      "declare `ContextEngineInfo.acceptedHostParams`; full host params after the window",
+      "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
     docsPath: "/concepts/context-engine#the-contextengine-interface",
     surfaces: ["ContextEngineInfo.acceptedHostParams and undeclared-engine default projection"],
-    diagnostics: ["plugin compatibility registry and dated runtime removal marker"],
+    diagnostics: ["plugin compatibility registry and context engine guide"],
     tests: ["src/context-engine/host-param-projection.test.ts"],
+    releaseNote:
+      "The undeclared context-engine host-parameter compatibility default was removed; engines without `acceptedHostParams` now receive all current host fields.",
   },
   {
     code: "removed-global-api-provider-publication",
@@ -45,19 +44,16 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "legacy-deactivate-hook-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-05-16",
-    deprecated: "2026-05-16",
-    warningStarts: "2026-05-16",
-    removeAfter: "2026-08-16",
     replacement: "`gateway_stop` hook",
-    docsPath: "/plugins/hooks#upcoming-deprecations",
+    docsPath: "/plugins/sdk-migration#deactivate-hook-alias",
     surfaces: ['api.on("deactivate", ...)', "plugin typed hook registration"],
-    diagnostics: ["plugin runtime compatibility warning"],
-    tests: ["src/plugins/loader.test.ts"],
+    diagnostics: ["plugin compatibility registry and migration guide"],
+    tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
-      '`api.on("deactivate", ...)` remains wired as a deprecated compatibility alias while plugins migrate to `gateway_stop`.',
+      'The deprecated `api.on("deactivate", ...)` hook alias was removed; plugins must register cleanup with `gateway_stop`.',
   },
   {
     code: "legacy-subagent-spawning-hook",

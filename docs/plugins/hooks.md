@@ -212,7 +212,6 @@ For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`
 | Hook                             | Purpose                                                                                              |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `gateway_start` / `gateway_stop` | Start or stop plugin-owned services with the Gateway                                                 |
-| `deactivate`                     | Deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins                 |
 | `cron_reconciled`                | Reconcile against the complete Gateway cron state after startup or reload                            |
 | `cron_changed`                   | Observe Gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled) |
 | **`before_install`**             | Inspect staged skill or plugin install material from a loaded plugin runtime                         |
@@ -248,6 +247,13 @@ api.on(
   { registrationId: "quality-regression", timeoutMs: 90_000 },
 );
 ```
+
+When evaluation input includes `correlationId`, OpenClaw forwards it to the
+evaluator event for both manual and apply-triggered evaluations. This value is
+caller-supplied correlation metadata, not authenticated identity or proof of
+authorization. An authorization plugin must mint or replace the value through
+a trusted entry point, bind it to the intended operation, and validate and
+consume it itself.
 
 Stored outcomes identify the evaluator, plugin id, plugin package version,
 status, and returned result. Timeouts and thrown errors are recorded as
@@ -846,6 +852,10 @@ clean up long-running resources. The cron scheduler can still be loading when
 `gateway_start` runs, so do not use it as the baseline signal for an external
 cron projection.
 
+The legacy `api.on("deactivate", ...)` alias was removed in August 2026. Use
+`gateway_stop` for cleanup; see the
+[migration note](/plugins/sdk-migration#deactivate-hook-alias).
+
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
 
@@ -1044,13 +1054,11 @@ before the next major release:
 - **Plaintext channel envelopes** in `inbound_claim` and `message_received`
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
-  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
+  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#removal-timeline).
 - **`subagent_spawning`** remains for compatibility with older plugins, but
   new plugins should not return thread routing from it. Core prepares
   `thread: true` subagent bindings through channel session-binding adapters
   before `subagent_spawned` fires.
-- **`deactivate`** remains as a deprecated cleanup compatibility alias until
-  after 2026-08-16. New plugins should use `gateway_stop`.
 - **`onResolution` in `before_tool_call`** now uses the typed
   `PluginApprovalResolution` union (`allow-once` / `allow-always` / `deny` /
   `timeout` / `cancelled`) instead of a free-form `string`.
@@ -1062,7 +1070,7 @@ before the next major release:
 For the full list - memory capability registration, provider thinking
 profile, external auth providers, provider discovery types, task runtime
 accessors, and the `command-auth` → `command-status` rename - see
-[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#active-deprecations).
+[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#removal-timeline).
 
 ## Related
 

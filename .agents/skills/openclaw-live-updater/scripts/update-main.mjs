@@ -35,7 +35,6 @@ import {
   resolveRuntimePostBuildRequirement,
 } from "../../../../scripts/run-node.mts";
 
-const DEFAULT_CHECKOUT = "/Users/steipete/openclaw";
 const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
 const GATEWAY_READINESS_ATTEMPTS = 7;
@@ -3800,7 +3799,7 @@ export async function maintainMain(options, dependencies = {}) {
 }
 
 function parseArgs(argv) {
-  const options = { checkout: DEFAULT_CHECKOUT, remote: "origin" };
+  const options = { checkout: process.cwd(), remote: "origin" };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--checkout") {

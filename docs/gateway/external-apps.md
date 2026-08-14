@@ -64,15 +64,15 @@ host-neutral suspension handshake:
 4. If it is `ready`, save the returned `suspensionId`, then freeze or snapshot
    the process before `expiresAtMs`.
 5. After thaw, or if suspension is abandoned, call `gateway.suspend.resume`
-   with that `suspensionId` over the existing WebSocket or Admin HTTP control
-   path.
+   with that `suspensionId` over the existing or a newly authenticated
+   WebSocket. The CLI equivalents are `openclaw gateway suspend` and
+   `openclaw gateway resume <suspensionId>`.
 
-A prepared Gateway rejects new WebSocket handshakes. A WebSocket controller
-must keep its authenticated connection open across the host operation. If that
-cannot be guaranteed, enable and use the
-[Admin HTTP RPC plugin](/plugins/admin-http-rpc) before preparing. If the
-control path is lost, wait for the two-minute lease to expire before
-reconnecting; expiry reopens admission automatically.
+A prepared Gateway accepts authenticated WebSocket connects, but fences every
+method except `gateway.suspend.*`. Controllers may reconnect after thaw and
+call resume. The [Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains
+available for hosts that cannot speak WebSocket at all. If every control path
+is lost, the two-minute lease expiry reopens admission automatically.
 
 The RPC contract is:
 

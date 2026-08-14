@@ -5,6 +5,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as activeTranscriptEvents from "../config/sessions/session-accessor.sqlite-active-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -32,6 +33,25 @@ function createScope(prefix: string) {
 }
 
 describe("session companion context", () => {
+  it("distinguishes a missing session from an empty selected transcript", async () => {
+    const missing = createScope("companion-context-missing");
+    await expect(defaultSessionCompanionContextReader.read(missing)).resolves.toEqual({
+      kind: "missing",
+    });
+
+    const empty = createScope("companion-context-empty");
+    await upsertSessionEntryCore(empty, { sessionId: empty.sessionId, updatedAt: 1 });
+    const result = await defaultSessionCompanionContextReader.read(empty);
+    expect(result).toEqual({
+      kind: "ready",
+      context: {
+        empty: true,
+        messages: [],
+        sessionId: empty.sessionId,
+      },
+    });
+  });
+
   it("reads a bounded active SQLite tail without decoding old transcript rows", async () => {
     const scope = createScope("companion-context-tail");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -176,7 +196,45 @@ describe("session companion context", () => {
     });
   });
 
-  it("preserves the latest compaction summary and retained context without resurrecting history", async () => {
+  it("rejects context assembled across different transcript snapshots", async () => {
+    const scope = createScope("companion-context-snapshot-fence");
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const page = vi
+      .spyOn(activeTranscriptEvents, "readSessionTranscriptBoundedMessageTailPage")
+      .mockReturnValueOnce({
+        activeLeafEntryId: "leaf-1",
+        events: [
+          {
+            event: {
+              type: "message",
+              id: "message-1",
+              parentId: null,
+              message: { role: "user", content: "stable context", timestamp: 1 },
+            },
+            seq: 1,
+          },
+        ],
+        scannedMessages: 1,
+        serializedBytes: 128,
+        snapshot: { generation: "generation-1", indexedSeq: 1 },
+        totalMessages: 1,
+      })
+      .mockReturnValueOnce({
+        activeLeafEntryId: "leaf-1",
+        events: [],
+        scannedMessages: 0,
+        serializedBytes: 0,
+        snapshot: { generation: "generation-2", indexedSeq: 1 },
+        totalMessages: 1,
+      });
+
+    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
+      kind: "unavailable",
+    });
+    expect(page).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps transcript-visible messages across compaction", async () => {
     const scope = createScope("companion-context-compaction");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await persistSessionTranscriptTurn(scope, {
@@ -226,17 +284,14 @@ describe("session companion context", () => {
       return;
     }
     expect(result.context.messages.map((message) => [message.role, message.text])).toEqual([
-      ["summary", "older context was compacted"],
+      ["user", "discarded context"],
       ["user", "retained context"],
       ["assistant", "recent answer"],
       ["user", "visible current question"],
     ]);
-    expect(result.context.messages.some((message) => message.text === "discarded context")).toBe(
-      false,
-    );
   });
 
-  it("returns unavailable without materializing an oversized compaction boundary", async () => {
+  it("ignores oversized non-message compaction details", async () => {
     const scope = createScope("companion-context-oversized-boundary");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await persistSessionTranscriptTurn(scope, {
@@ -261,7 +316,12 @@ describe("session companion context", () => {
     });
 
     await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
-      kind: "unavailable",
+      kind: "ready",
+      context: {
+        empty: false,
+        messages: [{ role: "user", text: "retained context", ts: 1 }],
+        sessionId: scope.sessionId,
+      },
     });
   });
 

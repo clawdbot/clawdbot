@@ -2,6 +2,7 @@
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 
 const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts"];
 const uiE2eRealGatewayTestFiles = [
@@ -15,6 +16,7 @@ function createUiE2eVitestConfig(
 ) {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
+  const baseSequence = (baseTest as { sequence?: object }).sequence;
   const exclude = [
     ...(baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts"),
     ...(env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY === "1" ? uiE2eRealGatewayTestFiles : []),
@@ -44,6 +46,7 @@ function createUiE2eVitestConfig(
       name: "ui-e2e",
       pool: "forks",
       runner: undefined,
+      sequence: { ...baseSequence, sequencer: UiE2eSequencer },
       setupFiles: ["test/vitest/vitest.ui-e2e.setup.ts"],
     },
   });

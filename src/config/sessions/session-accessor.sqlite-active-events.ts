@@ -14,7 +14,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  readBoundedContextMessageTail,
+  readTranscriptProjectionGeneration,
   readVisibleMessageRange,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
@@ -59,13 +59,10 @@ export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPa
 export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
   scannedMessages: number;
   serializedBytes: number;
-};
-
-type SessionTranscriptBoundedContextMessageTailPage = {
-  authoritative: boolean;
-  contextSummary?: { text: string; ts: number };
-  empty: boolean;
-  events: SessionTranscriptMessageEvent[];
+  snapshot: {
+    generation?: string;
+    indexedSeq: number;
+  };
 };
 
 function parseMessageEventRow(row: {
@@ -447,17 +444,17 @@ export function readSessionTranscriptMessageEventPage(
   });
 }
 
-function readBoundedMessageTailPage<TExtra extends object>(
+/** Reads a tail page whose materialized event payloads fit a hard byte budget. */
+export function readSessionTranscriptBoundedMessageTailPage(
   scope: SessionTranscriptReadScope,
   options: { maxBytes: number; maxMessages: number; offset: number },
-  visibility: {
-    resolvePositionRange: typeof resolveVisibleMessagePositionRange;
-    resolvePositions: typeof resolveVisibleMessagePositions;
-  },
-  readExtra: (projection: Parameters<typeof resolveVisibleMessagePositions>[0]) => TExtra,
-): SessionTranscriptBoundedMessageTailPage & TExtra {
+): SessionTranscriptBoundedMessageTailPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
-    const visible = visibility.resolvePositions(projection);
+    const visible = resolveVisibleMessagePositions(projection);
+    const snapshot = {
+      generation: readTranscriptProjectionGeneration(projection),
+      indexedSeq: projection.state.indexedSeq,
+    };
     const totalMessages = visible.total;
     const offset = Math.min(
       Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
@@ -473,16 +470,15 @@ function readBoundedMessageTailPage<TExtra extends object>(
     );
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - maxMessages);
-    const positions = visibility.resolvePositionRange(projection, start, endExclusive);
-    const extra = readExtra(projection);
+    const positions = resolveVisibleMessagePositionRange(projection, start, endExclusive);
     if (positions.length === 0 || maxBytes === 0) {
       return {
         activeLeafEntryId: projection.state.leafEventId,
         events: [],
         scannedMessages: positions.length,
         serializedBytes: 0,
+        snapshot,
         totalMessages,
-        ...extra,
       };
     }
     const db = getActiveTranscriptKysely(projection.database);
@@ -535,39 +531,10 @@ function readBoundedMessageTailPage<TExtra extends object>(
       events,
       scannedMessages: positions.length,
       serializedBytes,
+      snapshot,
       totalMessages,
-      ...extra,
     };
   });
-}
-
-/** Reads a transcript-visible tail page whose payloads fit a hard byte budget. */
-export function readSessionTranscriptBoundedMessageTailPage(
-  scope: SessionTranscriptReadScope,
-  options: { maxBytes: number; maxMessages: number; offset: number },
-): SessionTranscriptBoundedMessageTailPage {
-  return readBoundedMessageTailPage(
-    scope,
-    options,
-    {
-      resolvePositionRange: resolveVisibleMessagePositionRange,
-      resolvePositions: resolveVisibleMessagePositions,
-    },
-    () => ({}),
-  );
-}
-
-/**
- * Reads a model-context tail without resurrecting messages discarded by the
- * latest reset/compaction boundary.
- */
-export function readSessionTranscriptBoundedContextMessageTailPage(
-  scope: SessionTranscriptReadScope,
-  options: { maxBytes: number; maxMessages: number; maxScannedMessages: number },
-): SessionTranscriptBoundedContextMessageTailPage {
-  return withCurrentProjectionSnapshot(scope, (projection) =>
-    readBoundedContextMessageTail(projection, options),
-  );
 }
 
 export function readSessionTranscriptMessageEventCount(scope: SessionTranscriptReadScope): number {

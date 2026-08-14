@@ -230,7 +230,11 @@ describe("terminal gateway policy", () => {
     );
     await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
 
-    expect(openTerminal).toHaveBeenCalledWith({ hostId: "gateway:local", threadId: "thread" });
+    expect(openTerminal).toHaveBeenCalledWith({
+      allowProcessHomeFallback: false,
+      hostId: "gateway:local",
+      threadId: "thread",
+    });
     expect(sessions.open).toHaveBeenCalledWith(
       expect.objectContaining({
         shell: expect.any(String),

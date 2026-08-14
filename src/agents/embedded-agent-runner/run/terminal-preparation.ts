@@ -75,13 +75,12 @@ export function prepareEmbeddedRunTerminal(input: {
     latestUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
-  const resolvedModelRef = resolveReportedModelRef({
+  const reportedModelRef = resolveReportedModelRef({
     provider: input.provider,
     model: input.model,
     assistant: terminalAssistant,
   });
-  const responseModel = terminalAssistant?.responseModel?.trim() || resolvedModelRef.model;
-  const reportedModelRef = { ...resolvedModelRef, model: responseModel };
+  const responseModel = terminalAssistant?.responseModel?.trim() || reportedModelRef.model;
   const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";

@@ -8,6 +8,14 @@ import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 describe("normalizeBrowserUrlDraft", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
   });
 
   afterEach(() => {

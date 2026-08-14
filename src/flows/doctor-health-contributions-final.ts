@@ -11,6 +11,7 @@ import {
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
+  runHostDesktopHealth,
   runGitHubProjectHealth,
   runOpenAIOAuthTlsHealth,
   runSecurityHealth,
@@ -55,6 +56,20 @@ export function resolveFinalDoctorHealthContributions(params: {
         "core/doctor/gateway-services/platform-notes",
       ],
       run: runGatewayServicesHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:host-desktop",
+      label: "Host desktop",
+      healthChecks: {
+        description: "Gateway-host desktop enablement, reachability, and RFB security state.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectHostDesktopHealthFindings } =
+            await import("../commands/doctor-host-desktop.js");
+          return collectHostDesktopHealthFindings(ctx.cfg);
+        },
+      },
+      run: runHostDesktopHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:default-account-routing",

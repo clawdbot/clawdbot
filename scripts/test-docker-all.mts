@@ -255,7 +255,10 @@ function numericTimerValueMs(valueMs: unknown) {
   return Number.isFinite(value) ? Math.floor(value) : undefined;
 }
 
-function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS) {
+function resolveDockerSchedulerTimeoutMs(
+  valueMs: unknown,
+  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
+) {
   const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
   return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
 }
@@ -265,7 +268,7 @@ function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
   if (value === undefined || value <= 0) {
     return undefined;
   }
-  return resolveTimerTimeoutMs(value);
+  return resolveDockerSchedulerTimeoutMs(value);
 }
 
 function resourceLimitsSummary(resourceLimits: Record<string, number>) {
@@ -819,7 +822,7 @@ export function runShellCommand({
   return new Promise<ShellCommandResult>((resolve) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
     const resolvedNoOutputTimeoutMs = resolveOptionalTimerTimeoutMs(noOutputTimeoutMs);
-    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
+    const resolvedTimeoutKillGraceMs = resolveDockerSchedulerTimeoutMs(
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );
@@ -951,7 +954,7 @@ export function runShellCaptureCommand({
   }
   return new Promise<ShellCaptureResult>((resolve) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
-    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
+    const resolvedTimeoutKillGraceMs = resolveDockerSchedulerTimeoutMs(
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );

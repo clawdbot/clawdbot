@@ -214,6 +214,7 @@ struct RootTabsPresentationTests {
             .instances,
             .files,
             .dreaming,
+            .desktop,
             .terminal,
             .docs,
         ])
@@ -230,6 +231,7 @@ struct RootTabsPresentationTests {
             "dreaming",
             "usage",
             "cron",
+            "desktop",
             "terminal",
             "docs",
             "settings",

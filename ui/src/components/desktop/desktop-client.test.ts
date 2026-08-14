@@ -26,7 +26,7 @@ function createFakeRfb() {
     constructor(
       readonly target: HTMLElement,
       readonly channel: string | WebSocket,
-      readonly options?: { credentials?: { password: string } },
+      readonly options?: { credentials?: { username?: string; password?: string } },
     ) {
       super();
       instances.push(this);
@@ -37,14 +37,8 @@ function createFakeRfb() {
 
 describe("DesktopClient", () => {
   it.each([
-    [
-      "http://control.example.test/chat",
-      "ws://control.example.test/worker-desktop/observe?token=abc",
-    ],
-    [
-      "https://control.example.test/chat",
-      "wss://control.example.test/worker-desktop/observe?token=abc",
-    ],
+    ["http://control.example.test/chat", "ws://control.example.test/desktop/observe?token=abc"],
+    ["https://control.example.test/chat", "wss://control.example.test/desktop/observe?token=abc"],
   ])("resolves relative observer URLs against %s", async (gatewayUrl, expectedUrl) => {
     const { Rfb, instances } = createFakeRfb();
     const sockets: FakeSocket[] = [];
@@ -57,8 +51,8 @@ describe("DesktopClient", () => {
 
     await client.connect({
       gatewayUrl,
-      wsUrl: "/worker-desktop/observe?token=abc",
-      password: "secret",
+      wsUrl: "/desktop/observe?token=abc",
+      credentials: { password: "secret" },
       viewOnly: true,
       target,
     });
@@ -70,22 +64,41 @@ describe("DesktopClient", () => {
 
   it("propagates RFB options and disconnects through the returned handle", async () => {
     const { Rfb, instances } = createFakeRfb();
-    const socket = new FakeSocket("ws://control.example.test/worker-desktop/observe");
+    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
     const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
+    const target = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    const onKeyDown = vi.fn();
+    canvas.addEventListener("keydown", onKeyDown);
+    target.append(canvas);
 
     const handle = await client.connect({
       gatewayUrl: "ws://control.example.test",
-      wsUrl: "/worker-desktop/observe",
-      password: "secret",
+      wsUrl: "/desktop/observe",
+      credentials: { username: "operator", password: "secret" },
       background: "rgb(8, 8, 8)",
       viewOnly: false,
-      target: document.createElement("div"),
+      scaleViewport: false,
+      target,
     });
 
     expect(instances[0]?.background).toBe("rgb(8, 8, 8)");
     expect(instances[0]?.viewOnly).toBe(false);
+    expect(instances[0]?.scaleViewport).toBe(false);
+    expect(instances[0]?.options).toEqual({
+      credentials: { username: "operator", password: "secret" },
+    });
+
+    handle.setScaleViewport?.(true);
     expect(instances[0]?.scaleViewport).toBe(true);
-    expect(instances[0]?.options).toEqual({ credentials: { password: "secret" } });
+    handle.sendKeyboardEvent?.(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
+    expect(onKeyDown).toHaveBeenCalledOnce();
+    expect((onKeyDown.mock.calls[0]?.[0] as KeyboardEvent | undefined)?.key).toBe("k");
+    handle.sendText?.("m");
+    handle.sendBackspace?.();
+    expect(onKeyDown.mock.calls.map((call) => (call[0] as KeyboardEvent | undefined)?.key)).toEqual(
+      ["k", "m", "Backspace"],
+    );
 
     handle.disconnect();
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();
@@ -93,12 +106,12 @@ describe("DesktopClient", () => {
 
   it("forwards socket close metadata through the RFB disconnect callback", async () => {
     const { Rfb, instances } = createFakeRfb();
-    const socket = new FakeSocket("ws://control.example.test/worker-desktop/observe");
+    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
     const onDisconnect = vi.fn();
     const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
 
     await client.connect({
-      wsUrl: "ws://control.example.test/worker-desktop/observe",
+      wsUrl: "ws://control.example.test/desktop/observe",
       viewOnly: true,
       target: document.createElement("div"),
       onDisconnect,

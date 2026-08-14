@@ -13,11 +13,7 @@ import {
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentId,
-  resolveDefaultModelForAgent,
-} from "./bot-handlers.agent.runtime.js";
+import { resolveAgentDir, resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
@@ -38,7 +34,6 @@ import type {
   RegisterTelegramHandlerParams,
   TelegramCallbackRouter,
 } from "./bot-handlers.types.js";
-import { parseTelegramNativeCommandCallbackData } from "./bot-native-commands.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
@@ -63,6 +58,7 @@ import {
 } from "./model-buttons.js";
 import {
   hasTelegramOpaqueCallbackPrefix,
+  parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
 import { isTelegramMessageNotModifiedError } from "./network-errors.js";
@@ -464,7 +460,18 @@ async function handleTelegramModelCallback(params: {
     if (page === undefined) {
       return true;
     }
-    const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(runtimeCfg);
+    const agentId =
+      paginationMatch[2]?.trim() ||
+      messageRuntime.resolveTelegramSessionState({
+        chatId,
+        isGroup,
+        isForum,
+        messageThreadId,
+        resolvedThreadId,
+        botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+        senderId,
+        runtimeCfg,
+      }).agentId;
     const result = await retryModelAction(async () => {
       const skillCommands = telegramDeps.listSkillCommandsForAgents({
         cfg: runtimeCfg,

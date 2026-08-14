@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
 import { startQaGatewayChild } from "./gateway-child.js";
@@ -14,10 +15,7 @@ import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import type { QaProviderMode } from "./model-selection.js";
-import {
-  parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv,
-  sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
-} from "./progress-format.js";
+import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   createQaTransportAdapter,
@@ -169,11 +167,11 @@ export type QaSuiteRunParams = {
 };
 
 export function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
-  const override = parseQaSuiteBooleanEnv(env.OPENCLAW_QA_SUITE_PROGRESS);
+  const override = parseBooleanValue(env.OPENCLAW_QA_SUITE_PROGRESS);
   if (override !== undefined) {
     return override;
   }
-  return parseQaSuiteBooleanEnv(env.CI) === true;
+  return parseBooleanValue(env.CI) === true;
 }
 
 export function resolveQaSuiteTransportReadyTimeoutMs(
@@ -606,7 +604,6 @@ export const qaSuiteProgressTesting = {
   createScenarioStepRunner: createQaSuiteScenarioStepRunner,
   formatQaSuiteRunStartProgress,
   mergeQaRuntimeEnvPatches,
-  parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
   runQaFlowSuiteCleanupPlan,
   runQaSuiteCleanupSteps,

@@ -52,6 +52,13 @@ openclaw automations create "*/15 * * * *" \
 
 `--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
 
+Use `--display-name <name>` when the list and detail views should show a
+human-readable label distinct from the automation's stable name. Set or update
+that label with `automations add|edit --display-name`. Use
+`automations edit <job-id> --clear-display-name` to remove the label and restore
+the stable name in list and detail views. The set and clear options cannot be
+combined.
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.

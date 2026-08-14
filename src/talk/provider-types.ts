@@ -170,6 +170,8 @@ export type RealtimeVoiceProviderCapabilities = {
   /** True when provider VAD reports confirmed interruptions through onClearAudio("barge-in"). */
   handlesInputAudioBargeIn?: boolean;
   supportsToolCalls?: boolean;
+  /** True when user transcripts are reliable enough to gate responses on a leading wake name. */
+  supportsActivationNameGating?: boolean;
   supportsVideoFrames?: boolean;
   supportsSessionResumption?: boolean;
 };

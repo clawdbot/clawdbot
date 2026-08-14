@@ -21,6 +21,7 @@ import {
   resolvePersistedUserTurnText,
 } from "../../sessions/user-turn-transcript.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -28,6 +29,7 @@ import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
 import {
   buildPersistedMediaImageLayout,
   normalizeMessageTimestampMs,
+  suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -204,7 +206,17 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
-  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
+  const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
+  const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
+    unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
+  );
+  const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
+  const inboundMediaIndexes = buildInboundMediaNoteProjection(ctx).mediaIndexes ?? [];
+  const promptMediaForRun = suppressUnresolvedPromptMedia({
+    promptMedia: promptMedia ?? [],
+    inboundMediaIndexes,
+    unresolvedSourceIndexes,
+  });
   const mediaImageLayout = buildPersistedMediaImageLayout({
     ctx,
     media: userTurnMediaForPersistence,
@@ -330,7 +342,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
-    media: promptMedia,
+    media: promptMediaForRun,
     // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,

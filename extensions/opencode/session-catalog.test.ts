@@ -6,6 +6,7 @@ import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionTranscriptWriteLockContext } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type ResolveAcpSessionAvailability =
@@ -255,7 +256,7 @@ function captureOpenCodeContinuationCatalog() {
     {},
     { id: "opencode", config: {}, runtime },
   );
-  return { createSessionEntry, provider: provider! };
+  return { createSessionEntry, entries, provider: provider! };
 }
 
 async function installFakeOpenCode(
@@ -456,6 +457,47 @@ describe("OpenCode session catalog", () => {
     ]);
   });
 
+  itWithCli("allows a relative OPENCODE_DB as an explicit isolated-state root", async () => {
+    await installFakeOpenCode();
+    const { provider } = captureOpenCodeSessionRegistrations();
+
+    await withEnvAsync(
+      { OPENCODE_DB: undefined, XDG_DATA_HOME: undefined },
+      async () =>
+        await Promise.all([
+          expect(
+            provider!.list({ allowProcessHomeFallback: false, hostIds: ["gateway"] }),
+          ).resolves.toEqual([]),
+          expect(
+            provider!.continueSession?.({
+              allowProcessHomeFallback: false,
+              hostId: "gateway",
+              threadId: "ses_test",
+            }),
+          ).rejects.toThrow("local OpenCode sessions are unavailable in isolated state"),
+          expect(
+            provider!.openTerminal?.({
+              allowProcessHomeFallback: false,
+              hostId: "gateway",
+              threadId: "ses_test",
+            }),
+          ).rejects.toThrow("local OpenCode sessions are unavailable in isolated state"),
+        ]),
+    );
+    await withEnvAsync({ OPENCODE_DB: "relative.db", XDG_DATA_HOME: undefined }, async () => {
+      await expect(
+        provider!.list({ allowProcessHomeFallback: false, hostIds: ["gateway"] }),
+      ).resolves.toEqual([expect.objectContaining({ hostId: "gateway" })]);
+      await expect(
+        provider!.read({
+          allowProcessHomeFallback: false,
+          hostId: "gateway",
+          threadId: "ses_test",
+        }),
+      ).resolves.toMatchObject({ hostId: "gateway", threadId: "ses_test" });
+    });
+  });
+
   itWithCli(
     "memoizes the CLI database query across cadence and invalidates by config identity",
     async () => {
@@ -566,6 +608,26 @@ describe("OpenCode session catalog", () => {
     ]);
     expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "opencode-catalog-import",
+    });
+  });
+
+  itWithCli("projects only adopted OpenCode rows with their OpenClaw session key", async () => {
+    await installFakeOpenCode();
+    const { entries, provider } = captureOpenCodeContinuationCatalog();
+    const sessionEntries = { entriesForAgent: () => entries } as never;
+
+    const before = await provider.list({ hostIds: ["gateway"], sessionEntries });
+    expect(before[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+
+    const adopted = await provider.continueSession!({
+      hostId: "gateway",
+      threadId: "ses_test",
+    });
+    const after = await provider.list({ hostIds: ["gateway"], sessionEntries });
+
+    expect(after[0]?.sessions[0]).toMatchObject({
+      threadId: "ses_test",
+      sessionKey: adopted.sessionKey,
     });
   });
 

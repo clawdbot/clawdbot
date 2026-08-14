@@ -10,6 +10,12 @@ import { i18n, t } from "../i18n/index.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
 
+export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = false): string {
+  const totalSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
+  const minutes = String(Math.floor(totalSeconds / 60));
+  return `${padMinutes ? minutes.padStart(2, "0") : minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
 type FormatTimeAgoOptions = {
   suffix?: boolean;
   fallback?: string;

@@ -60,6 +60,11 @@ vi.mock("../daemon/service-env.js", () => ({
   buildServiceEnvironment: mocks.buildServiceEnvironment,
 }));
 
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: (...args: unknown[]) =>
+    mocks.loadPluginManifestRegistryCore(...args),
+}));
+
 vi.mock("../daemon/launchd-exec.js", async (importActual) => ({
   ...(await importActual<typeof import("../daemon/launchd-exec.js")>()),
   execLaunchctl: mocks.execLaunchctl,
@@ -228,6 +233,8 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
   const pluginRoot = path.join(home, "acme-secrets");
   createSecurePluginRoot(pluginRoot);
   writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
+  const configuredPluginRoot = path.join(home, "acme-plugin");
+  createSecurePluginRoot(configuredPluginRoot);
   mocks.loadPluginManifestRegistryCore.mockReturnValue({
     diagnostics: [],
     plugins: [
@@ -235,12 +242,24 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
         id: "acme-secrets",
         origin: "global",
         rootDir: pluginRoot,
+        channels: [],
         secretProviderIntegrations: {
           "secret-store": {
             source: "exec",
             command: "${node}",
             args: ["./secret-ref-resolver.js"],
             passEnv: ["ACME_SECRETS_TOKEN"],
+          },
+        },
+      },
+      {
+        id: "acme-plugin",
+        origin: "global",
+        rootDir: configuredPluginRoot,
+        channels: [],
+        configContracts: {
+          secretInputs: {
+            paths: [{ path: "apiKey", expected: "string" }],
           },
         },
       },
@@ -252,6 +271,8 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
       {
         id: "acme-plugin",
         origin: "global",
+        rootDir: configuredPluginRoot,
+        channels: [],
         configContracts: {
           secretInputs: {
             paths: [{ path: "apiKey", expected: "string" }],
