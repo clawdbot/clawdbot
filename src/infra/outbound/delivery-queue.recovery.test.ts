@@ -16,14 +16,22 @@ import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { sweepDeliveryFailureMaintenance } from "../delivery-queue-failure-maintenance.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
+import {
+  finalizeOutboundFailedDelivery,
+  resubmitOutboundDelivery,
+} from "./delivery-queue-failures.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
-import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import {
+  loadDeliveryQueueMediaRetentionSnapshot,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
+} from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
@@ -33,9 +41,14 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
+  moveToFailed,
   reserveDeliveryAttempt,
 } from "./delivery-queue-storage.js";
-import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
+import {
+  reconcileOutboundFailedDeliveryFinalizations,
+  recoverPendingDeliveries,
+  type DeliverFn,
+} from "./delivery-queue.js";
 import {
   asDeliverFn,
   createRecoveryLog,
@@ -150,6 +163,16 @@ describe("delivery-queue recovery", () => {
       },
       tmpDir(),
     );
+  }
+  async function createSpoolArtifact(suffix: string) {
+    const artifact = path.join(
+      tmpDir(),
+      "delivery-queue-media",
+      `00000000-0000-4000-8000-${suffix.padStart(12, "0")}.ogg`,
+    );
+    await fs.mkdir(path.dirname(artifact), { recursive: true });
+    await fs.writeFile(artifact, "audio-bytes");
+    return artifact;
   }
   function enqueueDemoRecoveryDelivery(
     texts: string[] = ["x"],
@@ -423,13 +446,14 @@ describe("delivery-queue recovery", () => {
     ["checks bounded provider admission before replaying a reconciliable platform attempt", true],
   ])("%s", async (_, stableAttempt) => {
     const capture = stableAttempt ? undefined : captureAuditEvents();
+    const rejectedArtifact = stableAttempt ? undefined : await createSpoolArtifact("41");
     const id = stableAttempt
       ? "cron-direct-delivery:v1:blocked-reconciled-admission"
       : await enqueueRecoveryDelivery({
           channel: "slack",
           to: "C123",
           accountId: "enterprise",
-          payloads: [{ text: "blocked" }],
+          payloads: [{ text: "blocked", mediaUrl: rejectedArtifact, audioAsVoice: true }],
         });
     const producerClaimId = stableAttempt
       ? await enqueueClaimedRecoveryDelivery(id, {
@@ -484,16 +508,61 @@ describe("delivery-queue recovery", () => {
     } else {
       expect(result).toEqual(RECOVERY_SUMMARY.failed);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
-      expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
+      const retainedFailure = readQueuedEntry(tmpDir(), id);
+      expect(retainedFailure).not.toHaveProperty("lastError");
+      expect(retainedFailure).toMatchObject({
+        terminalPolicy: {
+          detail: "compacted",
+          replay: "ambiguous",
+          reason: "admission_rejected",
+          evidence: "unknown_after_send",
+        },
+      });
       expectPayloadAudits(capture?.auditEvents ?? [], id, [
         { status: "unknown", outcome: "unknown", failureStage: "queue" },
       ]);
+      await expect(fs.stat(rejectedArtifact!)).rejects.toMatchObject({ code: "ENOENT" });
       resolveOutboundChannelMessageAdapterMock.mockReturnValue({
         durableFinal: { admitDeferredDelivery: () => ({ status: "allowed" }) },
       });
       await runRecovery({ deliver });
       expect(deliver).not.toHaveBeenCalled();
     }
+  });
+  it("retains replay-safe media when recovery admission rejects before side effects", async () => {
+    const artifact = await createSpoolArtifact("42");
+    const id = await enqueueRecoveryDelivery({
+      channel: "slack",
+      to: "C123",
+      accountId: "enterprise",
+      payloads: [{ text: "blocked", mediaUrl: artifact, audioAsVoice: true }],
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        admitDeferredDelivery: () => ({
+          status: "permanent_rejection" as const,
+          reason: "unsupported_enterprise_slack_delivery",
+        }),
+      },
+    });
+
+    const { result } = await runRecovery({ deliver: vi.fn() });
+
+    expect(result).toEqual(RECOVERY_SUMMARY.failed);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
+      terminalPolicy: {
+        detail: "full",
+        replay: "safe",
+        fence: { kind: "none" },
+        reason: "admission_rejected",
+      },
+    });
+    await expect(fs.stat(artifact)).resolves.toBeDefined();
+    await expect(resubmitOutboundDelivery(id, tmpDir())).resolves.toEqual({ ok: true });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
+    await ackDelivery(id, tmpDir());
+    await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
   });
   it.each([
     ["paces startup replay instead of draining eligible entries back-to-back", 60_000],
@@ -1103,6 +1172,322 @@ describe("delivery-queue recovery", () => {
     expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
     await expectFailedQueue(id);
     expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
+  });
+  it("recovers pending delivery independently of stranded owner finalization", async () => {
+    const artifact = await createSpoolArtifact("43");
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "retained", mediaUrl: artifact }],
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "crash-before-finalization",
+        storePath: path.join(tmpDir(), "agent-sessions.json"),
+      },
+    });
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+    await moveToFailed(id, tmpDir());
+
+    await expect(
+      sweepDeliveryFailureMaintenance({
+        stateDir: tmpDir(),
+        now: Date.now() + 31 * 24 * 60 * 60_000,
+      }),
+    ).resolves.toMatchObject({ compacted: 0, deleted: 0, errors: 0 });
+    await pruneOrphanedDeliveryQueueMedia({ stateDir: tmpDir() });
+    await expect(fs.stat(artifact)).resolves.toBeDefined();
+
+    const pendingId = await enqueueRecoveryDelivery({ payloads: [{ text: "still pending" }] });
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+    });
+    db.prepare(
+      `INSERT INTO delivery_queue_entries
+        (queue_name,id,status,entry_kind,retry_count,entry_json,enqueued_at,updated_at,failed_at)
+       VALUES (?,?,'failed','outbound',0,'{malformed',1,1,1)`,
+    ).run(OUTBOUND_DELIVERY_QUEUE_NAME, "malformed-owner-finalization");
+
+    const afterUnknownSendTerminal = vi.fn();
+    installUnknownSendAdapter(vi.fn(), { afterUnknownSendTerminal });
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toEqual(RECOVERY_SUMMARY.recovered);
+    expect(mockCallRecord(deliver)).toMatchObject({ deliveryQueueId: pendingId });
+    expect(afterUnknownSendTerminal).not.toHaveBeenCalled();
+    expect(readQueuedEntry(tmpDir(), id).terminalPolicy).toMatchObject({
+      detail: "full",
+      cleanup: "pending",
+      payload: "present",
+    });
+    await expect(fs.stat(artifact)).resolves.toBeDefined();
+
+    await reconcileOutboundFailedDeliveryFinalizations({
+      cfg: baseCfg,
+      log: createRecoveryLog(),
+      stateDir: tmpDir(),
+    });
+
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
+    const finalized = readQueuedEntry(tmpDir(), id);
+    expect(finalized).toMatchObject({
+      terminalPolicy: {
+        detail: "compacted",
+        replay: "owner-managed",
+        cleanup: "complete",
+        payload: "none",
+      },
+    });
+    expect(finalized).not.toHaveProperty("preparedBatch");
+    expect(finalized).not.toHaveProperty("deliveryCompletion");
+    await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("keeps failed provider cleanup pending until a later reconciliation succeeds", async () => {
+    const createCrashFailure = async (operationId: string) => {
+      const id = await enqueueRecoveryDelivery({
+        payloads: [{ text: operationId }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId,
+          storePath: path.join(tmpDir(), "agent-sessions.json"),
+        },
+      });
+      await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+      await moveToFailed(id, tmpDir());
+      return id;
+    };
+    const failedCleanupId = await createCrashFailure("cleanup-fails");
+    const laterId = await createCrashFailure("cleanup-continues");
+    const completeId = await createCrashFailure("cleanup-complete");
+    await finalizeOutboundFailedDelivery(completeId, tmpDir());
+    let cleanupUnavailable = true;
+    const afterUnknownSendTerminal = vi.fn(async (ctx: { queueId: string }) => {
+      if (ctx.queueId === failedCleanupId && cleanupUnavailable) {
+        throw new Error("provider cleanup unavailable");
+      }
+    });
+    installUnknownSendAdapter(vi.fn(), { afterUnknownSendTerminal });
+    const log = createRecoveryLog();
+
+    await reconcileOutboundFailedDeliveryFinalizations({ cfg: baseCfg, log, stateDir: tmpDir() });
+
+    expect(afterUnknownSendTerminal.mock.calls.map(([ctx]) => ctx.queueId).toSorted()).toEqual(
+      [failedCleanupId, laterId].toSorted(),
+    );
+    expect(readQueuedEntry(tmpDir(), failedCleanupId).terminalPolicy).toMatchObject({
+      detail: "full",
+      cleanup: "pending",
+    });
+    expect(readQueuedEntry(tmpDir(), laterId).terminalPolicy).toMatchObject({
+      detail: "compacted",
+      cleanup: "complete",
+    });
+    expect(readQueuedEntry(tmpDir(), completeId).terminalPolicy).toMatchObject({
+      detail: "compacted",
+      cleanup: "complete",
+    });
+    expectMockMessageContaining(log.warn, "provider cleanup unavailable");
+
+    cleanupUnavailable = false;
+    await reconcileOutboundFailedDeliveryFinalizations({ cfg: baseCfg, log, stateDir: tmpDir() });
+
+    expect(afterUnknownSendTerminal.mock.calls.map(([ctx]) => ctx.queueId)).toEqual([
+      failedCleanupId,
+      laterId,
+      failedCleanupId,
+    ]);
+    expect(readQueuedEntry(tmpDir(), failedCleanupId).terminalPolicy).toMatchObject({
+      detail: "compacted",
+      cleanup: "complete",
+    });
+  });
+  it("keeps owner cleanup pending until the channel adapter is available", async () => {
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "adapter unavailable" }],
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "adapter-unavailable-cleanup",
+        storePath: path.join(tmpDir(), "agent-sessions.json"),
+      },
+    });
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+    await moveToFailed(id, tmpDir());
+    const log = createRecoveryLog();
+
+    await reconcileOutboundFailedDeliveryFinalizations({ cfg: baseCfg, log, stateDir: tmpDir() });
+
+    expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
+      preparedBatch: expect.any(Object),
+      terminalPolicy: {
+        detail: "full",
+        cleanup: "pending",
+        payload: "present",
+      },
+    });
+    expectMockMessageContaining(log.warn, "channel adapter unavailable");
+
+    const afterUnknownSendTerminal = vi.fn();
+    installUnknownSendAdapter(vi.fn(), { afterUnknownSendTerminal });
+    await reconcileOutboundFailedDeliveryFinalizations({ cfg: baseCfg, log, stateDir: tmpDir() });
+
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
+    expect(readQueuedEntry(tmpDir(), id).terminalPolicy).toMatchObject({
+      detail: "compacted",
+      cleanup: "complete",
+      payload: "none",
+    });
+  });
+  it("retries exact media cleanup without rerunning successful provider cleanup", async () => {
+    const artifact = await createSpoolArtifact("46");
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "retained", mediaUrl: artifact }],
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "media-cleanup-retry",
+        storePath: path.join(tmpDir(), "agent-sessions.json"),
+      },
+    });
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+    await moveToFailed(id, tmpDir());
+    const afterUnknownSendTerminal = vi.fn();
+    installUnknownSendAdapter(vi.fn(), { afterUnknownSendTerminal });
+    await fs.unlink(artifact);
+    await fs.mkdir(artifact);
+    await fs.writeFile(path.join(artifact, "busy"), "spool unavailable");
+    const log = createRecoveryLog();
+
+    await reconcileOutboundFailedDeliveryFinalizations({ cfg: baseCfg, log, stateDir: tmpDir() });
+
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
+    expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
+      preparedBatch: expect.any(Object),
+      terminalPolicy: {
+        detail: "full",
+        cleanup: "media_pending",
+        payload: "present",
+      },
+    });
+    await expect(fs.stat(path.join(artifact, "busy"))).resolves.toBeDefined();
+    const retained = loadDeliveryQueueMediaRetentionSnapshot({
+      stateDir: tmpDir(),
+      expireBeforeMs: Date.now() + 2 * 24 * 60 * 60_000,
+    });
+    expect(JSON.stringify(retained.payloads)).toContain(artifact);
+    expectMockMessageContaining(log.warn, "not empty");
+
+    await fs.rm(artifact, { recursive: true });
+    await fs.writeFile(artifact, "audio-bytes");
+    await reconcileOutboundFailedDeliveryFinalizations({ cfg: baseCfg, log, stateDir: tmpDir() });
+
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
+    expect(readQueuedEntry(tmpDir(), id).terminalPolicy).toMatchObject({
+      detail: "compacted",
+      cleanup: "complete",
+      payload: "none",
+    });
+    await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("retries compaction idempotently after exact media was already removed", async () => {
+    const artifact = await createSpoolArtifact("47");
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "retained", mediaUrl: artifact }],
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "post-unlink-crash",
+        storePath: path.join(tmpDir(), "agent-sessions.json"),
+      },
+    });
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+    await moveToFailed(id, tmpDir());
+    const afterUnknownSendTerminal = vi.fn();
+    installUnknownSendAdapter(vi.fn(), { afterUnknownSendTerminal });
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+    });
+    db.exec(`CREATE TRIGGER reject_owner_media_compaction
+      BEFORE UPDATE ON delivery_queue_entries
+      WHEN OLD.id = '${id}'
+        AND json_extract(OLD.entry_json, '$.terminalPolicy.cleanup') = 'media_pending'
+      BEGIN SELECT RAISE(ABORT, 'simulated crash before compaction'); END`);
+    const log = createRecoveryLog();
+
+    await reconcileOutboundFailedDeliveryFinalizations({ cfg: baseCfg, log, stateDir: tmpDir() });
+
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
+    expect(readQueuedEntry(tmpDir(), id).terminalPolicy).toMatchObject({
+      detail: "full",
+      cleanup: "media_pending",
+    });
+    await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+    expectMockMessageContaining(log.warn, "simulated crash before compaction");
+
+    db.exec("DROP TRIGGER reject_owner_media_compaction");
+    await reconcileOutboundFailedDeliveryFinalizations({ cfg: baseCfg, log, stateDir: tmpDir() });
+
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
+    expect(readQueuedEntry(tmpDir(), id).terminalPolicy).toMatchObject({
+      detail: "compacted",
+      cleanup: "complete",
+    });
+  });
+  it("does not finalize replacement media when a failed-row CAS loses its owner", async () => {
+    const oldArtifact = await createSpoolArtifact("44");
+    const newArtifact = await createSpoolArtifact("45");
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ mediaUrl: oldArtifact }],
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "old-owner",
+        storePath: path.join(tmpDir(), "agent-sessions.json"),
+      },
+    });
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+    await moveToFailed(id, tmpDir());
+    const afterUnknownSendTerminal = vi.fn(async () => {
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+      });
+      db.prepare("DELETE FROM delivery_queue_entries WHERE queue_name = ? AND id = ?").run(
+        OUTBOUND_DELIVERY_QUEUE_NAME,
+        id,
+      );
+      await enqueueDeliveryOnce(
+        {
+          channel: "demo-channel-a",
+          to: "+1",
+          payloads: [{ mediaUrl: newArtifact }],
+          deliveryCompletion: {
+            kind: "conversation",
+            agentId: "main",
+            operationId: "replacement-owner",
+            storePath: path.join(tmpDir(), "agent-sessions.json"),
+          },
+        },
+        id,
+        tmpDir(),
+      );
+      await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+      await moveToFailed(id, tmpDir());
+    });
+    installUnknownSendAdapter(vi.fn(), { afterUnknownSendTerminal });
+
+    await reconcileOutboundFailedDeliveryFinalizations({
+      cfg: baseCfg,
+      log: createRecoveryLog(),
+      stateDir: tmpDir(),
+    });
+
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
+    expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
+      deliveryCompletion: { operationId: "replacement-owner" },
+      terminalPolicy: { detail: "full", cleanup: "pending" },
+    });
+    await expect(fs.stat(oldArtifact)).resolves.toBeDefined();
+    await expect(fs.stat(newArtifact)).resolves.toBeDefined();
   });
   it.each([
     [

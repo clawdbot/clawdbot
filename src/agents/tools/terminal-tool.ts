@@ -158,6 +158,9 @@ function launchBlockMessage(
   if (block.kind === "unknown-agent") {
     return `unknown agent: ${block.agentId}`;
   }
+  if (block.kind === "owner-required") {
+    return block.message;
+  }
   return `terminal unavailable: agent sandboxed (${block.mode})`;
 }
 

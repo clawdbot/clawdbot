@@ -142,6 +142,8 @@ export type RunCliAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Exact attempt authority attached to the active steering backend. */
+  toolAuthorityFingerprint?: string;
   /** Immutable lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   lane?: string;

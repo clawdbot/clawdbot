@@ -8,6 +8,7 @@ import type {
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -20,6 +21,7 @@ import {
 import { DesktopClient, type DesktopConnectionHandle } from "./desktop-client.ts";
 import { desktopDocumentStyles } from "./desktop-document-styles.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
+import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import type {
   DesktopAppId,
   DesktopCredentials,
@@ -38,7 +40,7 @@ import {
   renderDesktopPanelHeader,
   renderDesktopPicker,
 } from "./desktop-panel-view.ts";
-import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import { desktopSourceForEnvironment, resolveDesktopDocumentTarget } from "./desktop-source.ts";
 
 const panelLayout = createDockPanelLayout({
   storageKey: "openclaw.desktopPanel",
@@ -49,7 +51,6 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 560,
 });
-const MOBILE_KEYBOARD_SENTINEL = "________________";
 /** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
 class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
@@ -57,6 +58,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ type: Boolean }) suppressed = false;
   @property({ type: Boolean }) documentMode = false;
   @property({ attribute: false }) documentSource: string | null = null;
+  @property({ attribute: false }) documentSession: string | null = null;
   @property({ type: Boolean }) documentControl = false;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
 
@@ -85,7 +87,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private launchOperationId = 0;
   private controlTakeoverRecoveryUsed = false;
   private documentSourceResolved = false;
-  private keyboardInputValue = MOBILE_KEYBOARD_SENTINEL;
+  private readonly mobileKeyboard = new DesktopMobileKeyboard({
+    connection: () => this.connection,
+    controlling: () => this.controlling,
+    input: () => this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input"),
+  });
   private readonly dockLayout = new DockLayoutController(this, {
     layout: panelLayout,
     reservationPrefix: "desktop",
@@ -132,13 +138,14 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         void this.refreshEnvironments();
       }
     }
-    if (changed.has("documentSource")) {
+    if (changed.has("documentSource") || changed.has("documentSession")) {
       this.documentSourceResolved = false;
     }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
     const documentPresentationChanged =
       changed.has("documentMode") ||
       changed.has("documentSource") ||
+      changed.has("documentSession") ||
       changed.has("documentControl");
     if (this.documentMode && (gatewayAvailabilityChanged || documentPresentationChanged)) {
       if (!this.available) {
@@ -211,7 +218,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     const connection = this.connection;
     this.connection = null;
     connection?.disconnect();
-    this.resetDocumentKeyboardInput();
+    this.mobileKeyboard.reset();
   }
 
   private clearLaunchState(): void {
@@ -239,7 +246,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     } catch (error) {
       if (operationId === this.operationId) {
         this.errorText = t("desktop.errors.listFailed", { error: formatUiError(error) });
-        if (this.documentMode && this.documentSource !== null) {
+        if (this.documentMode && (this.documentSource !== null || this.documentSession !== null)) {
+          // A session key only names a machine once the inventory loads, so it stays out of
+          // `environmentId`; document-mode retry refreshes the inventory rather than reconnecting.
           this.environmentId = this.documentSource;
           this.state = "inventory-error";
         }
@@ -260,8 +269,36 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       return;
     }
     this.documentSourceResolved = true;
-    const requestedSource = this.documentSource;
+    let session: GatewaySessionRow | undefined;
+    if (this.documentSource === null && this.documentSession !== null) {
+      // `sessions.describe` is the exact-key lookup; a `sessions.list` search would have to
+      // page past same-agent keys that share this one's prefix before it could rule it out.
+      try {
+        const described = await this.client?.request<{ session?: GatewaySessionRow | null }>(
+          "sessions.describe",
+          { key: this.documentSession },
+        );
+        session = described?.session ?? undefined;
+      } catch {
+        session = undefined;
+      }
+      if (operationId !== this.operationId) {
+        return;
+      }
+    }
+    const requestedSource = resolveDesktopDocumentTarget(
+      {
+        source: this.documentSource,
+        session: this.documentSession,
+        control: this.documentControl,
+      },
+      session,
+    );
     if (requestedSource === null) {
+      if (this.documentSession !== null) {
+        this.state = "picker";
+        this.noticeText = t("desktop.sourceUnavailable");
+      }
       return;
     }
     if (!this.environments.some((environment) => environment.id === requestedSource)) {
@@ -543,57 +580,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
   }
 
-  private handleDocumentKeyboardEvent(event: KeyboardEvent): void {
-    if (!this.controlling || !this.connection?.sendKeyboardEvent) {
-      return;
-    }
-    this.connection.sendKeyboardEvent(event);
-    event.preventDefault();
-  }
-
-  private handleDocumentKeyboardInput(event: InputEvent): void {
-    const input = event.currentTarget as HTMLTextAreaElement;
-    if (!this.controlling) {
-      this.resetDocumentKeyboardInput(input);
-      return;
-    }
-    const previousValue = this.keyboardInputValue;
-    const nextValue = input.value;
-    let prefixLength = 0;
-    const comparableLength = Math.min(previousValue.length, nextValue.length);
-    while (
-      prefixLength < comparableLength &&
-      previousValue.charAt(prefixLength) === nextValue.charAt(prefixLength)
-    ) {
-      prefixLength += 1;
-    }
-    const removedCount = previousValue.length - prefixLength;
-    for (let index = 0; index < removedCount; index += 1) {
-      this.connection?.sendBackspace?.();
-    }
-    this.connection?.sendText?.(nextValue.slice(prefixLength));
-    if (nextValue.length < 1 || nextValue.length > MOBILE_KEYBOARD_SENTINEL.length * 2) {
-      this.resetDocumentKeyboardInput(input);
-      return;
-    }
-    this.keyboardInputValue = nextValue;
-  }
-
-  private resetDocumentKeyboardInput(input?: HTMLTextAreaElement): void {
-    this.keyboardInputValue = MOBILE_KEYBOARD_SENTINEL;
-    const target =
-      input ?? this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
-    if (target) {
-      target.value = MOBILE_KEYBOARD_SENTINEL;
-    }
-  }
-
-  private focusDocumentKeyboard(): void {
-    const input = this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
-    input?.focus({ preventScroll: true });
-    input?.setSelectionRange(input.value.length, input.value.length);
-  }
-
   private toggleDocumentScale(): void {
     this.scaleViewport = !this.scaleViewport;
     this.connection?.setScaleViewport?.(this.scaleViewport);
@@ -622,15 +608,15 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       inventoryError: this.state === "inventory-error",
       reason: this.disconnectedReason,
       onRetry: () => {
+        if (this.state === "inventory-error" && this.documentMode) {
+          this.retryDocumentInventory();
+          return;
+        }
         if (!this.environmentId) {
           return;
         }
         if (this.state === "inventory-error") {
-          if (this.documentMode) {
-            this.retryDocumentInventory();
-          } else {
-            void this.connectRequestedEnvironment(this.environmentId);
-          }
+          void this.connectRequestedEnvironment(this.environmentId);
           return;
         }
         void this.connectEnvironment(this.environmentId, this.controlling);
@@ -656,7 +642,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         state: this.state,
         controlling: this.controlling,
         scaleViewport: this.scaleViewport,
-        keyboardInputValue: this.keyboardInputValue,
+        keyboardInputValue: this.mobileKeyboard.value,
         notice,
         picker,
         credentials,
@@ -666,9 +652,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
             void this.connectEnvironment(this.environmentId, !this.controlling);
           }
         },
-        onKeyboardFocus: () => this.focusDocumentKeyboard(),
-        onKeyboardEvent: (event) => this.handleDocumentKeyboardEvent(event),
-        onKeyboardInput: (event) => this.handleDocumentKeyboardInput(event),
+        onKeyboardFocus: () => this.mobileKeyboard.focus(),
+        onKeyboardEvent: (event) => this.mobileKeyboard.handleKeyboardEvent(event),
+        onKeyboardInput: (event) => this.mobileKeyboard.handleInput(event),
         onScaleToggle: () => this.toggleDocumentScale(),
         onClose: () => this.onDocumentClose?.(),
       });

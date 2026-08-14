@@ -61,15 +61,33 @@ describe("SnapshotSchema", () => {
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
   });
 
-  it("accepts ingress dead letters and active lane pressure", () => {
+  it("accepts additive delivery failure classifications and ingress health", () => {
     const snapshot = {
       ...snapshotWithPresence({ ts: 1 }),
       health: {
         deliveryQueues: {
-          failed: [],
-          ingressFailed: [
-            { channelId: "telegram", accountId: "ops", count: 2, oldestFailedAt: 1_000 },
+          failed: [
+            {
+              queueName: "outbound-prepared-v1",
+              count: 2,
+              full: 1,
+              compacted: 1,
+              safe: 1,
+              ambiguous: 1,
+              ownerManaged: 0,
+              ownerCleanupPending: 0,
+              fenceNone: 1,
+              fencePermanent: 1,
+              fenceProducerBounded: 0,
+              legacyUnknown: 0,
+              payloadBearing: 1,
+              oldestPayloadFailedAt: 1,
+            },
           ],
+          ingressFailed: [
+            { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 1_000 },
+          ],
+          maintenance: { lastRunAt: 1, errors: 0 },
           ingressPressure: [
             {
               channelId: "telegram",

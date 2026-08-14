@@ -406,6 +406,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await MacNodeModeCoordinator.shared.stopAndWait()
     }
 
+    var peekabooBridgeTerminationCleanup: @MainActor () async -> Void = {
+        await PeekabooBridgeHostCoordinator.shared.shutdown()
+    }
+
     var waitForTerminationCleanupDeadline: @MainActor () async -> Void = {
         try? await Task.sleep(for: .seconds(AppTerminationTiming.cleanupDeadlineSeconds))
     }
@@ -599,6 +603,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExecApprovalsPromptServer.shared.start()
         ExecApprovalsGatewayPrompter.shared.start()
         MacNodeModeCoordinator.shared.start()
+        if let state {
+            CookieSyncManager.shared.start(state: state)
+        }
         VoiceWakeGlobalSettingsSync.shared.start()
         QuickChatController.shared.start()
         Task { PresenceReporter.shared.start() }
@@ -612,9 +619,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            DashboardManager.shared.preloadIfConfigured()
+        if launchPolicy.allowsAutomaticPresentation {
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                DashboardManager.shared.preloadIfConfigured()
+            }
         }
 
         #if DEBUG
@@ -649,6 +658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExecApprovalsPromptServer.shared.stop()
         ExecApprovalsGatewayPrompter.shared.stop()
         MacNodeModeCoordinator.shared.stop()
+        CookieSyncManager.shared.stop()
         TerminationSignalWatcher.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
         DashboardManager.shared.close()
@@ -656,7 +666,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await GatewayConnection.shared.shutdown() }
-        Task { await PeekabooBridgeHostCoordinator.shared.stop() }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -666,9 +675,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.terminationCleanupTask == nil else {
             return .terminateLater
         }
-        let cleanup = self.nodeTerminationCleanup
+        let nodeCleanup = self.nodeTerminationCleanup
+        let bridgeCleanup = self.peekabooBridgeTerminationCleanup
         self.terminationCleanupTask = Task { @MainActor [weak self] in
-            await cleanup()
+            async let nodeCleanupResult: Void = nodeCleanup()
+            async let bridgeCleanupResult: Void = bridgeCleanup()
+            _ = await (nodeCleanupResult, bridgeCleanupResult)
             self?.finishTerminationCleanup(for: sender)
         }
         let waitForDeadline = self.waitForTerminationCleanupDeadline

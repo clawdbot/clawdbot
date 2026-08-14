@@ -1,4 +1,5 @@
 import { resolveStateDir } from "../../config/paths.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   SetupTargetLockedError,
   withSetupMigrationTargetLock,
@@ -62,6 +63,12 @@ export async function createAdmittedWizardSession<T extends { whenSettled(): Pro
       : createSession();
     const settled = admissionSettled ?? session.whenSettled();
     wizardSessionAdmissionSettlements.set(session, settled);
+    // The runner outlives its start RPC and inherits that request's admission.
+    // Keep the root live so later prompts and post-auth probes remain subordinate work.
+    const releaseGatewayWork = retainGatewayRootWorkAdmissionContinuation();
+    if (releaseGatewayWork) {
+      void settled.then(releaseGatewayWork, releaseGatewayWork);
+    }
     void settled.then(releaseSession, releaseSession);
     return session;
   } catch (error) {

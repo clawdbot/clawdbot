@@ -581,6 +581,7 @@ enum class GatewayMethod(
   PortalList("portal.list"),
   PortalOpen("portal.open"),
   PortalClose("portal.close"),
+  DeliveryFailuresResubmit("delivery.failures.resubmit"),
 }
 
 enum class GatewayEvent(

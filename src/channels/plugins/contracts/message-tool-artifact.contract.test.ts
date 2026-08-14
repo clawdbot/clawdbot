@@ -1,14 +1,12 @@
-// Message-tool artifact parity contract for bundled channel plugins.
+// Message-tool lightweight artifact contract for bundled channel plugins.
 //
 // Core discovers message-tool schemas from lightweight `message-tool-api`
 // artifacts without loading full channel plugins
-// (src/channels/plugins/message-tool-api.ts). This suite pins each artifact
-// export to the exact function the loaded plugin's action surface uses so
-// discovery cannot drift from runtime behavior.
+// (src/channels/plugins/message-tool-api.ts). This shard owns artifact inventory
+// and export shape; loaded-plugin parity lives in plugin-shape.contract.test.ts.
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   getBundledChannelMessageToolArtifactAsync,
-  getBundledChannelPluginAsync,
   listBundledChannelPluginIds,
 } from "./test-helpers/bundled-channel-plugin-loader.js";
 
@@ -31,16 +29,8 @@ describe("bundled channel message-tool artifact parity", () => {
     expect([...artifactDescribers.keys()].toSorted()).toEqual([
       ...MESSAGE_TOOL_ARTIFACT_PLUGIN_IDS,
     ]);
+    for (const id of MESSAGE_TOOL_ARTIFACT_PLUGIN_IDS) {
+      expect(typeof artifactDescribers.get(id)).toBe("function");
+    }
   });
-
-  it.each(MESSAGE_TOOL_ARTIFACT_PLUGIN_IDS)(
-    "keeps the %s artifact describer identical to the plugin action surface",
-    async (id) => {
-      const describeMessageTool = artifactDescribers.get(id);
-      expect(typeof describeMessageTool).toBe("function");
-
-      const plugin = await getBundledChannelPluginAsync(id);
-      expect(plugin?.actions?.describeMessageTool).toBe(describeMessageTool);
-    },
-  );
 });

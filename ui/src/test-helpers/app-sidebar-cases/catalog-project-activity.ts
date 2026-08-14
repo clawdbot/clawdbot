@@ -81,12 +81,8 @@ describe("AppSidebar project session activity", () => {
     expect(active?.querySelector(".session-run-spinner")?.getAttribute("aria-label")).toBe(
       "Active run",
     );
-    const activeLead = active?.querySelector(".sidebar-session-indicator");
-    const idleLead = idle?.querySelector(".sidebar-session-indicator");
-    expect(activeLead).not.toBeNull();
-    expect(activeLead?.childElementCount).toBe(0);
-    expect(idleLead).not.toBeNull();
-    expect(idleLead?.childElementCount).toBe(0);
+    expect(active?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(idle?.querySelector(".sidebar-session-indicator")).toBeNull();
     expect(idle?.querySelector(".session-row-state")).toBeNull();
   });
 });
