@@ -2,7 +2,7 @@
  * Gateway node catalog regression tests.
  */
 import { describe, expect, it } from "vitest";
-import { NODE_WORKER_SUPERVISOR_COMMANDS } from "../infra/node-commands.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "./node-catalog.js";
 
 type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
@@ -62,9 +62,9 @@ describe("gateway/node-catalog", () => {
   it("never projects private worker controls from persisted or pending state", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [pairedDevice()],
-      pairedNodes: [pairedNode({ commands: ["system.run", ...NODE_WORKER_SUPERVISOR_COMMANDS] })],
+      pairedNodes: [pairedNode({ commands: ["system.run", ...NODE_WORKER_PRIVATE_COMMANDS] })],
       pendingNodes: [
-        pendingNode({ commands: ["screen.snapshot", ...NODE_WORKER_SUPERVISOR_COMMANDS] }),
+        pendingNode({ commands: ["screen.snapshot", ...NODE_WORKER_PRIVATE_COMMANDS] }),
       ],
       connectedNodes: [],
     });

@@ -82,8 +82,13 @@ export function createCodexAttemptServerRequestController(
     const projector = projectorRef.current;
     let armCompletionWatchOnResponse = false;
     let requestCountsAsTurnActivity = false;
-    const markCurrentTurnRequestProgress = () => {
+    let requestKeepsAttemptWatchArmed = false;
+    const markCurrentTurnRequestProgress = (options?: { hasIndependentTimeout?: boolean }) => {
       state.activeAppServerTurnRequests += 1;
+      requestKeepsAttemptWatchArmed = options?.hasIndependentTimeout !== true;
+      if (requestKeepsAttemptWatchArmed) {
+        state.activeAppServerTurnRequestsWithoutTimeout += 1;
+      }
       turnWatches.clearCompletionIdleTimer();
       turnWatches.disarmAssistantCompletionIdleWatch();
       requestCountsAsTurnActivity = true;
@@ -149,13 +154,13 @@ export function createCodexAttemptServerRequestController(
       const replayedExecution = openClawDynamicToolExecutions.get(call);
       if (replayedExecution) {
         armCompletionWatchOnResponse = true;
-        markCurrentTurnRequestProgress();
+        markCurrentTurnRequestProgress({ hasIndependentTimeout: true });
         state.turnCrossedToolHandoff = true;
         return toCodexDynamicToolProtocolResponse(await replayedExecution) as JsonValue;
       }
       const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
       armCompletionWatchOnResponse = true;
-      markCurrentTurnRequestProgress();
+      markCurrentTurnRequestProgress({ hasIndependentTimeout: true });
       state.turnCrossedToolHandoff = true;
       pendingOpenClawDynamicToolCompletionIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
@@ -348,6 +353,12 @@ export function createCodexAttemptServerRequestController(
     } finally {
       if (requestCountsAsTurnActivity) {
         state.activeAppServerTurnRequests = Math.max(0, state.activeAppServerTurnRequests - 1);
+        if (requestKeepsAttemptWatchArmed) {
+          state.activeAppServerTurnRequestsWithoutTimeout = Math.max(
+            0,
+            state.activeAppServerTurnRequestsWithoutTimeout - 1,
+          );
+        }
         const postToolContinuationTimeoutMs =
           request.method === "item/tool/call" && state.turnCrossedToolHandoff
             ? postToolRawAssistantCompletionIdleTimeoutMs

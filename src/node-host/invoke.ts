@@ -70,6 +70,7 @@ import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
+import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
@@ -88,6 +89,7 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 
 type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerSupervisor?: NodeWorkerSupervisorControl;
+  workerWorkspace?: NodeWorkerWorkspaceRuntime;
 };
 
 const execHostEnforced =
@@ -615,6 +617,10 @@ async function dispatchInvoke(
     command,
     paramsJSON: frame.paramsJSON,
     supervisor: runtime.workerSupervisor,
+    workspace: runtime.workerWorkspace,
+    gatewayUrl: runtime.gatewayUrl,
+    gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+    signal: runtime.signal,
   });
   if (workerSupervisorResult.handled) {
     if (workerSupervisorResult.ok) {
