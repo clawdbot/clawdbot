@@ -493,6 +493,9 @@ public actor GatewayChannelActor {
         if !options.commands.isEmpty {
             params["commands"] = ProtoAnyCodable(options.commands)
         }
+        if let computerUse = options.computerUse {
+            params["computerUse"] = computerUse
+        }
         if let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines), !pathEnv.isEmpty {
             params["pathEnv"] = ProtoAnyCodable(pathEnv)
         }

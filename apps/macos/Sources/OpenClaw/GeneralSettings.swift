@@ -16,7 +16,10 @@ struct GeneralSettings: View {
 
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = true
+    @AppStorage(computerControlEnabledKey, store: AppDefaults.standard)
+    private var computerControlEnabled: Bool = true
+    @AppStorage(computerControlProviderKey, store: AppDefaults.standard)
+    private var computerControlProviderRaw: String = ComputerControlProvider.peekaboo.rawValue
     let page: Page
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -66,8 +69,10 @@ struct GeneralSettings: View {
             QuickChatController.shared.setEnabled(enabled)
         }
         .onChange(of: self.computerControlEnabled) { _, _ in
-            // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
-            self.state.applyPeekabooBridgeHostState()
+            self.state.applyComputerControlHostState()
+        }
+        .onChange(of: self.computerControlProviderRaw) { _, _ in
+            self.state.applyComputerControlHostState()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             self.refreshComputerControlPermissions()
@@ -140,6 +145,8 @@ struct GeneralSettings: View {
                     move the pointer, click, and type without per-action confirmation. High risk.
                     """,
                     binding: self.$computerControlEnabled)
+
+                self.computerControlProviderRow
 
                 SettingsCardRow(
                     title: "Computer Control access",
@@ -874,6 +881,43 @@ struct GeneralSettings: View {
 }
 
 extension GeneralSettings {
+    @ViewBuilder
+    private var computerControlProviderRow: some View {
+        if self.computerControlEnabled {
+            SettingsCardRow(
+                title: "Computer Control provider",
+                subtitle: "Choose the node-local automation backend for snapshots and actions.")
+            {
+                Picker("Computer Control provider", selection: self.computerControlProviderBinding) {
+                    Text(ComputerControlProvider.peekaboo.displayName)
+                        .tag(ComputerControlProvider.peekaboo)
+                    Text(self.cuaDriverBundled ? "CUA" : "CUA (driver not bundled)")
+                        .tag(ComputerControlProvider.cua)
+                        .disabled(!self.cuaDriverBundled)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 220, alignment: .trailing)
+            }
+        }
+    }
+
+    private var cuaDriverBundled: Bool {
+        CuaDriverArtifact.bundledExecutableURL != nil
+    }
+
+    private var computerControlProviderBinding: Binding<ComputerControlProvider> {
+        Binding(
+            get: {
+                let selected = ComputerControlProvider(rawValue: self.computerControlProviderRaw) ?? .peekaboo
+                return selected == .cua && !self.cuaDriverBundled ? .peekaboo : selected
+            },
+            set: { provider in
+                guard provider != .cua || self.cuaDriverBundled else { return }
+                self.computerControlProviderRaw = provider.rawValue
+            })
+    }
+
     private var cookieSyncStatusTitle: String {
         switch self.cookieSyncManager.state {
         case .stopped: "Stopped"

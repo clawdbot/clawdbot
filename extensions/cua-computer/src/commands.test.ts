@@ -35,10 +35,24 @@ function result(structured: Record<string, unknown>, image = false): CuaToolResu
   };
 }
 
-function driver() {
+function driver(
+  options: {
+    geometry?: typeof geometry;
+    screenSize?: { width: number; height: number; scale_factor: number };
+  } = {},
+) {
   let generation = "execution-1";
-  const getDesktopState = vi.fn(async () => result(geometry, true));
-  const getScreenSize = vi.fn(async () => result({ width: 100, height: 50, scale_factor: 1 }));
+  const activeGeometry = options.geometry ?? geometry;
+  const getDesktopState = vi.fn(async () => result(activeGeometry, true));
+  const getScreenSize = vi.fn(async () =>
+    result(
+      options.screenSize ?? {
+        width: activeGeometry.screen_width,
+        height: activeGeometry.screen_height,
+        scale_factor: activeGeometry.scale_factor,
+      },
+    ),
+  );
   const click = vi.fn(async () => result({}));
   const drag = vi.fn(async () => result({}));
   const moveCursor = vi.fn(async () => result({}));
@@ -155,6 +169,95 @@ describe("cua-computer provider", () => {
     expect(actions).not.toContain("left_mouse_down");
     expect(actions).not.toContain("left_mouse_up");
     expect(actions).toContain("get_window_state");
+  });
+
+  it("advertises the macOS mapping only with a complete app-provided endpoint", () => {
+    const { session } = driver();
+    const endpoint = {
+      OPENCLAW_CUA_DRIVER_SOCKET_PATH: "/tmp/openclaw-cua-test/driver.sock",
+      OPENCLAW_CUA_DRIVER_BINARY_PATH: process.execPath,
+    };
+    const provider = createCuaComputerProvider({
+      platform: "darwin",
+      env: endpoint,
+      driver: session,
+    });
+
+    expect(provider.isAvailable()).toBe(true);
+    expect(provider.capabilities().actions).toContain("get_window_state");
+    expect(provider.capabilities().actions).not.toContain("left_mouse_down");
+    expect(provider.capabilities().features).toEqual({
+      recording: false,
+      agentCursor: false,
+      multiDisplay: false,
+    });
+
+    const createDriver = vi.fn(() => session);
+    expect(
+      createCuaComputerProvider({
+        platform: "darwin",
+        env: endpoint,
+        createDriver,
+      }).isAvailable(),
+    ).toBe(true);
+    expect(createDriver).not.toHaveBeenCalled();
+
+    for (const env of [
+      {},
+      { OPENCLAW_CUA_DRIVER_SOCKET_PATH: endpoint.OPENCLAW_CUA_DRIVER_SOCKET_PATH },
+      { OPENCLAW_CUA_DRIVER_BINARY_PATH: endpoint.OPENCLAW_CUA_DRIVER_BINARY_PATH },
+      { ...endpoint, OPENCLAW_CUA_DRIVER_SOCKET_PATH: "relative.sock" },
+      { ...endpoint, OPENCLAW_CUA_DRIVER_BINARY_PATH: "/missing/cua-driver" },
+    ]) {
+      expect(
+        createCuaComputerProvider({ platform: "darwin", env, driver: session }).isAvailable(),
+      ).toBe(false);
+    }
+  });
+
+  it("keeps macOS Retina screenshots in native-pixel action coordinates", async () => {
+    const retina = driver({
+      geometry: {
+        platform: "macos",
+        display: "primary",
+        screenshot_width: 200,
+        screenshot_height: 100,
+        screen_width: 100,
+        screen_height: 50,
+        scale_factor: 2,
+      },
+      screenSize: { width: 100, height: 50, scale_factor: 2 },
+    });
+    const computer = await createCuaComputerProvider({
+      platform: "darwin",
+      env: {
+        OPENCLAW_CUA_DRIVER_SOCKET_PATH: "/tmp/openclaw-cua-test/driver.sock",
+        OPENCLAW_CUA_DRIVER_BINARY_PATH: process.execPath,
+      },
+      driver: retina.session,
+      imageProcessor: {
+        encode: vi.fn(async () => ({ data: Buffer.from("png"), width: 100, height: 50 })),
+      },
+    }).openExecution({});
+    const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+      displayFrameId: string;
+      width: number;
+    };
+
+    await computer.act(
+      JSON.stringify({
+        action: "left_click",
+        displayFrameId: screen.displayFrameId,
+        refWidth: screen.width,
+        x: 10,
+        y: 10,
+      }),
+    );
+
+    expect(retina.click).toHaveBeenCalledWith(
+      { x: 20, y: 20, button: ClickButton.Left, count: 1 },
+      undefined,
+    );
   });
 
   it("uses one typed session for snapshot and frame-authorized click", async () => {

@@ -1,3 +1,5 @@
+import OpenClawProtocol
+
 public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
@@ -9,6 +11,7 @@ public struct GatewayConnectOptions: Sendable {
     public var scopesAreExplicit: Bool
     public var caps: [String]
     public var commands: [String]
+    public var computerUse: AnyCodable?
     public var pathEnv: String?
     public var permissions: [String: Bool]
     public var clientId: String
@@ -32,6 +35,7 @@ public struct GatewayConnectOptions: Sendable {
         scopesAreExplicit: Bool = false,
         caps: [String],
         commands: [String],
+        computerUse: AnyCodable? = nil,
         pathEnv: String? = nil,
         permissions: [String: Bool],
         clientId: String,
@@ -47,6 +51,7 @@ public struct GatewayConnectOptions: Sendable {
         self.scopesAreExplicit = scopesAreExplicit
         self.caps = caps
         self.commands = commands
+        self.computerUse = computerUse
         self.pathEnv = pathEnv
         self.permissions = permissions
         self.clientId = clientId
