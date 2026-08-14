@@ -85,6 +85,7 @@ export type GatewayStartupAuthInspection = {
   hasSharedSecret: boolean;
   passwordMissing: boolean;
   activeSecretRefPaths: string[];
+  explicitModeRequiredError?: string;
   knownWeakCredentialError?: string;
 };
 
@@ -181,6 +182,12 @@ export function inspectGatewayStartupAuth(params: {
         },
       }
     : params.cfg;
+  let explicitModeRequiredError: string | undefined;
+  try {
+    assertExplicitGatewayAuthModeWhenBothConfigured(params.cfg);
+  } catch (error) {
+    explicitModeRequiredError = error instanceof Error ? error.message : String(error);
+  }
   const auth = resolveGatewayAuth({
     authConfig: effectiveConfig.gateway?.auth,
     env,
@@ -214,6 +221,7 @@ export function inspectGatewayStartupAuth(params: {
     hasSharedSecret,
     passwordMissing: auth.mode === "password" && !passwordConfigured,
     activeSecretRefPaths,
+    ...(explicitModeRequiredError ? { explicitModeRequiredError } : {}),
     ...(knownWeakCredentialError ? { knownWeakCredentialError } : {}),
   };
 }

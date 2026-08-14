@@ -348,6 +348,49 @@ describe("gateway startup preflight command", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
   });
 
+  it("reports the canonical explicit auth mode blocker", async () => {
+    const config = {
+      gateway: {
+        mode: "local" as const,
+        auth: {
+          token: "configured-token",
+          password: "configured-password",
+        },
+      },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config,
+      sourceConfig: config,
+    });
+    mocks.collectGatewayStartupPreflight.mockResolvedValue({
+      checksRun: 0,
+      blockers: [],
+      errors: [],
+    });
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      checksRun: 2,
+      blockers: [
+        {
+          id: "core/gateway-auth/explicit-mode-required",
+          pluginId: "core",
+          migrationId: "gateway-auth",
+          code: "gateway-auth-mode-required",
+          message: expect.stringMatching(/gateway\.auth\.mode is unset/i),
+          configPath: "gateway.auth.mode",
+        },
+      ],
+      errors: [],
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+  });
+
   it("returns indeterminate for an active Gateway auth SecretRef", async () => {
     const config = {
       gateway: {

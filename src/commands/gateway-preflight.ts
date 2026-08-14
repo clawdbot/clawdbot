@@ -87,6 +87,17 @@ function combineCoreStartupPreflight(
   const blockers = [...pluginResult.blockers];
   const errors = [...pluginResult.errors];
   const authInspectionId = `${CORE_PREFLIGHT_PLUGIN_ID}/${CORE_AUTH_PREFLIGHT_MIGRATION_ID}`;
+  if (authResult.explicitModeRequiredError) {
+    blockers.push({
+      id: `${authInspectionId}/explicit-mode-required`,
+      pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+      migrationId: CORE_AUTH_PREFLIGHT_MIGRATION_ID,
+      code: "gateway-auth-mode-required",
+      message: authResult.explicitModeRequiredError,
+      remediation: ["Set gateway.auth.mode to token or password for the target Gateway."],
+      configPath: "gateway.auth.mode",
+    });
+  }
   if (authResult.passwordMissing) {
     blockers.push({
       id: `${authInspectionId}/password-missing`,

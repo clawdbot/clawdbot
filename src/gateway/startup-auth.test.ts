@@ -113,6 +113,36 @@ describe("inspectGatewayStartupAuth", () => {
     });
   });
 
+  it("surfaces an ambiguous token and password mode without resolving the conflict", () => {
+    expect(
+      inspectGatewayStartupAuth({
+        cfg: gatewayAuthConfig({
+          token: "configured-token",
+          password: "configured-password", // pragma: allowlist secret
+        }),
+        env: emptyEnv(),
+      }),
+    ).toMatchObject({
+      explicitModeRequiredError: expect.stringMatching(/gateway\.auth\.mode is unset/i),
+    });
+  });
+
+  it.each(["token", "password"] as const)(
+    "accepts both configured credentials when mode is explicitly %s",
+    (mode) => {
+      expect(
+        inspectGatewayStartupAuth({
+          cfg: gatewayAuthConfig({
+            mode,
+            token: "configured-token",
+            password: "configured-password", // pragma: allowlist secret
+          }),
+          env: emptyEnv(),
+        }),
+      ).not.toHaveProperty("explicitModeRequiredError");
+    },
+  );
+
   it.each([
     {
       name: "plaintext config",

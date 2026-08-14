@@ -449,6 +449,48 @@ describe("gateway preflight CLI process", () => {
     );
   });
 
+  it("blocks the same ambiguous auth mode prerequisite as direct Gateway startup", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            token: "configured-token",
+            password: "configured-password",
+          },
+        },
+        memory: { search: { provider: "none" } },
+      },
+    });
+    const before = await snapshotTree(fixture.root);
+
+    const preflight = await runPreflight(fixture);
+
+    expect(preflight.code).toBe(1);
+    expect(JSON.parse(preflight.stdout)).toMatchObject({
+      ok: false,
+      status: "blocked",
+      blockers: [
+        {
+          id: "core/gateway-auth/explicit-mode-required",
+          pluginId: "core",
+          migrationId: "gateway-auth",
+          code: "gateway-auth-mode-required",
+          message: expect.stringMatching(/gateway\.auth\.mode is unset/i),
+          configPath: "gateway.auth.mode",
+        },
+      ],
+      errors: [],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+
+    const startup = await runGateway(fixture);
+    expect(startup.code).toBe(1);
+    expect(startup.stderr).toContain(
+      "gateway.auth.token and gateway.auth.password are both configured",
+    );
+  });
+
   it("accepts password inputs already present in config or the target environment", async () => {
     const configured = await createFixture({
       config: {
