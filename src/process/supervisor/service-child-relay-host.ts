@@ -157,14 +157,11 @@ export async function createServiceChildRelayAdapter(params: {
     resolveStartup = resolve;
     rejectStartup = reject;
   });
-  let resolveWait!: (result: { code: number | null; signal: NodeJS.Signals | null }) => void;
-  let rejectWait!: (error: Error) => void;
-  const waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      resolveWait = resolve;
-      rejectWait = reject;
-    },
-  );
+  let resolveWait:
+    | ((result: { code: number | null; signal: NodeJS.Signals | null }) => void)
+    | undefined;
+  let rejectWait: ((error: Error) => void) | undefined;
+  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
   let waitSettled = false;
 
   const settleWait = () => {
@@ -173,7 +170,7 @@ export async function createServiceChildRelayAdapter(params: {
     }
     if (waitError) {
       waitSettled = true;
-      rejectWait(waitError);
+      rejectWait?.(waitError);
       return;
     }
     if (!rootResult) {
@@ -183,7 +180,7 @@ export async function createServiceChildRelayAdapter(params: {
       return;
     }
     waitSettled = true;
-    resolveWait(rootResult);
+    resolveWait?.(rootResult);
   };
 
   const loseIdentity = (message: string) => {
@@ -326,7 +323,20 @@ export async function createServiceChildRelayAdapter(params: {
     oomScoreWrapperSelected: params.oomScoreWrapperSelected,
     onStdout: (listener) => stdoutListeners.add(listener),
     onStderr: (listener) => stderrListeners.add(listener),
-    wait: async () => await waitPromise,
+    wait: async () => {
+      settleWait();
+      if (waitError) {
+        throw waitError;
+      }
+      if (rootResult && waitSettled) {
+        return rootResult;
+      }
+      waitPromise ??= new Promise((resolve, reject) => {
+        resolveWait = resolve;
+        rejectWait = reject;
+      });
+      return await waitPromise;
+    },
     kill,
     dispose: () => {
       stdoutListeners.clear();

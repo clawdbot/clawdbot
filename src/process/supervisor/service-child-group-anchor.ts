@@ -9,6 +9,7 @@ import {
 } from "./service-child-protocol.js";
 
 const TERM_GRACE_MS = 1_000;
+const LINEAGE_EXIT_OBSERVATION_MS = 100;
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
 type StdioEntry = "ignore" | "inherit" | "pipe" | number;
@@ -58,6 +59,7 @@ export function runServiceChildGroupAnchor(): void {
   let command: ChildProcess | undefined;
   let control: Socket | undefined;
   let rootSettled = false;
+  let rootSettlementStarted = false;
   let rootExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   let stdoutDrained = false;
   let stderrDrained = false;
@@ -68,20 +70,28 @@ export function runServiceChildGroupAnchor(): void {
   const lineageDone = new Promise<void>((resolve) => {
     resolveLineage = resolve;
   });
+  let resolveRootExited!: () => void;
+  const rootExited = new Promise<void>((resolve) => {
+    resolveRootExited = resolve;
+  });
+  let resolveRootSettled!: () => void;
+  const rootSettledDone = new Promise<void>((resolve) => {
+    resolveRootSettled = resolve;
+  });
 
   const send = async (message: ServiceChildAnchorPayload) => {
     if (!start || !control || control.destroyed) {
       return;
     }
     sequence += 1;
-    await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve) => {
       control!.write(
         encodeServiceChildMessage({
           ...message,
           generation: start!.generation,
           sequence,
         } as ServiceChildAnchorMessage),
-        (error) => (error ? reject(error) : resolve()),
+        () => resolve(),
       );
     });
   };
@@ -126,7 +136,20 @@ export function runServiceChildGroupAnchor(): void {
     if (state !== "closing" || cleanupClaim !== claim || !start) {
       return;
     }
+    if (lineageClosed && !rootExit && !forceCleanup) {
+      // A normal root exit may close the lineage fd before libuv reports the
+      // child exit. Give that exact child event a bounded observation window;
+      // a still-running root that closed lineage remains a lease violation.
+      await Promise.race([rootExited, delay(LINEAGE_EXIT_OBSERVATION_MS)]);
+    }
+    if (state !== "closing" || cleanupClaim !== claim || !start) {
+      return;
+    }
     if (lineageClosed && rootExit && !forceCleanup) {
+      await rootSettledDone;
+      if (state !== "closing" || cleanupClaim !== claim || !start) {
+        return;
+      }
       await closeAuthority(reason, false);
       return;
     }
@@ -209,44 +232,83 @@ export function runServiceChildGroupAnchor(): void {
       lineageClosed = true;
       resolveLineage();
       if (state === "active") {
-        // Pipe EOF and root exit can be delivered in either event-loop order.
-        // Give the authentic root result one turn before classifying EOF as an early lease loss.
-        setImmediate(() => {
+        // Pipe EOF and the child exit notification race independently. Wait
+        // briefly for the exact child event before treating EOF as lease loss.
+        void (async () => {
+          if (!rootExit) {
+            await Promise.race([rootExited, delay(LINEAGE_EXIT_OBSERVATION_MS)]);
+          }
           if (state !== "active") {
             return;
           }
-          if (rootSettled) {
+          if (rootExit) {
+            await rootSettledDone;
+          }
+          if (state !== "active") {
+            return;
+          }
+          if (rootExit && rootSettled) {
             void closeAuthority("lineage-closed", false);
-          } else if (!rootExit) {
+          } else {
             void requestCleanup("lineage-lost");
           }
-        });
+        })();
       }
     };
     lineage.once("end", markLineageClosed);
     lineage.once("close", markLineageClosed);
     lineage.once("error", markLineageClosed);
-    command.stdout?.on("data", (chunk) => process.stdout.write(chunk));
-    command.stderr?.on("data", (chunk) => process.stderr.write(chunk));
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    let pendingStdoutWrites = 0;
+    let pendingStderrWrites = 0;
+    const maybeMarkStdoutDrained = () => {
+      if (!stdoutDrained && stdoutEnded && pendingStdoutWrites === 0) {
+        stdoutDrained = true;
+        void settleRoot();
+      }
+    };
+    const maybeMarkStderrDrained = () => {
+      if (!stderrDrained && stderrEnded && pendingStderrWrites === 0) {
+        stderrDrained = true;
+        void settleRoot();
+      }
+    };
+    command.stdout?.on("data", (chunk) => {
+      pendingStdoutWrites += 1;
+      process.stdout.write(chunk, () => {
+        pendingStdoutWrites -= 1;
+        maybeMarkStdoutDrained();
+      });
+    });
+    command.stderr?.on("data", (chunk) => {
+      pendingStderrWrites += 1;
+      process.stderr.write(chunk, () => {
+        pendingStderrWrites -= 1;
+        maybeMarkStderrDrained();
+      });
+    });
     command.stdout?.on("error", () => {});
     command.stderr?.on("error", () => {});
     const settleRoot = async () => {
-      if (rootSettled || !rootExit || !stdoutDrained || !stderrDrained) {
+      if (rootSettlementStarted || !rootExit || !stdoutDrained || !stderrDrained) {
         return;
       }
-      rootSettled = true;
+      rootSettlementStarted = true;
       await send({ type: "root-result", code: rootExit.code, signal: rootExit.signal });
+      rootSettled = true;
+      resolveRootSettled();
       if (lineageClosed && state === "active") {
         await closeAuthority("lineage-closed", false);
       }
     };
     const markStdoutDrained = () => {
-      stdoutDrained = true;
-      void settleRoot();
+      stdoutEnded = true;
+      maybeMarkStdoutDrained();
     };
     const markStderrDrained = () => {
-      stderrDrained = true;
-      void settleRoot();
+      stderrEnded = true;
+      maybeMarkStderrDrained();
     };
     command.stdout?.once("end", markStdoutDrained);
     command.stdout?.once("close", markStdoutDrained);
@@ -277,6 +339,7 @@ export function runServiceChildGroupAnchor(): void {
     });
     command.once("exit", (code, signal) => {
       rootExit = { code, signal };
+      resolveRootExited();
       void settleRoot();
     });
   };

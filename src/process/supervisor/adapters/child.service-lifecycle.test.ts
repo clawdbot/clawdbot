@@ -24,7 +24,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (Date.now() >= deadline) {
       throw new Error("timed out waiting for process state");
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
   }
 }
 
@@ -127,6 +129,47 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     await waitFor(() => !isAlive(descendantPid));
   });
 
+  it("flushes forwarded output before exposing the root result", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const outputBytes = 8 * 1024 * 1024;
+    const adapter = await createChildAdapter({
+      argv: [process.execPath, "-e", `process.stdout.write(Buffer.alloc(${outputBytes}, 120))`],
+      stdinMode: "pipe-closed",
+    });
+    let receivedBytes = 0;
+    adapter.onStdout((chunk) => {
+      receivedBytes += Buffer.byteLength(chunk);
+    });
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    expect(receivedBytes).toBe(outputBytes);
+  });
+
+  it("preserves an exited root result when cleanup races forwarded output", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const outputBytes = 8 * 1024 * 1024;
+    const adapter = await createChildAdapter({
+      argv: [
+        "/bin/sh",
+        "-c",
+        `${process.execPath} -e 'process.stdout.write(Buffer.alloc(${outputBytes}, 120))'; sleep 60 >/dev/null 2>&1 & exit 0`,
+      ],
+      stdinMode: "pipe-closed",
+    });
+    const rootPid = adapter.pid!;
+    activePids.add(rootPid);
+    let receivedBytes = 0;
+    adapter.onStdout((chunk) => {
+      receivedBytes += Buffer.byteLength(chunk);
+    });
+    await waitFor(() => !isAlive(rootPid));
+
+    adapter.kill("SIGTERM");
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    expect(receivedBytes).toBe(outputBytes);
+  });
+
   it("revalidates and escalates when the group ignores SIGTERM", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const adapter = await createChildAdapter({
@@ -195,6 +238,45 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
     await adapter.wait();
     await waitFor(() => !isAlive(rootPid));
+  });
+
+  it("defers an identity-loss rejection until the caller waits", async () => {
+    const tempDir = tempDirs.make("openclaw-service-child-identity-loss-");
+    const scriptPath = path.join(tempDir, "identity-loss.mts");
+    const childModuleUrl = new URL("./child.ts", import.meta.url).href;
+    await writeFile(
+      scriptPath,
+      `
+        process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+        const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
+        const adapter = await createChildAdapter({
+          argv: ["/bin/sh", "-c", "sleep 0.05; kill -KILL $PPID; sleep 0.05"],
+          stdinMode: "pipe-closed",
+        });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        try {
+          await adapter.wait();
+          process.exit(2);
+        } catch {
+          process.exit(0);
+        }
+      `,
+      "utf8",
+    );
+    const host = spawn(process.execPath, ["--import", "tsx", scriptPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, OPENCLAW_SERVICE_MARKER: "openclaw" },
+    });
+    let stderr = "";
+    host.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      host.once("exit", resolve);
+    });
+
+    expect(exitCode, stderr).toBe(0);
   });
 
   it("fails closed when the service host exits", async () => {
