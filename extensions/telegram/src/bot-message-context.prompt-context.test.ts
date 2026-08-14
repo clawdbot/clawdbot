@@ -637,10 +637,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       timestampMs,
     });
 
-    const persistedWatermark = readAmbientTranscriptWatermark(
-      getSessionEntry({ storePath, sessionKey }),
-      key,
-    );
+    const persistedWatermark = readAmbientTranscriptWatermark({ storePath, sessionKey, key });
     expect(persistedWatermark).toMatchObject({ messageId: "1e3", timestampMs });
 
     const ctx = await buildTelegramMessageContextForTest({
