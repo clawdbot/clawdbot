@@ -209,6 +209,10 @@ by default, plus git-checkout installs under the same prefix flow.
     - `git` method: clones/updates a checkout (default `~/openclaw`) and still writes the wrapper to `<prefix>/bin/openclaw`
 
   </Step>
+  <Step title="Verify the installed CLI">
+    Runs `<prefix>/bin/openclaw --version` and stops with an error unless the
+    installed wrapper exits successfully with a nonempty version.
+  </Step>
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
     `openclaw gateway install --force`, which activates the replacement service,

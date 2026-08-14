@@ -1104,10 +1104,10 @@ async function persistManagedSourceInstall(params: {
   extensionsDir: string;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
-  persistenceLogger?: PluginInstallLogger;
   successMessage?: string;
   cleanupOnPersistenceFailure?: boolean;
-}): Promise<OpenClawConfig> {
+}): Promise<{ config: OpenClawConfig; warnings: string[] }> {
+  const warnings: string[] = [];
   const persist = () =>
     persistPluginInstall({
       snapshot: params.snapshot,
@@ -1115,17 +1115,17 @@ async function persistManagedSourceInstall(params: {
       install: params.install,
       invalidateRuntimeCache: params.invalidateRuntimeCache,
       runtime: params.runtime,
-      ...(params.persistenceLogger ? { persistenceLogger: params.persistenceLogger } : {}),
+      persistenceLogger: { warn: (message) => warnings.push(message) },
       ...(params.successMessage ? { successMessage: params.successMessage } : {}),
     });
   if (!params.cleanupOnPersistenceFailure) {
-    return await persist();
+    return { config: await persist(), warnings };
   }
   try {
-    return await persist();
+    return { config: await persist(), warnings };
   } catch (error) {
-    const warnings = await cleanupFailedManagedPluginInstall(params);
-    return throwPersistenceFailureWithCleanupWarnings(error, warnings);
+    const cleanupWarnings = await cleanupFailedManagedPluginInstall(params);
+    return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
   }
 }
 
@@ -1135,8 +1135,6 @@ export async function installManagedPluginSource(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   env?: NodeJS.ProcessEnv;
   logger?: PluginInstallLogger & { terminalLinks?: boolean };
-  // Source loggers can feed chat replies; management diagnostics require explicit private opt-in.
-  persistenceLogger?: PluginInstallLogger;
   safetyOverrides?: InstallSafetyOverrides;
   runtime?: RuntimeEnv;
   invalidateRuntimeCache?: boolean;
@@ -1198,7 +1196,7 @@ export async function installManagedPluginSource(params: {
       request.source === "local" && request.link
         ? false
         : (params.cleanupOnPersistenceFailure ?? true);
-    const config = await persistManagedSourceInstall({
+    const persisted = await persistManagedSourceInstall({
       ...params,
       cleanupOnPersistenceFailure,
       env,
@@ -1209,7 +1207,11 @@ export async function installManagedPluginSource(params: {
       extensionsDir,
       successMessage: completed.successMessage,
     });
-    return { ...installed, config };
+    return {
+      ...installed,
+      config: persisted.config,
+      ...(persisted.warnings.length > 0 ? { warnings: [...new Set(persisted.warnings)] } : {}),
+    };
   };
 
   if (request.source === "local") {
@@ -1449,7 +1451,6 @@ export async function installManagedPlugin(params: {
       snapshot,
       env,
       logger: installLogger,
-      persistenceLogger: installLogger,
       cleanupOnPersistenceFailure: true,
       invalidateRuntimeCache: false,
       runtime: createSilentRuntime(),
@@ -1457,6 +1458,7 @@ export async function installManagedPlugin(params: {
     if (!installed.ok) {
       return throwInstallFailure(installed);
     }
+    warnings.push(...(installed.warnings ?? []));
     const workspace = resolvePluginControlPlaneWorkspace({ config: installed.config, env });
     if (workspace.diagnostic) {
       warnings.push(workspace.diagnostic.message);

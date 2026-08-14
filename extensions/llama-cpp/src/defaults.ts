@@ -27,7 +27,10 @@ export const DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE =
 export const DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES = 4_977_171_584;
 export const DEFAULT_LLAMA_CPP_MODEL_SHA256 =
   "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87";
-export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 8192;
+// The full OpenClaw agent system prompt alone is ~31K tokens, so 8K overflows on
+// the first turn. 64K leaves real headroom for history and tool output; Gemma 4
+// supports far more, and the 16 GiB offer floor already bounds weaker machines.
+export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 65536;
 
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";

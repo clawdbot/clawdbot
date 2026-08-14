@@ -1415,6 +1415,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -1437,6 +1441,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.ccd226a2c0e85242",
+      "source": "Active task list is at its limit",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -2325,6 +2340,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -2707,6 +2726,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -2784,6 +2807,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.7e716e5025c96755",
+      "source": "Bounded active and recent snapshot",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -3771,6 +3805,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -5991,6 +6029,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageActions.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -6467,6 +6509,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -7496,6 +7542,17 @@
       ]
     },
     {
+      "id": "native.android.cee2b043b9ff723d",
+      "source": "Groups",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
       "id": "native.android.4f316f3050dd4439",
       "source": "Have a terminal open on the device running OpenClaw.",
       "surface": "android",
@@ -7718,6 +7775,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -8463,6 +8524,17 @@
       ]
     },
     {
+      "id": "native.android.982d8645f94585d2",
+      "source": "Loading Pulse",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
       "id": "native.android.0ba4fafa3c405a73",
       "source": "Loading automation…",
       "surface": "android",
@@ -9080,6 +9152,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.e238a849f3745e16",
+      "source": "More phases not shown",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -12040,6 +12123,17 @@
       ]
     },
     {
+      "id": "native.android.4c0349bb7fb1300c",
+      "source": "Pending requests",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
       "id": "native.android.95992be09ebae8eb",
       "source": "Permission needed",
       "surface": "android",
@@ -12080,6 +12174,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.b90b0acb54a1e930",
+      "source": "Phase %1$d",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -12659,6 +12764,17 @@
       ]
     },
     {
+      "id": "native.android.139b5e6557177a23",
+      "source": "Pulse",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
       "id": "native.android.c0fef45b3b102aac",
       "source": "QR code did not contain a valid setup code.",
       "surface": "android",
@@ -12732,6 +12848,21 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
+      "id": "native.android.139768629b9f2483",
+      "source": "Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -12914,6 +13045,17 @@
     {
       "id": "native.android.098f33346be87b0b",
       "source": "Reading agents, sessions, and chat",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
+      "id": "native.android.e8bfe61eb7a178e9",
+      "source": "Reading bounded aggregates from the paired phone.",
       "surface": "android",
       "sites": [
         {
@@ -13140,6 +13282,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.f26643818268e147",
+      "source": "Recent task list is at its limit",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -13425,6 +13578,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -14070,6 +14227,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -15029,6 +15190,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTimeline.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.076e5ee0a1e35da3",
+      "source": "Session swarm",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -16081,6 +16253,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.245f1127ee17dae9",
+      "source": "Status: %1$s",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -17658,6 +17841,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatQuestionCard.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -17715,6 +17902,10 @@
         {
           "kind": "resource-string",
           "path": "apps/android/app/src/main/res/values/strings.xml"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },

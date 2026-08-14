@@ -827,6 +827,45 @@ describe("package-mac-app plist stamping", () => {
     }
   });
 
+  it("skips the MLX TTS helper build and copy when OPENCLAW_SKIP_MLX_TTS=1", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    // Both the per-arch build and the bundle copy are gated on the same flag so
+    // a skipped build never tries to copy a helper binary that was not built.
+    expect(script).toContain(
+      'if [[ "$SKIP_MLX_TTS" == "1" ]]; then\n    echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1)',
+    );
+    expect(script).toContain(
+      'if [[ "$SKIP_MLX_TTS" == "1" ]]; then\n  echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1)',
+    );
+  });
+
+  it("refuses OPENCLAW_SKIP_MLX_TTS for release builds but allows it for dev builds", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    // Run the real guard snippet from the script (not a copy) so the release
+    // safety invariant stays coupled to source: release bundles must ship the
+    // voice helper, which notarization later verifies.
+    const guardStart = script.indexOf('SKIP_MLX_TTS="${OPENCLAW_SKIP_MLX_TTS:-0}"');
+    const guardEnd = script.indexOf("BUILD_TS=", guardStart);
+    expect(guardStart).toBeGreaterThanOrEqual(0);
+    expect(guardEnd).toBeGreaterThan(guardStart);
+    const guard = script.slice(guardStart, guardEnd);
+
+    const released = runHelper(
+      `set -euo pipefail\nexport OPENCLAW_SKIP_MLX_TTS=1\nBUILD_CONFIG=release\n${guard}\necho reached-build`,
+    );
+    expect(released.status).toBe(1);
+    expect(released.stderr).toContain("not allowed for release builds");
+    expect(released.stdout).not.toContain("reached-build");
+
+    const dev = runHelper(
+      `set -euo pipefail\nexport OPENCLAW_SKIP_MLX_TTS=1\nBUILD_CONFIG=debug\n${guard}\necho reached-build`,
+    );
+    expect(dev.status, dev.stderr).toBe(0);
+    expect(dev.stdout).toContain("reached-build");
+  });
+
   it("falls back to corepack pnpm when the pnpm shim is absent", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
