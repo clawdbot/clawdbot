@@ -18,17 +18,13 @@ import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
   type TerminalOperation,
-  type TerminalPanelAction,
   type TerminalPanelCatalogReference,
   type TerminalPanelSessionControllerHost,
   type TerminalPanelSessionControllerState,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
-import {
-  loadPersistedTerminalActions,
-  loadPersistedTerminalSessionIds,
-  persistTerminalActions,
-} from "./terminal-session-storage.ts";
+import { TerminalPendingActions } from "./terminal-pending-actions.ts";
+import { loadPersistedTerminalSessionIds } from "./terminal-session-storage.ts";
 import { createTerminalStartupInput } from "./terminal-startup-input.ts";
 import { TerminalTabReadinessController } from "./terminal-tab-readiness.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
@@ -48,28 +44,36 @@ export class TerminalPanelSessionController
   private activeClient: TerminalGatewayClient | null = null;
   private activeAvailable = false;
   private hadClient = false;
-  private refreshPending = false;
-  private refreshTimedOut = false;
-  private refreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private lifecycleGeneration = 0;
   private lifecycleAbortController = new AbortController();
   private lifecycleSyncToken = 0;
   private tabSequence = 0;
   private readonly bootQueue = new TerminalTaskQueue();
-  private readonly pendingActions: TerminalPanelAction[];
-  private actionDrainScheduled = false;
+  private readonly pendingActions: TerminalPendingActions;
   private readonly readiness: TerminalTabReadinessController<TerminalPanelSessionTab>;
 
   constructor(private readonly host: TerminalPanelSessionControllerHost) {
     host.addController(this);
-    const persistedActions = loadPersistedTerminalActions();
-    this.pendingActions = persistedActions.some((action) => action.kind !== "restore")
-      ? persistedActions.filter((action) => action.kind !== "restore")
-      : persistedActions;
-    if (this.pendingActions.length !== persistedActions.length) {
-      persistTerminalActions(this.pendingActions);
-    }
-    this.booting = this.pendingActions.length > 0;
+    this.pendingActions = new TerminalPendingActions({
+      bootQueue: this.bootQueue,
+      currentGeneration: () => this.lifecycleGeneration,
+      canRun: () => this.terminalActionsCanRun(),
+      attach: (sessionId, agentOwned) => this.attachSessionNow(sessionId, agentOwned),
+      open: (catalog, agentId) => this.openSessionNow(catalog, agentId),
+      reattach: () => this.reattachPersistedSessions(),
+      ensureInitial: (agentId) => this.ensureInitialSession(agentId),
+      hasTabs: () => this.tabs.length > 0,
+      requestUpdate: () => this.host.requestUpdate(),
+      setBooting: (booting) => this.updateControllerState("booting", booting),
+      timeoutMs: () => this.host.catalogReadyTimeoutMs,
+      showTimeout: () => {
+        this.host.terminalPanelErrorText = t("terminal.refreshRequired");
+      },
+      clearTimeout: () => {
+        this.host.terminalPanelErrorText = null;
+      },
+    });
+    this.booting = this.pendingActions.hasActions;
     this.readiness = new TerminalTabReadinessController<TerminalPanelSessionTab>({
       timeoutMs: () => this.host.catalogReadyTimeoutMs,
       isCurrent: (tab) => this.tabs.includes(tab),
@@ -155,27 +159,21 @@ export class TerminalPanelSessionController
     } else if (shouldRestore) {
       void this.restoreSessions();
     } else {
-      void this.drainPendingActions();
+      void this.pendingActions.drain();
     }
   }
 
   private refreshBeforeReconnectRestore(restore: boolean): void {
     const generation = this.lifecycleGeneration;
-    this.refreshPending = true;
-    this.clearRefreshFailure();
-    this.clearRefreshTimer();
+    this.pendingActions.beginRefreshFence(generation);
     if (restore) {
       void this.restoreSessions();
     }
-    this.armRefreshTimer(generation);
     const release = () => {
       if (generation !== this.lifecycleGeneration || !this.host.isConnected) {
         return;
       }
-      this.clearRefreshTimer();
-      this.refreshPending = false;
-      this.clearRefreshFailure();
-      void this.drainPendingActions();
+      this.pendingActions.releaseRefreshFence();
     };
     void import("../../app/sw-refresh.runtime.ts")
       .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
@@ -187,11 +185,11 @@ export class TerminalPanelSessionController
   }
 
   async restoreSessions(): Promise<void> {
-    await this.queueTerminalAction({ kind: "restore", agentId: this.selectedAgentId() });
+    await this.pendingActions.queue({ kind: "restore", agentId: this.selectedAgentId() });
   }
 
   async openCatalogSession(catalog: TerminalPanelCatalogReference): Promise<void> {
-    await this.queueTerminalAction({
+    await this.pendingActions.queue({
       kind: "catalog",
       agentId: this.selectedAgentId(),
       catalog,
@@ -199,48 +197,17 @@ export class TerminalPanelSessionController
   }
 
   async openRequestedSession(sessionId: string): Promise<void> {
-    await this.queueTerminalAction({ kind: "attach", sessionId, agentOwned: true });
+    await this.pendingActions.queue({ kind: "attach", sessionId, agentOwned: true });
   }
 
   private selectedAgentId(): string | null {
     return this.host.agentId?.trim() || null;
   }
 
-  private actionKey(action: TerminalPanelAction): string {
-    return JSON.stringify(action);
-  }
-
-  private async queueTerminalAction(action: TerminalPanelAction): Promise<void> {
-    let changed = false;
-    if (action.kind !== "restore") {
-      for (let index = this.pendingActions.length - 1; index >= 0; index -= 1) {
-        if (this.pendingActions[index]?.kind === "restore") {
-          this.pendingActions.splice(index, 1);
-          changed = true;
-        }
-      }
-    }
-    const key = this.actionKey(action);
-    if (!this.pendingActions.some((pending) => this.actionKey(pending) === key)) {
-      this.pendingActions.push(action);
-      changed = true;
-    }
-    if (changed) {
-      persistTerminalActions(this.pendingActions);
-    }
-    this.armRefreshTimer(this.lifecycleGeneration);
-    if (this.refreshPending) {
-      this.host.requestUpdate();
-    } else if (this.tabs.length === 0) {
-      this.updateControllerState("booting", true);
-    }
-    await this.drainPendingActions();
-  }
-
   private terminalActionsCanRun(): boolean {
     const client = this.host.client;
     return (
-      !this.refreshPending &&
+      !this.pendingActions.fenced &&
       Boolean(client) &&
       client === this.activeClient &&
       this.host.available &&
@@ -248,100 +215,12 @@ export class TerminalPanelSessionController
     );
   }
 
-  private async drainPendingActions(): Promise<void> {
-    if (
-      this.actionDrainScheduled ||
-      this.pendingActions.length === 0 ||
-      !this.terminalActionsCanRun()
-    ) {
-      return;
-    }
-    this.actionDrainScheduled = true;
-    try {
-      await this.bootQueue.enqueue(async (isCurrent) => {
-        const action = this.pendingActions[0];
-        if (!action || !isCurrent() || !this.terminalActionsCanRun()) {
-          return;
-        }
-        const completed = await this.executeTerminalAction(action);
-        if (!completed || !isCurrent()) {
-          return;
-        }
-        const index = this.pendingActions.indexOf(action);
-        if (index !== -1) {
-          this.pendingActions.splice(index, 1);
-          persistTerminalActions(this.pendingActions);
-        }
-      });
-    } finally {
-      this.actionDrainScheduled = false;
-      if (this.pendingActions.length > 0 && this.terminalActionsCanRun()) {
-        void this.drainPendingActions();
-      } else if (this.pendingActions.length === 0 && this.tabs.length === 0) {
-        this.updateControllerState("booting", false);
-      }
-    }
-  }
-
-  private async executeTerminalAction(action: TerminalPanelAction): Promise<boolean> {
-    if (action.kind === "attach") {
-      return this.attachSessionNow(action.sessionId, action.agentOwned);
-    }
-    if (action.kind === "open") {
-      return this.openSessionNow(undefined, action.agentId);
-    }
-    await this.reattachPersistedSessions();
-    if (!this.terminalActionsCanRun()) {
-      return false;
-    }
-    return action.kind === "catalog"
-      ? this.openSessionNow(action.catalog, action.agentId)
-      : this.ensureInitialSession(action.agentId);
-  }
-
   cancelPendingActions(): void {
-    this.pendingActions.splice(0);
-    persistTerminalActions(this.pendingActions);
-    this.updateControllerState("booting", false);
-    this.clearRefreshFailure();
+    this.pendingActions.cancel();
   }
 
   get waitingForRefresh(): boolean {
-    return this.refreshPending && !this.refreshTimedOut && this.pendingActions.length > 0;
-  }
-
-  private clearRefreshTimer(): void {
-    if (this.refreshTimer !== null) {
-      globalThis.clearTimeout(this.refreshTimer);
-      this.refreshTimer = null;
-    }
-  }
-
-  private clearRefreshFailure(): void {
-    if (this.refreshTimedOut) {
-      this.host.terminalPanelErrorText = null;
-      this.refreshTimedOut = false;
-    }
-  }
-
-  private armRefreshTimer(generation: number): void {
-    if (!this.refreshPending || this.refreshTimer !== null || this.pendingActions.length === 0) {
-      return;
-    }
-    this.refreshTimer = globalThis.setTimeout(() => {
-      this.refreshTimer = null;
-      if (
-        generation !== this.lifecycleGeneration ||
-        !this.host.isConnected ||
-        !this.refreshPending ||
-        this.pendingActions.length === 0
-      ) {
-        return;
-      }
-      this.refreshTimedOut = true;
-      this.host.terminalPanelErrorText = t("terminal.refreshRequired");
-      this.updateControllerState("booting", false);
-    }, this.host.catalogReadyTimeoutMs);
+    return this.pendingActions.waitingForRefresh;
   }
 
   private async reattachPersistedSessions(): Promise<void> {
@@ -416,7 +295,7 @@ export class TerminalPanelSessionController
   }
 
   async attachSessionById(sessionId: string, agentOwned = false): Promise<void> {
-    await this.queueTerminalAction({ kind: "attach", sessionId, agentOwned });
+    await this.pendingActions.queue({ kind: "attach", sessionId, agentOwned });
   }
 
   private async attachSessionNow(sessionId: string, agentOwned: boolean): Promise<boolean> {
@@ -616,7 +495,7 @@ export class TerminalPanelSessionController
   }
 
   async openSession(catalog?: TerminalPanelCatalogReference): Promise<void> {
-    await this.queueTerminalAction(
+    await this.pendingActions.queue(
       catalog
         ? { kind: "catalog", agentId: this.selectedAgentId(), catalog }
         : { kind: "open", agentId: this.selectedAgentId() },
@@ -838,7 +717,7 @@ export class TerminalPanelSessionController
   private captureTerminalOperation(): TerminalOperation | null {
     const client = this.host.client;
     if (
-      this.refreshPending ||
+      this.pendingActions.fenced ||
       !client ||
       client !== this.activeClient ||
       !this.host.available ||
@@ -879,9 +758,7 @@ export class TerminalPanelSessionController
 
   private disposeAllTabs(): void {
     this.lifecycleGeneration += 1;
-    this.clearRefreshTimer();
-    this.refreshPending = false;
-    this.clearRefreshFailure();
+    this.pendingActions.resetLifecycle();
     this.lifecycleAbortController.abort();
     this.lifecycleAbortController = new AbortController();
     this.bootQueue.reset();

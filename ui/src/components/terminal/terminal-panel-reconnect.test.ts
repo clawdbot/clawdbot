@@ -411,7 +411,9 @@ describe("OpenClawTerminalPanel reconnect", () => {
     );
     panel.closeTerminalPanel();
     releaseRefresh?.(false);
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
 
     expect(panel.terminalPanelOpen).toBe(false);
     expect(requests).toHaveLength(0);
