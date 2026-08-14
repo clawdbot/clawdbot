@@ -115,7 +115,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps a long non-running state clear of always-visible touch actions", async () => {
+  it("reserves no trailing state for a quiet row beside always-visible touch actions", async () => {
     const context = await suite.browser.newContext({
       hasTouch: true,
       locale: "en-US",
@@ -146,23 +146,27 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator('[data-session-key="agent:main:touch-forked"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".session-row-state");
+      const aside = row.locator(".session-row-aside");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
-      await expect.poll(() => state.locator(".session-row-fork-indicator").isVisible()).toBe(true);
-      await expect.poll(() => state.locator(".session-run-spinner").count()).toBe(0);
+      await expect.poll(() => pin.isVisible()).toBe(true);
+      // A finished, read row has no operational state, so the endcap omits the
+      // span rather than rendering an empty one. That absence is what leaves the
+      // title its full resting width.
+      expect(await row.locator(".session-row-state").count()).toBe(0);
 
-      const [nameBounds, stateBounds, pinBounds, menuBounds] = await Promise.all([
+      const [nameBounds, asideBounds, pinBounds, menuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__name").boundingBox(),
-        state.boundingBox(),
+        aside.boundingBox(),
         pin.boundingBox(),
         menu.boundingBox(),
       ]);
-      if (!nameBounds || !stateBounds || !pinBounds || !menuBounds) {
-        throw new Error("Expected visible non-running touch state geometry");
+      if (!nameBounds || !asideBounds || !pinBounds || !menuBounds) {
+        throw new Error("Expected visible non-running touch endcap geometry");
       }
-      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(stateBounds.x);
-      expect(stateBounds.x + stateBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      // Touch keeps the actions in flow, so the title must stop before the
+      // endcap begins rather than running under controls it cannot reveal.
+      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(asideBounds.x);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
     } finally {
       await context.close();
@@ -290,12 +294,15 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:combined-state"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const state = row.locator(".session-row-state");
-      await expect.poll(() => state.locator(".session-row-fork-indicator").isVisible()).toBe(true);
+      // Passive metadata is the state's sibling in the endcap, never its child:
+      // a pull request outlives whichever operational state the row is showing.
       await expect
-        .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
+        .poll(() => row.locator(".session-row-aside [data-session-pr-state='open']").isVisible())
         .toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
-      await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
+      // This session is running and unread at once. The live run outranks the
+      // unread, so no dot may accompany the spinner.
+      expect(await state.locator(".session-state-dot").count()).toBe(0);
       const link = row.locator(".sidebar-recent-session__link");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });

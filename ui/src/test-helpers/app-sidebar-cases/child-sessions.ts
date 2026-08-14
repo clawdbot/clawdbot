@@ -99,21 +99,18 @@ describe("AppSidebar agent chip", () => {
     ]);
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
     expect(childRows.every((row) => row.querySelector(".session-row-actions") === null)).toBe(true);
-    expect(childRows.every((row) => row.querySelector(".session-row-state") === null)).toBe(true);
-    expect(childRows.every((row) => row.querySelector(".sidebar-session-indicator") !== null)).toBe(
+    expect(childRows.every((row) => row.querySelector(".sidebar-session-indicator") === null)).toBe(
       true,
     );
-    expect(sidebar.querySelector('[aria-label="Done"]')).not.toBeNull();
-    const runtimeStartMs = (
-      sidebar.querySelector('[data-session-key="agent:main:child-one"] openclaw-elapsed-time') as
-        | (HTMLElement & { startMs: number })
-        | null
-    )?.startMs;
-    const childTrail = childRows[0]?.querySelector<HTMLElement>(".session-row-trail");
-    expect(childTrail?.querySelector("openclaw-elapsed-time")).not.toBeNull();
-    expect(childRows[0]?.querySelector("a")?.getAttribute("aria-describedby")).toBe(childTrail?.id);
-    expect(runtimeStartMs).toBeGreaterThan(Date.now() - 31_000);
-    expect(runtimeStartMs).toBeLessThan(Date.now() - 29_000);
+    // A quiet child says only whether it is working, unread, or blocked.
+    expect(sidebar.querySelector('[aria-label="Done"]')).toBeNull();
+    expect(childRows.every((row) => row.querySelector(".session-row-trail") === null)).toBe(true);
+    expect(childRows.every((row) => row.querySelector("openclaw-elapsed-time") === null)).toBe(
+      true,
+    );
+    expect(
+      childRows.every((row) => row.querySelector(".sidebar-recent-session__subtitle") === null),
+    ).toBe(true);
 
     harness.list.mockResolvedValue({
       ts: 3,
@@ -164,9 +161,7 @@ describe("AppSidebar agent chip", () => {
     });
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     await waitForFast(() =>
-      expect(
-        sidebar.querySelector('[data-session-key="agent:main:child-one"] [aria-label="Done"]'),
-      ).not.toBeNull(),
+      expect(sidebar.querySelector('[data-session-key="agent:main:child-one"]')).not.toBeNull(),
     );
   });
 
@@ -706,6 +701,6 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.textContent).toContain("Loaded sibling");
     expect(
       sidebar.querySelector('[data-session-key="agent:worker:child"] [aria-label="Done"]'),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 });

@@ -217,7 +217,7 @@ const PROOF_CLIP_MARGIN = 12;
 export async function captureUiProof(
   page: Page,
   fileName: string,
-  options: { clip?: readonly Locator[] } = {},
+  options: { clip?: readonly Locator[]; keepAnimations?: boolean } = {},
 ) {
   if (!captureUiProofEnabled) {
     return;
@@ -237,9 +237,11 @@ export async function captureUiProof(
           height: Math.max(...present.map((box) => box.y + box.height)) + PROOF_CLIP_MARGIN - top,
         };
   // Dialogs and menus fade in, so an undisabled capture can land mid-transition
-  // and prove nothing about the state it was taken for.
+  // and prove nothing about the state it was taken for. `keepAnimations` is for
+  // the opposite case: an endless animation is cancelled to its first frame, so
+  // a caller proving one must hold it at a phase itself and keep it there.
   await page.screenshot({
-    animations: "disabled",
+    animations: options.keepAnimations ? "allow" : "disabled",
     clip,
     fullPage: clip === undefined,
     path: path.join(uiProofArtifactDir, fileName),

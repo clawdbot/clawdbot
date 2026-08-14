@@ -1,12 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 // Deep import on purpose: the protocol barrel carries typebox and every
 // schema, which must stay out of the Control UI startup bundle.
-import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
+import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
@@ -56,9 +56,32 @@ function renderSessionRowBadge(
   </openclaw-tooltip>`;
 }
 
+export function describeSessionWorktreePullRequest(
+  state: SessionPullRequestIndicatorState,
+): string {
+  return state === "none"
+    ? ""
+    : state === "open"
+      ? t("sessionsView.openPullRequest")
+      : t("chat.pullRequests.merged");
+}
+
+export function renderSessionWorktreePullRequest(state: SessionPullRequestIndicatorState) {
+  if (state === "none") {
+    return nothing;
+  }
+  const label = describeSessionWorktreePullRequest(state);
+  return html`<span
+    class="sidebar-session-pr-indicator sidebar-session-pr-indicator--${state}"
+    data-session-pr-state=${state}
+    role="img"
+    aria-label=${label}
+    >${icons.gitBranch}</span
+  >`;
+}
+
 export function renderSessionRowBadges(params: {
   isChild?: boolean;
-  incognito?: boolean;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
@@ -73,16 +96,16 @@ export function renderSessionRowBadges(params: {
     ? formatSessionPullRequestSummary(params.pullRequest)
     : undefined;
   const pullRequestState = params.pullRequest?.state;
-  const placementState = params.isChild ? undefined : params.placementState;
-  const cloudPlacementState = isCloudWorkerPlacementState(placementState)
-    ? placementState
-    : undefined;
   const workspaceConflictCount = Math.max(0, Math.floor(params.workspaceConflictCount ?? 0));
-  // Child rows suppress ordinary placement chrome, but a retained conflict must stay discoverable.
-  const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
-  const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   const hasWorkspaceConflict = workspaceConflictCount > 0;
   const diskSpaceStatus = params.isChild ? undefined : params.diskSpaceStatus;
+  const hasDiskPressure = diskSpaceStatus === "warning" || diskSpaceStatus === "critical";
+  // Healthy cloud placement is context, not row state: it belongs to the
+  // session's details. Only something the operator has to act on - a blocked
+  // workspace or a filling disk - earns a persistent marker here, and dropping
+  // either would leave the session failing with nothing on screen saying so.
+  const displayedPlacementState =
+    hasWorkspaceConflict || hasDiskPressure ? params.placementState : undefined;
   const diskSpaceLabel =
     diskSpaceStatus === "critical"
       ? t("sessionsView.cloudWorkerDiskCritical")
@@ -97,14 +120,13 @@ export function renderSessionRowBadges(params: {
         })
       : "";
   if (
-    !params.incognito &&
     !hasAutomation &&
     !pullRequestLabel &&
     !params.hasApproval &&
     outboxCount === 0 &&
     !params.hasComposerDraft &&
-    !displayedPlacementState &&
-    !hasWorkspaceConflict
+    !hasWorkspaceConflict &&
+    !hasDiskPressure
   ) {
     return nothing;
   }
@@ -130,13 +152,6 @@ export function renderSessionRowBadges(params: {
       : "";
   const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
-    ${params.incognito
-      ? renderSessionRowBadge(
-          t("sessionsView.incognito"),
-          icons.hatGlasses,
-          "session-row-badge--incognito",
-        )
-      : nothing}
     ${hasAutomation
       ? renderSessionRowBadge(t("sessionsView.automationAttached"), icons.clock)
       : nothing}
@@ -166,7 +181,7 @@ export function renderSessionRowBadges(params: {
           "session-row-badge--draft",
         )
       : nothing}
-    ${displayedPlacementState || hasWorkspaceConflict
+    ${hasWorkspaceConflict || hasDiskPressure
       ? renderSessionRowBadge(
           cloudLabel,
           icons.globe,

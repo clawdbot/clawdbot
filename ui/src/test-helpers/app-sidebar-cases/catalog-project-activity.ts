@@ -78,9 +78,7 @@ describe("AppSidebar project session activity", () => {
     expect(activeState?.getAttribute("role")).toBe("img");
     expect(activeState?.getAttribute("aria-label")).toBe("Active run");
     expect(activeState?.querySelector(".session-run-spinner")).not.toBeNull();
-    expect(active?.querySelector(".session-run-spinner")?.getAttribute("aria-label")).toBe(
-      "Active run",
-    );
+    expect(activeState?.getAttribute("aria-label")).toBe("Active run");
     expect(active?.querySelector(".sidebar-session-indicator")).toBeNull();
     expect(idle?.querySelector(".sidebar-session-indicator")).toBeNull();
     expect(idle?.querySelector(".session-row-state")).toBeNull();

@@ -146,16 +146,16 @@ describe("AppSidebar interleaved zone", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
 
-    // Pinning is not a status, so it must not claim the row's one leading slot.
+    // Pinning is not a status, and no row reserves a leading slot at all.
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
     const plain = sidebar.querySelector('[data-session-key="agent:main:plain"]');
     expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
     expect(plain?.querySelector(".sidebar-session-indicator")).toBeNull();
     expect(row?.querySelector(".nav-item__state")).toBeNull();
-    expect(row?.querySelector(".session-row-state .sidebar-recent-session__state")).not.toBeNull();
+    expect(row?.querySelector(".session-row-state .session-run-spinner")).not.toBeNull();
   });
 
-  it("keeps pinned attention leading while unread trails the row", async () => {
+  it("gives a pinned failure one state slot instead of stacking attention", async () => {
     const keys = ["agent:main:main", "agent:main:page"];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
@@ -178,10 +178,11 @@ describe("AppSidebar interleaved zone", () => {
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
 
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
-    const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph");
-    expect(glyph?.querySelector(".sidebar-session-attention__icon")).not.toBeNull();
-    expect(glyph?.querySelector(".session-glyph__badge--unread")).toBeNull();
-    expect(row?.querySelector(".session-row-state .sidebar-recent-session__unread")).not.toBeNull();
+    expect(row?.getAttribute("data-session-attention")).toBe("error");
+    expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
+    // A blocked run outranks unread: one dot, not two competing ones.
+    expect(row?.querySelector(".session-row-state .session-state-dot--blocked")).not.toBeNull();
+    expect(row?.querySelector(".session-state-dot--unread")).toBeNull();
     expect(row?.querySelector(".nav-item__state")).toBeNull();
   });
 

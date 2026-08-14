@@ -41,7 +41,6 @@ function projectSidebarSession(
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
     outboxCountForSessionKey: () => 0,
-    hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
   });
@@ -393,7 +392,6 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
     outboxCountForSessionKey: () => 0,
-    hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
   });

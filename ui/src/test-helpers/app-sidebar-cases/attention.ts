@@ -371,7 +371,7 @@ describe("AppSidebar session attention", () => {
       }
       expect(
         sidebar.querySelector(
-          `[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`,
+          `[data-session-key="${parentKey}"][data-session-attention="${kind}"]`,
         ),
       ).not.toBeNull();
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
@@ -427,7 +427,7 @@ describe("AppSidebar session attention", () => {
     sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)?.click();
     await waitForFast(() => {
       expect(
-        sidebar.querySelector(`[data-session-key="${parentKey}"] [data-session-attention="agent"]`),
+        sidebar.querySelector(`[data-session-key="${parentKey}"][data-session-attention="agent"]`),
       ).not.toBeNull();
       expect(sidebar.querySelector(`[data-session-key="${childKeys[5]}"]`)).not.toBeNull();
     });

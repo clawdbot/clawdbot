@@ -8,7 +8,6 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
@@ -21,26 +20,30 @@ import type {
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   rowDemandsVisibility,
-  sidebarSessionMetaId,
   sidebarSessionStateId,
   type SidebarRecentSession,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
-import {
-  describeSessionTrailingState,
-  renderSessionLeadingState,
-} from "./session-leading-indicator.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import { renderSessionRowBadges } from "./session-row-badges.ts";
+import {
+  describeSessionPrimaryState,
+  resolveSessionPrimaryState,
+} from "./session-primary-state.ts";
+import {
+  describeSessionWorktreePullRequest,
+  renderSessionRowBadges,
+  renderSessionWorktreePullRequest,
+} from "./session-row-badges.ts";
+import { renderSessionRowEndcap } from "./session-row-endcap.ts";
+import { renderSessionRowOrigin } from "./session-row-origin.ts";
 import {
   renderSidebarSessionSubtitle,
   resolveSidebarSessionSubtitle,
 } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
-import "./elapsed-time.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
@@ -163,7 +166,7 @@ export function renderRecentSession(params: {
     params: { key: session.key, pinned: !session.pinned },
   });
   const label = display?.label ?? session.label;
-  const { subtitle, narration } = resolveSidebarSessionSubtitle({
+  const subtitleSlot = resolveSidebarSessionSubtitle({
     session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
@@ -171,6 +174,7 @@ export function renderRecentSession(params: {
     narrationLine: host.sidebarNarrationLines.get(session.key),
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
+  const { narration } = subtitleSlot;
   const pullRequestState = session.worktreeId
     ? host.sessionPullRequestIndicatorState(session.key, session.worktreeId)
     : "none";
@@ -180,20 +184,20 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
-  const { running, leadingIndicator, trailingIndicator } = renderSessionLeadingState(
-    session,
-    pullRequestState,
-    ownerActor,
-    ownerAttribution,
-  );
-  const trailingDescription = session.isChild
-    ? ""
-    : describeSessionTrailingState(session, pullRequestState);
+  const primaryState = resolveSessionPrimaryState(session);
+  const running = primaryState.kind === "running";
+  const stateDescription = describeSessionPrimaryState(primaryState);
   const meta = display?.meta ?? formatSidebarTimestamp(session.updatedAt);
   const rowMeta = session.pinned ? "" : meta;
-  const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
-  const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
+  const stateId = primaryState.kind === "none" ? undefined : sidebarSessionStateId(session.key);
+  const origin = session.isChild
+    ? nothing
+    : renderSessionRowOrigin({
+        actor: ownerActor,
+        attribution: ownerAttribution,
+        draft: session.visibility === "draft",
+        incognito: session.incognito === true,
+      });
   const openMenuFromEvent = session.isChild
     ? undefined
     : (event: MouseEvent | KeyboardEvent) =>
@@ -204,7 +208,8 @@ export function renderRecentSession(params: {
         );
   const title = [
     display?.title ?? [label, narration, rowMeta].filter(Boolean).join(" · "),
-    trailingDescription,
+    stateDescription,
+    describeSessionWorktreePullRequest(pullRequestState),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -242,13 +247,12 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
-  // Leading state occupies the shared icon rail without owning text alignment.
-  const showLead = leadingIndicator !== nothing || session.visibility === "draft";
   const row = html`
     <div
       class=${rowClass}
       data-session-key=${session.key}
       data-session-unread=${session.unread ? "true" : nothing}
+      data-session-attention=${session.attention.kind === "none" ? nothing : session.attention.kind}
       role=${ifDefined(listItem ? "listitem" : undefined)}
       draggable=${rowDraggable ? "true" : "false"}
       title=${!session.isChild && !groupWriteAccess.allowed ? groupWriteAccess.reason : nothing}
@@ -276,33 +280,24 @@ export function renderRecentSession(params: {
         draggable="false"
         title=${title}
         aria-current=${session.visuallyActive ? "page" : nothing}
-        aria-describedby=${[stateId, metaId].filter(Boolean).join(" ") || nothing}
+        aria-describedby=${stateId ?? nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        ${showLead
-          ? html`<span class="sidebar-session-indicator"
-              >${leadingIndicator}
-              ${session.visibility === "draft"
-                ? html`<span
-                    class="session-row-draft-indicator"
-                    title=${t("chat.sessionSharing.draft")}
-                    >👻</span
-                  >`
-                : nothing}</span
-            >`
-          : nothing}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee"
-            >${session.archived
-              ? html`<span
-                  class="sidebar-session__archive-glyph"
-                  aria-label=${t("sessionsView.archived")}
-                  title=${t("sessionsView.archived")}
-                  >${icons.archive}</span
-                >`
-              : nothing}${label}</span
-          >
-          ${renderSidebarSessionSubtitle({ subtitle, narration })}
+          <span class="sidebar-recent-session__title">
+            ${origin}
+            <span class="sidebar-recent-session__name hover-marquee"
+              >${session.archived
+                ? html`<span
+                    class="sidebar-session__archive-glyph"
+                    aria-label=${t("sessionsView.archived")}
+                    title=${t("sessionsView.archived")}
+                    >${icons.archive}</span
+                  >`
+                : nothing}${label}</span
+            >
+          </span>
+          ${session.isChild ? nothing : renderSidebarSessionSubtitle(subtitleSlot)}
         </span>
         ${!session.isChild && sessionHasBoard(session.key)
           ? html`<span
@@ -323,12 +318,14 @@ export function renderRecentSession(params: {
         ></openclaw-viewer-facepile>
         ${renderSessionRowBadges({
           ...session,
+          // An active row shows the composer itself, so its own draft is not news.
           hasComposerDraft: session.hasComposerDraft === true && !session.visuallyActive,
           pullRequest: session.pullRequest ?? display?.pullRequest,
-          hasApproval: sessionHasPendingApproval(
-            host.sessionData.approvalBadgeSnapshot(),
-            session.key,
-          ),
+          // The subtitle already reads "Waiting for approval" whenever the row
+          // owns that attention; a second glyph says nothing new.
+          hasApproval:
+            session.attention.kind !== "approval" &&
+            sessionHasPendingApproval(host.sessionData.approvalBadgeSnapshot(), session.key),
         })}
       </a>
       ${session.childSessionKeys.length > 0
@@ -359,31 +356,11 @@ export function renderRecentSession(params: {
                 >`}
           </button>`
         : nothing}
-      <span class="sidebar-recent-session__aside session-row-aside">
-        ${trailingIndicator === nothing
-          ? nothing
-          : html`<span
-              class="session-row-state"
-              id=${stateId}
-              role="img"
-              aria-label=${trailingDescription}
-              >${trailingIndicator}</span
-            >`}
-        ${hasTrail
-          ? html`<span class="session-row-trail" id=${metaId}
-              >${session.runtimeMs != null
-                ? session.hasActiveRun
-                  ? html`<openclaw-elapsed-time
-                      .startMs=${session.runtimeSampledAt! - session.runtimeMs}
-                    ></openclaw-elapsed-time>`
-                  : (formatDurationCompact(session.runtimeMs) ?? "0ms")
-                : html`<openclaw-elapsed-time
-                    .startMs=${session.startedAt!}
-                    .endMs=${session.endedAt ?? null}
-                  ></openclaw-elapsed-time>`}</span
-            >`
-          : nothing}
-        ${session.isChild
+      ${renderSessionRowEndcap({
+        state: primaryState,
+        stateId,
+        metadata: renderSessionWorktreePullRequest(pullRequestState),
+        actions: session.isChild
           ? nothing
           : html`<span class="session-row-actions">
               <button
@@ -413,8 +390,8 @@ export function renderRecentSession(params: {
               >
                 ${icons.ellipsis}
               </button>
-            </span>`}
-      </span>
+            </span>`,
+      })}
     </div>
   `;
   // Marquee state mutates the row DOM; keying prevents cross-session reuse.

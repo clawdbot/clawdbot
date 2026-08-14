@@ -26,57 +26,6 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("shows an unsent-draft pencil after switching sessions and removes it after clearing", async () => {
-    const firstKey = "agent:main:draft-first";
-    const secondKey = "agent:main:draft-second";
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow(firstKey, "Draft first", 2),
-          sessionRow(secondKey, "Draft second", 1),
-        ]),
-      },
-      sessionKey: firstKey,
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
-      const firstRow = page.locator(`[data-session-key="${firstKey}"]`);
-      const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
-      const composer = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
-      );
-      await firstRow.waitFor({ state: "visible", timeout: 10_000 });
-      await secondRow.waitFor({ state: "visible" });
-      await composer.waitFor({ state: "visible" });
-      await captureUiProof(page, "draft-indicator-before.png");
-
-      await composer.fill("Keep this unsent");
-      await secondRow.getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-      await firstRow.getByRole("img", { name: "Unsent draft" }).waitFor();
-      await captureUiProof(page, "draft-indicator-after.png");
-
-      await firstRow.getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
-      expect(await firstRow.getByRole("img", { name: "Unsent draft" }).count()).toBe(0);
-
-      await composer.fill("");
-      await secondRow.getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-      await expect.poll(() => firstRow.getByRole("img", { name: "Unsent draft" }).count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
   it("expands child sessions inline and opens a child chat", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
@@ -128,7 +77,9 @@ suite.define(() => {
                     startedAt: baseTime - 64_000,
                     status: "failed",
                   }),
-                  lastReadAt: baseTime,
+                  // Read before it failed, so the failure is still pending: a
+                  // child read *after* its failure has already been dealt with.
+                  lastReadAt: baseTime - 5_000,
                   runtimeMs: 60_000,
                   runtimeSampledAt: baseTime,
                 },
@@ -171,13 +122,18 @@ suite.define(() => {
       await expect.poll(() => childRows.count()).toBe(4);
       expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
-      await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+      // A finished child with nothing left to look at reports nothing: success
+      // is not a state the reader has to acknowledge, so the endcap stays empty.
+      expect(await childRows.nth(1).locator(".session-row-state").count()).toBe(0);
 
       const staleRunningChild = page.locator(`[data-session-key="${staleRunningChildKey}"]`);
       const failedChild = page.locator(`[data-session-key="${failedChildKey}"]`);
       expect(await staleRunningChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
       expect(await failedChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
-      await failedChild.getByRole("img", { name: "Failed" }).waitFor();
+      // A blocked child speaks through the danger dot plus its accessible name;
+      // there is no alert glyph and no colour-only signal.
+      await failedChild.getByRole("img", { name: "Session needs attention" }).waitFor();
+      expect(await failedChild.locator(".session-state-dot--blocked").count()).toBe(1);
       await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
 
       const childToggle = parent.locator(`[data-child-session-toggle="${parentKey}"]`);
@@ -186,7 +142,10 @@ suite.define(() => {
       );
       for (const child of [staleRunningChild, failedChild]) {
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
-        expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
+        // A child row's endcap carries state only: no duration, no relative time.
+        expect((await child.locator(".sidebar-recent-session__aside").textContent())?.trim()).toBe(
+          "",
+        );
       }
       await captureUiProof(page, "child-sessions-expanded.png");
       await captureUiProof(page, "child-sessions-run-state-precedence.png");

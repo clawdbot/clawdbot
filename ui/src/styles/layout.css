@@ -2132,8 +2132,7 @@ body.update-dialog-open .sidebar-update-card__status {
   text-decoration: none;
 }
 
-.sidebar-recent-session__link
-  > :not(.sidebar-session-indicator):not(.sidebar-recent-session__text) {
+.sidebar-recent-session__link > :not(.sidebar-recent-session__text) {
   margin-left: 8px;
 }
 
@@ -2343,6 +2342,44 @@ body.update-dialog-open .sidebar-update-card__status {
   background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
+/* Origin metadata and the title share one line so an absent creator or
+   qualifier costs no width at all; the name keeps its own clipping box. */
+.sidebar-recent-session__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-row-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.session-row-origin__qualifier {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.session-row-origin__qualifier svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-row-origin__draft {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .sidebar-recent-session__name {
   flex: 1 1 auto;
   min-width: 0;
@@ -2371,39 +2408,12 @@ body.update-dialog-open .sidebar-update-card__status {
   padding-bottom: 3px;
 }
 
-.sidebar-recent-session--child
-  .sidebar-recent-session__link
-  > :not(.sidebar-session-indicator):not(.sidebar-recent-session__text) {
+.sidebar-recent-session--child .sidebar-recent-session__link > :not(.sidebar-recent-session__text) {
   margin-left: 6px;
 }
 
-.sidebar-recent-session--child .session-row-trail {
-  font-size: calc(10px * var(--control-ui-text-scale));
-}
-
-.sidebar-child-session__status {
-  display: inline-flex;
-  flex: 0 0 auto;
-  color: var(--muted);
-}
-
-.sidebar-child-session__status--done {
-  color: var(--ok);
-}
-
-.sidebar-child-session__status--failed,
-.sidebar-child-session__status--timeout {
-  color: var(--danger);
-}
-
-.sidebar-child-session__status svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8px;
+.sidebar-recent-session--child .sidebar-recent-session__name {
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
@@ -2459,17 +2469,15 @@ body.update-dialog-open .sidebar-update-card__status {
   mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
 }
 
-/* Touch keeps the actions permanently visible, so the fade is permanent too. */
+/* No hover means the actions are never revealed — they are resting content, so
+   the endcap returns to flow and the row reserves exactly what it shows. Left
+   overlaid, the title would run under controls the reader cannot dismiss; and
+   because nothing overlaps the link any more, the fade that hides text beneath
+   the actions has nothing to hide and would eat real title instead. */
 @media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
-      > .sidebar-recent-session__aside > .session-row-state
-    )
-    > .sidebar-recent-session__link {
-    padding-right: 112px;
-  }
-
-  .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__link {
-    mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+  .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
+    position: static;
+    transform: none;
   }
 }
 
@@ -4075,27 +4083,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 /* Sidebar sessions redesign: work-session subtitles, agent sections, draft row. */
-.sidebar-session-indicator {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* Falls back outside the sidebar, where the shared row primitives are reused
-     by the chat session picker and no sidebar rail token is in scope. */
-  width: var(--sidebar-lead, 16px);
-  height: 16px;
-  flex: 0 0 var(--sidebar-lead, 16px);
-}
-
-.sidebar-session-indicator > .session-row-draft-indicator:not(:only-child) {
-  position: absolute;
-  right: 0;
-  bottom: -1px;
-  width: 9px;
-  height: 9px;
-  font-size: 6px;
-}
-
 .sidebar-session-pr-indicator--open {
   color: var(--ok);
 }
@@ -4176,6 +4163,49 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__name,
 .sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__subtitle {
   color: color-mix(in srgb, var(--danger) 86%, var(--text));
+}
+
+/* A pending approval is a request, not a report, so its subtitle carries a
+   reddish sweep across the text itself. Clipping the gradient to the glyphs
+   keeps the motion inside the words: a band crossing the whole row would read
+   as the row loading. Traversal 1.8s then a 1.5s rest, so the row asks again
+   without ever becoming a strobe. Reduced motion drops to static warning text
+   below -- the colour alone still separates it from an ordinary subtitle. */
+.sidebar-recent-session__subtitle--approval {
+  background-image: linear-gradient(
+    90deg,
+    currentColor 0%,
+    currentColor 40%,
+    var(--danger) 50%,
+    currentColor 60%,
+    currentColor 100%
+  );
+  background-size: 300% 100%;
+  background-repeat: no-repeat;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: sidebar-approval-shimmer 3.3s linear infinite;
+}
+
+/* 1.8s of travel out of 3.3s is 54.55%; the rest holds the band off the end. */
+@keyframes sidebar-approval-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  54.55% {
+    background-position: 0% 0;
+  }
+  100% {
+    background-position: 0% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-recent-session__subtitle--approval {
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+  }
 }
 
 .sidebar-recent-session__subtitle--narration {

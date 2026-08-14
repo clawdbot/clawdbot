@@ -198,10 +198,6 @@ export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
 export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 
-export function sidebarSessionMetaId(key: string): string {
-  return `sidebar-session-meta-${encodeURIComponent(key)}`;
-}
-
 export function sidebarSessionStateId(key: string): string {
   return `sidebar-session-state-${encodeURIComponent(key)}`;
 }

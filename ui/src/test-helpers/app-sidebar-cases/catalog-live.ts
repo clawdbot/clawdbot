@@ -343,7 +343,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(linkedMenu?.querySelector('[data-shortcut="d"]')).not.toBeNull();
     expect(
       catalogSection?.querySelector(
-        `[data-session-key="${backingSessionKey}"] .session-unread-dot`,
+        `[data-session-key="${backingSessionKey}"] .session-state-dot--unread`,
       ),
     ).not.toBeNull();
     expect(

@@ -5510,10 +5510,6 @@ td.data-table-key-col {
   opacity: var(--draft-row-opacity);
 }
 
-.session-row-host--draft-owner .session-row-draft-indicator {
-  opacity: 0.55;
-}
-
 .session-row-host--draft-other {
   --draft-row-opacity: 0.58;
   background: color-mix(in srgb, var(--bg-muted) 44%, transparent);
@@ -5525,28 +5521,27 @@ td.data-table-key-col {
   --draft-row-opacity: 0.88;
 }
 
-.session-row-draft-indicator {
-  display: inline-grid;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-  font-size: 12px;
-}
-
 /* Unread indicator shared by the sidebar recents list, the chat session
    picker, and the sessions page key cell. */
-.session-unread-dot {
+.session-unread-dot,
+.session-state-dot {
   display: inline-block;
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
   border-radius: var(--radius-full);
   background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* Unread and blocked ask the reader for different things, so they must not be
+   the same colour. --accent is a red in every theme, which made a finished
+   result read as a failure at a glance. */
+.session-state-dot--unread {
+  background: var(--info);
+}
+
+.session-state-dot--blocked {
+  background: var(--danger);
 }
 
 .session-row-aside {
@@ -5560,20 +5555,6 @@ td.data-table-key-col {
   grid-area: 1 / 1;
 }
 
-.session-row-trail {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  transition: opacity var(--duration-fast) ease;
-  /* Display-only, and its opacity transition forms a stacking context that
-     would otherwise sit above the action buttons and swallow their clicks. */
-  pointer-events: none;
-}
-
 .session-row-state {
   display: inline-flex;
   align-items: center;
@@ -5583,19 +5564,6 @@ td.data-table-key-col {
   min-height: 24px;
   transition: opacity var(--duration-fast) ease;
   pointer-events: none;
-}
-
-.session-row-fork-indicator {
-  display: inline-flex;
-  color: var(--muted);
-}
-
-.session-row-fork-indicator svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6px;
 }
 
 /* Attribute badges (attached automation, approval, cloud placement):
@@ -5737,7 +5705,7 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-.session-row-host:is(:hover, :focus-within) :is(.session-row-trail, .session-row-state) {
+.session-row-host:is(:hover, :focus-within) .session-row-state {
   opacity: 0;
 }
 
@@ -5751,10 +5719,6 @@ td.data-table-key-col {
 
   .sidebar-recent-session .session-action:disabled {
     opacity: 0.35;
-  }
-
-  .sidebar-recent-session .session-row-trail {
-    opacity: 0;
   }
 
   .sidebar-recent-session .session-row-aside:has(> .session-row-state) {
@@ -5777,17 +5741,19 @@ td.data-table-key-col {
 .session-run-spinner {
   box-sizing: border-box;
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--run) 22%, transparent);
+  border-top-color: color-mix(in srgb, var(--run) 72%, transparent);
+  border-right-color: color-mix(in srgb, var(--run) 72%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--run) 72%, transparent);
   border-radius: var(--radius-full);
 }
 
 .session-run-spinner,
 .session-glyph__ring {
-  animation: session-run-spin 0.8s linear infinite;
+  animation: session-run-spin 1.1s linear infinite;
 }
 
 @keyframes session-run-spin {

@@ -123,7 +123,7 @@ describe("AppSidebar live narration", () => {
     await sidebar.updateComplete;
 
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
-    expect(row?.querySelector("[data-session-attention=question]")).not.toBeNull();
+    expect(row?.getAttribute("data-session-attention")).toBe("question");
     expect(row?.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
       "Waiting for your answer",
     );

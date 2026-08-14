@@ -368,7 +368,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
           <body>
             <span class="nav-item__text">Navigation</span>
             <span class="sidebar-recent-session__name">Recent session</span>
-            <span class="session-row-trail">3m</span>
             <div class="sidebar-session-catalog-host__head">
               <span class="sidebar-session-catalog-host__label">Local host</span>
               <span class="sidebar-session-catalog-host__count">100</span>
@@ -405,7 +404,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
       const selectors = [
         ".nav-item__text",
         ".sidebar-recent-session__name",
-        ".session-row-trail",
         ".sidebar-session-catalog-host__count",
         ".sidebar-session-group-count",
         ".sidebar-agent-card__name",
@@ -486,8 +484,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <input class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span class="sidebar-recent-session__name">Child session</span>
-                <span class="session-row-trail">3m</span>
-              </div>
+                  </div>
             </div>
           </body>
         </html>
@@ -504,7 +501,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
           };
           return {
             childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
-            childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
             coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
             agentFilter: fontSize(".sidebar-agent-menu__filter input"),
             fileSearch: fontSize(".file-view__search input"),
@@ -516,7 +512,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
       const baseline = await readSizes();
       expect(baseline).toMatchObject({
         childName: 13,
-        childTrail: 10,
         coarsePointer: true,
         agentFilter: 16,
         fileSearch: 16,
@@ -530,7 +525,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
       const scaled = await readSizes();
       expect(scaled.agentFilter).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childName).toBeCloseTo(13 * 1.4, 1);
-      expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.settingsSearch).toBeCloseTo(12.5 * 1.4, 1);
       expect(scaled.navItem).toBeCloseTo(12 * 1.4, 1);

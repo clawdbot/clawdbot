@@ -35,6 +35,7 @@ import { sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
+import { renderSessionRowEndcap } from "./session-row-endcap.ts";
 
 type SessionCatalogGroupsParams = {
   catalogs: readonly SessionCatalog[];
@@ -79,15 +80,6 @@ type SessionCatalogGroupsParams = {
     trigger?: HTMLElement,
   ) => void;
 };
-
-function renderSessionRunSpinner(showTitle = true) {
-  return html`<span
-    class="session-run-spinner"
-    role="img"
-    aria-label=${t("sessionsView.activeRun")}
-    title=${showTitle ? t("sessionsView.activeRun") : nothing}
-  ></span>`;
-}
 
 function catalogHeaderStatus(params: {
   errorHelp: string | undefined;
@@ -475,24 +467,19 @@ function renderCatalogSessionRow(
         }}
       >
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+          <span class="sidebar-recent-session__title">
+            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+          </span>
         </span>
         ${renderSessionRowBadges({
           hasAutomation: false,
           pullRequest: session.pullRequest,
         })}
       </a>
-      <span class="sidebar-recent-session__aside session-row-aside">
-        ${running
-          ? html`<span
-              class="session-row-state"
-              id=${stateId}
-              role="img"
-              aria-label=${stateDescription}
-              >${renderSessionRunSpinner(false)}</span
-            >`
-          : nothing}
-        <span class="session-row-actions">
+      ${renderSessionRowEndcap({
+        state: running ? { kind: "running" } : { kind: "none" },
+        stateId,
+        actions: html`<span class="session-row-actions">
           <button
             class="session-action"
             data-catalog-session-menu="true"
@@ -509,8 +496,8 @@ function renderCatalogSessionRow(
           >
             ${icons.ellipsis}
           </button>
-        </span>
-      </span>
+        </span>`,
+      })}
     </div>
   `;
 }

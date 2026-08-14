@@ -624,7 +624,8 @@ describe("AppSidebar catalog session rows", () => {
 
       expect(link?.getAttribute("aria-describedby")).toBe(state?.id);
       expect(link?.getAttribute("title")).toBe("Running catalog · Local Codex · Active run");
-      expect(state?.querySelector('.session-run-spinner[aria-label="Active run"]')).not.toBeNull();
+      expect(state?.getAttribute("aria-label")).toBe("Active run");
+      expect(state?.querySelector(".session-run-spinner")).not.toBeNull();
       expect(state?.querySelector(".session-run-spinner")?.hasAttribute("title")).toBe(false);
     } finally {
       vi.useRealTimers();
