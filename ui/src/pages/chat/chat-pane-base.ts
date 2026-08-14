@@ -417,7 +417,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     const agentId = resolveChatAgentId(state);
     await this.sessionCompanionThreads
       .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key, agentId), agentId)
-      .catch(() => undefined);
+      .catch((error: unknown) => this.publishHeaderError(error));
   };
   protected resetConfirmation:
     | {
