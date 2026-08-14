@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import {
+  cleanupTempDirs,
+  makeTempDir,
+  useAutoCleanupTempDirTracker,
+} from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
@@ -21,6 +25,7 @@ import {
 } from "./session-accessor.js";
 
 const tempDirs: string[] = [];
+const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function countRegisteredAgentDatabases(env: NodeJS.ProcessEnv): number {
   const row = openOpenClawStateDatabase({ env })
@@ -140,7 +145,7 @@ describe("session accessor readonly listing", () => {
   });
 
   it("probes session identity by exact key and indexed current session id", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-evidence-");
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-evidence-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentId = "worker-1";
     const sessionKey = "agent:worker-1:moved";
@@ -172,7 +177,7 @@ describe("session accessor readonly listing", () => {
   });
 
   it("reports migration-invalid session evidence as unknown", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-evidence-invalid-");
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-evidence-invalid-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentId = "worker-1";
     const sessionKey = "agent:worker-1:main";
@@ -190,7 +195,7 @@ describe("session accessor readonly listing", () => {
   });
 
   it("uses the current-session-id index for fallback identity probes", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-evidence-index-");
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-evidence-index-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentId = "worker-1";
     const database = openOpenClawAgentDatabase({ agentId, env });
