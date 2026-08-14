@@ -1245,9 +1245,25 @@ describe("skills cli commands", () => {
       runCommand(["skills", "verify", "agentreceipt", "--version", "1.0.0", "--tag", "latest"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors).toContain("Use either --version or --tag.");
+    expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
+      error: "Use either --version or --tag.",
+    });
+    expect(runtimeErrors).toStrictEqual([]);
     expect(fetchClawHubSkillVerificationMock).not.toHaveBeenCalled();
     expect(fetchClawHubSkillCardMock).not.toHaveBeenCalled();
+  });
+
+  it("returns JSON when verify workspace selection fails", async () => {
+    defaultRuntime.exit.mockImplementationOnce(() => undefined);
+
+    await runCommand(["skills", "verify", "agentreceipt", "--global", "--agent", "main"]);
+
+    expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
+      error: "Use either --global or --agent, not both.",
+    });
+    expect(runtimeErrors).toStrictEqual([]);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(resolveClawHubSkillVerificationTargetMock).not.toHaveBeenCalled();
   });
 
   it("registers explicit --json output for verify", () => {

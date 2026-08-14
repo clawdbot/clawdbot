@@ -230,10 +230,11 @@ function resolveClawHubTargetWorkspaceDir(
 function resolveClawHubTargetWorkspace(
   command: Command | undefined,
   opts: { agent?: string; global?: boolean },
+  reportError: (message: string) => void = defaultRuntime.error,
 ): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
   const agentId = resolveAgentOption(command, opts);
   if (opts.global && normalizeOptionalString(agentId)) {
-    defaultRuntime.error("Use either --global or --agent, not both.");
+    reportError("Use either --global or --agent, not both.");
     defaultRuntime.exit(1);
     return undefined;
   }
@@ -850,19 +851,23 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         let exitCode: number | undefined;
+        const reportError =
+          hasJsonOutput(opts) || opts.card !== true
+            ? (message: string) => defaultRuntime.writeJson({ error: message })
+            : defaultRuntime.error;
         try {
-          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
-          if (!workspaceDir) {
+          const workspace = resolveClawHubTargetWorkspace(command, opts, reportError);
+          if (!workspace) {
             return;
           }
           const target = await resolveClawHubSkillVerificationTarget({
-            workspaceDir,
+            workspaceDir: workspace.workspaceDir,
             slug,
             version: opts.version,
             tag: opts.tag,
           });
           if (!target.ok) {
-            defaultRuntime.error(target.error);
+            reportError(target.error);
             exitCode = 1;
           } else {
             const verification = await fetchClawHubSkillVerification({
@@ -878,7 +883,7 @@ export function registerSkillsCli(program: Command) {
             if (opts.card && !hasJsonOutput(opts)) {
               const cardUrl = readVerifiedSkillCardUrl(verification);
               if (!cardUrl.ok) {
-                defaultRuntime.error(cardUrl.error);
+                reportError(cardUrl.error);
                 exitCode = 1;
               } else {
                 const card = await fetchClawHubSkillCard({
@@ -894,7 +899,7 @@ export function registerSkillsCli(program: Command) {
             }
           }
         } catch (err) {
-          defaultRuntime.error(String(err));
+          reportError(String(err));
           defaultRuntime.exit(1);
           return;
         }
