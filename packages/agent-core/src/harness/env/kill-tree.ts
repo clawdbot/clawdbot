@@ -223,8 +223,10 @@ function getUnixProcessTreePids(rootPid: number): ProcessSnapshot[] {
       const res = spawnSync("ps", ["-ax", "-o", "pid=,ppid="], { encoding: "utf8", timeout: 1000 });
       if (res.stdout) {
         for (const line of res.stdout.split("\n")) {
-          const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-          if (ppid > 0 && pid > 1) {
+          const [rawPid, rawPpid] = line.trim().split(/\s+/);
+          const pid = Number(rawPid);
+          const ppid = Number(rawPpid);
+          if (Number.isSafeInteger(ppid) && ppid > 0 && Number.isSafeInteger(pid) && pid > 1) {
             const list = childrenMap.get(ppid) ?? [];
             list.push(pid);
             childrenMap.set(ppid, list);
