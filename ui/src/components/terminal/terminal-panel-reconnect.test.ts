@@ -258,7 +258,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(controllers[1].dispose).toHaveBeenCalledOnce();
   });
 
-  it("replays and deduplicates explicit terminal actions after a reconnect refresh fence", async () => {
+  it("replays and deduplicates explicit terminal actions after a same-client reconnect fence", async () => {
     createGhosttyTerminalMock
       .mockResolvedValueOnce(createTerminalController())
       .mockResolvedValueOnce(createTerminalController())
@@ -293,7 +293,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.available = true;
     document.body.append(panel);
 
-    panel.client = null;
     panel.available = false;
     await panel.updateComplete;
 
@@ -303,7 +302,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
         releaseRefresh = resolve;
       }),
     );
-    panel.client = client;
     panel.available = true;
     await panel.updateComplete;
     await vi.waitFor(() => expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce());

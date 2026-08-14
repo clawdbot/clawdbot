@@ -72,7 +72,7 @@ export function loadPersistedTerminalSessionIds(): string[] {
   }
 }
 
-export function persistTerminalSessionIds(ids: readonly string[]): void {
+function persistTerminalSessionIds(ids: readonly string[]): void {
   try {
     globalThis.sessionStorage?.setItem(TERMINAL_SESSIONS_KEY, JSON.stringify(ids));
   } catch {

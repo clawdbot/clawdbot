@@ -42,6 +42,10 @@ type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
 
+type TerminalPanelElement = PanelToggleElement & {
+  agentId: string | null;
+};
+
 export function isBrowserPanelAvailable(
   snapshot: ApplicationContext["gateway"]["snapshot"],
 ): boolean {
@@ -112,7 +116,7 @@ export class ShellChromeOwner {
     window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
-    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle, true);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
   }
@@ -132,7 +136,11 @@ export class ShellChromeOwner {
     window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
-    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
+    window.removeEventListener(
+      TERMINAL_PANEL_TOGGLE_EVENT,
+      this.handleDeferredTerminalToggle,
+      true,
+    );
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
   }
@@ -458,20 +466,35 @@ export class ShellChromeOwner {
       .catch(() => undefined);
   };
 
-  deliverPanelEventAfterLoad(element: OptionalCustomElement, event: Event): void {
+  deliverPanelEventAfterLoad(
+    element: OptionalCustomElement,
+    event: Event,
+    beforeDeliver?: (panel: PanelToggleElement) => void,
+  ): void {
     const host = this.host;
     void ensureOptionalElementForHost(host, element)
       .then(async () => {
         // Wait for the host to apply availability after defining the mounted tag.
         await host.updateComplete;
-        host.querySelector<PanelToggleElement>(element.tagName)?.handleToggleRequest(event);
+        const panel = host.querySelector<PanelToggleElement>(element.tagName);
+        if (panel) {
+          beforeDeliver?.(panel);
+          panel.handleToggleRequest(event);
+        }
       })
       .catch(() => undefined);
   }
 
   readonly handleDeferredTerminalToggle = (event: Event): void => {
     const host = this.host;
+    const selectedAgentId = host.context?.agentSelection.state.selectedId?.trim() || null;
     if (isOptionalElementDefined(host.terminalPanelElement)) {
+      // This listener runs before the optional panel's listener. Carry the
+      // canonical click-time selection past Lit's deferred property render.
+      const panel = host.querySelector<TerminalPanelElement>(host.terminalPanelElement.tagName);
+      if (panel) {
+        panel.agentId = selectedAgentId;
+      }
       return;
     }
     const context = host.context;
@@ -482,7 +505,9 @@ export class ShellChromeOwner {
     ) {
       return;
     }
-    this.deliverPanelEventAfterLoad(host.terminalPanelElement, event);
+    this.deliverPanelEventAfterLoad(host.terminalPanelElement, event, (panel) => {
+      (panel as TerminalPanelElement).agentId = selectedAgentId;
+    });
   };
 
   readonly handleDeferredBrowserToggle = (event: Event): void => {

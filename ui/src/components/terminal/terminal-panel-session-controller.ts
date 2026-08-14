@@ -46,6 +46,7 @@ export class TerminalPanelSessionController
   private activeClient: TerminalGatewayClient | null = null;
   private activeAvailable = false;
   private hadClient = false;
+  private hadAvailable = false;
   private lifecycleGeneration = 0;
   private lifecycleAbortController = new AbortController();
   private lifecycleSyncToken = 0;
@@ -106,13 +107,13 @@ export class TerminalPanelSessionController
     this.activeClient = this.host.client;
     this.activeAvailable = this.host.available;
     this.hadClient = this.host.client !== null;
+    this.hadAvailable = this.host.available;
   }
 
   disconnectHost(): void {
     this.disposeAllTabs();
     this.activeClient = null;
     this.activeAvailable = false;
-    this.hadClient = false;
   }
 
   scheduleLifecycleSync(): void {
@@ -138,12 +139,15 @@ export class TerminalPanelSessionController
     if (!clientChanged && !availabilityChanged) {
       return;
     }
-    const reconnecting = clientChanged && this.hadClient && this.host.client !== null;
+    const becameAvailable = availabilityChanged && this.host.available && this.hadAvailable;
+    const priorEpoch = (clientChanged && this.hadClient) || becameAvailable;
+    const reconnecting = this.host.client !== null && priorEpoch;
     if (clientChanged) {
       this.activeClient = this.host.client;
       this.hadClient ||= this.host.client !== null;
     }
     this.activeAvailable = this.host.available;
+    this.hadAvailable ||= this.host.available;
     const becameUnavailable = availabilityChanged && !this.host.available;
     if (clientChanged || becameUnavailable) {
       this.disposeAllTabs();
@@ -187,23 +191,20 @@ export class TerminalPanelSessionController
   }
 
   async restoreSessions(): Promise<void> {
-    await this.pendingActions.queue({ kind: "restore", agentId: this.selectedAgentId() });
+    const agentId = this.host.agentId?.trim() || null;
+    await this.pendingActions.queue({ kind: "restore", agentId });
   }
 
   async openCatalogSession(catalog: TerminalPanelCatalogReference): Promise<void> {
     await this.pendingActions.queue({
       kind: "catalog",
-      agentId: this.selectedAgentId(),
+      agentId: this.host.agentId?.trim() || null,
       catalog,
     });
   }
 
   async openRequestedSession(sessionId: string): Promise<void> {
     await this.pendingActions.queue({ kind: "attach", sessionId, agentOwned: true });
-  }
-
-  private selectedAgentId(): string | null {
-    return this.host.agentId?.trim() || null;
   }
 
   private terminalActionsCanRun(): boolean {
@@ -499,8 +500,8 @@ export class TerminalPanelSessionController
   async openSession(catalog?: TerminalPanelCatalogReference): Promise<void> {
     await this.pendingActions.queue(
       catalog
-        ? { kind: "catalog", agentId: this.selectedAgentId(), catalog }
-        : { kind: "open", agentId: this.selectedAgentId() },
+        ? { kind: "catalog", agentId: this.host.agentId?.trim() || null, catalog }
+        : { kind: "open", agentId: this.host.agentId?.trim() || null },
     );
   }
 
