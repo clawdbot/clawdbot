@@ -35,7 +35,7 @@ import {
   formatDurationCompact,
   formatMs,
   formatRelativeTimestamp,
-  formatTokens,
+  formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -297,7 +297,7 @@ function renderTokensCell(row: GatewaySessionRow) {
   // as "~" orientation but must not drive warn/danger tones; mirrors the chat
   // composer's context-usage convention.
   const fresh = row.totalTokensFresh !== false;
-  const totalLabel = `${fresh ? "" : "~"}${formatTokens(total)}`;
+  const totalLabel = `${fresh ? "" : "~"}${formatCompactTokenCount(total)}`;
   const context =
     typeof row.contextTokens === "number" && row.contextTokens > 0 ? row.contextTokens : null;
   if (!context) {
@@ -319,7 +319,9 @@ function renderTokensCell(row: GatewaySessionRow) {
   return html`
     <openclaw-tooltip .content=${title}>
       <div class="session-tokens">
-        <span class="session-tokens__value">${totalLabel} / ${formatTokens(context)}</span>
+        <span class="session-tokens__value"
+          >${totalLabel} / ${formatCompactTokenCount(context)}</span
+        >
         <span
           class="session-context-meter session-context-meter--${tone}"
           role="img"
@@ -350,7 +352,7 @@ function renderSessionsOverview(
   const tokensValue =
     rowsWithTokens.length === 0
       ? t("common.na")
-      : `${tokensApproximate ? "~" : ""}${formatTokens(totalTokens)}`;
+      : `${tokensApproximate ? "~" : ""}${formatCompactTokenCount(totalTokens)}`;
   const tiles: Array<
     readonly [string, (typeof icons)[keyof typeof icons], string, string, boolean]
   > = [

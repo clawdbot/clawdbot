@@ -16,6 +16,7 @@ export type {
   ReplyOperation,
   ReplyOperationPhase,
   ReplyToolAuthorityOverlay,
+  ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 export {
   abortReplyMessageInjectionTarget,

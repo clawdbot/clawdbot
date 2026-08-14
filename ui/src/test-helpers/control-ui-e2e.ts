@@ -81,6 +81,12 @@ type ControlUiRouteTarget = {
 // wait browser-local, but allow enough time for the router to finish committing.
 const CONTROL_UI_ROUTE_TIMEOUT_MS = 60_000;
 
+// Loaded CI runners regularly stall real Chromium renders past 10s; the larger
+// CI budget trades failure latency, not coverage (mirrors the ui-e2e vitest
+// config's expect.poll budget). Local runs keep the snappy 10s deadline.
+export const controlUiE2eWaitTimeoutMs =
+  process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true" ? 30_000 : 10_000;
+
 /**
  * Wait for the browser router to commit a route, not merely update the URL.
  * Browser-local polling keeps readiness independent of host-side CDP scheduling.
@@ -2268,7 +2274,7 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
           return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
         },
         method,
-        { timeout: 10_000 },
+        { timeout: controlUiE2eWaitTimeoutMs },
       );
       const requests = await getRequests(method);
       const request = requests.at(-1);

@@ -5,6 +5,7 @@ import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -38,7 +39,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     try {
       const gateway = await installMockGateway(page, {
         historyMessages: [
@@ -192,7 +193,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     });
     try {
       const page = await context.newPage();
-      page.setDefaultTimeout(15_000);
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.files.get": {
