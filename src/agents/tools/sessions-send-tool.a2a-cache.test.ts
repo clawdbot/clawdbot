@@ -20,7 +20,7 @@ describe("sessions_send A2A prompt caching", () => {
     a2aMocks.resolveAnnounceTarget.mockResolvedValue(null);
   });
 
-  it("keeps reply system prompts byte-stable while moving turn data to runtime context", async () => {
+  it("keeps step system prompts byte-stable while moving volatile data to runtime context", async () => {
     a2aMocks.runAgentStep
       .mockResolvedValueOnce("reply from requester")
       .mockResolvedValueOnce("REPLY_SKIP")
@@ -48,17 +48,19 @@ describe("sessions_send A2A prompt caching", () => {
           message?: string;
         },
     );
-    const firstReply = calls[0];
-    const secondReply = calls[1];
-    const announce = calls[2];
+    const [firstReply, secondReply, announce] = calls;
+    if (!firstReply || !secondReply || !announce) {
+      throw new Error("Expected two A2A reply steps and one announce step");
+    }
 
-    expect(firstReply.extraSystemPrompt).toBe("Agent-to-agent reply step.");
+    expect(firstReply.extraSystemPrompt).toContain("Agent-to-agent reply step");
     expect(secondReply.extraSystemPrompt).toBe(firstReply.extraSystemPrompt);
+    expect(announce.extraSystemPrompt).toBe(firstReply.extraSystemPrompt);
+
     expect(firstReply.runtimeContext).toContain("Turn 1 of 2.");
     expect(secondReply.runtimeContext).toContain("Turn 2 of 2.");
     expect(firstReply.runtimeContext).not.toBe(secondReply.runtimeContext);
 
-    expect(announce.extraSystemPrompt).toBe("Agent-to-agent announce step.");
     expect(announce.message).toBe("Agent-to-agent announce step.");
     expect(announce.runtimeContext).toContain("Original request: original request");
     expect(announce.runtimeContext).toContain("Round 1 reply: initial target reply");
