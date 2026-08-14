@@ -33,6 +33,12 @@ In the macOS app: **Settings -> Enable Peekaboo Bridge**. The toggle requires **
 
 When enabled (and Computer Control is on), OpenClaw starts a local UNIX socket server at `~/Library/Application Support/OpenClaw/<socket-name>`. If disabled, the host stops and `peekaboo` falls back to other available hosts. The coordinator also maintains legacy socket symlinks (`clawdbot`, `clawdis`, `moltbot` under Application Support) pointing at the current socket for older `peekaboo` installs.
 
+For an unattended elevation host, launch OpenClaw with `--attach-only --background-only`. Background-only mode does
+not preload dashboard, onboarding, or saved Gateway-profile Keychain state, so a signer or Keychain ACL transition
+cannot interrupt automation with SecurityAgent prompts. The Bridge still starts on its local socket; the control
+channel and Mac-node runtime continue using the primary Gateway route supplied through the normal environment/config
+path.
+
 ## Client discovery order
 
 Peekaboo clients typically try hosts in this order:

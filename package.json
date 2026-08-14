@@ -1065,6 +1065,10 @@
     "./plugin-sdk/node-host": {
       "default": "./dist/plugin-sdk/node-host.js"
     },
+    "./plugin-sdk/computer-use": {
+      "types": "./dist/plugin-sdk/computer-use.d.ts",
+      "default": "./dist/plugin-sdk/computer-use.js"
+    },
     "./plugin-sdk/response-limit-runtime": {
       "default": "./dist/plugin-sdk/response-limit-runtime.js"
     },

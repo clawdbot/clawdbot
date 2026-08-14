@@ -108,7 +108,13 @@ async function writeSupervisedTestBinding(
   });
 }
 
-function startCompaction(sessionFile: string, options: { currentTokenCount?: number } = {}) {
+function startCompaction(
+  sessionFile: string,
+  options: {
+    currentTokenCount?: number;
+    nativeToolSurface?: "unrestricted" | "host-isolated";
+  } = {},
+) {
   return maybeCompactCodexAppServerSession({
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -206,6 +212,42 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.signal).toBe("thread/compact/start");
     expect(details.pending).toBe(false);
     expect(details.completed).toBe(true);
+  });
+
+  it("does not compact a thread created with restricted native authority", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({ nativeToolPolicyRestricted: true });
+
+    await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "native compaction is unavailable for a host-isolated Codex session",
+      result: {
+        details: {
+          backend: "codex-app-server",
+          skipped: true,
+          reason: "native_tool_policy_restricted",
+          expectedThreadId: "thread-1",
+        },
+      },
+    });
+    expect(fake.request).not.toHaveBeenCalled();
+  });
+
+  it("does not compact an unrestricted binding during a host-isolated operation", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    await expect(
+      startCompaction(sessionFile, { nativeToolSurface: "host-isolated" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      compacted: false,
+      result: { details: { reason: "native_tool_policy_restricted" } },
+    });
+    expect(fake.request).not.toHaveBeenCalled();
   });
 
   it("compacts a warm session without displacing its independently retained sibling", async () => {

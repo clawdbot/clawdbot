@@ -29,6 +29,15 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
   runId?: string;
+  /** Exact authority of the concrete provider/model attempt behind this handle. */
+  toolAuthorityFingerprint?: string;
+  /** Atomically consumes one plain-text answer for this run's pending user-input request. */
+  claimPendingUserInputAnswer?: (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => Promise<boolean>;
+  /** Cancels this run's pending user-input request before an image is queued as a later turn. */
+  cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,

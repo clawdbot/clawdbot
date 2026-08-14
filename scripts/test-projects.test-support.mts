@@ -969,11 +969,16 @@ function createBroadToolingScriptPlans(params: VitestRunPlan & { cwd: string }) 
     : null;
 }
 
-function createBoundedExtensionPlans(plan: VitestRunPlan) {
+function createBoundedExtensionPlans(plan: VitestRunPlan, env?: NodeJS.ProcessEnv) {
   const { config, forwardedArgs, watchMode } = plan;
   const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
   if (watchMode || !roots) {
     return [plan];
+  }
+  // A CI include file already owns the test scope. Expanding its config here
+  // or emitting local patterns would replace that shard in the run spec.
+  if (env?.[INCLUDE_FILE_ENV_KEY]?.trim()) {
+    return [{ ...plan, includePatterns: null }];
   }
   const chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
   if (chunks.length <= 1) {
@@ -3609,12 +3614,15 @@ export function buildVitestRunPlans(
       );
     }
     return explicitConfigTargets.flatMap((config) =>
-      createBoundedExtensionPlans({
-        config,
-        forwardedArgs: nonTargetArgs,
-        includePatterns: null,
-        watchMode,
-      }),
+      createBoundedExtensionPlans(
+        {
+          config,
+          forwardedArgs: nonTargetArgs,
+          includePatterns: null,
+          watchMode,
+        },
+        options.env,
+      ),
     );
   }
 
@@ -3726,7 +3734,7 @@ export function buildVitestRunPlans(
           includePatterns: null,
           watchMode,
         };
-        plans.push(...createBoundedExtensionPlans(plan));
+        plans.push(...createBoundedExtensionPlans(plan, options.env));
       }
       continue;
     }
@@ -3778,12 +3786,15 @@ export function buildVitestRunPlans(
     });
     const boundedExtensionPlans =
       boundedExtensionRoots.length > 0 && boundedRootsCoverGroupedTargets
-        ? createBoundedExtensionPlans({
-            config,
-            forwardedArgs: forwardedPlanArgs,
-            includePatterns,
-            watchMode,
-          })
+        ? createBoundedExtensionPlans(
+            {
+              config,
+              forwardedArgs: forwardedPlanArgs,
+              includePatterns,
+              watchMode,
+            },
+            options.env,
+          )
         : null;
     if (boundedExtensionPlans) {
       plans.push(...boundedExtensionPlans);

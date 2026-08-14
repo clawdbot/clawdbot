@@ -603,6 +603,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExecApprovalsPromptServer.shared.start()
         ExecApprovalsGatewayPrompter.shared.start()
         MacNodeModeCoordinator.shared.start()
+        if let state {
+            CookieSyncManager.shared.start(state: state)
+        }
         VoiceWakeGlobalSettingsSync.shared.start()
         QuickChatController.shared.start()
         Task { PresenceReporter.shared.start() }
@@ -616,9 +619,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            DashboardManager.shared.preloadIfConfigured()
+        if launchPolicy.allowsAutomaticPresentation {
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                DashboardManager.shared.preloadIfConfigured()
+            }
         }
 
         #if DEBUG
@@ -653,6 +658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExecApprovalsPromptServer.shared.stop()
         ExecApprovalsGatewayPrompter.shared.stop()
         MacNodeModeCoordinator.shared.stop()
+        CookieSyncManager.shared.stop()
         TerminationSignalWatcher.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
         DashboardManager.shared.close()

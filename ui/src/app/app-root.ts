@@ -250,6 +250,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .available=${desktopAvailable}
           .documentMode=${true}
           .documentSource=${this.desktopOptions.source}
+          .documentSession=${this.desktopOptions.session}
           .documentControl=${this.desktopOptions.control}
           .onDocumentClose=${() => {
             if (globalThis.history.length > 1) {
