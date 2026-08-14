@@ -42,6 +42,7 @@ type KnownNodeApprovedSource = {
   permissions?: Record<string, boolean>;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -133,6 +134,7 @@ function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSour
     permissions: entry.permissions,
     approvedAtMs: entry.approvedAtMs,
     lastConnectedAtMs: entry.lastConnectedAtMs,
+    lastDisconnectedAtMs: entry.lastDisconnectedAtMs,
     lastSeenAtMs: entry.lastSeenAtMs,
     lastSeenReason: entry.lastSeenReason,
   };
@@ -178,6 +180,11 @@ function resolveCurrentPendingNodePairing(params: {
     : undefined;
 }
 
+function maxDefinedTimestamp(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined);
+  return defined.length > 0 ? Math.max(...defined) : undefined;
+}
+
 function resolveEffectiveLastSeen(params: {
   live?: NodeSession;
   devicePairing?: KnownNodeDevicePairingSource;
@@ -218,9 +225,15 @@ function buildEffectiveKnownNode(entry: {
   nodePairing?: KnownNodeApprovedSource;
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
+  sessionHost: boolean;
 }): NodeListNode {
-  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live } = entry;
+  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live, sessionHost } = entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
+  const lastConnectedAtMs = maxDefinedTimestamp(
+    nodePairing?.lastConnectedAtMs,
+    live?.connectedAtMs,
+  );
+  const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
   return {
     nodeId,
     displayName: firstNormalizedString(
@@ -282,7 +295,7 @@ function buildEffectiveKnownNode(entry: {
     commands: filterPublicNodeCommands(
       live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
     ),
-    sessionHost: live?.workerRuns !== undefined,
+    sessionHost,
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
@@ -298,6 +311,8 @@ function buildEffectiveKnownNode(entry: {
     pendingDeclaredCommands: pendingNodePairing?.commands,
     pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastConnectedAtMs,
+    lastDisconnectedAtMs,
     lastActiveAtMs: live?.lastActiveAtMs,
     presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,
@@ -329,6 +344,7 @@ export function createKnownNodeCatalog(params: {
   pairedNodes?: readonly PairedDeviceNode[];
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
+  sessionHostNodeIds?: ReadonlySet<string>;
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
@@ -381,6 +397,7 @@ export function createKnownNodeCatalog(params: {
         nodePairing,
         pendingNodePairing,
         live,
+        sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
       }),
     });
   }

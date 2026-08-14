@@ -16,7 +16,6 @@ const CHECK_COMMANDS = [
   "pnpm config:channels:check",
   "pnpm config:docs:check",
   "pnpm plugin-sdk:check-exports",
-  "pnpm plugin-sdk:api:check",
   "pnpm plugin-sdk:surface:check",
   "pnpm ui:i18n:check",
   "pnpm native:i18n:check",
@@ -29,7 +28,6 @@ const FIX_COMMANDS = [
   "pnpm config:channels:gen",
   "pnpm config:docs:gen",
   "pnpm plugin-sdk:sync-exports",
-  "pnpm plugin-sdk:api:gen",
   "pnpm ui:i18n:sync",
 ];
 

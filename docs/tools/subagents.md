@@ -517,10 +517,10 @@ children:
 Sub-agent auth is resolved by **agent id**, not by session type:
 
 - The sub-agent session key is `agent:<agentId>:subagent:<uuid>`.
-- The auth store is loaded from that agent's `agentDir`.
-- The main agent's auth profiles are merged in as a **fallback**; agent profiles override main profiles on conflicts.
+- The local auth overlay is loaded from that agent's `agentDir`.
+- The shared auth profiles are merged in as a **fallback**; agent profiles override shared profiles on conflicts.
 
-The merge is additive, so main profiles are always available as
+The merge is additive, so shared profiles are always available as
 fallbacks. Fully isolated auth per agent is not supported yet.
 
 ## Announce

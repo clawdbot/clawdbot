@@ -250,7 +250,6 @@ export function enableOpenClawCompileCache(params: {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.entryCompileCacheTestApi")] = {
     buildOpenClawCompileCacheRespawnPlan,
-    isNodeVersionAffectedByCompileCacheDeadlock,
     isSourceCheckoutInstallRoot,
     resolveOpenClawCompileCacheDirectory,
     runOpenClawCompileCacheRespawnPlan,

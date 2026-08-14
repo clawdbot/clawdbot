@@ -444,12 +444,6 @@ describe("iMessage approval reactions", () => {
     ).toEqual({ chatIdentifier: "group@example.com" });
   });
 
-  it("exposes allow-always as the shared infinity reaction choice", () => {
-    expect(buildIMessageApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
-    );
-  });
-
   it("registers and resolves allow-always through the shared infinity reaction", async () => {
     expect(
       registerIMessageApprovalReactionTarget({

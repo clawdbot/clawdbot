@@ -329,8 +329,8 @@ const MATRIX_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
     ],
   },
   // Previews are mentions-inert and an edit cannot retro-notify, so a final
-  // whose text would activate mentions redacts the preview and re-sends the
-  // final as a fresh mention-bearing event.
+  // whose text would activate mentions is sent fresh before the preview is
+  // redacted. A failed replacement therefore leaves the preview visible.
   {
     name: "final-mentions-fresh",
     steps: [

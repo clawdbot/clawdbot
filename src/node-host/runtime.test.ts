@@ -48,6 +48,23 @@ vi.mock("./node-worker-supervisor.js", () => ({
   createNodeWorkerSupervisor: vi.fn(() => ({ close: mocks.closeWorkerSupervisor })),
 }));
 
+vi.mock("./node-worker-build.js", () => ({
+  resolveNodeWorkerInstallation: vi.fn(async () => ({
+    packageRoot: "/tmp/openclaw-node-worker",
+    build: {
+      bundleHash: "a".repeat(64),
+      openclawVersion: "2026.8.1",
+      protocolFeatures: [],
+    },
+  })),
+}));
+
+vi.mock("./node-worker-workspace.js", () => ({
+  NodeWorkerWorkspaceRuntime: class {
+    readonly exec = vi.fn();
+  },
+}));
+
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
   isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
@@ -79,9 +96,10 @@ beforeEach(() => {
 
 async function startRuntime() {
   const prepared = await prepareNodeHostRuntime({
-    config: { nodeHost: { skills: { enabled: false } } },
+    config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
     env: { PATH: "/usr/bin" },
     enableAgentRuns: true,
+    enableWorkerRuns: true,
   });
   return prepared.start({
     client: { request: vi.fn(async () => ({ bins: [] })) } as unknown as NodeHostClient,

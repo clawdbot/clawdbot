@@ -363,6 +363,7 @@ describe("gateway agent handler", () => {
       expectRecordFields(run, {
         controllerSessionKey: "agent:work:main",
         requesterSessionKey: requester.sessionKey,
+        requesterAgentId: "main",
         requesterDisplayKey: requester.sessionKey,
         requesterOrigin: requester.origin,
         label: "plugin:memory-core",

@@ -502,7 +502,7 @@ export function parseArgs(argv: string[]): EvidenceCliOptions {
 /**
  * Runs the dependency release evidence generator CLI.
  */
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) {
     process.stdout.write(usage());

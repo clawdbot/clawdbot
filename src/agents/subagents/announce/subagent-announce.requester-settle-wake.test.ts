@@ -234,6 +234,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       wakeParams({ settledEntry: children[1] }),
     );
     await vi.waitFor(() => expect(deliverSpy).toHaveBeenCalledOnce());
+    await wakeB;
     releaseDeliveries();
     await expect(Promise.all([wakeA, wakeB])).resolves.toEqual(
       expect.arrayContaining([true, false]),

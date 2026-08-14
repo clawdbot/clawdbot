@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -94,6 +95,7 @@ async function runSkillCollectionReview(params: {
   }
   const model = resolveCollectionReviewModel(params.config, params.agentId);
   const sessionId = randomUUID();
+  const runId = `${COLLECTION_REVIEW_SESSION_SEGMENT}:${randomUUID()}`;
   const sessionKey = `agent:${params.agentId}:${COLLECTION_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const collectionReconcile: SkillCollectionReconcileContext = {
     agentIds: [...(params.agentIds ?? [params.agentId])],
@@ -109,41 +111,52 @@ async function runSkillCollectionReview(params: {
     ),
   };
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-  await runEmbeddedAgent({
-    sessionId,
-    sessionKey,
-    sandboxSessionKey: sessionKey,
-    sessionManager: SessionManager.inMemory(params.workspaceDir),
-    agentId: params.agentId,
-    trigger: "cron",
-    lane: CommandLane.SkillWorkshopReview,
-    agentHarnessId: "openclaw",
-    agentHarnessRuntimeOverride: "openclaw",
-    workspaceDir: params.workspaceDir,
-    config: params.config,
-    prompt: buildCollectionReviewPrompt(skills),
-    provider: model.provider,
-    model: model.model,
-    ...(model.authProfileId
-      ? { authProfileId: model.authProfileId, authProfileIdSource: "user" as const }
-      : {}),
-    modelSelectionLocked: true,
-    modelFallbacksOverride: [],
-    timeoutMs: COLLECTION_REVIEW_TIMEOUT_MS,
-    runId: `${COLLECTION_REVIEW_SESSION_SEGMENT}:${randomUUID()}`,
-    toolsAllow: ["skill_workshop"],
-    skillWorkshopProposalOnly: true,
-    disableMessageTool: true,
-    disableTrajectory: true,
-    skillWorkshopCollectionReconcile: collectionReconcile,
-    skillWorkshopProposalEnv: params.env,
-    cleanupBundleMcpOnRunEnd: true,
-    bootstrapContextMode: "lightweight",
-    skillsSnapshot: { prompt: "", skills: [] },
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    suppressToolErrorWarnings: true,
-  });
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    params.config,
+    runId,
+    params.agentId,
+    "skill-workshop.collection-review",
+  );
+  try {
+    await runEmbeddedAgent({
+      preparedRunAdmission,
+      sessionId,
+      sessionKey,
+      sandboxSessionKey: sessionKey,
+      sessionManager: SessionManager.inMemory(params.workspaceDir),
+      agentId: params.agentId,
+      trigger: "cron",
+      lane: CommandLane.SkillWorkshopReview,
+      agentHarnessId: "openclaw",
+      agentHarnessRuntimeOverride: "openclaw",
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+      prompt: buildCollectionReviewPrompt(skills),
+      provider: model.provider,
+      model: model.model,
+      ...(model.authProfileId
+        ? { authProfileId: model.authProfileId, authProfileIdSource: "user" as const }
+        : {}),
+      modelSelectionLocked: true,
+      modelFallbacksOverride: [],
+      timeoutMs: COLLECTION_REVIEW_TIMEOUT_MS,
+      runId,
+      toolsAllow: ["skill_workshop"],
+      skillWorkshopProposalOnly: true,
+      disableMessageTool: true,
+      disableTrajectory: true,
+      skillWorkshopCollectionReconcile: collectionReconcile,
+      skillWorkshopProposalEnv: params.env,
+      cleanupBundleMcpOnRunEnd: true,
+      bootstrapContextMode: "lightweight",
+      skillsSnapshot: { prompt: "", skills: [] },
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      suppressToolErrorWarnings: true,
+    });
+  } finally {
+    preparedRunAdmission.close();
+  }
   if (!collectionReconcile.result) {
     throw new Error("Skill collection review ended without reconciling the collection.");
   }

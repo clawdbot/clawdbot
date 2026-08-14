@@ -21,6 +21,7 @@ import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { isNodeRunnerSessionHost } from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
@@ -87,6 +88,12 @@ function summarizeNodeEnvironment(
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.connected === true && node.sessionHost === true,
+    ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
+    ...(node.lastDisconnectedAtMs !== undefined
+      ? { lastDisconnectedAtMs: node.lastDisconnectedAtMs }
+      : {}),
+    ...(node.lastSeenAtMs !== undefined ? { lastSeenAtMs: node.lastSeenAtMs } : {}),
+    ...(node.lastSeenReason ? { lastSeenReason: node.lastSeenReason } : {}),
     trust: "persistent",
     ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
@@ -135,10 +142,24 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
       });
     }
   }
+  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(currentPairingStates);
+  const sessionHostNodeIds = new Set(
+    connectedNodes.flatMap((node) =>
+      isNodeRunnerSessionHost({
+        registry: context.nodeRegistry,
+        nodeId: node.nodeId,
+        connId: node.connId,
+        pairingGeneration: node.pairingGeneration,
+      })
+        ? [node.nodeId]
+        : [],
+    ),
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: devices.paired,
     pairedNodes: nodes.paired,
-    connectedNodes: context.nodeRegistry.listConnectedForPairingStates(currentPairingStates),
+    connectedNodes,
+    sessionHostNodeIds,
   });
   const config = context.getRuntimeConfig();
   const gateway =
