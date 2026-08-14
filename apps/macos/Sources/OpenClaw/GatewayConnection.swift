@@ -64,6 +64,12 @@ actor GatewayConnection {
         }
     }
 
+    /// Opaque identity for one route and one physical websocket generation.
+    struct ServerIdentity: Equatable, Sendable {
+        fileprivate let routeGeneration: UInt64
+        fileprivate let socketGeneration: UInt64
+    }
+
     /// One connected Gateway server, not merely an endpoint configuration.
     /// A reconnect at the same URL creates a different lease.
     struct ServerLease: Sendable {
@@ -72,6 +78,17 @@ actor GatewayConnection {
         let route: Route
         fileprivate let socketGeneration: UInt64
         fileprivate let client: GatewayChannelActor
+
+        var identity: ServerIdentity {
+            ServerIdentity(
+                routeGeneration: self.route.generation,
+                socketGeneration: self.socketGeneration)
+        }
+    }
+
+    struct ServerSnapshotSubscription: Sendable {
+        let baseline: ServerIdentity?
+        let stream: AsyncStream<ServerIdentity>
     }
 
     enum Method: String {
@@ -167,6 +184,7 @@ actor GatewayConnection {
     private var lastRetiredSocketGeneration: UInt64?
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
+    private var serverSnapshotSubscribers: [UUID: AsyncStream<ServerIdentity>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
     var canvasPluginSurfaceURL: String?
 
@@ -1188,15 +1206,12 @@ extension GatewayConnection {
             stateDir?.isEmpty == false ? stateDir : nil)
     }
 
-    func subscribe(
-        bufferingNewest: Int = 100,
-        replayLatestSnapshot: Bool = true) -> AsyncStream<GatewayPush>
-    {
+    func subscribe(bufferingNewest: Int = 100) -> AsyncStream<GatewayPush> {
         let id = UUID()
         let snapshot = self.lastSnapshot
         let connection = self
         return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
-            if replayLatestSnapshot, let snapshot {
+            if let snapshot {
                 continuation.yield(.snapshot(snapshot))
             }
             self.subscribers[id] = continuation
@@ -1206,8 +1221,36 @@ extension GatewayConnection {
         }
     }
 
+    /// Captures the current hello generation and registers future generations
+    /// in one actor turn, so reconnects cannot fall between inspection and subscription.
+    func subscribeServerSnapshots(bufferingNewest: Int = 1) -> ServerSnapshotSubscription {
+        let id = UUID()
+        let connection = self
+        let baseline = self.currentServerIdentity()
+        let stream = AsyncStream(
+            bufferingPolicy: .bufferingNewest(bufferingNewest))
+        { continuation in
+            self.serverSnapshotSubscribers[id] = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { await connection.removeServerSnapshotSubscriber(id) }
+            }
+        }
+        return ServerSnapshotSubscription(baseline: baseline, stream: stream)
+    }
+
     private func removeSubscriber(_ id: UUID) {
         self.subscribers[id] = nil
+    }
+
+    private func removeServerSnapshotSubscriber(_ id: UUID) {
+        self.serverSnapshotSubscribers[id] = nil
+    }
+
+    private func currentServerIdentity() -> ServerIdentity? {
+        guard self.lastSnapshot != nil, let socketGeneration = self.activeSocketGeneration else { return nil }
+        return ServerIdentity(
+            routeGeneration: self.routeGeneration,
+            socketGeneration: socketGeneration)
     }
 
     private func broadcast(_ push: GatewayPush) {
@@ -1219,6 +1262,11 @@ extension GatewayConnection {
             if let mainSessionKey = cachedMainSessionKey() {
                 Task { @MainActor in
                     WorkActivityStore.shared.setMainSessionKey(mainSessionKey)
+                }
+            }
+            if let identity = self.currentServerIdentity() {
+                for continuation in self.serverSnapshotSubscribers.values {
+                    continuation.yield(identity)
                 }
             }
         }

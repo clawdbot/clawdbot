@@ -528,13 +528,22 @@ enum OnboardingSystemAgentResumeStore {
 
 @MainActor
 protocol FirstRunOnboardingPresenting: AnyObject {
+    var presentsDashboardInsteadOfOnboarding: Bool { get }
     func complete()
+    func openDashboard()
+    func showOnboarding()
     func show()
 }
 
-enum FirstRunOnboardingDestination: Equatable {
-    case onboarding
-    case dashboard
+extension FirstRunOnboardingPresenting {
+    func show() {
+        guard self.presentsDashboardInsteadOfOnboarding else {
+            self.showOnboarding()
+            return
+        }
+        self.complete()
+        self.openDashboard()
+    }
 }
 
 @MainActor
@@ -547,6 +556,10 @@ final class OnboardingController: NSObject, NSWindowDelegate, FirstRunOnboarding
     /// setup mid-operation.
     var busyReason: String?
 
+    var presentsDashboardInsteadOfOnboarding: Bool {
+        ProcessInfo.processInfo.isNixMode
+    }
+
     static func markComplete() {
         AppDefaults.standard.set(true, forKey: onboardingSeenKey)
         AppDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
@@ -558,17 +571,11 @@ final class OnboardingController: NSObject, NSWindowDelegate, FirstRunOnboarding
         Self.markComplete()
     }
 
-    static func firstRunDestination(isNixMode: Bool) -> FirstRunOnboardingDestination {
-        isNixMode ? .dashboard : .onboarding
+    func openDashboard() {
+        AppNavigationActions.openDashboard()
     }
 
-    func show() {
-        if Self.firstRunDestination(isNixMode: ProcessInfo.processInfo.isNixMode) == .dashboard {
-            // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
-            Self.markComplete()
-            AppNavigationActions.openDashboard()
-            return
-        }
+    func showOnboarding() {
         if let window {
             DockIconManager.shared.temporarilyShowDock()
             window.makeKeyAndOrderFront(nil)

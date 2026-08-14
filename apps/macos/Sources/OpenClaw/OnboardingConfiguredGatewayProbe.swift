@@ -49,8 +49,8 @@ final class OnboardingConfiguredGatewayProbe {
     private var generation: UInt64 = 0
     private var scheduledProbeGenerations = Set<UInt64>()
     private var activeProbeGenerations = Set<UInt64>()
-    private var reconnectPending = false
-    private var snapshotAwaitingProbeLease: GatewayConnection.ServerLease?
+    private var observedServerIdentity: GatewayConnection.ServerIdentity?
+    private var pendingReconnectIdentity: GatewayConnection.ServerIdentity?
     private var reconnectHandler: (@MainActor () -> Void)?
     private var pendingActivationDeadlineTask: Task<Void, Never>?
     private var temporaryConnectionCheckDepth = 0
@@ -150,7 +150,7 @@ final class OnboardingConfiguredGatewayProbe {
             return .unavailable
         }
         guard self.isCurrent(attempt) else { return .superseded }
-        await self.registerProbeLease(lease)
+        self.registerProbeServer(lease.identity)
         let route = lease.route
         do {
             let agentsData = try await gateway.request(
@@ -182,7 +182,7 @@ final class OnboardingConfiguredGatewayProbe {
             }
             let verificationData: Data
             do {
-                verificationData = try await gateway.request(
+                verificationData = try await self.gateway.request(
                     method: "openclaw.setup.verify",
                     params: [:],
                     timeoutMs: self.verificationTimeoutMs,
@@ -242,32 +242,16 @@ final class OnboardingConfiguredGatewayProbe {
         self.reconnectHandler = onReconnect
         defer {
             self.reconnectHandler = nil
-            self.reconnectPending = false
-            self.snapshotAwaitingProbeLease = nil
+            self.pendingReconnectIdentity = nil
+            self.observedServerIdentity = nil
         }
-        // onboardingDidAppear owns the current cached snapshot. This stream
-        // observes only physical connections established after it subscribes.
-        let stream = await gateway.subscribe(
-            bufferingNewest: 1,
-            replayLatestSnapshot: false)
-        for await push in stream {
+        let subscription = await gateway.subscribeServerSnapshots(bufferingNewest: 1)
+        if let baseline = subscription.baseline {
+            self.consumeServerSnapshot(baseline, onReconnect: onReconnect)
+        }
+        for await identity in subscription.stream {
             guard !Task.isCancelled else { return }
-            guard case .snapshot = push else { continue }
-            // ServerLease validation includes the physical socket generation.
-            // Ignore the hello owned by this probe, but retain a newer socket
-            // until all work for the replaced lease has unwound.
-            if let lease = self.snapshotAwaitingProbeLease,
-               await self.gateway.isCurrentServerLease(lease)
-            {
-                self.snapshotAwaitingProbeLease = nil
-                self.reconnectPending = false
-                continue
-            }
-            guard !self.hasProbeWork else {
-                self.reconnectPending = true
-                continue
-            }
-            onReconnect()
+            self.consumeServerSnapshot(identity, onReconnect: onReconnect)
         }
     }
 
@@ -275,24 +259,32 @@ final class OnboardingConfiguredGatewayProbe {
         !self.scheduledProbeGenerations.isEmpty || !self.activeProbeGenerations.isEmpty
     }
 
-    private func registerProbeLease(_ lease: GatewayConnection.ServerLease) async {
-        guard await self.gateway.isCurrentServerLease(lease) else { return }
-        if self.reconnectPending {
-            // A snapshot received before lease acquisition belongs to the same
-            // physical socket now covered by this probe.
-            self.reconnectPending = false
-            self.snapshotAwaitingProbeLease = nil
-        } else {
-            // Push delivery is intentionally asynchronous to connect. Remember
-            // the lease until its hello arrives after a fast probe completes.
-            self.snapshotAwaitingProbeLease = lease
+    private func registerProbeServer(_ identity: GatewayConnection.ServerIdentity) {
+        self.observedServerIdentity = identity
+        if self.pendingReconnectIdentity == identity {
+            self.pendingReconnectIdentity = nil
         }
+    }
+
+    private func consumeServerSnapshot(
+        _ identity: GatewayConnection.ServerIdentity,
+        onReconnect: @escaping @MainActor () -> Void)
+    {
+        guard identity != self.observedServerIdentity else { return }
+        // Admission and ordinary push delivery can expose the same socket.
+        // Record it before starting work so that socket schedules only one probe.
+        self.observedServerIdentity = identity
+        guard !self.hasProbeWork else {
+            self.pendingReconnectIdentity = identity
+            return
+        }
+        onReconnect()
     }
 
     private func finishProbe(_ attempt: Attempt) {
         self.activeProbeGenerations.remove(attempt.generation)
-        guard !self.hasProbeWork, self.reconnectPending else { return }
-        self.reconnectPending = false
+        guard !self.hasProbeWork, self.pendingReconnectIdentity != nil else { return }
+        self.pendingReconnectIdentity = nil
         self.reconnectHandler?()
     }
 }
