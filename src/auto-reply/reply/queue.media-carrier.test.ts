@@ -67,19 +67,27 @@ describe("followup prompt metadata carrier", () => {
     const done = createDeferred();
     const calls: FollowupRun[] = [];
 
-    for (const [prompt, path, contentType, skillName] of [
-      ["[media attached: /tmp/a.png (image/png)]\nfirst", "/tmp/a.png", "image/png", "a"],
+    for (const [prompt, path, contentType, skillName, sharedSkillName] of [
+      [
+        "[media attached: /tmp/a.png (image/png)]\nfirst",
+        "/tmp/a.png",
+        "image/png",
+        "a",
+        "shared-first",
+      ],
       [
         "[media attached: /tmp/b.pdf (application/pdf)]\nsecond",
         "/tmp/b.pdf",
         "application/pdf",
         "b",
+        "shared-last",
       ],
     ] as const) {
       const run = createQueueTestRun({ prompt });
       run.media = [{ path, contentType }];
       run.explicitSkillSelections = [
         { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
+        { name: sharedSkillName, path: "/tmp/skills/shared/SKILL.md" },
       ];
       run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
         channelId: "test",
@@ -116,6 +124,7 @@ describe("followup prompt metadata carrier", () => {
     ]);
     const expectedSkills = [
       { name: "a", path: "/tmp/skills/a/SKILL.md" },
+      { name: "shared-last", path: "/tmp/skills/shared/SKILL.md" },
       { name: "b", path: "/tmp/skills/b/SKILL.md" },
     ];
     expect(calls.map((run) => run.explicitSkillSelections)).toEqual([
@@ -128,6 +137,69 @@ describe("followup prompt metadata carrier", () => {
     expect(consumeChannelAdmissionEvidence(calls[1]?.channelAdmissionEvidence)).toMatchObject({
       ingressState: "present",
       invoker: { state: "present", kind: "person" },
+    });
+  });
+
+  it("removes sender authority when collected evidence identifies mixed participants", async () => {
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    evidenceCleanups.add(clearCollection);
+    const key = `prompt-metadata-mixed-${Date.now()}`;
+    queueKeys.add(key);
+    const done = createDeferred();
+    const calls: FollowupRun[] = [];
+
+    for (const [participantId, skillName] of [
+      ["person-1", "a"],
+      ["person-2", "b"],
+    ] as const) {
+      const run = createQueueTestRun({
+        prompt: `from ${participantId}`,
+        originatingChannel: "test",
+        originatingTo: "room:shared",
+      });
+      run.explicitSkillSelections = [
+        { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
+      ];
+      run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        channelId: "test",
+        participantId,
+      });
+      run.run = {
+        ...run.run,
+        senderId: "ambiguous-transport-sender",
+        senderName: "Ambiguous Sender",
+        senderUsername: "ambiguous",
+        senderE164: "+15550000000",
+        senderIsOwner: true,
+        traceAuthorized: true,
+        ownerNumbers: ["+15550000000"],
+      };
+      enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.explicitSkillSelections).toEqual([
+      { name: "a", path: "/tmp/skills/a/SKILL.md" },
+      { name: "b", path: "/tmp/skills/b/SKILL.md" },
+    ]);
+    expect(consumeChannelAdmissionEvidence(calls[0]?.channelAdmissionEvidence)).toMatchObject({
+      ingressState: "unknown",
+      invoker: { state: "unknown" },
+    });
+    expect(calls[0]?.run).toMatchObject({
+      senderId: undefined,
+      senderName: undefined,
+      senderUsername: undefined,
+      senderE164: undefined,
+      senderIsOwner: false,
+      traceAuthorized: false,
+      ownerNumbers: [],
     });
   });
 
