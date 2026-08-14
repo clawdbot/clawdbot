@@ -1185,7 +1185,7 @@ export function createComputerTool(options?: {
         }
 
         if (!isComputerActAction(action)) {
-          throw new Error(`Unknown action: ${String(action)}`);
+          throw new Error(`Unknown action: ${action}`);
         }
         const wireParams = buildComputerActParams({
           action,
