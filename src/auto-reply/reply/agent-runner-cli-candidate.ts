@@ -440,10 +440,9 @@ export async function runCliFallbackCandidate(params: {
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             disableTools: turn.opts?.disableTools,
-            toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-              turn.followupRun,
-              toolAuthorityRoute,
-            ),
+            toolAuthorityFingerprint: turn.replyOperation
+              ? resolveFollowupRunToolAuthorityFingerprint(turn.followupRun, toolAuthorityRoute)
+              : undefined,
             abortSignal: params.runAbortSignal,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,

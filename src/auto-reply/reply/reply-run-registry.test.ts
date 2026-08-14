@@ -1855,6 +1855,32 @@ describe("reply run registry", () => {
     ).resolves.toEqual({ status: "accepted" });
   });
 
+  it("preserves legacy steering when either side has no authority fingerprint", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createTestReplyOperation({ sessionId: "session-legacy-authority" });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    await expect(
+      queueCurrentReplyRunMessage("session-legacy-authority", "legacy turn", {
+        isInboundUserMessage: true,
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+
+    operation.bindToolAuthorityFingerprint("authority-a");
+    await expect(
+      queueCurrentReplyRunMessage("session-legacy-authority", "legacy caller", {
+        isInboundUserMessage: true,
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(queueMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("refuses stale injectable owners for admission and delivery until activity resumes", async () => {
     vi.useFakeTimers();
     try {

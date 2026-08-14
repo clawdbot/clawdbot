@@ -260,10 +260,9 @@ export async function runEmbeddedFallbackCandidate(params: {
           turn.opts?.shouldSuppressToolErrorWarnings ?? turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
-        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-          turn.followupRun,
-          toolAuthorityRoute,
-        ),
+        toolAuthorityFingerprint: turn.replyOperation
+          ? resolveFollowupRunToolAuthorityFingerprint(turn.followupRun, toolAuthorityRoute)
+          : undefined,
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,

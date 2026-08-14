@@ -146,7 +146,7 @@ export async function runReplyAgent(
       )
     : undefined;
   const hasAuthorityMismatch =
-    activeReplyOperation !== undefined &&
+    activeToolAuthorityFingerprint !== undefined &&
     activeToolAuthorityFingerprint !== incomingToolAuthorityFingerprint;
   const hasRouteOnlyAuthorityMismatch =
     hasAuthorityMismatch &&
