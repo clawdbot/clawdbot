@@ -9,7 +9,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -41,7 +40,7 @@ type AuditEventsTable = OpenClawStateKyselyDatabase["audit_events"];
 type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
 type AuditEventRow = Selectable<AuditEventsTable>;
 
-const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const AUDIT_EVENT_MAX_ROWS = 100_000;
 const AUDIT_EVENT_PRUNE_BATCH_ROWS = 1_024;
 // The single audit writer owns one DB handle. Invalidate on out-of-band
@@ -459,7 +458,7 @@ function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventR
   return corruptAuditRow(row, "invalid outbound status");
 }
 
-function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
+export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   if (row.kind === "agent_run") {
     return parseAgentRunRow(row);
   }
@@ -696,101 +695,6 @@ export function listAuditEvents(params: {
     events,
     ...(hasMore && events.length > 0 ? { nextCursor: events[events.length - 1]?.sequence } : {}),
   };
-}
-
-export type OutboundMessageAuditEventCursor = { occurredAt: number; rowId: number };
-
-/** Count retained owner-native outbound lifecycle records for one run. */
-export function countOutboundMessageAuditEventsForRun(params: {
-  runId: string;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): number {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        getAuditKysely(db)
-          .selectFrom("audit_events")
-          .select((expression) => expression.fn.countAll<number>().as("count"))
-          .where("kind", "=", "message")
-          .where("direction", "=", "outbound")
-          .where("run_id", "=", params.runId)
-          .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS),
-      );
-      return normalizeSqliteNumber(row?.count ?? null) ?? 0;
-    }, params.database) ?? 0
-  );
-}
-
-/** Page retained owner-native outbound lifecycle records in decision order. */
-export function pageOutboundMessageAuditEventsForRun(params: {
-  runId: string;
-  after?: OutboundMessageAuditEventCursor;
-  offset?: number;
-  limit: number;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): { events: OutboundMessageAuditEventRecord[]; nextCursor?: OutboundMessageAuditEventCursor } {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const boundary = params.after
-        ? executeSqliteQueryTakeFirstSync(
-            db,
-            getAuditKysely(db)
-              .selectFrom("audit_events")
-              .select(["event_id", "occurred_at"])
-              .where("sequence", "=", params.after.rowId)
-              .where("run_id", "=", params.runId)
-              .where("occurred_at", "=", params.after.occurredAt)
-              .where("kind", "=", "message")
-              .where("direction", "=", "outbound"),
-          )
-        : undefined;
-      if (params.after && !boundary) {
-        throw new Error("outbound message decision cursor is no longer retained");
-      }
-      const rows = executeSqliteQuerySync(
-        db,
-        getAuditKysely(db)
-          .selectFrom("audit_events")
-          .selectAll()
-          .where("kind", "=", "message")
-          .where("direction", "=", "outbound")
-          .where("run_id", "=", params.runId)
-          .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS)
-          .$if(boundary !== undefined, (query) =>
-            query.where((eb) =>
-              eb.or([
-                eb("occurred_at", ">", boundary!.occurred_at),
-                eb.and([
-                  eb("occurred_at", "=", boundary!.occurred_at),
-                  eb("event_id", ">", boundary!.event_id),
-                ]),
-              ]),
-            ),
-          )
-          .orderBy("occurred_at", "asc")
-          .orderBy("event_id", "asc")
-          .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
-          .limit(params.limit + 1),
-      ).rows;
-      const pageRows = rows.slice(0, params.limit);
-      const events = pageRows.map((row) => rowToAuditEvent(row) as OutboundMessageAuditEventRecord);
-      const last = pageRows.at(-1);
-      return {
-        events,
-        ...(rows.length > params.limit && last
-          ? {
-              nextCursor: {
-                occurredAt: normalizeSqliteNumber(last.occurred_at) ?? 0,
-                rowId: normalizeSqliteNumber(last.sequence) ?? 0,
-              },
-            }
-          : {}),
-      };
-    }, params.database) ?? { events: [] }
-  );
 }
 
 /** Delete expired metadata during Gateway startup and periodic worker maintenance. */

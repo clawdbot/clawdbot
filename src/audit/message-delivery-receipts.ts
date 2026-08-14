@@ -4,12 +4,12 @@ import type {
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { OutboundMessageAuditEventRecord } from "./audit-event-types.js";
 import {
   countOutboundMessageAuditEventsForRun,
   pageOutboundMessageAuditEventsForRun,
   type OutboundMessageAuditEventCursor,
-} from "./audit-event-store.js";
-import type { OutboundMessageAuditEventRecord } from "./audit-event-types.js";
+} from "./message-delivery-audit-store.js";
 
 type MessageDeliveryReadOptions = OpenClawStateDatabaseOptions & { now?: number };
 
@@ -82,6 +82,7 @@ function messageOutcome(
         ],
       };
   }
+  throw new Error("unsupported outbound message outcome");
 }
 
 function projectMessageDeliveryReceipt(
