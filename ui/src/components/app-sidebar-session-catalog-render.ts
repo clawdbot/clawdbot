@@ -25,7 +25,12 @@ import {
   type CatalogSessionMenuRequest,
   visibleCatalogHosts,
 } from "./app-sidebar-session-catalogs.ts";
-import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
+import {
+  renderSidebarSessionSectionHeader,
+  renderSidebarSessionSectionToggle,
+  SIDEBAR_SECTION_NO_STATUS,
+  type SidebarSectionStatus,
+} from "./app-sidebar-session-section-header.ts";
 import { sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
@@ -84,17 +89,20 @@ function renderSessionRunSpinner(showTitle = true) {
   ></span>`;
 }
 
-function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
-  if (hasActiveRun) {
-    return renderSessionRunSpinner();
+function catalogHeaderStatus(params: {
+  errorHelp: string | undefined;
+  hasActiveRun: boolean;
+  hasUnread: boolean;
+}): SidebarSectionStatus {
+  if (params.errorHelp) {
+    return { kind: "error", label: params.errorHelp };
   }
-  return hasUnread
-    ? html`<span
-        class="session-unread-dot"
-        role="img"
-        aria-label=${t("sessionsView.unread")}
-      ></span>`
-    : nothing;
+  if (params.hasActiveRun) {
+    return { kind: "running", label: t("sessionsView.activeRun") };
+  }
+  return params.hasUnread
+    ? { kind: "unread", label: t("sessionsView.unread") }
+    : SIDEBAR_SECTION_NO_STATUS;
 }
 
 function catalogErrorMessages(catalog: SessionCatalog): string[] {
@@ -152,6 +160,11 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     }
     const errorMessage = errorMessages.join("; ");
     const errorHelp = t("chat.sidebar.catalogDiscoveryHelp", { error: errorMessage });
+    const headerStatus = catalogHeaderStatus({
+      errorHelp: hasError ? errorHelp : undefined,
+      hasActiveRun,
+      hasUnread,
+    });
     const sectionClass = [
       "sidebar-recent-sessions__group",
       "sidebar-recent-sessions__group--zone-coding",
@@ -179,6 +192,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       >
         ${renderSidebarSessionSectionHeader({
           sectionId,
+          status: headerStatus,
           disabledReason: params.sectionDragDisabledReason,
           onToggle: () => params.onToggleSection(sectionId),
           onStartDrag: params.onStartSectionDrag,
@@ -194,42 +208,25 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             });
           },
           content: html`
-            <button
-              type="button"
-              class="sidebar-session-group-toggle"
-              aria-expanded=${String(!collapsed)}
-              aria-label=${hasError ? `${catalog.label}: ${errorHelp}` : catalog.label}
-              title=${hasError ? errorHelp : nothing}
-              @click=${() => params.onToggleSection(sectionId)}
-            >
-              <span
-                class="sidebar-session-group-toggle__lead ${hasBrandIcon
-                  ? "sidebar-session-group-toggle__lead--branded"
-                  : ""}"
-                aria-hidden="true"
-              >
-                ${hasBrandIcon
-                  ? renderProviderBrandIcon(catalog.id, {
+            ${renderSidebarSessionSectionToggle({
+              label: catalog.label,
+              collapsed,
+              status: headerStatus,
+              // The status dot beside this toggle already carries the failure as
+              // its accessible name; repeating it here makes a screen reader
+              // announce the whole catalog error twice for one heading.
+              ariaLabel: catalog.label,
+              title: hasError ? errorHelp : undefined,
+              count: collapsed ? rows.length : undefined,
+              lead: hasBrandIcon
+                ? html`<span class="sidebar-session-group-toggle__lead" aria-hidden="true"
+                    >${renderProviderBrandIcon(catalog.id, {
                       className: "sidebar-session-catalog-provider-icon",
-                    })
-                  : nothing}
-                <span class="sidebar-session-group-toggle__icon"
-                  >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-                >
-              </span>
-              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-              ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
-              ${hasError || (collapsed && rows.length > 0)
-                ? html`<span
-                    class="sidebar-session-group-count ${hasError
-                      ? "sidebar-session-group-count--error"
-                      : ""}"
-                    data-session-catalog-error=${hasError ? catalog.id : nothing}
-                    aria-hidden="true"
-                    >${hasError ? icons.alertTriangle : rows.length}</span
+                    })}</span
                   >`
-                : nothing}
-            </button>
+                : undefined,
+              onToggle: () => params.onToggleSection(sectionId),
+            })}
             <button
               type="button"
               class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.creatorFilterActive
@@ -315,13 +312,16 @@ function renderCatalogHostGroup(
             title=${errorHelp ?? host.label}
           >
             <span class="sidebar-session-catalog-host__label">${host.label}</span>
-            <span
-              class="sidebar-session-catalog-host__count ${host.error
-                ? "sidebar-session-catalog-host__count--error"
-                : ""}"
-              aria-hidden="true"
-              >${host.error ? icons.alertTriangle : host.sessions.length}</span
-            >
+            ${host.error
+              ? html`<span
+                  class="sidebar-session-group-status sidebar-session-group-status--error"
+                  data-section-status="error"
+                  role="img"
+                  aria-label=${errorHelp!}
+                ></span>`
+              : html`<span class="sidebar-session-catalog-host__count" aria-hidden="true"
+                  >${host.sessions.length}</span
+                >`}
           </div>`
         : nothing}
       <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
@@ -330,23 +330,21 @@ function renderCatalogHostGroup(
               const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
               const collapsed = params.collapsedSections.has(sectionId);
               return html`
-                <div class="sidebar-session-catalog-project" role="listitem">
-                  <button
-                    type="button"
-                    class="sidebar-session-catalog-project__head"
-                    data-session-catalog-project=${group.key}
-                    aria-expanded=${String(!collapsed)}
-                    title=${group.title}
-                    @click=${() => params.onToggleSection(sectionId)}
-                  >
-                    <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
-                      >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-                    >
-                    <span class="sidebar-session-catalog-project__label">${group.label}</span>
-                    <span class="sidebar-session-catalog-project__count" aria-hidden="true"
-                      >${group.sessions.length}</span
-                    >
-                  </button>
+                <div
+                  class="sidebar-session-catalog-project"
+                  data-session-catalog-project=${group.key}
+                  role="listitem"
+                >
+                  ${renderSidebarSessionSectionToggle({
+                    label: group.label,
+                    collapsed,
+                    status: SIDEBAR_SECTION_NO_STATUS,
+                    className: "sidebar-session-catalog-project__head",
+                    labelClassName: "sidebar-session-catalog-project__label",
+                    title: group.title,
+                    count: group.sessions.length,
+                    onToggle: () => params.onToggleSection(sectionId),
+                  })}
                   ${collapsed
                     ? nothing
                     : html`<div

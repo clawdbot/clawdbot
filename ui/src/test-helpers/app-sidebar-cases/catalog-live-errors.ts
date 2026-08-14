@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog request errors", () => {
@@ -196,6 +196,45 @@ describe("AppSidebar session catalog request errors", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(request).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("announces a catalog failure on one accessible element", async () => {
+    vi.useFakeTimers();
+    try {
+      const page = catalogPage([{ threadId: "t1", name: "Ship it" }]);
+      const failing = {
+        ...page,
+        catalogs: [
+          { ...page.catalogs[0]!, error: { code: "UNAVAILABLE", message: "host is offline" } },
+        ],
+      };
+      const request = vi.fn().mockResolvedValue(failing);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      const status = sidebar.querySelector('[data-section-status="error"]');
+      expect(status?.getAttribute("aria-label")).toContain("host is offline");
+      // The dot owns the failure; a toggle that repeated it would make a screen
+      // reader read the whole catalog error twice for one heading.
+      const named = [...sidebar.querySelectorAll("[aria-label]")].filter((element) =>
+        element.getAttribute("aria-label")?.includes("host is offline"),
+      );
+      expect(named).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

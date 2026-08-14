@@ -12,7 +12,12 @@ import {
   renderSessionTree,
   type SessionListHost,
 } from "./app-sidebar-session-row-render.ts";
-import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
+import {
+  renderSidebarSessionSectionHeader,
+  renderSidebarSessionSectionToggle,
+  SIDEBAR_SECTION_NO_STATUS,
+  type SidebarSectionStatus,
+} from "./app-sidebar-session-section-header.ts";
 import {
   rowDemandsVisibility,
   RowVisibilityReason,
@@ -50,6 +55,21 @@ type SessionCatalogRenderSnapshot = {
   terminalAvailable: boolean;
 };
 
+/** An expanded section shows its rows; collapsed, one dot has to stand in for
+    them, and attention outranks a live run because only attention needs acting
+    on. Coding is the one zone whose background runs are worth reporting. */
+function collapsedSectionStatus(section: RenderableSessionSection): SidebarSectionStatus {
+  if (section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention))) {
+    return { kind: "attention", label: t("sessionsView.attentionRequired") };
+  }
+  const running =
+    section.work &&
+    section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.ActiveRun));
+  return running
+    ? { kind: "running", label: t("sessionsView.activeRun") }
+    : SIDEBAR_SECTION_NO_STATUS;
+}
+
 function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
@@ -69,14 +89,7 @@ function renderSessionSection(params: {
         ? group
         : t("chat.sidebar.threads");
   const zone = section.groups ? "groups" : section.work ? "coding" : group ? "category" : "threads";
-  // Collapsed Coding still signals live runs so background work stays visible.
-  const collapsedRunningDot =
-    collapsed &&
-    section.work &&
-    section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.ActiveRun));
-  const collapsedAttentionDot =
-    collapsed &&
-    section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
+  const status = collapsed ? collapsedSectionStatus(section) : SIDEBAR_SECTION_NO_STATUS;
   const newSessionAccess = host.readNewSessionAccess();
   const groupWriteAccess = host.readSessionMutationAccess({
     method: "sessions.groups.put",
@@ -114,6 +127,7 @@ function renderSessionSection(params: {
     >
       ${renderSidebarSessionSectionHeader({
         sectionId: section.id,
+        status,
         disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
         onToggle: () => host.toggleSection(section.id),
         onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
@@ -125,39 +139,13 @@ function renderSessionSection(params: {
             }
           : undefined,
         content: html`
-          <button
-            type="button"
-            class="sidebar-session-group-toggle"
-            aria-expanded=${String(!collapsed)}
-            aria-label=${label}
-            @click=${() => host.toggleSection(section.id)}
-          >
-            <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
-              <span class="sidebar-session-group-toggle__icon"
-                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-              >
-            </span>
-            <span class="sidebar-recent-sessions__label-text">${label}</span>
-            ${collapsed && totalRowCount > 0
-              ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
-              : nothing}
-            ${collapsedRunningDot
-              ? html`<span
-                  class="session-run-spinner sidebar-session-group-running"
-                  role="img"
-                  aria-label=${t("sessionsView.activeRun")}
-                  title=${t("sessionsView.activeRun")}
-                ></span>`
-              : nothing}
-            ${collapsedAttentionDot
-              ? html`<span
-                  class="sidebar-session-group-attention"
-                  role="img"
-                  aria-label=${t("sessionsView.attentionRequired")}
-                  title=${t("sessionsView.attentionRequired")}
-                ></span>`
-              : nothing}
-          </button>
+          ${renderSidebarSessionSectionToggle({
+            label,
+            collapsed,
+            status,
+            count: collapsed ? totalRowCount : undefined,
+            onToggle: () => host.toggleSection(section.id),
+          })}
           ${section.id === "ungrouped"
             ? html`
                 <button

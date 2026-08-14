@@ -174,11 +174,13 @@ describe("AppSidebar session catalog pagination", () => {
       expect(claudeSection?.querySelector(".sidebar-session-group-count")?.textContent).not.toBe(
         "0",
       );
+      // The status dot owns the failure text; the toggle keeps its plain label
+      // so the error is announced once per heading.
       expect(
-        codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+        codexSection?.querySelector("[data-section-status]")?.getAttribute("aria-label"),
       ).toContain("[unavailable] Codex provider unavailable");
       expect(
-        claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+        claudeSection?.querySelector("[data-section-status]")?.getAttribute("aria-label"),
       ).toContain("[NODE_LIST_FAILED] Paired nodes could not be listed");
       const claudeTitle =
         claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title") ?? "";
@@ -188,8 +190,8 @@ describe("AppSidebar session catalog pagination", () => {
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
       ).toContain("Settings > Automation > Plugins");
-      expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
-      expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
+      expect(codexSection?.querySelector('[data-section-status="error"]')).not.toBeNull();
+      expect(claudeSection?.querySelector('[data-section-status="error"]')).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -259,9 +261,9 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
 
-      expect(section()?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+      expect(section()?.querySelector('[data-section-status="error"]')).not.toBeNull();
       expect(
-        section()?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+        section()?.querySelector("[data-section-status]")?.getAttribute("aria-label"),
       ).toContain("Second page unavailable");
       expect(sidebar.sessionData.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
       expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
@@ -276,7 +278,7 @@ describe("AppSidebar session catalog pagination", () => {
         catalogId: "codex",
         cursors: { "gateway:local": "page-2" },
       });
-      expect(section()?.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+      expect(section()?.querySelector('[data-section-status="error"]')).toBeNull();
       expect(sidebar.textContent).toContain("Older");
       expect(loadMore()).toBeNull();
     } finally {

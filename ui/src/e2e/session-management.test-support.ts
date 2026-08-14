@@ -206,16 +206,42 @@ export async function submitInputDialog(page: Page, value: string): Promise<void
   await field.waitFor({ state: "detached" });
 }
 
-export async function captureUiProof(page: Page, fileName: string) {
+const PROOF_CLIP_MARGIN = 12;
+
+/**
+ * Screenshots the state the caller just built. Pass `clip` to frame the union of
+ * those locators: hover cards and row menus are absolutely positioned, so a
+ * frame drawn around the row alone would cut off the surface the capture exists
+ * to show.
+ */
+export async function captureUiProof(
+  page: Page,
+  fileName: string,
+  options: { clip?: readonly Locator[] } = {},
+) {
   if (!captureUiProofEnabled) {
     return;
   }
   await mkdir(uiProofArtifactDir, { recursive: true });
+  const boxes = await Promise.all((options.clip ?? []).map((locator) => locator.boundingBox()));
+  const present = boxes.filter((box) => box !== null);
+  const left = Math.min(...present.map((box) => box.x)) - PROOF_CLIP_MARGIN;
+  const top = Math.min(...present.map((box) => box.y)) - PROOF_CLIP_MARGIN;
+  const clip =
+    present.length === 0
+      ? undefined
+      : {
+          x: Math.max(0, left),
+          y: Math.max(0, top),
+          width: Math.max(...present.map((box) => box.x + box.width)) + PROOF_CLIP_MARGIN - left,
+          height: Math.max(...present.map((box) => box.y + box.height)) + PROOF_CLIP_MARGIN - top,
+        };
   // Dialogs and menus fade in, so an undisabled capture can land mid-transition
   // and prove nothing about the state it was taken for.
   await page.screenshot({
     animations: "disabled",
-    fullPage: true,
+    clip,
+    fullPage: clip === undefined,
     path: path.join(uiProofArtifactDir, fileName),
   });
 }

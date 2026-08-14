@@ -480,29 +480,34 @@ suite.define(() => {
       }
 
       const touchAffordance = await page
-        .locator(
-          '[data-session-section="catalog:claude"] .sidebar-session-group-toggle__lead--branded',
-        )
-        .evaluate((lead) => {
-          const providerIcon = lead.querySelector<HTMLElement>(
+        .locator('[data-session-section="catalog:claude"] .sidebar-session-group-toggle')
+        .evaluate((toggle) => {
+          const providerIcon = toggle.querySelector<HTMLElement>(
             ".sidebar-session-catalog-provider-icon",
           );
-          const chevron = lead.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
-          if (!providerIcon || !chevron) {
-            throw new Error("expected branded catalog provider icon and chevron");
+          const label = toggle.querySelector<HTMLElement>(".sidebar-recent-sessions__label-text");
+          const chevron = toggle.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
+          if (!providerIcon || !label || !chevron) {
+            throw new Error("expected branded catalog provider icon, label, and chevron");
           }
           return {
             coarsePointer: matchMedia("(pointer: coarse)").matches,
             noHover: matchMedia("(hover: none)").matches,
             providerOpacity: getComputedStyle(providerIcon).opacity,
             chevronOpacity: getComputedStyle(chevron).opacity,
+            chevronFollowsLabel: Boolean(
+              label.compareDocumentPosition(chevron) & Node.DOCUMENT_POSITION_FOLLOWING,
+            ),
           };
         });
+      // Brand artwork and disclosure no longer share one slot: the icon stays
+      // put and the chevron rests visible where touch has no hover to reveal it.
       expect(touchAffordance).toEqual({
         coarsePointer: true,
         noHover: true,
-        providerOpacity: "0",
+        providerOpacity: "1",
         chevronOpacity: "0.75",
+        chevronFollowsLabel: true,
       });
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();

@@ -375,7 +375,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
             </div>
             <button class="sidebar-session-catalog-project__head">
               <span class="sidebar-session-catalog-project__label">Project</span>
-              <span class="sidebar-session-catalog-project__count">100</span>
+              <span class="sidebar-session-group-count">100</span>
             </button>
             <span class="sidebar-agent-card__name">Agent</span>
             <span class="settings-sidebar__item-label">Settings</span>
@@ -407,7 +407,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
         ".sidebar-recent-session__name",
         ".session-row-trail",
         ".sidebar-session-catalog-host__count",
-        ".sidebar-session-catalog-project__count",
+        ".sidebar-session-group-count",
         ".sidebar-agent-card__name",
         ".settings-sidebar__item-label",
         ".sidebar-file-view__path",
@@ -458,7 +458,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
       for (const selector of [
         ".sidebar-child-session-toggle",
         ".sidebar-session-catalog-host__count",
-        ".sidebar-session-catalog-project__count",
+        ".sidebar-session-group-count",
       ]) {
         const fits = await page.$eval(selector, (node) => node.scrollWidth <= node.clientWidth);
         expect(fits, selector).toBe(true);

@@ -461,7 +461,7 @@ suite.define(() => {
         await openclawProject.locator(".sidebar-session-catalog-project__label").textContent(),
       ).toBe("openclaw");
       expect(
-        await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
+        await openclawProject.locator(".sidebar-session-group-count").textContent(),
       ).toBe("2");
       const projectRows = section.locator(".sidebar-recent-session--catalog-project-child");
       await expect.poll(() => projectRows.count()).toBe(3);
@@ -639,7 +639,7 @@ suite.define(() => {
       expect(await section.getByText("Other project session", { exact: true }).count()).toBe(1);
       expect(await openclawProject.count()).toBe(1);
       expect(
-        await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
+        await openclawProject.locator(".sidebar-session-group-count").textContent(),
       ).toBe("2");
       expect(
         await page.evaluate(
@@ -909,7 +909,7 @@ suite.define(() => {
       });
 
       const section = page.locator('[data-session-section="catalog:codex"]');
-      await section.locator('[data-session-catalog-error="codex"]').waitFor({ state: "visible" });
+      await section.locator('[data-section-status="error"]').waitFor({ state: "visible" });
       await expect
         .poll(() => section.locator(".sidebar-session-group-toggle").getAttribute("aria-label"))
         .toContain("Second catalog page unavailable");

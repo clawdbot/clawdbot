@@ -228,9 +228,9 @@ describe("AppSidebar session catalog pagination", () => {
     await sidebar.updateComplete;
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
-    const lead = section?.querySelector(".sidebar-session-group-toggle__lead");
-    expect(lead?.querySelector(".sidebar-session-group-toggle__icon")).not.toBeNull();
-    const providerIcon = lead?.querySelector(".sidebar-session-catalog-provider-icon");
+    const toggle = section?.querySelector(".sidebar-session-group-toggle");
+    expect(toggle?.querySelector(".sidebar-session-group-toggle__icon")).not.toBeNull();
+    const providerIcon = toggle?.querySelector(".sidebar-session-catalog-provider-icon");
     expect(providerIcon?.getAttribute("data-provider-icon")).toBe(branded ? id : undefined);
     const hostGroups = section?.querySelectorAll<HTMLElement>("[data-session-catalog-host]");
     expect(Array.from(hostGroups ?? []).map((host) => host.dataset.sessionCatalogHost)).toEqual([
@@ -347,7 +347,9 @@ describe("AppSidebar session catalog pagination", () => {
       ),
     ).not.toBeNull();
     expect(
-      catalogSection?.querySelector(".sidebar-recent-sessions__head .session-unread-dot"),
+      catalogSection?.querySelector(
+        '.sidebar-recent-sessions__head [data-section-status="unread"]',
+      ),
     ).not.toBeNull();
 
     const runningRows = backingRows.map((row) =>

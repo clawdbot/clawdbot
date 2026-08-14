@@ -325,7 +325,7 @@ describe("AppSidebar session attention", () => {
     );
 
     const section = sidebar.querySelector('[data-session-section="ungrouped"]');
-    expect(section?.querySelector(".sidebar-session-group-attention")).not.toBeNull();
+    expect(section?.querySelector('[data-section-status="attention"]')).not.toBeNull();
     expect(section?.querySelector(".sidebar-recent-session")).toBeNull();
   });
 
@@ -380,7 +380,7 @@ describe("AppSidebar session attention", () => {
       expect(
         sidebar
           .querySelector('[data-session-section="ungrouped"]')
-          ?.querySelector(".sidebar-session-group-attention"),
+          ?.querySelector('[data-section-status="attention"]'),
       ).not.toBeNull();
       sidebar.remove();
     }

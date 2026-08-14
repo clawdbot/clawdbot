@@ -270,9 +270,9 @@ describe("AppSidebar session catalog pagination", () => {
         await sidebar.updateComplete;
 
         const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
-        expect(section?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+        expect(section?.querySelector('[data-section-status="error"]')).not.toBeNull();
         expect(
-          section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+          section?.querySelector("[data-section-status]")?.getAttribute("aria-label"),
         ).toContain(errorOwner === "catalog" ? "Catalog page failed" : "Host page failed");
         expect(sidebar.textContent).toContain("Newest");
         expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
@@ -280,7 +280,11 @@ describe("AppSidebar session catalog pagination", () => {
         loadMore()?.click();
         await vi.advanceTimersByTimeAsync(0);
         await sidebar.updateComplete;
-        expect(sidebar.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+        expect(
+          sidebar.querySelector(
+            '[data-session-section="catalog:codex"] [data-section-status="error"]',
+          ),
+        ).toBeNull();
         expect(sidebar.textContent).toContain("Older");
       } finally {
         vi.useRealTimers();

@@ -956,6 +956,12 @@ openclaw-settings-save-indicator {
   --sidebar-divider-active: color-mix(in srgb, var(--text) 42%, transparent);
   --focus-ring: 0 0 0 2px var(--sidebar-focus-visible);
   --scrollbar-size: 10px;
+  /* One rhythm for every group boundary in the sidebar (Pages and each
+     session section) so the column reads as separate shelves, not one list. */
+  --sidebar-group-gap: var(--space-4);
+  --sidebar-group-heading-gap: 2px;
+  --sidebar-subgroup-gap: var(--space-2);
+  --sidebar-lead: 20px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1511,8 +1517,6 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-sessions {
-  --sidebar-lead: 20px;
-
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-section-gap);
@@ -1593,7 +1597,7 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-group-toggle {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 4px;
   min-width: 0;
   flex: 1 1 auto;
   padding-block: 2px;
@@ -1605,7 +1609,6 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-session-group-toggle__lead {
-  position: relative;
   display: inline-grid;
   width: var(--sidebar-lead);
   height: 16px;
@@ -1613,36 +1616,22 @@ body.update-dialog-open .sidebar-update-card__status {
   place-items: center;
 }
 
-.sidebar-session-group-toggle__icon,
-.sidebar-session-catalog-provider-icon {
-  grid-area: 1 / 1;
+/* Disclosure belongs to the label, not to a left rail. A collapsed section has
+   to advertise the rows it hides; an expanded one already shows them, so its
+   chevron returns only on hover, keyboard focus, or a coarse pointer that has
+   no hover to offer. Losing this makes collapsing undiscoverable on touch. */
+.sidebar-session-group-toggle__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0;
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-session-group-toggle__icon {
-  display: inline-flex;
-  opacity: 0.75;
-}
-
-.sidebar-session-group-toggle__lead--branded .sidebar-session-group-toggle__icon {
-  opacity: 0;
-}
-
-.sidebar-recent-sessions__head:hover
-  .sidebar-session-group-toggle__lead--branded
-  .sidebar-session-catalog-provider-icon,
-.sidebar-recent-sessions__head:has(:focus-visible)
-  .sidebar-session-group-toggle__lead--branded
-  .sidebar-session-catalog-provider-icon {
-  opacity: 0;
-}
-
-.sidebar-recent-sessions__head:hover
-  .sidebar-session-group-toggle__lead--branded
-  .sidebar-session-group-toggle__icon,
-.sidebar-recent-sessions__head:has(:focus-visible)
-  .sidebar-session-group-toggle__lead--branded
-  .sidebar-session-group-toggle__icon {
+.sidebar-session-group-toggle__icon--collapsed,
+.sidebar-recent-sessions__head:hover .sidebar-session-group-toggle__icon,
+.sidebar-recent-sessions__head:has(:focus-visible) .sidebar-session-group-toggle__icon,
+.sidebar-session-catalog-project__head:hover .sidebar-session-group-toggle__icon,
+.sidebar-session-catalog-project__head:focus-visible .sidebar-session-group-toggle__icon {
   opacity: 0.75;
 }
 
@@ -1668,29 +1657,30 @@ body.update-dialog-open .sidebar-update-card__status {
   opacity: 0.7;
 }
 
-.sidebar-session-group-count--error {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--warn);
+/* Status owns the far right of every section head, so revealing the group
+   actions to its left never displaces the signal a user is scanning for. */
+.sidebar-session-group-status {
+  flex: 0 0 auto;
 }
 
-.sidebar-session-group-count--error svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
+.sidebar-session-group-status--unread,
+.sidebar-session-group-status--attention,
+.sidebar-session-group-status--error {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
 }
 
-.sidebar-session-group-attention {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  margin-left: 4px;
-  border-radius: 50%;
+.sidebar-session-group-status--unread {
+  background: var(--accent);
+}
+
+.sidebar-session-group-status--attention {
   background: var(--warn);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
+}
+
+.sidebar-session-group-status--error {
+  background: var(--danger);
 }
 
 .sidebar-session-catalog-load-more {
@@ -1813,6 +1803,7 @@ body.update-dialog-open .sidebar-update-card__status {
   justify-content: center;
   height: 22px;
   flex: 0 0 auto;
+  padding: 0;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1841,8 +1832,8 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-session-group-actions svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.7px;
@@ -1861,12 +1852,8 @@ body.update-dialog-open .sidebar-update-card__status {
 
 @media (hover: none), (pointer: coarse) {
   /* Touch has no hover, so the chevron must be the resting state or
-     catalog collapsibility becomes undiscoverable. */
-  .sidebar-session-group-toggle__lead--branded .sidebar-session-catalog-provider-icon {
-    opacity: 0;
-  }
-
-  .sidebar-session-group-toggle__lead--branded .sidebar-session-group-toggle__icon {
+     collapsibility becomes undiscoverable. */
+  .sidebar-session-group-toggle__icon {
     opacity: 0.75;
   }
 
@@ -1887,11 +1874,6 @@ body.update-dialog-open .sidebar-update-card__status {
   letter-spacing: var(--sidebar-type-section-tracking);
   line-height: var(--sidebar-type-section-line-height);
   text-transform: uppercase;
-}
-
-.sidebar-session-group-toggle
-  > :not(.sidebar-session-group-toggle__lead):not(.sidebar-recent-sessions__label-text) {
-  margin-left: 5px;
 }
 
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
@@ -1942,8 +1924,9 @@ body.update-dialog-open .sidebar-update-card__status {
   color: var(--text);
 }
 
-.sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
-  gap: var(--sidebar-section-gap);
+.sidebar-recent-sessions__group:has(.sidebar-session-catalog-host)
+  > .sidebar-recent-sessions__list {
+  gap: var(--sidebar-subgroup-gap);
 }
 
 .sidebar-session-catalog-host {
@@ -1979,25 +1962,10 @@ body.update-dialog-open .sidebar-update-card__status {
   text-align: center;
 }
 
-.sidebar-session-catalog-host__count--error {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--warn);
-}
-
-.sidebar-session-catalog-host__count--error svg {
-  width: 11px;
-  height: 11px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-}
-
 .sidebar-session-catalog-project__head {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 4px;
   width: 100%;
   min-height: 18px;
   padding: 2px 12px 0 0;
@@ -2019,22 +1987,6 @@ body.update-dialog-open .sidebar-update-card__status {
   color: var(--text);
 }
 
-.sidebar-session-catalog-project__icon {
-  display: inline-grid;
-  width: var(--sidebar-lead);
-  flex: 0 0 var(--sidebar-lead);
-  place-items: center;
-  opacity: 0.75;
-}
-
-.sidebar-session-catalog-project__icon svg {
-  width: 10px;
-  height: 10px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-}
-
 /* Structural label, not content: at the session row's 13px/500 a group reads as
    just another session. Type carries the whole split because the head color
    stays near `--text` for readability; case stays as authored (project names). */
@@ -2047,15 +1999,6 @@ body.update-dialog-open .sidebar-update-card__status {
   font-size: calc(12px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: 0.03em;
-}
-
-.sidebar-session-catalog-project__count {
-  width: calc(20px * var(--control-ui-text-scale));
-  flex: 0 0 calc(20px * var(--control-ui-text-scale));
-  color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-variant-numeric: tabular-nums;
-  text-align: center;
 }
 
 .sidebar-session-pagination {
@@ -2079,9 +2022,12 @@ body.update-dialog-open .sidebar-update-card__status {
   color: var(--text);
 }
 
+/* Flush with the section heading it explains, and with the rows it stands in
+   for. A lead indent would read as content nested under the heading rather than
+   as the section reporting that it has none. */
 .sidebar-session-empty-hint {
   display: block;
-  padding: 4px 10px 10px var(--sidebar-text-start);
+  padding: 4px 10px 10px 0;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -2186,8 +2132,7 @@ body.update-dialog-open .sidebar-update-card__status {
   text-decoration: none;
 }
 
-.sidebar-recent-sessions
-  .sidebar-recent-session__link
+.sidebar-recent-session__link
   > :not(.sidebar-session-indicator):not(.sidebar-recent-session__text) {
   margin-left: 8px;
 }
@@ -2426,8 +2371,7 @@ body.update-dialog-open .sidebar-update-card__status {
   padding-bottom: 3px;
 }
 
-.sidebar-recent-sessions
-  .sidebar-recent-session--child
+.sidebar-recent-session--child
   .sidebar-recent-session__link
   > :not(.sidebar-session-indicator):not(.sidebar-recent-session__text) {
   margin-left: 6px;
@@ -3647,11 +3591,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: var(--danger);
 }
 
-.sidebar-session-group-running {
-  flex: none;
-  margin-left: 4px;
-}
-
 .sidebar-agent-menu__agent-switch {
   min-width: 0;
 }
@@ -4141,14 +4080,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
+  /* Falls back outside the sidebar, where the shared row primitives are reused
+     by the chat session picker and no sidebar rail token is in scope. */
+  width: var(--sidebar-lead, 16px);
   height: 16px;
-  flex: 0 0 16px;
-}
-
-.sidebar-recent-sessions .sidebar-session-indicator {
-  width: var(--sidebar-lead);
-  flex-basis: var(--sidebar-lead);
+  flex: 0 0 var(--sidebar-lead, 16px);
 }
 
 .sidebar-session-indicator > .session-row-draft-indicator:not(:only-child) {
