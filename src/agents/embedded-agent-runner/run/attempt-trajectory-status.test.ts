@@ -46,13 +46,44 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
-  it("marks length-limited visible text as non-deliverable without terminal output", () => {
-    // No payload was synthesized, so nothing reached the user and the error
-    // classification stands.
+  it("records length-limited visible text as success with no synthesized payload", () => {
+    // The headline case: an ordinary text-only truncated reply. Finalization runs
+    // before terminal preparation converts assistant text into payloads, so
+    // synthesizedPayloadCount is still 0 here while the reply is delivered. The
+    // durable record must not contradict that.
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
           assistantTexts: ["Partial answer."],
+          synthesizedPayloadCount: 0,
+          lastAssistantStopReason: "length",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
+  it("keeps a length-limited turn with nothing to show non-deliverable", () => {
+    // No visible text, no payload, no terminal output: nothing reached the user,
+    // so this stays the incomplete-turn error the runner still surfaces.
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          assistantTexts: [],
+          synthesizedPayloadCount: 0,
+          lastAssistantStopReason: "length",
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("keeps whitespace-only length-limited text non-deliverable", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          assistantTexts: ["   \n  "],
           lastAssistantStopReason: "length",
         }),
       ),
