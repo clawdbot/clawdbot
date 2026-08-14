@@ -264,6 +264,7 @@ type FileViewControls = {
   editing: boolean;
   editorLoadFailed: boolean;
   loadingEditor: boolean;
+  onRetryEditorLoad: () => void;
   mountKey: number;
   matches: number[];
   query: string;
@@ -480,6 +481,9 @@ function renderFileSidebarContent(
         ${!controls?.loadingEditor && controls?.editorLoadFailed
           ? html`<div class="file-view__loading muted">
               ${t("chat.detailPanel.editorLoadFailed")}
+              <button class="btn btn--sm" type="button" @click=${controls.onRetryEditorLoad}>
+                ${t("common.retry")}
+              </button>
             </div>`
           : nothing}
       </div>
@@ -859,6 +863,13 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   private loadFileEditorModule(): Promise<typeof import("./file-editor-view.ts")> {
     return import("./file-editor-view.ts");
   }
+
+  // User-triggered one-shot retry after a terminal chunk-load failure (e.g.
+  // connectivity returned). Flipping the reactive flag re-renders, and
+  // updated() starts a fresh load exactly once — never in a loop.
+  private retryFileEditorLoad = () => {
+    this.fileEditorLoadFailed = false;
+  };
 
   private ensureFileEditor(): Promise<void> {
     if (this.fileEditor) {
@@ -1390,6 +1401,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
             editing: this.fileEditing,
             editorLoadFailed: this.fileEditorLoadFailed,
             loadingEditor: this.fileEditorLoading,
+            onRetryEditorLoad: this.retryFileEditorLoad,
             mountKey: this.fileOperationVersion,
             matches,
             query: this.fileSearchQuery,
