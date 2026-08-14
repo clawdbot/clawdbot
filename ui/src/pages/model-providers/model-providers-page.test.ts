@@ -29,6 +29,7 @@ type ModelProvidersPageTestElement = HTMLElement & {
   probeResults: Record<string, ModelsProbeResult>;
   refresh: (opts: { force: boolean }) => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
+  requestUpdate: () => void;
   saveDefaultModels: () => Promise<void>;
   saveKey: (provider: string, configKey: string) => Promise<void>;
   selectedAgentId: string;
@@ -55,6 +56,7 @@ function createHarness(initialScopeId: string) {
     });
     return () => releaseAuthStatus?.();
   };
+  let usageStatus: unknown = { updatedAt: 1, providers: [] };
   const request = vi.fn(async (method: string): Promise<unknown> => {
     switch (method) {
       case "models.authStatus": {
@@ -76,7 +78,7 @@ function createHarness(initialScopeId: string) {
       case "config.get":
         return { config: {}, hash: "hash" };
       case "usage.status":
-        return { updatedAt: 1, providers: [] };
+        return usageStatus;
       case "sessions.usage":
         return { aggregates: { byProvider: [] } };
       default:
@@ -172,6 +174,9 @@ function createHarness(initialScopeId: string) {
     request,
     runtimeConfig,
     snapshot,
+    setUsageStatus: (value: unknown) => {
+      usageStatus = value;
+    },
   };
 }
 
@@ -212,7 +217,60 @@ function appendPage(context: ApplicationContext) {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe("ModelProvidersPage usage convergence", () => {
+  it("restarts an exhausted retry cycle on same-client reconnect", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const usageCallsBeforeReconnect = harness.request.mock.calls.filter(
+      ([method]) => method === "usage.status",
+    ).length;
+    expect(usageCallsBeforeReconnect).toBe(4);
+
+    harness.snapshot.phase = "offline";
+    page.requestUpdate();
+    await page.updateComplete;
+    harness.snapshot.phase = "connected";
+    page.requestUpdate();
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.request.mock.calls.filter(([method]) => method === "usage.status").length).toBe(
+      5,
+    );
+  });
+
+  it("replaces a pending pre-disconnect load before it can publish", async () => {
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [] });
+    const releaseOldLoad = harness.deferNextAuthStatus();
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+
+    harness.snapshot.phase = "offline";
+    page.requestUpdate();
+    await page.updateComplete;
+    harness.setUsageStatus({ updatedAt: 2, providers: [] });
+    harness.snapshot.phase = "connected";
+    page.requestUpdate();
+    await page.updateComplete;
+
+    await vi.waitFor(() =>
+      expect(
+        harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
+      ).toBe(2),
+    );
+    releaseOldLoad();
+    await vi.waitFor(() => expect(page.data?.providerUsage?.updatedAt).toBe(2));
+  });
 });
 
 describe("ModelProvidersPage agent scope", () => {

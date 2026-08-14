@@ -97,8 +97,14 @@ const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 
 The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
 `run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
-`task-suggestions`, `terminal-offset-seq`, `tool-events`, and `ui-commands`.
+`task-suggestions`, `terminal-offset-seq`, `tool-events`, `ui-commands`, and
+`usage-refreshing`.
 Advertise only capabilities the client actually implements.
+
+`usage-refreshing` allows a cold `usage.status` request to return immediately
+with `refreshing: true` and an empty provider list. A client advertising it must
+keep that payload cache-cold and refetch on a short bounded schedule. Other
+clients retain the blocking cold read.
 
 <Warning>
 `tool-events` gates live tool-execution streaming. The Gateway registers only

@@ -1,6 +1,7 @@
 // Optional model-catalog access gives session/tool methods metadata when ready
 // while keeping provider discovery out of ordinary request hot paths.
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { readPreparedCatalogSnapshot } from "../server-model-catalog-auth.js";
 import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -74,7 +75,11 @@ export function startOptionalServerMethodModelCatalogSnapshotLoad(
   loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
 ): OptionalServerMethodModelCatalogLoad<GatewayModelCatalogSnapshot> {
   return startOptionalServerMethodModelCatalogValueLoad({
-    load: () => context.loadGatewayModelCatalogSnapshot(loadParams),
+    load: async () =>
+      // Prepared startup facts avoid provider discovery. The cold loader remains
+      // the fallback because it publishes the generation used by capability checks.
+      (await readPreparedCatalogSnapshot(context, loadParams)) ??
+      (await context.loadGatewayModelCatalogSnapshot(loadParams)),
     normalize: normalizeOptionalModelCatalogSnapshot,
   });
 }

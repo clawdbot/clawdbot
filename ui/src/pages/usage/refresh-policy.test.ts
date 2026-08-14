@@ -71,4 +71,23 @@ describe("UsageRefreshPolicy", () => {
     policy.request("focus");
     expect(reload).toHaveBeenCalledOnce();
   });
+
+  it("restarts an exhausted retry budget for manual and focus cycles", () => {
+    const { policy, reload } = createPolicy();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      policy.markLoaded({ incomplete: true });
+      vi.advanceTimersByTime(5_000);
+    }
+    expect(reload).toHaveBeenCalledTimes(3);
+
+    policy.request("manual");
+    policy.markLoaded({ incomplete: true });
+    vi.advanceTimersByTime(5_000);
+    expect(reload).toHaveBeenCalledTimes(5);
+
+    policy.request("focus");
+    policy.markLoaded({ incomplete: true });
+    vi.advanceTimersByTime(5_000);
+    expect(reload).toHaveBeenCalledTimes(7);
+  });
 });

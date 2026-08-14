@@ -19,6 +19,8 @@ type TestUsagePage = HTMLElement & {
   usageTimeSeriesStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   usageSessionLogs: SessionLogEntry[] | null;
   usageSessionLogsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
+  providerUsageStalled: boolean;
+  routeData?: unknown;
   loadSessionTimeSeries: (sessionKey: string) => Promise<void>;
   loadSessionLogs: (sessionKey: string) => Promise<void>;
   render: () => unknown;
@@ -260,6 +262,44 @@ describe("UsagePage provider usage outcome", () => {
 });
 
 describe("UsagePage detail requests", () => {
+  it("marks provider usage stalled once the retry budget is spent", async () => {
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const page = await createPage(client);
+    const gateway = page.context.gateway;
+    const routeDataAt = (loadedAtMs: number) => ({
+      gateway,
+      gatewaySnapshot: gateway.snapshot,
+      client,
+      query: {
+        startDate: "2026-05-14",
+        endDate: "2026-05-14",
+        scope: "family" as const,
+        timeZone: "local" as const,
+        agentId: null,
+      },
+      result: null,
+      costSummary: null,
+      providerUsageSummary: { updatedAt: 1, providers: [], refreshing: true },
+      loadedAtMs,
+      error: null,
+    });
+
+    // Three bounded attempts, then the page owns the outcome. Without the wiring
+    // the empty provider list renders as a loaded answer.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      page.routeData = routeDataAt(attempt);
+      await page.updateComplete;
+      expect(page.providerUsageStalled).toBe(false);
+    }
+    page.routeData = routeDataAt(3);
+    await page.updateComplete;
+    expect(page.providerUsageStalled).toBe(true);
+
+    page.routeData = { ...routeDataAt(4), providerUsageSummary: { updatedAt: 2, providers: [] } };
+    await page.updateComplete;
+    expect(page.providerUsageStalled).toBe(false);
+  });
+
   it("commits only the latest time-series selection", async () => {
     const first = deferred<SessionUsageTimeSeries>();
     const second = deferred<SessionUsageTimeSeries>();

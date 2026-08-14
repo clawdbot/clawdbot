@@ -66,5 +66,13 @@ export async function readPreparedCatalog(
   context: Pick<GatewayRequestContext, "loadGatewayModelCatalogSnapshot">,
   agentId: string,
 ): Promise<PreparedGatewayModelCatalogSnapshot | undefined> {
-  return await requirePrivateAccess(context).readPrepared({ agentId });
+  return await readPreparedCatalogSnapshot(context, { agentId });
+}
+
+/** Reads a prepared owner snapshot without exposing private auth facts on the request context. */
+export async function readPreparedCatalogSnapshot(
+  context: Pick<GatewayRequestContext, "loadGatewayModelCatalogSnapshot">,
+  params?: Omit<GatewayModelCatalogReadParams, "readOnly">,
+): Promise<PreparedGatewayModelCatalogSnapshot | undefined> {
+  return await requirePrivateAccess(context).readPrepared(params);
 }

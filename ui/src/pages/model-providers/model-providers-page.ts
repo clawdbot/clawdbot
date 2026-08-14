@@ -14,6 +14,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -70,6 +71,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private addProviderKey = "";
   @state() private defaultsDraft: DefaultModelSelection | null = null;
   @state() private selectedAgentId = "";
+  @state() private providerUsageStalled = false;
 
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
@@ -153,6 +155,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
+    this.refreshPolicy.dispose();
     super.disconnectedCallback();
   }
 
@@ -169,6 +172,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       } else {
         this.data = null;
         this.dataClient = null;
+        this.providerUsageStalled = false;
         this.refreshPolicy.resetPayload();
       }
       this.ensureInitialData();
@@ -202,7 +206,14 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private adoptLoadedData(client: GatewayBrowserClient | null, data: ModelProvidersData) {
     this.data = data;
     this.dataClient = client;
-    this.refreshPolicy.setLastLoadedAtMs(data.providerUsage?.ok ? data.updatedAt : null);
+    const providerUsageIncomplete =
+      data.providerUsage?.ok === false ||
+      (data.providerUsage?.ok === true && isUsageIncomplete(data.providerUsage.value));
+    this.providerUsageStalled =
+      this.refreshPolicy.setLastLoadedAtMs(data.updatedAt, {
+        incomplete: providerUsageIncomplete,
+        connection: this.gateway.epoch,
+      }) === "exhausted";
   }
 
   private invalidateRequests() {
@@ -216,6 +227,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.data = null;
       this.dataClient = null;
     }
+    this.providerUsageStalled = false;
     this.refreshPolicy.resetPayload();
     this.busy = {};
     this.messages = {};
@@ -261,6 +273,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.invalidateRequests();
     this.data = null;
     this.dataClient = null;
+    this.providerUsageStalled = false;
     this.refreshPolicy.resetPayload();
     // probeEpochs stays: per-card counters must remain monotonic across agent
     // switches, or an in-flight probe from the old agent can reuse an epoch
@@ -277,6 +290,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!this.gateway.connected || !client) {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
+    }
+    if (opts.force) {
+      this.providerUsageStalled = false;
+      this.refreshPolicy.resetPayload();
     }
     this.loadClient = client;
     return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
@@ -643,6 +660,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       ),
       canMutate: this.canMutate(),
       mutationBlockedReason: blockedReason,
+      providerUsageStalled: this.providerUsageStalled,
       probeAvailable: !this.probeUnsupported && advertised !== false,
       busy: this.busy,
       messages: this.messages,
