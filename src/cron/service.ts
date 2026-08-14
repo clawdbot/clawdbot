@@ -4,6 +4,7 @@ import type {
   CronServiceRunOptions,
   CronServiceRunResult,
 } from "./service-contract.js";
+import * as detachedMediaFailureOps from "./service/detached-media-failure.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
 import * as lifecycleOps from "./service/ops-lifecycle.js";
 import * as mutationOps from "./service/ops-mutations.js";
@@ -196,6 +197,12 @@ export class CronService implements CronServiceContract {
     source?: { scheduleKey: string; identity: string },
   ): Promise<void> {
     await readOps.recordExternalFailure(this.state, id, error, statePatch, source);
+  }
+
+  async recordDetachedMediaFailure(
+    request: import("./detached-media-failure-recorder.js").DetachedMediaCronFailureRecordRequest,
+  ): Promise<boolean> {
+    return await detachedMediaFailureOps.recordDetachedMediaFailure(this.state, request);
   }
 
   async updateExternalState(

@@ -6,6 +6,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { registerDetachedMediaCronFailureRecorder } from "../../cron/detached-media-failure-recorder.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -67,6 +68,7 @@ import {
 } from "./media-generate-background-shared.js";
 
 beforeEach(() => {
+  registerDetachedMediaCronFailureRecorder(() => {})();
   resetGeneratedMediaTaskActivityForTests();
   subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
   subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReset();
@@ -851,31 +853,50 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         return { status: "delivered" as const };
       }),
     };
+    const recordCronFailure = vi.fn(async () => {});
+    const unregisterCronFailureRecorder =
+      registerDetachedMediaCronFailureRecorder(recordCronFailure);
 
-    scheduleMediaGenerationTaskCompletion({
-      lifecycle,
-      handle: {
-        taskId: "task-image-generation-error",
-        runId: "tool:image_generate:generation-error",
-        requesterSessionKey: "agent:main:discord:channel:123",
-        taskLabel: "proof image",
-      },
-      scheduleBackgroundWork: (work) => {
-        scheduled.push(work);
-      },
-      progressSummary: "Generating image",
-      toolName: "Image generation",
-      onWakeFailure: vi.fn(),
-      run: async () => {
-        throw generationError;
-      },
-    });
+    try {
+      scheduleMediaGenerationTaskCompletion({
+        lifecycle,
+        handle: {
+          taskId: "task-image-generation-error",
+          runId: "tool:image_generate:generation-error",
+          requesterSessionKey:
+            "agent:main:cron:daily-media:run:550e8400-e29b-41d4-a716-446655440003",
+          originatingCronTaskRunId: "cron-task-run-1",
+          originatingCronRunReceipt: {
+            receiptId: "receipt-1",
+            storeKey: "store-1",
+            jobId: "daily-media",
+            configRevision: "revision-1",
+            agentId: "main",
+            ownerPid: 123,
+            ownerStartTime: 456,
+            startedAtMs: 789,
+          },
+          taskLabel: "proof image",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+        progressSummary: "Generating image",
+        toolName: "Image generation",
+        onWakeFailure: vi.fn(),
+        run: async () => {
+          throw generationError;
+        },
+      });
 
-    const backgroundWork = scheduled[0]?.();
-    await vi.waitFor(() => expect(lifecycle.wakeTaskCompletion).toHaveBeenCalled());
-    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
-    releaseWake?.();
-    await backgroundWork;
+      const backgroundWork = scheduled[0]?.();
+      await vi.waitFor(() => expect(lifecycle.wakeTaskCompletion).toHaveBeenCalled());
+      expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+      releaseWake?.();
+      await backgroundWork;
+    } finally {
+      unregisterCronFailureRecorder();
+    }
 
     expect(lifecycle.failTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -889,6 +910,13 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       }),
     );
     expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+    expect(recordCronFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cronTaskRunId: "cron-task-run-1",
+        taskId: "task-image-generation-error",
+        error: "Detached Image generation failed: provider returned no images",
+      }),
+    );
   });
 });
 

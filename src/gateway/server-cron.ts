@@ -33,6 +33,7 @@ import {
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
+import { registerDetachedMediaCronFailureRecorder } from "../cron/detached-media-failure-recorder.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
@@ -1384,9 +1385,23 @@ export function buildGatewayCronService(params: {
     getDefaultAgentId: () => cron.getDefaultAgentId(),
   };
   const automationEpoch = claimSessionAutomationEpoch();
+  let unregisterDetachedMediaCronFailureRecorder: (() => void) | undefined;
+  const registerDetachedMediaFailureRecorder = () => {
+    unregisterDetachedMediaCronFailureRecorder?.();
+    unregisterDetachedMediaCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
+      async (request) => {
+        await cron.recordDetachedMediaFailure(request);
+      },
+    );
+  };
+  const unregisterDetachedMediaFailureRecorder = () => {
+    unregisterDetachedMediaCronFailureRecorder?.();
+    unregisterDetachedMediaCronFailureRecorder = undefined;
+  };
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
     try {
+      unregisterDetachedMediaFailureRecorder();
       stopCron();
       stopExitWatchers();
       stopHeartbeatReconcileRetry();
@@ -1470,6 +1485,7 @@ export function buildGatewayCronService(params: {
     if (generation !== streamWatcherGeneration) {
       return;
     }
+    registerDetachedMediaFailureRecorder();
     exitWatchersStopped = false;
     streamWatchersStopped = false;
     // A reload restart owns a fresh watcher lifecycle; the next stop must run.

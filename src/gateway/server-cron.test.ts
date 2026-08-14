@@ -10,6 +10,10 @@ import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-reg
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import {
+  getDetachedMediaCronFailureRecorder,
+  registerDetachedMediaCronFailureRecorder,
+} from "../cron/detached-media-failure-recorder.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -307,6 +311,7 @@ function expectIsolatedRunFields(fields: Record<string, unknown>) {
 
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
+    registerDetachedMediaCronFailureRecorder(() => {})();
     resetActiveCronTaskRunsForTests();
     enqueueSystemEventMock.mockClear();
     systemEventReceiptRemoveMock.mockClear();
@@ -582,6 +587,31 @@ describe("buildGatewayCronService", () => {
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
     } finally {
       state.cron.stop();
+    }
+  });
+
+  it("restores detached-media failure recording after cron stop and start", async () => {
+    const cfg = createCronConfig("server-cron-restart-detached-media-recorder");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      expect(getDetachedMediaCronFailureRecorder()).toBeUndefined();
+      await state.cron.start();
+      expect(getDetachedMediaCronFailureRecorder()).toBeTypeOf("function");
+
+      state.cron.stop();
+      expect(getDetachedMediaCronFailureRecorder()).toBeUndefined();
+
+      await state.cron.start();
+      expect(getDetachedMediaCronFailureRecorder()).toBeTypeOf("function");
+    } finally {
+      state.cron.stop();
+      expect(getDetachedMediaCronFailureRecorder()).toBeUndefined();
     }
   });
 

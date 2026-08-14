@@ -50,6 +50,7 @@ import {
   type MediaGenerationCompletionWakeOutcome,
   wakeMediaGenerationTaskCompletionWithRetry,
 } from "./media-generate-completion-retry.js";
+import { markOriginatingCronRunFailedFromMediaGeneration } from "./media-generate-cron-failure-state.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
@@ -505,6 +506,11 @@ export function scheduleMediaGenerationTaskCompletion<
           error: wakeError,
         });
       }
+      await markOriginatingCronRunFailedFromMediaGeneration({
+        handle: params.handle,
+        error,
+        toolName: params.toolName,
+      });
       params.lifecycle.failTaskRun({ handle: params.handle, error });
       return;
     }
