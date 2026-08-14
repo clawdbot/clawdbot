@@ -1,6 +1,6 @@
 export const ANTHROPIC_COMPACTION_LIVE_ENV = "OPENCLAW_LIVE_ANTHROPIC_COMPACTION";
 
-export type AnthropicCompactionLiveSettings =
+type AnthropicCompactionLiveSettings =
   | { enabled: false }
   | {
       enabled: true;
