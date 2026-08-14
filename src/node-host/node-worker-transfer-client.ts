@@ -30,8 +30,6 @@ import {
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 const validatedTlsSocketPins = new WeakMap<TLSSocket, string>();
-// Replacement sockets must expose a full peer certificate for pin verification.
-const pinnedTransferAgent = new https.Agent({ keepAlive: true, maxCachedSessions: 0 });
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
 
 function tlsPinMismatch(): NodeWorkerWorkspaceTransferError {
@@ -131,12 +129,13 @@ async function openRequest(params: {
 }): Promise<IncomingMessage> {
   const url = transferUrl(params.gatewayUrl, params.routePath);
   const transport = url.protocol === "https:" ? https : http;
+  // Keep the proxy-aware global transport, but require replacement sockets to expose a certificate.
   const request = transport.request(url, {
     method: params.method,
     headers: { authorization: `Bearer ${params.token}`, ...params.headers },
     signal: params.signal,
     ...(url.protocol === "https:" && params.tlsFingerprint
-      ? { agent: pinnedTransferAgent, rejectUnauthorized: false }
+      ? { rejectUnauthorized: false, session: Buffer.alloc(0) }
       : {}),
   });
   const response = once(request, "response").then(([message]) => message as IncomingMessage);

@@ -7,14 +7,11 @@ import http, {
   type RequestOptions,
   type Server as HttpServer,
 } from "node:http";
-import https, {
-  createServer as createHttpsServer,
-  type RequestOptions as HttpsRequestOptions,
-  type Server as HttpsServer,
-} from "node:https";
-import type { Socket } from "node:net";
+import https, { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
+import { connect as connectNet, type Socket } from "node:net";
 import path from "node:path";
 import type { TLSSocket } from "node:tls";
+import { installGlobalProxy } from "@openclaw/proxyline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -254,7 +251,7 @@ describe("node worker transfer client", () => {
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     const gatewayPort = Number(new URL(gatewayUrl).port);
     let hidPeerCertificate = false;
-    let pinnedAgent: https.Agent | undefined;
+    const pinnedAgent = https.globalAgent;
     const hidePeerCertificate = (socket: Socket) => {
       if (socket.remotePort !== gatewayPort || hidPeerCertificate) {
         return;
@@ -262,19 +259,7 @@ describe("node worker transfer client", () => {
       hidPeerCertificate = true;
       (socket as TLSSocket).getPeerCertificate = (() => ({})) as TLSSocket["getPeerCertificate"];
     };
-    const request = https.request.bind(https);
-    const requestSpy = vi.spyOn(https, "request").mockImplementation(((
-      url: string | URL,
-      options: HttpsRequestOptions,
-    ) => {
-      const clientRequest = request(url, options);
-      const agent = options.agent;
-      if (!pinnedAgent && agent instanceof https.Agent) {
-        pinnedAgent = agent;
-        agent.on("free", hidePeerCertificate);
-      }
-      return clientRequest;
-    }) as typeof https.request);
+    pinnedAgent.on("free", hidePeerCertificate);
     try {
       await expect(
         runNodeWorkerWorkspaceTransfer({
@@ -311,8 +296,7 @@ describe("node worker transfer client", () => {
       expect(requestCount).toBe(3);
       expect(connectionCount).toBe(1);
     } finally {
-      pinnedAgent?.off("free", hidePeerCertificate);
-      requestSpy.mockRestore();
+      pinnedAgent.off("free", hidePeerCertificate);
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -388,6 +372,74 @@ describe("node worker transfer client", () => {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
+    }
+  });
+
+  it("preserves managed proxy routing for pinned transfers", async () => {
+    const root = tempDirs.make("node-worker-transfer-tls-proxy-");
+    const rawManifest = serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [],
+    });
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const target = createHttpsServer(
+      { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
+      (_req, res) => {
+        res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
+        res.end(rawManifest);
+      },
+    );
+    const gatewayUrl = (await listen(target)).replace(/^ws/u, "wss");
+    const proxySockets = new Set<Socket>();
+    let connectCount = 0;
+    const proxy = createHttpServer();
+    proxy.on("connect", (req, clientSocket, head) => {
+      connectCount += 1;
+      const destination = new URL(`http://${req.url}`);
+      const upstream = connectNet(Number(destination.port), destination.hostname, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.byteLength > 0) {
+          upstream.write(head);
+        }
+        upstream.pipe(clientSocket);
+        clientSocket.pipe(upstream);
+      });
+      proxySockets.add(clientSocket);
+      proxySockets.add(upstream);
+      clientSocket.once("close", () => proxySockets.delete(clientSocket));
+      upstream.once("close", () => proxySockets.delete(upstream));
+    });
+    const proxyUrl = (await listen(proxy)).replace(/^ws/u, "http");
+    const proxyHandle = installGlobalProxy({ mode: "managed", proxyUrl });
+    const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+    try {
+      await expect(
+        runNodeWorkerWorkspaceTransfer({
+          gatewayUrl,
+          gatewayTlsFingerprint: fingerprint,
+          environmentId: "environment-tls-proxy",
+          workspaceDir: path.join(root, "workspace"),
+          manifestHome: root,
+          transfer: { direction: "download", token: "proxy-token", manifestRef },
+        }),
+      ).resolves.toBe(manifestRef);
+      expect(connectCount).toBe(1);
+    } finally {
+      proxyHandle.stop();
+      for (const socket of proxySockets) {
+        socket.destroy();
+      }
+      proxy.closeAllConnections();
+      target.closeAllConnections();
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          proxy.close(() => resolve());
+        }),
+        new Promise<void>((resolve) => {
+          target.close(() => resolve());
+        }),
+      ]);
     }
   });
 
