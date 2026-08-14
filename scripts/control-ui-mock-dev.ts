@@ -1838,8 +1838,15 @@ async function createChatPickerScenario(
                   command: "openclaw export --target production",
                   sessionKey: "agent:main:production-export",
                 },
-                createdAtMs: baseTime - 75_000,
-                expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+                createdAtMs: Date.now() - 75_000,
+                // Not ATTENTION_FIXTURE_EXPIRES_AT: an approval arms a real
+                // setTimeout for its own expiry, and a year-2099 delay overflows
+                // int32, clamps to 0, and prunes the approval on the next tick.
+                // Questions poll instead, so the shared constant is safe there.
+                // Minutes, not days: the card shows this as a live countdown, and
+                // a multi-day one reads as a broken clock. Resolving it is safe --
+                // the list is static, so a reload seeds the approval again.
+                expiresAtMs: Date.now() + 45 * 60_000,
               },
             ]
           : [],
