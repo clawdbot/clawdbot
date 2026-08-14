@@ -104,12 +104,17 @@ const runtimeMocks = vi.hoisted(() => ({
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   upsertSessionEntryCore: vi.fn(),
+  withSystemEventOwner: vi.fn((options: object) => options),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeat: vi.fn(),
+  resolveSystemMainSessionTarget: vi.fn(() => ({
+    agentId: "ops",
+    sessionKey: "agent:ops:main",
+  })),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({
@@ -929,6 +934,7 @@ describe("voice transcript events", () => {
     upsertSessionEntryMock.mockClear();
     loadSessionEntryMock.mockClear();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+    runtimeMocks.resolveSystemMainSessionTarget.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     upsertSessionEntryMock.mockImplementation(async (_scope, patch) => patch);
   });
@@ -1456,16 +1462,17 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
-      {
-        sessionKey: "node-node-n1",
+      expect.objectContaining({
+        sessionKey: "agent:ops:main",
         contextKey: "notification:notif-1",
-      },
+      }),
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "event",
       reason: "notifications-event",
-      sessionKey: "node-node-n1",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
     });
   });
 
@@ -1482,17 +1489,36 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
-      {
-        sessionKey: "node-node-n2",
+      expect.objectContaining({
+        sessionKey: "agent:ops:main",
         contextKey: "notification:notif-2",
-      },
+      }),
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "event",
       reason: "notifications-event",
-      sessionKey: "node-node-n2",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
     });
+  });
+
+  it("records non-delivery when a targetless notification has no system owner", async () => {
+    const warn = vi.fn();
+    runtimeMocks.resolveSystemMainSessionTarget.mockImplementationOnce(() => {
+      throw new Error("Set agents.defaults.systemAgent.agentId");
+    });
+
+    await handleNodeEvent({ ...buildCtx(), logGateway: { warn } }, "node-unowned", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({ change: "posted", key: "notif-unowned" }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "notification event not delivered node=node-unowned: Set agents.defaults.systemAgent.agentId",
+    );
   });
 
   it("wakes heartbeat on payload sessionKey when provided", async () => {
@@ -1525,6 +1551,7 @@ describe("notifications changed events", () => {
       payloadJSON: JSON.stringify({
         change: "posted",
         key: "notif-5",
+        sessionKey: "node-node-n5",
       }),
     });
 

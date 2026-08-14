@@ -81,6 +81,10 @@ export type EnvironmentSummary = {
   status: "available" | "unavailable" | "starting" | "stopping" | "error";
   platform?: string;
   sessionHost?: boolean;
+  lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
   trust?: "persistent" | "disposable";
   capabilities?: string[];
   worker?: WorkerEnvironmentMetadata;

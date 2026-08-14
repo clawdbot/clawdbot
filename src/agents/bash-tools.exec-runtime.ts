@@ -17,6 +17,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
@@ -356,13 +357,16 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     sessionScope: session.sessionScope,
   };
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
+  const eventOptions = {
+    sessionKey: eventSessionKey,
+    contextKey: `exec:${session.id}`,
+    deliveryContext: session.notifyDeliveryContext,
+  };
   const remove = enqueueSystemEventWithReceipt(
     eventText,
-    {
-      sessionKey: eventSessionKey,
-      contextKey: `exec:${session.id}`,
-      deliveryContext: session.notifyDeliveryContext,
-    },
+    eventSessionKey === "global" && session.agentId
+      ? withSystemEventOwner(eventOptions, session.agentId)
+      : eventOptions,
     { allowDuplicate: true },
   );
   if (remove) {
@@ -371,17 +375,20 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
   if (!isSubagentSessionKey(sessionKey)) {
+    const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
+      sessionKey,
+      {
+        source: "exec-event" as const,
+        intent: "event" as const,
+        reason: "exec-event",
+        coalesceMs: 0,
+      },
+      eventRouting,
+    );
     requestHeartbeat(
-      scopedHeartbeatWakeOptionsForPolicy(
-        sessionKey,
-        {
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-        },
-        eventRouting,
-      ),
+      sessionKey === "global" && session.agentId
+        ? { ...wakeOptions, agentId: session.agentId }
+        : wakeOptions,
     );
   }
 }
@@ -622,6 +629,7 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  agentId?: string;
   /** `session.mainKey` from the runtime config; snapshotted onto the
    *  ProcessSession so background-exit notifications can remap cron-run
    *  keys without an ambient config load. Long-running background exits use
@@ -654,6 +662,7 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    agentId: opts.agentId,
     mainKey: opts.mainKey,
     sessionScope: opts.sessionScope,
     eventRouting: opts.eventRouting,

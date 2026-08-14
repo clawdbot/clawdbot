@@ -155,6 +155,8 @@ export type AuthProfileStore = AuthProfileSecretsStore &
 
 /** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
 export type RuntimeAuthProfileStore = AuthProfileStore & {
+  /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
+  runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
   runtimeInheritsMainState?: boolean;
 };

@@ -42,6 +42,7 @@ type KnownNodeApprovedSource = {
   permissions?: Record<string, boolean>;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -133,6 +134,7 @@ function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSour
     permissions: entry.permissions,
     approvedAtMs: entry.approvedAtMs,
     lastConnectedAtMs: entry.lastConnectedAtMs,
+    lastDisconnectedAtMs: entry.lastDisconnectedAtMs,
     lastSeenAtMs: entry.lastSeenAtMs,
     lastSeenReason: entry.lastSeenReason,
   };
@@ -176,6 +178,11 @@ function resolveCurrentPendingNodePairing(params: {
     sameNodePermissionSurface(pending.permissions, declaredPermissions)
     ? pending
     : undefined;
+}
+
+function maxDefinedTimestamp(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined);
+  return defined.length > 0 ? Math.max(...defined) : undefined;
 }
 
 function resolveEffectiveLastSeen(params: {
@@ -222,6 +229,11 @@ function buildEffectiveKnownNode(entry: {
 }): NodeListNode {
   const { nodeId, devicePairing, nodePairing, pendingNodePairing, live, sessionHost } = entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
+  const lastConnectedAtMs = maxDefinedTimestamp(
+    nodePairing?.lastConnectedAtMs,
+    live?.connectedAtMs,
+  );
+  const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
   return {
     nodeId,
     displayName: firstNormalizedString(
@@ -299,6 +311,8 @@ function buildEffectiveKnownNode(entry: {
     pendingDeclaredCommands: pendingNodePairing?.commands,
     pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastConnectedAtMs,
+    lastDisconnectedAtMs,
     lastActiveAtMs: live?.lastActiveAtMs,
     presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,

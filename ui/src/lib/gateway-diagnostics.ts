@@ -15,7 +15,7 @@ export async function loadGatewayDiagnostics(
   const [status, health, models, heartbeat] = await Promise.all([
     client.request("status", {}, { signal }),
     client.request("health", {}, { signal }),
-    client.request("models.list", {}, { signal }),
+    client.request("models.list", { preparedOnly: true }, { signal }),
     client.request("last-heartbeat", {}, { signal }),
   ]);
   const modelPayload = models as { models?: unknown[] } | undefined;

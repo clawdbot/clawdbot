@@ -200,6 +200,9 @@ export class DraftSubmissionFlow {
   }
 
   submitDisabledReason(): string | undefined {
+    if (this.place.modelControl.isModelUnavailable(this.place.selectedAgent())) {
+      return `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`;
+    }
     const access = this.submissionAccess();
     return access.allowed ? undefined : access.reason;
   }
@@ -229,6 +232,7 @@ export class DraftSubmissionFlow {
       this.submittingValue ||
       this.gateway.preferenceLoading ||
       this.requiresModelSetup() ||
+      this.place.modelControl.isModelUnavailable(this.place.selectedAgent()) ||
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknownValue) ||
       (kind === "session" && !message && !hasAttachments) ||

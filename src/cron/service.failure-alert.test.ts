@@ -37,15 +37,20 @@ async function withFailureAlertCron(
   params: {
     failureAlert: FailureAlertConfig;
     runResult?: IsolatedAgentRunResult;
+    useFallback?: boolean;
   },
   run: (context: {
     cron: CronService;
+    enqueueSystemEvent: ReturnType<typeof vi.fn>;
+    requestHeartbeat: ReturnType<typeof vi.fn>;
     sendCronFailureAlert: ReturnType<typeof vi.fn>;
     addJob: (name: string, overrides?: Partial<CronJobCreate>) => ReturnType<CronService["add"]>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await makeStorePath();
   const sendCronFailureAlert = vi.fn(async () => undefined);
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeat = vi.fn();
   const runResult = params.runResult ?? {
     status: "error",
     error: "temporary upstream error",
@@ -55,16 +60,18 @@ async function withFailureAlertCron(
     cronEnabled: true,
     cronConfig: { failureAlert: params.failureAlert },
     log: noopLogger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSystemEvent,
+    requestHeartbeat,
     runIsolatedAgentJob: vi.fn(async () => runResult),
-    sendCronFailureAlert,
+    ...(params.useFallback ? {} : { sendCronFailureAlert }),
   });
 
   await cron.start();
   try {
     await run({
       cron,
+      enqueueSystemEvent,
+      requestHeartbeat,
       sendCronFailureAlert,
       addJob: async (name, overrides) => await cron.add(createFailureAlertJob(name, overrides)),
     });
@@ -114,6 +121,34 @@ function expectAlertTextContaining(
 }
 
 describe("CronService failure alerts", () => {
+  it("keeps fallback events and immediate wakes on the failing job owner", async () => {
+    await withFailureAlertCron(
+      { failureAlert: { enabled: true, after: 1 }, useFallback: true },
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, addJob }) => {
+        const sessionKey = "agent:work:cron:failure-alert";
+        const job = await addJob("work-owned failure", {
+          agentId: "work",
+          sessionKey,
+          wakeMode: "now",
+        });
+
+        await cron.run(job.id, "force");
+
+        expect(enqueueSystemEvent).toHaveBeenCalledWith(
+          expect.stringContaining('Automation "work-owned failure" failed 1 times'),
+          { agentId: "work", sessionKey },
+        );
+        expect(requestHeartbeat).toHaveBeenCalledWith({
+          source: "cron",
+          intent: "immediate",
+          reason: `cron:${job.id}:failure-alert`,
+          agentId: "work",
+          sessionKey,
+        });
+      },
+    );
+  });
+
   it("alerts after configured consecutive failures and honors cooldown", async () => {
     await withFailureAlertCron(
       {
