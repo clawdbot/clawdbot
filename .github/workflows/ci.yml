@@ -765,6 +765,7 @@ jobs:
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
+                predicted_seconds: shard.predictedSeconds,
                 save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
@@ -2195,7 +2196,7 @@ jobs:
       fail-fast: false
       # Canonical main admits only one complete run at a time, so widen this
       # matrix within the current runner-registration budget.
-      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 48 || 28 }}
+      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 64 || 28 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -2236,6 +2237,7 @@ jobs:
         # that can overlap Vitest processes keeps the proven 2-worker cap.
         # Timing-sensitive groups stay pinned to 2 via plan-level env.
         env:
+          PREDICTED_TEST_SECONDS: ${{ matrix.predicted_seconds || '' }}
           SHARD_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency || '' }}
         run: |
           cores="$(nproc)"
@@ -2248,7 +2250,7 @@ jobs:
           else
             workers=3
           fi
-          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
+          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} predicted_test_seconds=${PREDICTED_TEST_SECONDS:-unknown} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
       - name: Checkout trusted Node shard runner

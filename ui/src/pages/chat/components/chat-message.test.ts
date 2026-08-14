@@ -5463,6 +5463,65 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it.each([
+    { state: { status: "error" as const, revision: 2 }, retries: true, label: "bounded error" },
+    { state: { status: "error" as const, revision: 6 }, retries: false, label: "exhausted error" },
+    { state: { status: "loading" as const, revision: 1 }, retries: false, label: "loading" },
+  ])(
+    "retries a failed full-message load only while attempts remain ($label)",
+    ({ state, retries }) => {
+      const container = document.createElement("div");
+      const onToggleAssistantMessageExpanded = vi.fn();
+      renderAssistantMessage(
+        container,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "abcde\n...(truncated)..." }],
+          __openclaw: { id: "msg-retry-error", seq: 1 },
+        },
+        {
+          sessionKey: "global",
+          loadFullAssistantMessage: async () => null,
+          getAssistantMessageExpansion: () => state,
+          onToggleAssistantMessageExpanded,
+        },
+      );
+
+      if (retries) {
+        expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("msg-retry-error");
+      } else {
+        expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("renders a visible retry affordance once automatic full-message loads exhaust", () => {
+    const container = document.createElement("div");
+    const onToggleAssistantMessageExpanded = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "abcde\n...(truncated)..." }],
+        __openclaw: { id: "msg-retry-exhausted", seq: 1 },
+      },
+      {
+        sessionKey: "global",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () => ({ status: "error", revision: 6 }),
+        onToggleAssistantMessageExpanded,
+      },
+    );
+
+    const retry = container.querySelector<HTMLButtonElement>(".chat-message-load-error__retry");
+    expect(container.querySelector(".chat-message-load-error")?.textContent).toContain(
+      "Could not load the full message.",
+    );
+    expect(retry).not.toBeNull();
+    retry?.click();
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("msg-retry-exhausted");
+  });
+
   it("does not add disclosure or canvas actions to non-truncated assistant messages", () => {
     const container = document.createElement("div");
     renderAssistantMessage(

@@ -1016,6 +1016,7 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
   migration_version INTEGER NOT NULL,
   policy_hash TEXT NOT NULL,
   generated_at_ms INTEGER NOT NULL,
+  workspace_dir TEXT,
   refresh_reason TEXT,
   install_records_json TEXT NOT NULL,
   plugins_json TEXT NOT NULL,

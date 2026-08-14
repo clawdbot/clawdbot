@@ -419,6 +419,7 @@ const cachedWorkspacePackageAliasMaps = new PluginLruCache<Record<string, string
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
 const CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH = "codex-session-transcript-runtime";
+const NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH = "native-hook-relay-runtime";
 const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "agent-runtime-test-contracts",
@@ -459,6 +460,7 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     subpaths: [
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
       CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH,
+      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
     ],
   },
   {
@@ -715,6 +717,7 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   return [
     ...new Set([
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
       OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
         ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
