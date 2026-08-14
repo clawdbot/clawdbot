@@ -7,7 +7,7 @@ on:
         description: 'Version tag (e.g., v2026.1.15) - 留空则构建当前分支'
         required: false
         type: string
-        default: ''
+        default: 'v20260815'
 
 
 permissions:
