@@ -756,6 +756,61 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("keeps token-limited text replayable when it was never streamed", async () => {
+    // Non-streaming routes can end the turn with empty streamed assistant texts
+    // while the completed assistant message still carries the visible answer.
+    // Payload building falls back to that message, so the reply is delivered and
+    // classification must not call the turn abandoned.
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "Partial answer" }],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("marks a token-limited turn with nothing to deliver as abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+  });
+
   it("preserves token-limited terminal tool media before runner finalization", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(
