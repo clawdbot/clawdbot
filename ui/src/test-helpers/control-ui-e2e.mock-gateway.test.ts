@@ -24,28 +24,61 @@ function waitForMockCycle(): Promise<void> {
 }
 
 describe("mock gateway stateful config", () => {
-  it("takes every mock socket offline before a reconnect", async () => {
-    const script = createControlUiMockGatewayInitScript({});
+  it("takes existing mock sockets offline without closing their replacement", async () => {
+    const passthroughPrefix = "ws://source-ui/?token=";
+    const script = createControlUiMockGatewayInitScript({
+      webSocketPassthroughPrefixes: [passthroughPrefix],
+    });
     window.sessionStorage.clear();
-    // oxlint-disable-next-line typescript/no-implied-eval -- Exercises the serialized browser fixture.
-    new Function(script)();
+    const priorWebSocket = window.WebSocket;
+    class PassthroughWebSocket extends EventTarget {
+      static readonly CLOSED = 3;
+      static readonly CLOSING = 2;
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      readyState = PassthroughWebSocket.OPEN;
 
-    const first = new WebSocket("ws://mock-gateway/first");
-    const second = new WebSocket("ws://mock-gateway/second");
-    await flushMockTimers();
-    expect(first.readyState).toBe(WebSocket.OPEN);
-    expect(second.readyState).toBe(WebSocket.OPEN);
-
-    const controls = (
-      window as Window & {
-        openclawControlUiE2eGateway?: { setOnline: (online: boolean) => void };
+      close(): void {
+        this.readyState = PassthroughWebSocket.CLOSED;
       }
-    ).openclawControlUiE2eGateway;
-    expect(controls).toBeDefined();
-    controls?.setOnline(false);
+    }
+    window.WebSocket = PassthroughWebSocket as unknown as typeof WebSocket;
 
-    expect(first.readyState).toBe(WebSocket.CLOSED);
-    expect(second.readyState).toBe(WebSocket.CLOSED);
+    try {
+      // oxlint-disable-next-line typescript/no-implied-eval -- Exercises the serialized browser fixture.
+      new Function(script)();
+
+      const passthrough = new WebSocket(`${passthroughPrefix}vite`);
+      const first = new WebSocket("ws://mock-gateway/first");
+      const second = new WebSocket("ws://mock-gateway/second");
+      await flushMockTimers();
+      expect(passthrough.readyState).toBe(WebSocket.OPEN);
+      expect(first.readyState).toBe(WebSocket.OPEN);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+
+      let replacement: WebSocket | undefined;
+      first.addEventListener("close", () => {
+        replacement = new WebSocket("ws://mock-gateway/replacement");
+      });
+
+      const controls = (
+        window as Window & {
+          openclawControlUiE2eGateway?: { setOnline: (online: boolean) => void };
+        }
+      ).openclawControlUiE2eGateway;
+      expect(controls).toBeDefined();
+      controls?.setOnline(false);
+
+      expect(passthrough.readyState).toBe(WebSocket.OPEN);
+      expect(first.readyState).toBe(WebSocket.CLOSED);
+      expect(second.readyState).toBe(WebSocket.CLOSED);
+      expect(replacement?.readyState).toBe(WebSocket.CONNECTING);
+
+      controls?.setOnline(true);
+      expect(replacement?.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      window.WebSocket = priorWebSocket;
+    }
   });
 
   it("round-trips config.set through config.get with an advancing hash", async () => {

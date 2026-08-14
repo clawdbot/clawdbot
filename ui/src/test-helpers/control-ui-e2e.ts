@@ -2066,12 +2066,16 @@ function installControlUiMockGateway(
         // The current document can still toggle the in-memory mock.
       }
       if (!online) {
-        for (const socket of sockets) {
+        // Close handlers can synchronously construct replacements. Snapshot the
+        // transition members so an offline replacement stays ready for recovery.
+        const transitionSockets = sockets.slice();
+        for (const socket of transitionSockets) {
           socket.close(1006, "mock offline");
         }
         return;
       }
-      for (const socket of sockets) {
+      const transitionSockets = sockets.slice();
+      for (const socket of transitionSockets) {
         socket.openConnection();
       }
     },
