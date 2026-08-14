@@ -298,7 +298,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    if (existingPlacement?.state !== "active") {
+    if (existingPlacement?.state !== "active" && existingPlacement?.state !== "failed") {
       respondInvalidWorkerSession(
         respond,
         `session cannot stop cloud worker from placement ${existingPlacement?.state ?? "local"}`,
