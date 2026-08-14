@@ -238,7 +238,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
         ${moreRoutes.map((routeId) => renderMoreMenuRoute(params, routeId))}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="customize">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings2}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customize")}</span>
         </wa-dropdown-item>
       </wa-dropdown>
