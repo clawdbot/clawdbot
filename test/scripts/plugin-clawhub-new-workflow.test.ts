@@ -32,6 +32,7 @@ type Workflow = {
 };
 
 const source = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
+const contractWorkflowSource = readFileSync(".github/workflows/clawhub-cli-contract.yml", "utf8");
 const workflow = parse(source) as Workflow;
 const jobs = workflow.jobs ?? {};
 const materializerSource = readFileSync("scripts/materialize-clawhub-cli.sh", "utf8");
@@ -353,6 +354,21 @@ describe("Plugin ClawHub New workflow", () => {
     expect(source).not.toContain("CLAWHUB_CLI_PACKAGE");
     expect(source).toContain("OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}");
     expect(source).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');
+  });
+
+  it("uses the same no-secret command-contract proof for updates and releases", () => {
+    expect(
+      step(
+        job("validate_bootstrap_trusted_publisher_cli"),
+        "Validate pinned ClawHub trusted publisher CLI support",
+      ).run,
+    ).toBe('bash scripts/verify-clawhub-cli-contract.sh "${CLAWHUB_CLI}"');
+    expect(contractWorkflowSource).toContain("pull_request:");
+    expect(contractWorkflowSource).toContain("scripts/materialize-clawhub-cli.sh");
+    expect(contractWorkflowSource).toContain(
+      'bash scripts/verify-clawhub-cli-contract.sh "${CLAWHUB_CLI}"',
+    );
+    expect(contractWorkflowSource).not.toContain("secrets.");
   });
 
   it("bounds every job and keeps secretless validation active in dry-run mode", () => {
