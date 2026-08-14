@@ -50,10 +50,7 @@ export function resolveReplyBackendQueueMessageMismatch(
       backend.toolAuthorityFingerprint ?? authority?.toolAuthorityFingerprint,
     );
     const incomingFingerprint = normalizeOptionalString(options.toolAuthorityFingerprint);
-    if (
-      (activeFingerprint || incomingFingerprint) &&
-      (!activeFingerprint || !incomingFingerprint || activeFingerprint !== incomingFingerprint)
-    ) {
+    if (!activeFingerprint || !incomingFingerprint || activeFingerprint !== incomingFingerprint) {
       return "tool_authority_mismatch";
     }
   }
