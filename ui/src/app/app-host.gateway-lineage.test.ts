@@ -10,7 +10,12 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { refreshControlUiServiceWorker } from "./service-worker-lifecycle.ts";
 import { loadSettings } from "./settings.ts";
+
+vi.mock("./service-worker-lifecycle.ts", () => ({
+  refreshControlUiServiceWorker: vi.fn(async () => undefined),
+}));
 
 const HELLO: GatewayHelloOk = {
   type: "hello-ok",
@@ -59,6 +64,44 @@ afterEach(() => {
 });
 
 describe("Control UI Gateway target lineage", () => {
+  it("checks the incumbent worker before reconnect surfaces resume", async () => {
+    let snapshot = {
+      client: {} as GatewayBrowserClient,
+      phase: "connected",
+      lastError: null,
+      lastErrorCode: null,
+    } as ApplicationGateway["snapshot"];
+    const gateway = {
+      get snapshot() {
+        return snapshot;
+      },
+      connection: { gatewayUrl: "ws://gateway.test", token: "", password: "" },
+    } as ApplicationGateway;
+    let releaseRefresh: (() => void) | undefined;
+    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseRefresh = resolve;
+      }),
+    );
+    const app = document.createElement("openclaw-app") as unknown as {
+      reconnectWorkerRefreshPending: boolean;
+      synchronizeGateway: (gateway: ApplicationGateway) => void;
+    };
+
+    app.synchronizeGateway(gateway);
+    snapshot = { ...snapshot, client: null, phase: "reconnecting" };
+    app.synchronizeGateway(gateway);
+    snapshot = { ...snapshot, client: {} as GatewayBrowserClient, phase: "connected" };
+    app.synchronizeGateway(gateway);
+
+    expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce();
+    expect(app.reconnectWorkerRefreshPending).toBe(true);
+    releaseRefresh?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(app.reconnectWorkerRefreshPending).toBe(false);
+  });
+
   it("returns to the login gate when a newly selected Gateway's first attempt fails", () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.start();

@@ -123,6 +123,7 @@ class OpenClawShell
 {
   @property({ attribute: false }) runtime: ApplicationRuntime | undefined;
   @property({ attribute: false }) onboarding = false;
+  @property({ attribute: false }) reconnectWorkerRefreshPending = false;
 
   @state() navDrawerOpen = false;
   @state() desktopNavigationExpanded = false;
@@ -242,6 +243,10 @@ class OpenClawShell
       .watch(
         () => this.context?.navigation,
         (navigation, notify) => navigation.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agentSelection,
+        (selection, notify) => selection.subscribe(notify),
       )
       .watch(
         () => this.context?.gateway,
