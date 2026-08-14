@@ -16,7 +16,6 @@ export type {
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderRuntime,
 } from "./host/openclaw-runtime-memory.js";
-export { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./host/embeddings.js";
 export {
   EmbeddingBatchUnavailableError,
   extractBatchErrorMessage,

@@ -2019,6 +2019,9 @@ export const en: TranslationMap = {
     resize: "Resize desktop panel",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    enterFullscreen: "Enter fullscreen",
+    exitFullscreen: "Exit fullscreen",
+    fullscreenUnavailable: "Fullscreen is unavailable in this browser",
     pickerTitle: "Desktop sources",
     thisMachine: "This machine",
     refresh: "Refresh",
@@ -2052,6 +2055,7 @@ export const en: TranslationMap = {
     unknownReason: "unknown reason",
     errors: {
       listFailed: "Could not load desktop sources: {error}",
+      fullscreenFailed: "Could not change fullscreen mode: {error}",
       securityFailed: "Desktop security negotiation failed: {reason}",
     },
   },
@@ -2228,7 +2232,7 @@ export const en: TranslationMap = {
     },
     prepare: {
       title: "Run a model locally",
-      intro: "Use a local model service, or run a private GGUF model directly inside this Gateway.",
+      intro: "Use a local model service or prepare a private GGUF model on this Gateway.",
       ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
       ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
@@ -4043,6 +4047,7 @@ export const en: TranslationMap = {
       missing: "Not signed in",
       apiKey: "API key",
       denied: "Credentials rejected",
+      configured: "Credentials configured",
     },
     expiresIn: "Credential expires in {time}",
     models: "{count} models",
@@ -4846,6 +4851,10 @@ export const en: TranslationMap = {
     },
     codeBlock: {
       jsonLines: "JSON · {count} lines",
+      jsonBadge: "JSON",
+      jsonArrayItem: "Array ({count} item)",
+      jsonArrayItems: "Array ({count} items)",
+      jsonObjectKeys: "Object ({count} keys)",
     },
     workspaceConflict: {
       titleOne: "1 cloud workspace conflict",
@@ -5092,6 +5101,7 @@ export const en: TranslationMap = {
       showLess: "Show less",
       showMore: "Show more",
       unknownDate: "Unknown date",
+      toolSender: "Tool",
       voiceNote: "Voice note",
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
@@ -5389,6 +5399,7 @@ export const en: TranslationMap = {
     },
     attachments: {
       attachedFile: "Attached file",
+      readFailed: "Could not attach: {names}{more}",
       showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",

@@ -300,8 +300,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Pushes retain three lanes of headroom under the workflow's 28-worker cap.
     expect(compact).toHaveLength(25);
     expect(pullRequestCompact).toHaveLength(31);
-    expect(githubCompact).toHaveLength(37);
-    expect(githubPullRequestCompact).toHaveLength(43);
+    expect(githubCompact).toHaveLength(32);
+    expect(githubPullRequestCompact).toHaveLength(38);
     expect(githubPullRequestCompact.length).toBeLessThanOrEqual(48);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
@@ -378,6 +378,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap((shard) => shard.groups.map((group) => group.shard_name))
         .toSorted(),
     ).toEqual(pullRequestCompactGroups.map((group) => group.shard_name).toSorted());
+    const groupsWith = (plan: typeof githubCompact, shardName: string) =>
+      plan.find((shard) => shard.groups.some((group) => group.shard_name === shardName))?.groups;
+    expect(
+      groupsWith(githubCompact, "agentic-agents-support")?.map((group) => group.shard_name),
+    ).toEqual(["agentic-agents-support"]);
+    expect(
+      groupsWith(compact, "agentic-agents-support")?.map((group) => group.shard_name),
+    ).toContain("agentic-agents-embedded-overflow-compaction");
     for (const shardName of pushExcludedShardNames) {
       expect(compactGroups.some((group) => group.shard_name === shardName)).toBe(false);
       expect(pullRequestCompactGroups.some((group) => group.shard_name === shardName)).toBe(true);

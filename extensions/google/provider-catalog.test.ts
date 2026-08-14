@@ -26,14 +26,19 @@ describe("google provider catalog", () => {
         "gemini-3.1-pro-preview",
         "gemini-3.5-flash-lite",
         "gemini-3.6-flash",
+        "gemini-3.7-flash",
       ]),
     );
-    expect(provider.models.find((model) => model.id === "gemini-3.6-flash")).toMatchObject({
+    expect(provider.models.find((model) => model.id === "gemini-3.7-flash")).toMatchObject({
       contextWindow: 1_048_576,
       maxTokens: 65_536,
       reasoning: true,
       input: ["text", "image"],
+      thinkingLevelMap: { minimal: null },
     });
+    expect(provider.models.find((model) => model.id === "gemini-3.6-flash")).not.toHaveProperty(
+      "thinkingLevelMap",
+    );
   });
 
   it("keeps Google AI Studio and Vertex model ids aligned", () => {
@@ -77,6 +82,14 @@ describe("google provider catalog", () => {
                     inputTokenLimit: 1_048_576,
                     outputTokenLimit: 65_536,
                     supportedGenerationMethods: ["generateContent", "countTokens"],
+                    thinking: true,
+                  },
+                  {
+                    name: "models/gemini-3.7-flash",
+                    displayName: "Gemini 3.7 Flash",
+                    inputTokenLimit: 1_048_576,
+                    outputTokenLimit: 65_536,
+                    supportedGenerationMethods: ["generateContent"],
                     thinking: true,
                   },
                   {
@@ -134,6 +147,16 @@ describe("google provider catalog", () => {
         maxTokens: 65_536,
         input: ["text", "image", "video"],
         compat: { codeMode: "preferred" },
+      }),
+      expect.objectContaining({
+        id: "gemini-3.7-flash",
+        name: "Gemini 3.7 Flash",
+        reasoning: true,
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        input: ["text", "image", "video"],
+        compat: { codeMode: "preferred" },
+        thinkingLevelMap: { minimal: null },
       }),
       expect.objectContaining({
         id: "gemma-3-1b-it",

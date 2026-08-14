@@ -93,6 +93,7 @@ jobs:
       historical_target: ${{ steps.manifest.outputs.historical_target }}
       frozen_target: ${{ steps.manifest.outputs.frozen_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
+      qa_smoke_ci_matrix: ${{ steps.manifest.outputs.qa_smoke_ci_matrix }}
       run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
       run_sqlite_session_lifecycle: ${{ steps.manifest.outputs.run_sqlite_session_lifecycle }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
@@ -603,6 +604,8 @@ jobs:
           const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly;
           const uiE2eShardCount =
             process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ? 8 : 4;
+          const qaSmokeCiPartCount =
+            process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
             hasPackageScript("android:i18n:check") &&
@@ -798,6 +801,18 @@ jobs:
             frozen_target: frozenTarget,
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
+            qa_smoke_ci_matrix: createMatrix(
+              Array.from({ length: qaSmokeCiPartCount }, (_, index) => {
+                const part = index + 1;
+                return {
+                  name: `profile ${part}/${qaSmokeCiPartCount}`,
+                  lane: `profile-${part}`,
+                  slug: `profile-${part}-of-${qaSmokeCiPartCount}`,
+                  part_count: qaSmokeCiPartCount,
+                  ...(qaSmokeCiPartCount === 4 && part === 2 ? { docker_cache: true } : {}),
+                };
+              }),
+            ),
             run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
             run_sqlite_session_lifecycle: runSqliteSessionLifecycle,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
@@ -833,14 +848,20 @@ jobs:
             run_checks_windows: runWindows,
             checks_windows_matrix: createMatrix(
               runWindows
-                ? [
-                    {
-                      check_name: "checks-windows-node-test",
+                ? process.env.OPENCLAW_CI_RUNNER_BACKEND === "github"
+                  ? [1, 2].map((part) => ({
+                      check_name: `checks-windows-node-test-${part}`,
                       runtime: "node",
-                      task: "test",
-                      runner: "blacksmith-8vcpu-windows-2025",
-                    },
-                  ]
+                      task: `test-${part}`,
+                    }))
+                  : [
+                      {
+                        check_name: "checks-windows-node-test",
+                        runtime: "node",
+                        task: "test",
+                        runner: "blacksmith-8vcpu-windows-2025",
+                      },
+                    ]
                 : [],
             ),
             run_macos_node: runMacos,
@@ -1875,22 +1896,8 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
-      matrix:
-        include:
-          - name: profile 1/4
-            lane: profile-1
-            slug: profile-1-of-4
-          - name: profile 2/4
-            lane: profile-2
-            slug: profile-2-of-4
-            docker_cache: true
-          - name: profile 3/4
-            lane: profile-3
-            slug: profile-3-of-4
-          - name: profile 4/4
-            lane: profile-4
-            slug: profile-4-of-4
+      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 6 || 4 }}
+      matrix: ${{ fromJson(needs.preflight.outputs.qa_smoke_ci_matrix) }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1934,6 +1941,7 @@ jobs:
       - name: Run smoke profile part
         env:
           PROFILE_PART: ${{ matrix.lane }}
+          PROFILE_PART_COUNT: ${{ matrix.part_count }}
           PROFILE_PART_SLUG: ${{ matrix.slug }}
           OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && '0' || '1500' }}
         shell: bash
@@ -1951,10 +1959,11 @@ jobs:
             node --import tsx --input-type=module <<'EOF'
           const smokePlan = await import("./extensions/qa-lab/src/ci-smoke-plan.ts");
           const partId = process.env.PROFILE_PART ?? "";
+          const partCount = Number(process.env.PROFILE_PART_COUNT ?? "4");
           let runs;
           if (typeof smokePlan.createQaSmokeCiPart === "function") {
             try {
-              runs = smokePlan.createQaSmokeCiPart(partId).runs;
+              runs = smokePlan.createQaSmokeCiPart(partId, partCount).runs;
             } catch (error) {
               // Frozen/compat targets ship older planners that declare fewer
               // profile parts; the declared parts still cover every scenario.
@@ -3211,6 +3220,12 @@ jobs:
               # Linux owns the full repo test suite. Keep the Windows runner focused on
               # Windows-native process/path wrappers so platform regressions fail fast.
               pnpm test:windows:ci
+              ;;
+            test-1)
+              pnpm test:windows:ci:1
+              ;;
+            test-2)
+              pnpm test:windows:ci:2
               ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2

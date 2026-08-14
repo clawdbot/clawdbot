@@ -114,9 +114,10 @@ export async function agentsDeleteCommand(
     runtime.log(`Normalized agent id to "${agentId}".`);
   }
   const agentDir = resolveAgentDir(cfg, agentId);
+  const sharedAuthOwnership = resolveSharedAuthStoreOwnership();
   if (
     isSharedAuthStoreOwner({
-      ownership: resolveSharedAuthStoreOwnership(),
+      ownership: sharedAuthOwnership,
       agentAuthDbPath: resolveAuthProfileDatabasePath(agentDir),
       sharedAuthDbPath: resolveSharedAuthStorePath(),
     })
@@ -137,8 +138,11 @@ export async function agentsDeleteCommand(
     runtime.exit(1);
     return;
   }
-  if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(cfg))) {
-    // H2-2 owns credential relocation; deleting this directory first destroys the shared store.
+  const explicitInheritedAuthAgentId = cfg.agents?.defaults?.authInheritance?.agentId?.trim();
+  const inheritedAuthAgentId =
+    explicitInheritedAuthAgentId ||
+    (sharedAuthOwnership.location === "legacy-main" ? resolveLegacyInheritedAuthAgentId(cfg) : "");
+  if (inheritedAuthAgentId && agentId === normalizeAgentId(inheritedAuthAgentId)) {
     runtime.error(
       `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
     );
