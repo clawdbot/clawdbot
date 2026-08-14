@@ -147,8 +147,6 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
-type GatewayConnectClientInfo = ConnectParams["client"];
-
 type ConnectPlan = {
   generation: number;
   params: ConnectParams;
@@ -445,7 +443,7 @@ export class GatewayBrowserClient {
   ): Promise<ConnectPlan> {
     this.recovery = { ...this.recovery, generation, resolved: false };
     const role = CONTROL_UI_OPERATOR_ROLE;
-    const client: GatewayConnectClientInfo = {
+    const client: ConnectParams["client"] = {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
       version: this.opts.clientVersion ?? "control-ui",
       buildId: this.opts.clientBuildId,
