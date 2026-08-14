@@ -29,12 +29,10 @@ type ReusedOpenClawStateReadOnlyDatabase<T> = { reused: false } | { reused: true
 
 type PreparedReadOnlyLocation = ReturnType<typeof prepareSqliteReadOnlyLocationSync>;
 
-const OPENCLAW_STATE_INSPECTION_SNAPSHOTS_KEY = Symbol.for(
-  "openclaw.stateDatabaseInspectionSnapshots",
-);
+const STATE_INSPECTION_SNAPSHOTS_KEY = Symbol.for("openclaw.stateDatabaseInspectionSnapshots");
 const inspectionSnapshots = resolveGlobalSingleton<
   AsyncLocalStorage<Map<string, PreparedReadOnlyLocation>>
->(OPENCLAW_STATE_INSPECTION_SNAPSHOTS_KEY, () => new AsyncLocalStorage());
+>(STATE_INSPECTION_SNAPSHOTS_KEY, () => new AsyncLocalStorage());
 
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));

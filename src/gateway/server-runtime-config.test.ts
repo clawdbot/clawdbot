@@ -2,7 +2,10 @@
 // container defaults, and invalid config rejection before server startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
-import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
+import {
+  inspectGatewayStartupRuntimePolicy,
+  resolveGatewayRuntimeConfig,
+} from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
   mode: "trusted-proxy" as const,
@@ -15,6 +18,110 @@ const TOKEN_AUTH = {
   mode: "token" as const,
   token: "test-token-123",
 };
+
+describe("inspectGatewayStartupRuntimePolicy", () => {
+  const readyInput = {
+    authMode: "token" as const,
+    hasSharedSecret: true,
+    hostClass: "loopback" as const,
+    controlUiEnabled: true,
+    controlUiAllowedOrigins: [] as string[],
+    dangerouslyAllowHostHeaderOriginFallback: false,
+    tailscaleMode: "off" as const,
+    trustedProxies: [] as string[],
+  };
+
+  it.each([
+    {
+      name: "Tailscale Funnel without password auth",
+      overrides: { tailscaleMode: "funnel" as const },
+      code: "gateway-tailscale-funnel-password-required",
+    },
+    {
+      name: "non-loopback bind without auth",
+      overrides: {
+        authMode: "none" as const,
+        hasSharedSecret: false,
+        hostClass: "non-loopback" as const,
+      },
+      code: "gateway-bind-auth-required",
+    },
+    {
+      name: "non-loopback Control UI without allowed origins",
+      overrides: { hostClass: "non-loopback" as const },
+      code: "gateway-control-ui-origins-required",
+    },
+    {
+      name: "trusted-proxy auth without trusted proxies",
+      overrides: {
+        authMode: "trusted-proxy" as const,
+        hasSharedSecret: false,
+      },
+      code: "gateway-trusted-proxies-required",
+    },
+  ])("blocks $name", ({ overrides, code }) => {
+    expect(inspectGatewayStartupRuntimePolicy({ ...readyInput, ...overrides })).toMatchObject({
+      status: "blocked",
+      issue: { code },
+    });
+  });
+
+  it("blocks host-independent trusted-proxy policy when bind inspection is unresolved", () => {
+    expect(
+      inspectGatewayStartupRuntimePolicy({
+        ...readyInput,
+        authMode: "trusted-proxy",
+        hasSharedSecret: false,
+        hostClass: "indeterminate",
+      }),
+    ).toMatchObject({
+      status: "blocked",
+      issue: { code: "gateway-trusted-proxies-required" },
+    });
+  });
+
+  it("keeps unresolved host-dependent policy indeterminate", () => {
+    expect(
+      inspectGatewayStartupRuntimePolicy({
+        ...readyInput,
+        hostClass: "indeterminate",
+      }),
+    ).toMatchObject({ status: "indeterminate" });
+  });
+
+  it.each([
+    {
+      name: "loopback token auth",
+      overrides: {},
+    },
+    {
+      name: "non-loopback token auth with explicit Control UI origins",
+      overrides: {
+        hostClass: "non-loopback" as const,
+        controlUiAllowedOrigins: ["https://control.example.com"],
+      },
+    },
+    {
+      name: "trusted-proxy auth with a proxy list",
+      overrides: {
+        authMode: "trusted-proxy" as const,
+        hasSharedSecret: false,
+        trustedProxies: ["127.0.0.1"],
+      },
+    },
+    {
+      name: "Funnel with password auth",
+      overrides: {
+        authMode: "password" as const,
+        tailscaleMode: "funnel" as const,
+      },
+    },
+  ])("accepts $name", ({ overrides }) => {
+    expect(inspectGatewayStartupRuntimePolicy({ ...readyInput, ...overrides })).toEqual({
+      status: "ready",
+    });
+  });
+});
 
 describe("resolveGatewayRuntimeConfig", () => {
   describe("trusted-proxy auth mode", () => {

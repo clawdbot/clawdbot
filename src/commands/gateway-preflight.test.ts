@@ -490,6 +490,97 @@ describe("gateway startup preflight command", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
   });
 
+  it.each([
+    {
+      name: "trusted-proxy auth without a proxy list",
+      config: {
+        gateway: {
+          mode: "local" as const,
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      code: "gateway-trusted-proxies-required",
+      configPath: "gateway.trustedProxies",
+    },
+    {
+      name: "Tailscale Funnel with token auth",
+      config: {
+        gateway: {
+          mode: "local" as const,
+          auth: { mode: "token" as const, token: "configured-token" },
+          tailscale: { mode: "funnel" as const },
+        },
+      },
+      code: "gateway-tailscale-funnel-password-required",
+      configPath: "gateway.auth.mode",
+    },
+  ])("reports the shared Gateway runtime blocker for $name", async (testCase) => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: testCase.config,
+      sourceConfig: testCase.config,
+    });
+    mocks.collectGatewayStartupPreflight.mockResolvedValue({
+      checksRun: 0,
+      blockers: [],
+      errors: [],
+    });
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      blockers: [
+        {
+          id: `core/gateway-runtime/${testCase.code}`,
+          pluginId: "core",
+          migrationId: "gateway-runtime",
+          code: testCase.code,
+          configPath: testCase.configPath,
+        },
+      ],
+      errors: [],
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+  });
+
+  it("keeps runtime-seeded non-loopback Control UI origins ready without writing config", async () => {
+    const config = {
+      gateway: {
+        mode: "local" as const,
+        bind: "lan" as const,
+        auth: { mode: "token" as const, token: "configured-token" },
+      },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config,
+      sourceConfig: config,
+    });
+    mocks.collectGatewayStartupPreflight.mockResolvedValue({
+      checksRun: 0,
+      blockers: [],
+      errors: [],
+    });
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "ready",
+      blockers: [],
+      errors: [],
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(config.gateway).not.toHaveProperty("controlUi");
+  });
+
   it("returns indeterminate for an active Gateway auth SecretRef", async () => {
     const config = {
       gateway: {

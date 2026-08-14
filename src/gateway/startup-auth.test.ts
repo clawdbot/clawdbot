@@ -316,7 +316,7 @@ describe("inspectGatewayStartupBindAuth", () => {
   };
 
   it.each([
-    { bindMode: "loopback" as const, status: "ready" },
+    { bindMode: "loopback" as const, status: "ready", hostClass: "loopback" },
     { bindMode: "lan" as const, status: "blocked" },
     { bindMode: "auto" as const, isContainer: true, status: "blocked" },
     { bindMode: "auto" as const, isContainer: false, status: "indeterminate" },
@@ -324,7 +324,7 @@ describe("inspectGatewayStartupBindAuth", () => {
     {
       bindMode: "custom" as const,
       customBindHost: "10.0.0.5",
-      status: "blocked",
+      status: "indeterminate",
     },
     {
       bindMode: "custom" as const,
@@ -340,32 +340,77 @@ describe("inspectGatewayStartupBindAuth", () => {
     ).toMatchObject({
       mode: testCase.bindMode,
       status: testCase.status,
+      ...(testCase.hostClass ? { hostClass: testCase.hostClass } : {}),
     });
   });
 
   it.each([
     {
       name: "shared secret",
+      bindMode: "lan" as const,
       hasSharedSecret: true,
       resolvedAuthMode: "token" as const,
+      hostClass: "non-loopback",
     },
     {
       name: "trusted proxy",
+      bindMode: "loopback" as const,
       hasSharedSecret: false,
       resolvedAuthMode: "trusted-proxy" as const,
+      hostClass: "loopback",
     },
-  ])("does not require bind probing with $name auth", ({ hasSharedSecret, resolvedAuthMode }) => {
+  ])(
+    "classifies a deterministic bind with $name auth",
+    ({ bindMode, hasSharedSecret, resolvedAuthMode, hostClass }) => {
+      expect(
+        inspectGatewayStartupBindAuth({
+          bindMode,
+          hasSharedSecret,
+          resolvedAuthMode,
+        }),
+      ).toEqual({
+        mode: bindMode,
+        status: "ready",
+        hostClass,
+      });
+    },
+  );
+
+  it("keeps probe-dependent binds indeterminate even when auth is configured", () => {
     expect(
       inspectGatewayStartupBindAuth({
         bindMode: "tailnet",
-        hasSharedSecret,
-        resolvedAuthMode,
+        hasSharedSecret: true,
+        resolvedAuthMode: "token",
       }),
     ).toEqual({
       mode: "tailnet",
-      status: "ready",
+      status: "indeterminate",
+      reason:
+        "Gateway tailnet binding requires a runtime availability probe to determine the effective host.",
     });
   });
+
+  it.each([undefined, "", "not-an-ip"])(
+    "blocks an invalid custom bind host without probing (%s)",
+    (customBindHost) => {
+      expect(
+        inspectGatewayStartupBindAuth({
+          bindMode: "custom",
+          customBindHost,
+          hasSharedSecret: true,
+          resolvedAuthMode: "token",
+        }),
+      ).toMatchObject({
+        mode: "custom",
+        status: "blocked",
+        issue: {
+          code: "gateway-custom-bind-invalid",
+          configPath: "gateway.customBindHost",
+        },
+      });
+    },
+  );
 });
 
 describe("ensureGatewayStartupAuth", () => {

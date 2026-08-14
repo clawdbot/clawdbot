@@ -19,6 +19,7 @@ import {
   inspectLlamaCppEmbeddingStartupPrerequisites,
   resolveConfiguredLlamaCppProvider,
   resolveLlamaCppChatModel,
+  resolveLlamaCppEmbeddingSource,
   resolveLlamaCppProviderPort,
 } from "./embedding-provider-preflight.js";
 import { selectLlamaServerAsset } from "./llama-server-install.js";
@@ -204,7 +205,7 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   inspectStartupPrerequisites: inspectLlamaCppEmbeddingStartupPrerequisites,
   create: async (options) => {
     const local = readLocalOptions(options);
-    const modelPath = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
+    const modelPath = resolveLlamaCppEmbeddingSource(options);
     await prepareEmbeddingServer(options, modelPath);
     const genericAdapter = getEmbeddingProvider("openai-compatible", options.config);
     if (!genericAdapter) {

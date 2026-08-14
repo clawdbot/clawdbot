@@ -3,7 +3,9 @@ import type {
   EmbeddingProviderStartupInspectionResult,
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_MODEL_ID,
   LLAMA_CPP_PROVIDER_ID,
   resolveLlamaCppModelCacheDir,
@@ -84,6 +86,10 @@ export function resolveLlamaCppChatModel(
   return chatModel;
 }
 
+export function resolveLlamaCppEmbeddingSource(options: EmbeddingProviderCreateOptions): string {
+  return normalizeOptionalString(options.local?.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
+}
+
 export async function inspectLlamaCppEmbeddingStartupPrerequisites(
   options: EmbeddingProviderCreateOptions,
 ): Promise<EmbeddingProviderStartupInspectionResult> {
@@ -116,6 +122,52 @@ export async function inspectLlamaCppEmbeddingStartupPrerequisites(
         "chat-model-cache-invalid",
         `Managed llama.cpp chat model cache is invalid at ${target.filePath}.`,
       );
+    }
+
+    const embeddingTarget = resolveLlamaCppModelCacheInspectionTarget({
+      source: resolveLlamaCppEmbeddingSource(options),
+      cacheDir: resolveLlamaCppModelCacheDir(provider),
+    });
+    if (embeddingTarget.status === "indeterminate") {
+      return { status: "indeterminate", reason: embeddingTarget.reason };
+    }
+    if (embeddingTarget.status === "invalid") {
+      throw new LlamaCppStartupPrerequisiteError(
+        "embedding-model-source-invalid",
+        embeddingTarget.reason,
+      );
+    }
+    const embeddingInspection = await inspectLlamaCppModelFile({
+      filePath: embeddingTarget.filePath,
+      ...(embeddingTarget.expectedSha256 ? { expectedSha256: embeddingTarget.expectedSha256 } : {}),
+    });
+    if (embeddingInspection.status === "missing") {
+      if (embeddingTarget.sourceKind === "local") {
+        throw new LlamaCppStartupPrerequisiteError(
+          "embedding-model-cache-missing",
+          `Managed llama.cpp embedding model is not cached at ${embeddingTarget.filePath}.`,
+        );
+      }
+      return {
+        status: "indeterminate",
+        reason:
+          `Managed llama.cpp embedding model is not cached at ${embeddingTarget.filePath}; ` +
+          "startup may download it, which passive preflight does not perform.",
+      };
+    }
+    if (embeddingInspection.status === "invalid") {
+      if (embeddingTarget.sourceKind === "local" || !embeddingTarget.expectedSha256) {
+        throw new LlamaCppStartupPrerequisiteError(
+          "embedding-model-cache-invalid",
+          `Managed llama.cpp embedding model cache is invalid at ${embeddingTarget.filePath}.`,
+        );
+      }
+      return {
+        status: "indeterminate",
+        reason:
+          `Managed llama.cpp embedding model cache needs repair at ${embeddingTarget.filePath}; ` +
+          "startup may download it again, which passive preflight does not perform.",
+      };
     }
     return { status: "ready" };
   } catch (error) {

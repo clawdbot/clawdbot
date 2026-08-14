@@ -146,11 +146,29 @@ export function shouldBlockGatewayBindWithoutExplicitAuth(params: {
   );
 }
 
-export type GatewayStartupBindAuthInspection = {
-  mode: GatewayBindMode;
-  status: "ready" | "blocked" | "indeterminate";
-  reason?: string;
+type GatewayStartupBindAuthIssue = {
+  code: "gateway-bind-auth-required" | "gateway-custom-bind-invalid";
+  message: string;
+  configPath: "gateway.auth" | "gateway.customBindHost";
+  remediation: readonly string[];
 };
+
+export type GatewayStartupBindAuthInspection =
+  | {
+      mode: GatewayBindMode;
+      status: "ready";
+      hostClass: "loopback" | "non-loopback";
+    }
+  | {
+      mode: GatewayBindMode;
+      status: "blocked";
+      issue: GatewayStartupBindAuthIssue;
+    }
+  | {
+      mode: GatewayBindMode;
+      status: "indeterminate";
+      reason: string;
+    };
 
 /** Inspect the bind/auth startup guard without probing a host or opening a socket. */
 export function inspectGatewayStartupBindAuth(params: {
@@ -161,18 +179,42 @@ export function inspectGatewayStartupBindAuth(params: {
   isContainer?: boolean;
 }): GatewayStartupBindAuthInspection {
   const mode = params.bindMode;
-  if (params.hasSharedSecret || params.resolvedAuthMode === "trusted-proxy") {
-    return { mode, status: "ready" };
-  }
+  const hasAuth = params.hasSharedSecret || params.resolvedAuthMode === "trusted-proxy";
   if (mode === "loopback") {
-    return { mode, status: "ready" };
+    return { mode, status: "ready", hostClass: "loopback" };
   }
   if (mode === "lan") {
-    return { mode, status: "blocked" };
+    return hasAuth
+      ? { mode, status: "ready", hostClass: "non-loopback" }
+      : {
+          mode,
+          status: "blocked",
+          issue: {
+            code: "gateway-bind-auth-required",
+            message: "Refusing to bind gateway to lan without auth.",
+            remediation: [
+              "Set gateway.auth.token/password or the corresponding target environment variable.",
+            ],
+            configPath: "gateway.auth",
+          },
+        };
   }
   if (mode === "auto") {
     if (params.isContainer ?? isContainerEnvironment()) {
-      return { mode, status: "blocked" };
+      return hasAuth
+        ? { mode, status: "ready", hostClass: "non-loopback" }
+        : {
+            mode,
+            status: "blocked",
+            issue: {
+              code: "gateway-bind-auth-required",
+              message: "Refusing to bind gateway to auto without auth.",
+              remediation: [
+                "Set gateway.auth.token/password or the corresponding target environment variable.",
+              ],
+              configPath: "gateway.auth",
+            },
+          };
     }
     return {
       mode,
@@ -183,14 +225,35 @@ export function inspectGatewayStartupBindAuth(params: {
   }
   if (mode === "custom") {
     const host = params.customBindHost?.trim() ?? "";
-    if (!isValidIPv4(host) || !isLoopbackHost(host)) {
-      return { mode, status: "blocked" };
+    if (!host) {
+      return {
+        mode,
+        status: "blocked",
+        issue: {
+          code: "gateway-custom-bind-invalid",
+          message: "gateway.bind=custom requires gateway.customBindHost",
+          remediation: ["Set gateway.customBindHost to a valid IPv4 address."],
+          configPath: "gateway.customBindHost",
+        },
+      };
+    }
+    if (!isValidIPv4(host)) {
+      return {
+        mode,
+        status: "blocked",
+        issue: {
+          code: "gateway-custom-bind-invalid",
+          message: `gateway.bind=custom requires a valid IPv4 customBindHost (got ${host})`,
+          remediation: ["Set gateway.customBindHost to a valid IPv4 address."],
+          configPath: "gateway.customBindHost",
+        },
+      };
     }
     return {
       mode,
       status: "indeterminate",
       reason:
-        "Gateway custom loopback binding requires a runtime availability probe to determine whether startup falls back to an exposed host.",
+        "Gateway custom binding requires a runtime availability probe to verify the configured host without opening a listener.",
     };
   }
   return {

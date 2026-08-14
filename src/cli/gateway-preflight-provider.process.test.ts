@@ -1,3 +1,3 @@
-import { registerGatewayPreflightProviderProcessTests } from "./gateway-preflight.process.test-support.js";
+import { registerGatewayPreflightProviderProcessTests } from "./gateway-preflight-provider.process.test-support.js";
 
 registerGatewayPreflightProviderProcessTests();

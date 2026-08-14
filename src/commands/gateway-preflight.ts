@@ -1,9 +1,14 @@
 import { resolveGatewayShellEnvFallbackPlan } from "../cli/gateway-cli/shell-env-fallback-plan.js";
 import { getGatewayStartGuardErrors } from "../cli/gateway-cli/start-guard.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../config/io.audit.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { defaultGatewayBindMode } from "../gateway/net.js";
+import {
+  inspectGatewayStartupRuntimePolicy,
+  type GatewayStartupRuntimePolicyInspection,
+} from "../gateway/server-runtime-config.js";
 import {
   inspectStartupSessionMigrationPrerequisites,
   type SessionStartupPreflightResult,
@@ -50,6 +55,7 @@ type GatewayStartupPreflightResult = {
 const CORE_PREFLIGHT_PLUGIN_ID = "core";
 const CORE_SESSION_PREFLIGHT_MIGRATION_ID = "session-sqlite";
 const CORE_AUTH_PREFLIGHT_MIGRATION_ID = "gateway-auth";
+const CORE_RUNTIME_PREFLIGHT_MIGRATION_ID = "gateway-runtime";
 const CORE_CONFIG_PREFLIGHT_MIGRATION_ID = "gateway-config";
 const CORE_ENVIRONMENT_PREFLIGHT_MIGRATION_ID = "gateway-environment";
 
@@ -80,6 +86,7 @@ function combineCoreStartupPreflight(
   },
   authResult: GatewayStartupAuthInspection,
   bindResult: GatewayStartupBindAuthInspection,
+  runtimePolicyResult: GatewayStartupRuntimePolicyInspection,
   sessionResult?: SessionStartupPreflightResult,
 ): {
   checksRun: number;
@@ -127,24 +134,46 @@ function combineCoreStartupPreflight(
     });
   }
   if (bindResult.status === "blocked") {
+    const suffix =
+      bindResult.issue.code === "gateway-bind-auth-required"
+        ? "bind-auth-required"
+        : bindResult.issue.code;
     blockers.push({
-      id: `${authInspectionId}/bind-auth-required`,
+      id: `${authInspectionId}/${suffix}`,
       pluginId: CORE_PREFLIGHT_PLUGIN_ID,
       migrationId: CORE_AUTH_PREFLIGHT_MIGRATION_ID,
-      code: "gateway-bind-auth-required",
-      message: `Refusing to bind gateway to ${bindResult.mode} without auth.`,
-      remediation: [
-        "Set gateway.auth.token/password or the corresponding target environment variable.",
-      ],
-      configPath: "gateway.auth",
+      code: bindResult.issue.code,
+      message: bindResult.issue.message,
+      remediation: bindResult.issue.remediation,
+      configPath: bindResult.issue.configPath,
     });
-  } else if (bindResult.status === "indeterminate") {
+  }
+  if (runtimePolicyResult.status === "blocked") {
+    const runtimeInspectionId = `${CORE_PREFLIGHT_PLUGIN_ID}/${CORE_RUNTIME_PREFLIGHT_MIGRATION_ID}`;
+    blockers.push({
+      id: `${runtimeInspectionId}/${runtimePolicyResult.issue.code}`,
+      pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+      migrationId: CORE_RUNTIME_PREFLIGHT_MIGRATION_ID,
+      code: runtimePolicyResult.issue.code,
+      message: runtimePolicyResult.issue.message,
+      remediation: runtimePolicyResult.issue.remediation,
+      configPath: runtimePolicyResult.issue.configPath,
+    });
+  } else if (
+    bindResult.status !== "blocked" &&
+    (bindResult.status === "indeterminate" || runtimePolicyResult.status === "indeterminate")
+  ) {
     errors.push({
       id: `${authInspectionId}/bind`,
       pluginId: CORE_PREFLIGHT_PLUGIN_ID,
       migrationId: CORE_AUTH_PREFLIGHT_MIGRATION_ID,
       code: "gateway-bind-inspection-required",
-      message: bindResult.reason ?? `Gateway bind mode ${bindResult.mode} requires inspection.`,
+      message:
+        bindResult.status === "indeterminate"
+          ? bindResult.reason
+          : runtimePolicyResult.status === "indeterminate"
+            ? runtimePolicyResult.reason
+            : `Gateway bind mode ${bindResult.mode} requires inspection.`,
     });
   }
   if (authResult.activeSecretRefPaths.length > 0) {
@@ -313,6 +342,23 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
       hasSharedSecret: authResult.hasSharedSecret,
       resolvedAuthMode: authResult.auth.mode,
     });
+    const runtimeConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(snapshot.config, {
+      runtimeBind: bindMode,
+      runtimePort: snapshot.config.gateway?.port,
+    }).config;
+    const runtimePolicyResult = inspectGatewayStartupRuntimePolicy({
+      authMode: authResult.auth.mode,
+      hasSharedSecret: authResult.hasSharedSecret,
+      hostClass: bindResult.status === "ready" ? bindResult.hostClass : "indeterminate",
+      controlUiEnabled: runtimeConfig.gateway?.controlUi?.enabled ?? true,
+      controlUiAllowedOrigins: (runtimeConfig.gateway?.controlUi?.allowedOrigins ?? [])
+        .map((value) => value.trim())
+        .filter(Boolean),
+      dangerouslyAllowHostHeaderOriginFallback:
+        runtimeConfig.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+      tailscaleMode,
+      trustedProxies: runtimeConfig.gateway?.trustedProxies ?? [],
+    });
     const [pluginResult, sessionResult] = await Promise.all([
       collectGatewayStartupPreflight({
         config: snapshot.config,
@@ -325,7 +371,13 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
       }),
     ]);
     return createResult(
-      combineCoreStartupPreflight(pluginResult, authResult, bindResult, sessionResult),
+      combineCoreStartupPreflight(
+        pluginResult,
+        authResult,
+        bindResult,
+        runtimePolicyResult,
+        sessionResult,
+      ),
     );
   } catch (error) {
     return createResult(
@@ -345,7 +397,9 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
         {
           mode: snapshot.config.gateway?.bind ?? "loopback",
           status: "ready",
+          hostClass: "loopback",
         },
+        { status: "ready" },
       ),
     );
   }
