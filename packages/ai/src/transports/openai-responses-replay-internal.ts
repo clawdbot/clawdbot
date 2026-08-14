@@ -66,17 +66,13 @@ function isOrphanedFunctionCallOutputError(error: unknown): boolean {
     return false;
   }
   const record = error as Record<string, unknown>;
-  if (
-    record.status !== 400 &&
-    record.code !== "invalid_request_error" &&
-    record.type !== "invalid_request_error"
-  ) {
-    return false;
-  }
-  if (record.param !== undefined && record.param !== null && record.param !== "input") {
-    return false;
-  }
+  const invalidRequest =
+    record.status === 400 ||
+    record.code === "invalid_request_error" ||
+    record.type === "invalid_request_error";
   return (
+    invalidRequest &&
+    (record.param === undefined || record.param === null || record.param === "input") &&
     typeof record.message === "string" &&
     /^(?:400 )?No tool call found for function call output with call_id [A-Za-z0-9_-]+\.$/.test(
       record.message,
