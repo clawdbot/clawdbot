@@ -21,11 +21,9 @@ async function inspectConfiguredProvider(params: {
   env: NodeJS.ProcessEnv;
   agentDatabasePath: string;
 }): Promise<ProviderFailure | null> {
-  const [{ resolveAgentConfig }, foundation, embeddings, providerState] = await Promise.all([
+  const [{ resolveAgentConfig }, foundation] = await Promise.all([
     import("openclaw/plugin-sdk/agent-runtime"),
     import("openclaw/plugin-sdk/memory-core-host-engine-foundation"),
-    import("../memory/embeddings.js"),
-    import("../memory/manager-provider-state.js"),
   ]);
   let settings: ReturnType<typeof foundation.resolveMemorySearchConfig>;
   try {
@@ -39,6 +37,10 @@ async function inspectConfiguredProvider(params: {
   if (!settings || settings.provider === "none") {
     return null;
   }
+  const [embeddings, providerState] = await Promise.all([
+    import("../memory/embeddings.js"),
+    import("../memory/manager-provider-state.js"),
+  ]);
   try {
     const configuredAgentDir = resolveAgentConfig(params.config, params.agentId)?.agentDir?.trim();
     const result = await embeddings.createEmbeddingProvider({
