@@ -162,8 +162,12 @@ export async function prepareGatewayKernelState(params: {
           });
         })
       : {};
-  const { workerEnvironmentService, workerLiveEvents, bindDeviceNodeControl } =
-    workerEnvironmentRuntime;
+  const {
+    workerEnvironmentService,
+    workerLiveEvents,
+    bindDeviceNodeControl,
+    bindNodeWorkspaceBindingResolver,
+  } = workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
     revoke: (_params: { sessionId: string; sessionKeys: readonly string[] }): void => {
@@ -184,6 +188,7 @@ export async function prepareGatewayKernelState(params: {
         })
       : undefined;
   if (workerPlacementRuntime) {
+    bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
       workerPlacementRuntime.dispatchService.dispatch,
     );

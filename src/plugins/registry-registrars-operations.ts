@@ -16,7 +16,7 @@ import {
   isPrivateNodeInvokeCommand,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
-  NODE_WORKER_SUPERVISOR_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -188,7 +188,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     ...NODE_SYSTEM_RUN_COMMANDS,
     ...NODE_EXEC_APPROVALS_COMMANDS,
     NODE_SYSTEM_NOTIFY_COMMAND,
-    ...NODE_WORKER_SUPERVISOR_COMMANDS,
+    ...NODE_WORKER_PRIVATE_COMMANDS,
   ]);
 
   const registerNodeHostCommand = (

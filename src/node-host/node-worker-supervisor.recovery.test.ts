@@ -19,6 +19,7 @@ import {
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   testNodeWorkerLaunchIdentity,
+  TEST_WORKER_ENDPOINT,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
@@ -60,7 +61,8 @@ function planHash(input: ReturnType<typeof testWorkerLaunchInput>): string {
   return createHash("sha256")
     .update(
       stableStringify({
-        bundleHash: input.bundleHash,
+        installKind: input.installKind,
+        expectedBundleHash: input.expectedBundleHash,
         descriptor: input.descriptor,
         gatewayNamespace: input.gatewayNamespace,
         placementGeneration: input.placementGeneration,
@@ -154,7 +156,7 @@ function writeSupervisorOwnerScript(root: string): string {
       };
       process.once("SIGTERM", () => void shutdown());
       const input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
-      const receipt = await supervisor.launch(input);
+      const receipt = await supervisor.launch(input, ${JSON.stringify({ kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" })});
       process.stdout.write(JSON.stringify(receipt) + "\\n");
       setInterval(() => {}, 1000);
     `,
@@ -205,7 +207,7 @@ describe("node worker supervisor recovery", () => {
       supervisor: { pid: 2_147_483_647, startTime: 1 },
     });
 
-    const running = await supervisor.launch(input);
+    const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
 
     expect(running).toMatchObject({
       state: "running",
@@ -259,7 +261,7 @@ describe("node worker supervisor recovery", () => {
       const recovered =
         operation === "cancel"
           ? await supervisor.cancel(testNodeWorkerLaunchIdentity(input))
-          : await supervisor.launch(input);
+          : await supervisor.launch(input, TEST_WORKER_ENDPOINT);
 
       expect(recovered).toMatchObject({ state, worker });
       await waitForIdentityDeath(worker);
@@ -299,7 +301,7 @@ describe("node worker supervisor recovery", () => {
         readFileSync.mockRestore();
       }
     }
-    const replay = await second.launch(input);
+    const replay = await second.launch(input, TEST_WORKER_ENDPOINT);
 
     expect(unchanged).toEqual(owned);
     expect(replay).toEqual(owned);
@@ -331,7 +333,7 @@ describe("node worker supervisor recovery", () => {
       await waitForIdentityDeath(grandchild);
 
       const restarted = createNodeWorkerSupervisor({ bundleRoot, env });
-      const reconciled = await restarted.launch(input);
+      const reconciled = await restarted.status(input.launchId);
       expect(reconciled).toMatchObject({
         state: "interrupted",
         supervisor: owned.supervisor,
@@ -386,7 +388,7 @@ describe("node worker supervisor recovery", () => {
     const owned = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
     const second = createNodeWorkerSupervisor({ bundleRoot, env });
 
-    const replay = await second.launch(input);
+    const replay = await second.launch(input, TEST_WORKER_ENDPOINT);
 
     expect(replay).toEqual(owned);
     owner.kill("SIGKILL");
