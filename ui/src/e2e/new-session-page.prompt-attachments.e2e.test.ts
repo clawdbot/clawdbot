@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -181,6 +182,28 @@ suite.define(() => {
       await page.getByRole("button", { name: "Remove attachment" }).click();
       await expect.poll(() => attachment.count()).toBe(0);
       await captureUiProof(page, "new-session-picked-image-removed.png");
+    });
+  });
+
+  it("keeps blob-backed SVG previews out of original-document navigation", async () => {
+    await withNewSessionPage(async (page) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}new`);
+
+      await page.locator(".agent-chat__photo-input").setInputFiles({
+        name: "untrusted.svg",
+        mimeType: "image/svg+xml",
+        buffer: Buffer.from(
+          "<svg xmlns='http://www.w3.org/2000/svg'><rect width='1' height='1'/></svg>",
+        ),
+      });
+
+      const previewButton = page.getByRole("button", { name: "Open image untrusted.svg" });
+      await expect.poll(() => previewButton.locator("img").getAttribute("src")).toMatch(/^blob:/u);
+      await previewButton.click();
+      await page.getByRole("dialog", { name: "Image preview: untrusted.svg" }).waitFor();
+      await expect(page.getByRole("link", { name: "Open original" }).count()).resolves.toBe(0);
+      await captureUiProof(page, "new-session-svg-lightbox.png");
     });
   });
 
