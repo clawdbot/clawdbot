@@ -367,7 +367,11 @@ export function refreshClientPluginNodeCapability(params: {
 }
 
 export function hasAuthorizedPluginNodeCapability(params: {
-  clients: Iterable<PluginNodeCapabilityClient>;
+  clients: Iterable<
+    PluginNodeCapabilityClient & {
+      connect?: { role?: string; caps?: readonly string[] };
+    }
+  >;
   surface: PluginNodeCapabilitySurface;
   capability: string;
   nowMs?: number;
@@ -383,6 +387,11 @@ export function hasAuthorizedPluginNodeCapability(params: {
     return false;
   }
   for (const client of params.clients) {
+    // A minted token is not enough: only an active node with the approved
+    // surface in its effective caps may exercise a plugin-node route.
+    if (client.connect?.role !== "node" || !client.connect.caps?.includes(surface)) {
+      continue;
+    }
     if (client.invalidated) {
       continue;
     }

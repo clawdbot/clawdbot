@@ -19,6 +19,7 @@ function makeClient(
   overrides: Partial<GatewayWsClient> & {
     pluginNodeCapabilities?: GatewayWsClient["pluginNodeCapabilities"];
   } = {},
+  caps: string[] = ["canvas"],
 ): GatewayWsClient {
   return {
     socket: {} as GatewayWsClient["socket"],
@@ -26,6 +27,7 @@ function makeClient(
       role: "node",
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
+      caps,
       client: {
         mode: "node",
       },
@@ -476,6 +478,42 @@ describe("plugin node capability helpers", () => {
         clients: new Set([client]),
         surface: { surface: "canvas" },
         capability: "canvas-token",
+        nowMs: 1_000,
+      }),
+    ).toBe(false);
+  });
+
+  test("requires an approved node surface for capability authorization", () => {
+    const capability = "canvas-token";
+    const surface = { surface: "canvas" };
+    const pendingNode = makeClient(
+      {
+        pluginNodeCapabilities: {
+          canvas: { capability, expiresAtMs: 1_500 },
+        },
+      },
+      [],
+    );
+    const operator = makeClient({
+      pluginNodeCapabilities: {
+        canvas: { capability, expiresAtMs: 1_500 },
+      },
+    });
+    operator.connect.role = "operator";
+
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([pendingNode]),
+        surface,
+        capability,
+        nowMs: 1_000,
+      }),
+    ).toBe(false);
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([operator]),
+        surface,
+        capability,
         nowMs: 1_000,
       }),
     ).toBe(false);
