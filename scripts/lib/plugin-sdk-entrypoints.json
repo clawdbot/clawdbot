@@ -209,6 +209,7 @@
   "runtime-fetch",
   "inline-image-data-url-runtime",
   "node-host",
+  "computer-use",
   "response-limit-runtime",
   "session-binding-runtime",
   "session-catalog",

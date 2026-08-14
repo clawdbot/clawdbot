@@ -14,12 +14,14 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  clearAllCliSessions,
   clearCliSession,
   getCliSessionBinding,
   setCliSessionBinding,
   setCliSessionId,
 } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
@@ -494,7 +496,7 @@ export async function persistCliSessionForkSuccessorInStore(params: {
 
 /** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
-  provider: string;
+  compactionKind: NonNullable<EmbeddedAgentCompactResult["compactionKind"]>;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
@@ -502,19 +504,21 @@ export async function recordCliCompactionInStore(params: {
   newSessionId?: string;
   expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
+  const { compactionKind, sessionKey, sessionStore, storePath, expectedSessionId } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
   }
 
   const next = { ...entry };
-  clearCliSession(next, provider);
+  // A shared-history rewrite invalidates every binding; native compaction preserves its session.
+  if (compactionKind === "context-engine") {
+    clearAllCliSessions(next);
+  }
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
   const newSessionId = normalizeOptionalString(params.newSessionId);
-  const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
-  if (sessionIdChanged && newSessionId) {
+  if (newSessionId && newSessionId !== entry.sessionId) {
     delete (next as { sessionFile?: unknown }).sessionFile;
     next.sessionId = newSessionId;
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
@@ -524,21 +528,17 @@ export async function recordCliCompactionInStore(params: {
   }
   const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
+  next.inputTokens = undefined;
+  next.outputTokens = undefined;
+  next.cacheRead = undefined;
+  next.cacheWrite = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;
     next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    next.inputTokens = undefined;
-    next.outputTokens = undefined;
-    next.cacheRead = undefined;
-    next.cacheWrite = undefined;
   } else {
     next.totalTokensFresh = false;
     next.totalTokensVersion = undefined;
-    next.inputTokens = undefined;
-    next.outputTokens = undefined;
-    next.cacheRead = undefined;
-    next.cacheWrite = undefined;
   }
 
   const persisted = await patchSessionEntryCore(

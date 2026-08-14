@@ -475,7 +475,6 @@ function renderCatalogSessionRow(
           }
         }}
       >
-        <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>

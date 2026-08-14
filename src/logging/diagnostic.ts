@@ -1176,19 +1176,19 @@ export function startDiagnosticHeartbeat(
       lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
     lastDiagnosticHeartbeatTickAt = now;
     const heartbeatOverdueMs = Math.max(0, heartbeatElapsedMs - DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
+    const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
     // Observe ordinary timer jitter at the scheduled tick so it cannot consume
     // a run's remaining recovery budget. Material lateness can also hide queued
     // progress events, so the next healthy heartbeat owns recovery instead.
     const recoveryObservationNow = now - heartbeatOverdueMs;
     const shouldDeferRecovery = heartbeatOverdueMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
-    if (shouldDeferRecovery) {
+    if (shouldDeferRecovery && !inStartupGrace) {
       diag.warn(
-        `liveness heartbeat delayed ${Math.round(heartbeatElapsedMs)}ms; deferring recovery decisions`,
+        `liveness heartbeat delayed: overdue=${Math.round(heartbeatOverdueMs)}ms elapsed=${Math.round(heartbeatElapsedMs)}ms; deferring recovery decisions`,
       );
     }
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
-    const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
     const rawLivenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
     // Keep sampling during grace so event-loop delay baselines reset, but suppress startup-only reports.
     const livenessSample = inStartupGrace ? null : rawLivenessSample;

@@ -18,6 +18,7 @@ import {
 } from "./reply-run-registry.state.js";
 
 type ReplyBackendQueueMessageMismatch =
+  | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
@@ -35,10 +36,23 @@ type ReplyMessageInjectionRejectionReason =
 export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
     ReplyBackendHandle,
-    "sourceReplyDeliveryMode" | "supportsQueueMessageImages" | "taskSuggestionDeliveryMode"
+    | "sourceReplyDeliveryMode"
+    | "supportsQueueMessageImages"
+    | "taskSuggestionDeliveryMode"
+    | "toolAuthorityFingerprint"
   >,
   options?: ReplyBackendQueueMessageOptions,
+  authority?: { toolAuthorityFingerprint?: string },
 ): ReplyBackendQueueMessageMismatch | undefined {
+  if (options?.isInboundUserMessage === true) {
+    const activeFingerprint = normalizeOptionalString(
+      backend.toolAuthorityFingerprint ?? authority?.toolAuthorityFingerprint,
+    );
+    const incomingFingerprint = normalizeOptionalString(options.toolAuthorityFingerprint);
+    if (!activeFingerprint || !incomingFingerprint || activeFingerprint !== incomingFingerprint) {
+      return "tool_authority_mismatch";
+    }
+  }
   if (options?.images?.length && backend.supportsQueueMessageImages !== true) {
     return "image_input_unsupported";
   }
@@ -123,7 +137,7 @@ export function resolveReplyMessageInjectionRejection(params: {
   } catch (error) {
     return { reason: "injection_unavailable", errorMessage: String(error) };
   }
-  const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options);
+  const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, operation);
   return mismatch ? { reason: mismatch } : { backend, injection };
 }
 

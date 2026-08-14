@@ -67,6 +67,7 @@ describe("node-host runtime worker supervisor lifetime", () => {
     const input = testWorkerLaunchInput(fixture.workspaceDir, "launch-runtime", "wait");
     resolveNodeWorkerInstallationMock.mockResolvedValue({
       packageRoot: fixture.root,
+      revalidateBuild: vi.fn(async () => true),
       build: input.descriptor.admission.handshake,
     });
     let releaseLaunchResponse!: () => void;

@@ -524,6 +524,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["portal.list", "portals", "operator.read", "2026.8"],
   ["portal.open", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
   ["portal.close", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
+  ["delivery.failures.resubmit", "delivery-failures", "operator.admin", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

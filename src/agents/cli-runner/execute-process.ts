@@ -287,6 +287,7 @@ export async function executeCliProcess(params: {
         ? {
             kind: "cli" as const,
             runId: runParams.runId,
+            toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
             cancel: () => managedRun.cancel("manual-cancel"),
           }
         : undefined;

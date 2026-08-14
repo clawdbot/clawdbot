@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
@@ -13,6 +14,7 @@ import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   abortActiveReplyRuns,
@@ -44,6 +46,7 @@ import {
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
+import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
@@ -93,6 +96,50 @@ async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
 }
 
 describe("reply run registry", () => {
+  it("distinguishes hidden allowlist intersections in steering authority", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    const second = createQueueTestRun({ prompt: "second" });
+    first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
+    second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
+
+    expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(second),
+    );
+  });
+
+  it.each([
+    {
+      label: "provider",
+      first: { provider: "openai", model: "gpt-test" },
+      second: { provider: "anthropic", model: "gpt-test" },
+    },
+    {
+      label: "model",
+      first: { provider: "openai", model: "gpt-primary" },
+      second: { provider: "openai", model: "gpt-fallback" },
+    },
+  ])("distinguishes the concrete $label route in steering authority", ({ first, second }) => {
+    const run = createQueueTestRun({ prompt: "route authority" });
+
+    expect(resolveFollowupRunToolAuthorityFingerprint(run, first)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(run, second),
+    );
+  });
+
+  it("tracks the concrete authority route across fallback candidates", () => {
+    const operation = createTestReplyOperation({ sessionId: "session-route" });
+
+    operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-primary" });
+    expect(operation.toolAuthorityRoute).toEqual({ provider: "openai", model: "gpt-primary" });
+
+    operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude-fallback" });
+    expect(operation.toolAuthorityRoute).toEqual({
+      provider: "anthropic",
+      model: "claude-fallback",
+    });
+    operation.complete();
+  });
+
   afterEach(() => {
     testing.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
@@ -1778,6 +1825,34 @@ describe("reply run registry", () => {
       "hello",
       expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
     );
+  });
+
+  it("rejects inbound steering when tool authority changes before backend admission", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createTestReplyOperation({ sessionId: "session-authority" });
+    operation.bindToolAuthorityFingerprint("authority-a");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    await expect(
+      queueCurrentReplyRunMessage("session-authority", "restricted turn", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "authority-b",
+      }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+    expect(queueMessage).not.toHaveBeenCalled();
+
+    await expect(
+      queueCurrentReplyRunMessage("session-authority", "same authority", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "authority-a",
+      }),
+    ).resolves.toEqual({ status: "accepted" });
   });
 
   it("refuses stale injectable owners for admission and delivery until activity resumes", async () => {

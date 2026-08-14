@@ -137,18 +137,21 @@ export async function prepareGatewayNodeConnect(
     }
     throw error;
   }
-  // The ssh-verify key match already proved this node runs under the
-  // operator's account on a machine they own, which is the same claim
-  // a manual capability approval asserts; approve the first declared
-  // surface directly. Surface upgrades still prompt.
-  if (deviceApprovedVia === "ssh-verified" && !pairedNode && reconciliation.pendingPairing) {
+  // SSH verification proves machine ownership, while an admin-minted setup code
+  // records that admin's consent to this machine's initial declared surface.
+  // Approve either initial surface directly; later manifest upgrades still prompt.
+  if (
+    (deviceApprovedVia === "ssh-verified" || deviceApprovedVia === "bootstrap") &&
+    !pairedNode &&
+    reconciliation.pendingPairing
+  ) {
     const surfaceRequestId = reconciliation.pendingPairing.request.requestId;
     const approvedSurface = await approveNodePairing(surfaceRequestId, {
       callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE],
     });
     if (approvedSurface && "node" in approvedSurface) {
       logGateway.info(
-        `security audit: node capability surface ssh-verified auto-approve node=${reconciliation.nodeId} commands=${reconciliation.declaredCommands.join(",") || "<none>"}`,
+        `security audit: node capability surface ${deviceApprovedVia} auto-approve node=${reconciliation.nodeId} commands=${reconciliation.declaredCommands.join(",") || "<none>"}`,
       );
       buildRequestContext().broadcast(
         "node.pair.resolved",
