@@ -519,7 +519,12 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       const previousSessionId = mutation.previous.sessionId;
       const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
       if (previousSessionId && previousSessionId !== currentSessionId) {
-        void reconcileActivePlacements();
+        const pending = placementReconcile.current;
+        if (!pending) {
+          void reconcileActivePlacements();
+          return;
+        }
+        void pending.then(reconcileActivePlacements, reconcileActivePlacements);
       }
     });
     const sidecar: WorkerPlacementSidecar = {
