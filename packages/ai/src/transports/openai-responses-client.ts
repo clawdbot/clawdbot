@@ -49,6 +49,7 @@ import {
 } from "./openai-responses-params-internal.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
+  createOpenAIResponsesAssistantOutput,
   createResponsesStreamWithEncryptedContentRetry,
   isInvalidEncryptedContentError,
   resolveNextResponsesEncryptedContentAttempt,
@@ -241,23 +242,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
-      const output: AssistantMessage = {
-        role: "assistant" as const,
-        content: [],
-        api: config.outputApi ?? model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      const output = createOpenAIResponsesAssistantOutput(model, config.outputApi);
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       let continuationClaim: ReturnType<typeof claimOpenAIResponsesHttpContinuation>;
       try {
