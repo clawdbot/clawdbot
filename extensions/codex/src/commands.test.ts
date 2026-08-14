@@ -2849,6 +2849,10 @@ describe("codex command", () => {
   });
 
   it("escapes compaction failure reasons before chat display", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-123", cwd: "/repo" },
+    );
     const result = await handleCodexCommand(
       createContext("compact", undefined, {
         runtimeContext: {
@@ -3076,14 +3080,19 @@ describe("codex command", () => {
     expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
 
-  it("gates compaction when the command has no bound session", async () => {
+  it("requires a Codex thread binding before host compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
 
     await expect(
-      handleCodexCommand(createContext("compact", sessionFile), { deps: createDeps() }),
+      handleCodexCommand(
+        createContext("compact", sessionFile, { runtimeContext: { compactCurrent } }),
+        { deps: createDeps() },
+      ),
     ).resolves.toEqual({
-      text: "Codex compaction is unavailable because this command is not bound to a session.",
+      text: "No Codex thread is attached to this OpenClaw session yet.",
     });
+    expect(compactCurrent).not.toHaveBeenCalled();
   });
 
   it("asks before sending diagnostics feedback for the attached Codex thread", async () => {

@@ -425,6 +425,14 @@ export async function startThreadAction(
   if (args.length > 0) {
     return `Usage: /codex ${kind}`;
   }
+  const target = await resolveControlTarget(ctx);
+  if (!target) {
+    return `Cannot start Codex ${kind === "compact" ? "compaction" : "review"} because this command did not include a stable binding identity.`;
+  }
+  const binding = await deps.bindingStore.read(target.identity);
+  if (!binding?.threadId) {
+    return `No Codex thread is attached to this OpenClaw session yet.`;
+  }
   if (kind === "compact") {
     const compactCurrent = ctx.runtimeContext?.compactCurrent;
     if (!compactCurrent) {
@@ -434,14 +442,6 @@ export async function startThreadAction(
     return result.compacted
       ? `Compacted Codex session (${result.tokensAfter ?? "unknown"} tokens after).`
       : `Codex compaction did not complete: ${formatCodexDisplayText(result.reason ?? "no reason returned")}.`;
-  }
-  const target = await resolveControlTarget(ctx);
-  if (!target) {
-    return "Cannot start Codex review because this command did not include a stable binding identity.";
-  }
-  const binding = await deps.bindingStore.read(target.identity);
-  if (!binding?.threadId) {
-    return `No Codex thread is attached to this OpenClaw session yet.`;
   }
   const connection = resolveCodexBindingAppServerConnection({
     binding,

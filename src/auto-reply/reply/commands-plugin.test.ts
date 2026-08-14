@@ -182,6 +182,29 @@ describe("handlePluginCommand", () => {
     expect(firstCommandContext(handler).runtimeContext?.compactCurrent).toBeUndefined();
   });
 
+  it("blocks session compaction for an unauthorized public command", async () => {
+    const handler = vi.fn(async (ctx: PluginCommandContext) => ({
+      text: JSON.stringify(await ctx.runtimeContext?.compactCurrent?.()),
+    }));
+    registerTestCommand(undefined, {
+      requireAuth: false,
+      handler,
+    });
+    const params = buildPluginParams("/card", { commands: { text: true } } as OpenClawConfig);
+    params.command = { ...params.command, isAuthorizedSender: false };
+
+    const result = await handlePluginCommand(params, true);
+
+    expect(result?.reply?.text).toBe(
+      JSON.stringify({ compacted: false, reason: "compaction requires authorization" }),
+    );
+    expect(
+      expectDefined(handler.mock.calls[0]?.[0], "public command context").runtimeContext
+        ?.compactCurrent,
+    ).toBeTypeOf("function");
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("closes retained session compaction when the command handler settles", async () => {
     let retained: NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"];
     registerTestCommand(undefined, {

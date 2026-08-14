@@ -104,8 +104,11 @@ export const handlePluginCommand: CommandHandler = async (
     ...(sessionTarget
       ? {
           runtimeContext: {
-            compactCurrent: async (invocationSignal) =>
-              (await handleCompactCommand(
+            compactCurrent: async (invocationSignal) => {
+              if (!params.command.isAuthorizedSender) {
+                return { compacted: false, reason: "compaction requires authorization" };
+              }
+              const compaction = await handleCompactCommand(
                 {
                   ...params,
                   command: { ...params.command, commandBodyNormalized: "/compact" },
@@ -119,7 +122,14 @@ export const handlePluginCommand: CommandHandler = async (
                   },
                 },
                 true,
-              ))!.sessionCompaction!,
+              );
+              return (
+                compaction?.sessionCompaction ?? {
+                  compacted: false,
+                  reason: "compaction unavailable",
+                }
+              );
+            },
           },
         }
       : {}),
