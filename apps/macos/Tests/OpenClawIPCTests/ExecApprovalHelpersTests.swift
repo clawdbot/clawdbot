@@ -40,6 +40,15 @@ struct ExecApprovalHelpersTests {
         } else {
             Issue.record("Expected empty pattern rejection")
         }
+
+        // A multi-line paste must not persist as one unmatchable pattern.
+        let multiline = "/usr/bin/rg\n/usr/bin/rg"
+        if case let .invalid(reason) = ExecApprovalHelpers.validateAllowlistPattern(multiline) {
+            #expect(reason == .multiline)
+        } else {
+            Issue.record("Expected multi-line pattern rejection")
+        }
+        #expect(!ExecApprovalHelpers.isValidAllowlistPattern(multiline))
     }
 
     @Test func `requires ask matches policy`() {
