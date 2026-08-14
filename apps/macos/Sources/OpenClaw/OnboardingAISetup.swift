@@ -137,6 +137,12 @@ final class OnboardingAISetupModel {
             Task { await self.verifyPendingConfiguredInference() }
             return
         }
+        if self.providerAuthReconciliationPending {
+            self.phase = .detecting
+            self.detectError = nil
+            self.scheduleDetection()
+            return
+        }
         self.resetForGatewayChange()
         self.started = true
         self.phase = .detecting
