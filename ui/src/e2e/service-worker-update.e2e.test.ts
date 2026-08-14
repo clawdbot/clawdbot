@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
@@ -45,6 +45,23 @@ async function findBuildAsset(buildId: string): Promise<BuildAsset> {
     }
   }
   throw new Error(`Production Control UI output did not contain build id ${buildId}`);
+}
+
+async function holdReplacementWorkerInstalling(delayMs: number): Promise<void> {
+  const workerPath = path.join(outDir, "sw.js");
+  const source = await readFile(workerPath, "utf8");
+  const install =
+    "event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)));";
+  if (!source.includes(install)) {
+    throw new Error("Production service worker did not contain the expected install lifetime");
+  }
+  await writeFile(
+    workerPath,
+    source.replace(
+      install,
+      `event.waitUntil(Promise.all([new Promise((resolve) => setTimeout(resolve, ${delayMs})), caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))]));`,
+    ),
+  );
 }
 
 async function ensureControlledPage(page: Page, pageErrors: string[], expectedBuildId: string) {
@@ -235,6 +252,7 @@ describe("Control UI service-worker production update E2E", () => {
         .toContain(`openclaw-control-${buildA}`);
 
       await buildProductionControlUiE2e(outDir, buildB);
+      await holdReplacementWorkerInstalling(1_200);
       const assetB = await findBuildAsset(buildB);
       expect(assetB.path).not.toBe(assetA.path);
       expect(assetB.sha256).not.toBe(assetA.sha256);
@@ -251,6 +269,12 @@ describe("Control UI service-worker production update E2E", () => {
       await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));
       const reloaded = page.waitForEvent("domcontentloaded");
       await gateway.setOnline(true);
+      await page.waitForFunction(async () => {
+        const registration = await navigator.serviceWorker.getRegistration();
+        return registration?.installing?.state === "installing";
+      });
+      await page.waitForTimeout(300);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);
       await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildB);

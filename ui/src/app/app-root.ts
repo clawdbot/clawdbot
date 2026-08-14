@@ -194,17 +194,20 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private beginReconnectWorkerRefresh(gateway: ApplicationContext["gateway"]): void {
     const generation = ++this.reconnectWorkerRefreshGeneration;
     this.reconnectWorkerRefreshPending = true;
-    void refreshControlUiServiceWorker()
-      .catch(() => undefined)
-      .finally(() => {
-        if (
-          generation === this.reconnectWorkerRefreshGeneration &&
-          this.loginGatewaySource === gateway &&
-          gateway.snapshot.phase === "connected"
-        ) {
-          this.reconnectWorkerRefreshPending = false;
-        }
-      });
+    const releaseFence = () => {
+      if (
+        generation === this.reconnectWorkerRefreshGeneration &&
+        this.loginGatewaySource === gateway &&
+        gateway.snapshot.phase === "connected"
+      ) {
+        this.reconnectWorkerRefreshPending = false;
+      }
+    };
+    void refreshControlUiServiceWorker().then((replacementActivated) => {
+      if (!replacementActivated) {
+        releaseFence();
+      }
+    }, releaseFence);
   }
 
   private syncLoginConnection(gateway = this.context?.gateway) {

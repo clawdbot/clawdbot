@@ -14,7 +14,7 @@ import { refreshControlUiServiceWorker } from "./service-worker-lifecycle.ts";
 import { loadSettings } from "./settings.ts";
 
 vi.mock("./service-worker-lifecycle.ts", () => ({
-  refreshControlUiServiceWorker: vi.fn(async () => undefined),
+  refreshControlUiServiceWorker: vi.fn(async () => false),
 }));
 
 const HELLO: GatewayHelloOk = {
@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("Control UI Gateway target lineage", () => {
-  it("checks the incumbent worker before reconnect surfaces resume", async () => {
+  it("keeps a replacement fenced and releases a current worker", async () => {
     let snapshot = {
       client: {} as GatewayBrowserClient,
       phase: "connected",
@@ -77,9 +77,9 @@ describe("Control UI Gateway target lineage", () => {
       },
       connection: { gatewayUrl: "ws://gateway.test", token: "", password: "" },
     } as ApplicationGateway;
-    let releaseRefresh: (() => void) | undefined;
+    let releaseRefresh: ((replacementActivated: boolean) => void) | undefined;
     vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
-      new Promise<void>((resolve) => {
+      new Promise<boolean>((resolve) => {
         releaseRefresh = resolve;
       }),
     );
@@ -96,10 +96,21 @@ describe("Control UI Gateway target lineage", () => {
 
     expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce();
     expect(app.reconnectWorkerRefreshPending).toBe(true);
-    releaseRefresh?.();
+    releaseRefresh?.(false);
     await Promise.resolve();
     await Promise.resolve();
     expect(app.reconnectWorkerRefreshPending).toBe(false);
+
+    vi.mocked(refreshControlUiServiceWorker).mockResolvedValueOnce(true);
+    snapshot = { ...snapshot, client: null, phase: "reconnecting" };
+    app.synchronizeGateway(gateway);
+    snapshot = { ...snapshot, client: {} as GatewayBrowserClient, phase: "connected" };
+    app.synchronizeGateway(gateway);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(refreshControlUiServiceWorker).toHaveBeenCalledTimes(2);
+    expect(app.reconnectWorkerRefreshPending).toBe(true);
   });
 
   it("returns to the login gate when a newly selected Gateway's first attempt fails", () => {

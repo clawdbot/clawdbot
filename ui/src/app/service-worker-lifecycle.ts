@@ -35,16 +35,47 @@ export function installControlUiServiceWorker(production: boolean): void {
   registrationPromise = serviceWorker.register(swUrl, { updateViaCache: "none" }).catch(() => null);
 }
 
+function waitForReplacementWorker(worker: ServiceWorker): Promise<boolean> {
+  if (worker.state === "activated") {
+    return Promise.resolve(true);
+  }
+  if (worker.state === "redundant") {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    const onStateChange = () => {
+      if (worker.state !== "activated" && worker.state !== "redundant") {
+        return;
+      }
+      worker.removeEventListener("statechange", onStateChange);
+      resolve(worker.state === "activated");
+    };
+    worker.addEventListener("statechange", onStateChange);
+    onStateChange();
+  });
+}
+
 /**
  * Rechecks the incumbent worker after a Gateway reconnect. A deployment can
  * restart the Gateway without changing the package version, so the socket's
  * version handshake alone cannot retire an already-open document.
  */
-export async function refreshControlUiServiceWorker(): Promise<void> {
+export async function refreshControlUiServiceWorker(): Promise<boolean> {
   const serviceWorker = serviceWorkerContainer();
   if (!serviceWorker) {
-    return;
+    return false;
   }
-  const registration = await (registrationPromise ?? serviceWorker.getRegistration());
-  await registration?.update();
+  const registration =
+    (registrationPromise ? await registrationPromise : null) ??
+    (await serviceWorker.getRegistration());
+  if (!registration) {
+    return false;
+  }
+  const incumbent = registration.active;
+  await registration.update();
+  const replacement =
+    registration.installing ??
+    registration.waiting ??
+    (registration.active !== incumbent ? registration.active : null);
+  return replacement ? waitForReplacementWorker(replacement) : false;
 }
