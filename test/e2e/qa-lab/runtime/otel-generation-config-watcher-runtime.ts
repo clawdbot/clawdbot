@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import {
   inspectOtelParentGraph,
+  isSpanId,
   type OtelGenerationConfigWatcherOptions,
   parseOtelGenerationConfigWatcherOptions,
   sanitizeOtelWatcherFailure,

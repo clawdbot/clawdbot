@@ -31,7 +31,7 @@ export function parseOtelGenerationConfigWatcherOptions(
   return { artifactBase, repoRoot };
 }
 
-function isSpanId(value: string | undefined): value is string {
+export function isSpanId(value: string | undefined): value is string {
   return typeof value === "string" && /^[0-9a-f]{16}$/u.test(value);
 }
 
