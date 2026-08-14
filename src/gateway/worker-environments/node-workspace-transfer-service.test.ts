@@ -10,6 +10,7 @@ import type { ResolvedGatewayAuth } from "../auth.js";
 import { createGatewayHttpServer } from "../server-http.js";
 import { createNodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
@@ -48,8 +49,7 @@ describe("node workspace transfer service", () => {
       sessionId: "session-1",
     };
     const service = createNodeWorkspaceTransferService({
-      getCredential: () => credential,
-      getEnvironment: () => environment,
+      getOwner: () => ({ credential, environment }),
       now: () => nowMs,
       temporaryRoot: path.join(root, "gateway-transfer-tmp"),
     });
@@ -165,6 +165,17 @@ describe("node workspace transfer service", () => {
       await expect(
         fs.readFile(path.join(uploaded.stagingRoot, "result.txt"), "utf8"),
       ).resolves.toBe("node result\n");
+      const acceptedToken = service.publishSnapshot("environment-1", {
+        manifest: uploaded.current,
+        manifestRef: uploaded.currentManifestRef,
+        rawManifest: serializeWorkerWorkspaceManifest(uploaded.current),
+        root: localPath,
+      });
+      expect(service.getSnapshot("environment-1", prepared.snapshot.manifestRef)).toBeDefined();
+      service.revoke("environment-1", prepared.token);
+      expect(service.getSnapshot("environment-1", prepared.snapshot.manifestRef)).toBeUndefined();
+      expect(service.getSnapshot("environment-1", uploaded.currentManifestRef)).toBeDefined();
+      service.revoke("environment-1", acceptedToken);
     } finally {
       await service.closeAll();
       server.closeAllConnections();
@@ -179,16 +190,18 @@ describe("node workspace transfer service", () => {
     const localPath = path.join(root, "workspace");
     await fs.mkdir(localPath);
     const service = createNodeWorkspaceTransferService({
-      getCredential: () => ({
-        ownerEpoch: 1,
-        expiresAtMs: Date.now() + 60_000,
-        sessionId: "session-close",
-      }),
-      getEnvironment: () => ({
-        ownerEpoch: 1,
-        attachedSessionIds: ["session-close"],
-        destroyRequestedAtMs: null,
-        state: "attached",
+      getOwner: () => ({
+        credential: {
+          ownerEpoch: 1,
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: "session-close",
+        },
+        environment: {
+          ownerEpoch: 1,
+          attachedSessionIds: ["session-close"],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
       }),
       temporaryRoot: path.join(root, "transfer-tmp"),
     });
@@ -216,5 +229,51 @@ describe("node workspace transfer service", () => {
 
     expect(signal.aborted).toBe(true);
     expect(service.isAuthorizationCurrent(authorization!)).toBe(false);
+  });
+
+  it("rejects a retained tunnel callback after durable transfer ownership changes", async () => {
+    const root = tempDirs.make("node-workspace-transfer-owner-");
+    const localPath = path.join(root, "workspace");
+    await fs.mkdir(localPath);
+    const environment = {
+      ownerEpoch: 1,
+      attachedSessionIds: ["session-owner"],
+      destroyRequestedAtMs: null,
+      state: "attached",
+    };
+    const service = createNodeWorkspaceTransferService({
+      getOwner: () => ({
+        credential: {
+          ownerEpoch: 1,
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: "session-owner",
+        },
+        environment,
+      }),
+      temporaryRoot: path.join(root, "transfer-tmp"),
+    });
+    const prepared = await service.prepareSync({
+      environmentId: "environment-owner",
+      ownerEpoch: 1,
+      sessionId: "session-owner",
+      generation: 1,
+      localPath,
+      isAuthorized: () => true,
+    });
+    const authorization = service.authorize({
+      token: prepared.token,
+      route: {
+        kind: "manifest",
+        direction: "download",
+        environmentId: "environment-owner",
+        manifestRef: prepared.snapshot.manifestRef,
+      },
+    });
+    expect(authorization).toBeDefined();
+
+    environment.ownerEpoch += 1;
+
+    expect(service.isAuthorizationCurrent(authorization!)).toBe(false);
+    await service.closeAll();
   });
 });
