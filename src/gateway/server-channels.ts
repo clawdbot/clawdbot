@@ -901,10 +901,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
         };
 
+        const retainKnownAccountHandoffUntilReplacement =
+          includeKnownAccounts && knownAccountDeferredToCaller.has(rKey);
+
         try {
           restartDeferredToCaller.delete(rKey);
           restartPendingDeferredToCaller.delete(rKey);
-          knownAccountDeferredToCaller.delete(rKey);
+          if (!retainKnownAccountHandoffUntilReplacement) {
+            knownAccountDeferredToCaller.delete(rKey);
+          }
           // Reject the account before plugin resolution so an explicit failed SecretRef cannot
           // drift into a channel-specific environment or file fallback.
           const secretOwnerId = `${channelId}:${normalizeAccountId(id)}`;
@@ -916,6 +921,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             ? plugin.config.isEnabled(account, cfg)
             : isAccountEnabled(account);
           if (!enabled) {
+            knownAccountDeferredToCaller.delete(rKey);
             setRuntime(channelId, id, {
               accountId: id,
               enabled: false,
@@ -1331,6 +1337,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             return store.tasks.get(id) === trackedPromise;
           }
           handedOffTask = true;
+          knownAccountDeferredToCaller.delete(rKey);
           store.tasks.set(id, trackedPromise);
         } catch (error) {
           if (!handedOffTask) {

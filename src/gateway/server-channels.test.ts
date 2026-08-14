@@ -2063,6 +2063,60 @@ describe("server-channels auto restart", () => {
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
+  it("retains private handoffs when paired include-known startup fails before handoff", async () => {
+    let accountIds = ["account-a"];
+    let failNextResolve = false;
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => {
+          if (failNextResolve) {
+            failNextResolve = false;
+            throw new Error("temporary account store unavailable");
+          }
+          return { enabled: true, configured: true };
+        },
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", "account-a", {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    failNextResolve = true;
+    await expect(
+      manager.startChannel("discord", undefined, { includeKnownAccounts: true }),
+    ).rejects.toThrow("temporary account store unavailable");
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-a",
+    ]);
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(true);
+  });
+
   it("records timed-out caller-owned reload stops for the paired restart", async () => {
     const releaseFirstTask = createDeferred();
     const startAccount = vi.fn(
