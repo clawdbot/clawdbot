@@ -291,6 +291,56 @@ describe("channel account config mutations", () => {
     expect(prepareAccountConfigInput).not.toHaveBeenCalled();
   });
 
+  it("preserves account-owner validation when other setup fields are present", async () => {
+    const prepareAccountConfigInput = vi.fn(() => {
+      throw new Error("prepare should stay lazy when validation rejects input");
+    });
+    const validateInput = vi.fn(({ accountId, input }: { accountId: string; input: unknown }) => {
+      if (isRecord(input) && input.useEnv === true && accountId !== "default") {
+        return "--use-env only supports the default account";
+      }
+      return isRecord(input) && typeof input.baseUrl === "string" ? null : "--base-url is required";
+    });
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "env-owner-field-chat" }),
+      setupContract: defineChannelSetupContract({
+        fields: {
+          audience: {
+            kind: "string",
+            cli: { flags: "--audience <audience>", description: "Google Chat audience" },
+          },
+          useEnv: {
+            kind: "boolean",
+            cli: { flags: "--use-env", description: "Use environment credentials" },
+            envVars: ["ENV_OWNER_FIELD_CHAT_TOKEN"],
+          },
+        },
+        adapter: {
+          prepareAccountConfigInput,
+          validateInput,
+          applyAccountConfig: ({ cfg }) => cfg,
+        },
+      }),
+    } as ChannelPlugin;
+
+    const prepared = await prepareChannelAccountConfiguration({
+      cfg: {},
+      plugin,
+      requestedAccountId: "work",
+      resolveInput: () => ({ audience: "team", useEnv: true }),
+      runtime,
+    });
+
+    expect(prepared).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid-input",
+        message: "--use-env only supports the default account",
+      },
+    });
+    expect(prepareAccountConfigInput).not.toHaveBeenCalled();
+  });
+
   it("reports missing setup env vars before raw alias validation", async () => {
     const prepareAccountConfigInput = vi.fn(() => {
       throw new Error("prepare should stay lazy when env metadata already rejects input");

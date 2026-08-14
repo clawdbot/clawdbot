@@ -52,11 +52,33 @@ function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): s
     : `Set these environment variables before using --use-env: ${missing.join(", ")}.`;
 }
 
-function canValidateRawInputBeforeMissingEnv(input: unknown): boolean {
-  if (!isRecord(input)) {
-    return true;
+function resolveMissingEnvAccountScopeValidationError(params: {
+  cfg: OpenClawConfig;
+  setup: ChannelSetupExecutionAdapter;
+  accountId: string;
+  input: unknown;
+}): string | undefined {
+  if (params.accountId === DEFAULT_ACCOUNT_ID || !isRecord(params.input)) {
+    return undefined;
   }
-  return Object.keys(input).every((key) => key === "useEnv" || key === "name");
+  const scopedInput: Record<string, unknown> = { useEnv: true };
+  if (typeof params.input.name === "string") {
+    scopedInput.name = params.input.name;
+  }
+  const accountScopedError = params.setup.validateInput?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: scopedInput,
+  });
+  if (!accountScopedError) {
+    return undefined;
+  }
+  const defaultScopedError = params.setup.validateInput?.({
+    cfg: params.cfg,
+    accountId: DEFAULT_ACCOUNT_ID,
+    input: scopedInput,
+  });
+  return defaultScopedError === accountScopedError ? undefined : accountScopedError;
 }
 
 export async function prepareChannelAccountConfiguration(params: {
@@ -94,15 +116,14 @@ export async function prepareChannelAccountConfiguration(params: {
     }) ?? normalizeAccountId(params.requestedAccountId);
   const missingEnvMessage = resolveMissingSetupEnvMessage(params.plugin, input);
   if (missingEnvMessage) {
-    if (canValidateRawInputBeforeMissingEnv(input)) {
-      const validationError = setup.validateInput?.({
-        cfg: params.cfg,
-        accountId,
-        input,
-      });
-      if (validationError) {
-        return resultError({ kind: "invalid-input", message: validationError });
-      }
+    const accountScopeValidationError = resolveMissingEnvAccountScopeValidationError({
+      cfg: params.cfg,
+      setup,
+      accountId,
+      input,
+    });
+    if (accountScopeValidationError) {
+      return resultError({ kind: "invalid-input", message: accountScopeValidationError });
     }
     return resultError({ kind: "invalid-input", message: missingEnvMessage });
   }

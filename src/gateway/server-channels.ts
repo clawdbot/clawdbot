@@ -1503,7 +1503,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             } else {
               outcome = {
                 status: "rejected",
-                error: new Error(`stopAccount timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`),
+                error: existingStopAccountFence.timeoutError,
               };
             }
           }
