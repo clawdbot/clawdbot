@@ -4,6 +4,7 @@
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
@@ -15,6 +16,7 @@ import {
 } from "../../embedded-agent-runner/delivery-evidence.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
+  hasAnnounceSendEvidence,
   sourceOwnerChangedResult,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
@@ -105,6 +107,11 @@ export async function deliverCompletionDirect(params: {
     !params.deliveryTarget.to ||
     !isDirectMessageDeliveryTarget(params.deliveryTarget, params.requesterSessionKey)
   ) {
+    // Returning silently is why an announce give-up looked like it had no
+    // salvageable text: the decline itself left no trace.
+    defaultRuntime.log(
+      `[warn] Subagent completion text-direct salvage skipped: contentChars=${content?.length ?? 0} deliver=${params.deliveryTarget.deliver} channel=${params.deliveryTarget.channel ?? "-"} to=${params.deliveryTarget.to ?? "-"} requester=${params.requesterSessionKey}`,
+    );
     return undefined;
   }
   const agentId = tryResolveSubagentRequesterAgentId(
@@ -170,10 +177,13 @@ export async function deliverCompletionDirect(params: {
       // retryable failure and send the same completion twice.
       return committedDelivery;
     }
+    // A send-then-throw already put the text on the platform. Reporting it as
+    // undelivered would retry and post the same completion again.
     return {
       delivered: false,
       path: "direct",
       error: `text completion direct delivery failed: ${summarizeDeliveryError(err)}`,
+      ...(hasAnnounceSendEvidence(err) ? { terminal: true } : {}),
     };
   }
 }

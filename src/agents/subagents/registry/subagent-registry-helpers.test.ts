@@ -297,8 +297,23 @@ describe("logAnnounceGiveUp", () => {
     logAnnounceGiveUp(entry, "expiry");
 
     expect(logSpy).toHaveBeenCalledWith(
-      '[warn] Subagent announce give up (expiry) run=run-1 child=agent:main:subagent:child requester=agent:main:main retries=3 endedAgo=5s deliveryError="direct-primary: routed-dispatch-did-not-queue-final"',
+      '[warn] Subagent announce give up (expiry) run=run-1 child=agent:main:subagent:child requester=agent:main:main retries=3 endedAgo=5s discardedResultChars=0 deliveryError="direct-primary: routed-dispatch-did-not-queue-final"',
     );
+    logSpy.mockRestore();
+  });
+
+  it("reports discarded completion text at error level", () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const entry = createRunEntry({
+      completion: { required: true, resultText: "child result text" },
+      delivery: { status: "failed", attemptCount: 3, lastError: "message_tool_delivery_missing" },
+    });
+
+    logAnnounceGiveUp(entry, "permanent_failure");
+
+    const line = String(logSpy.mock.calls[0]?.[0]);
+    expect(line).toContain("[error] Subagent announce give up (permanent_failure)");
+    expect(line).toContain("discardedResultChars=17");
     logSpy.mockRestore();
   });
 

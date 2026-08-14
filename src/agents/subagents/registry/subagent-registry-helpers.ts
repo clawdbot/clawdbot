@@ -91,8 +91,11 @@ export function logAnnounceGiveUp(
   const deliveryError = lastDeliveryError
     ? ` deliveryError=${formatAnnounceGiveUpLogField(lastDeliveryError)}`
     : "";
+  // Losing completion text with nothing user-visible is an error, not a warning.
+  // A give-up with no text to lose (a run briefed to stay silent) stays a warning.
+  const discardedResultChars = (entry.completion?.resultText ?? "").length;
   defaultRuntime.log(
-    `[warn] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel}${deliveryError}`,
+    `[${discardedResultChars > 0 ? "error" : "warn"}] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel} discardedResultChars=${discardedResultChars}${deliveryError}`,
   );
 }
 
