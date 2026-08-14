@@ -241,6 +241,13 @@ more history; appended rows stay visible and are re-fetched to the same depth
 across refreshes. Catalog clients use `sessions.catalog.list`; opening a row uses
 `sessions.catalog.read`.
 
+Catalog visibility follows the authenticated Gateway profile. Admin connections
+see every discovered Claude row, and solo or shared-secret Gateways remain
+unfiltered. On a multi-user Gateway, a non-admin sees only rows already adopted
+by their durable profile; unattributed host-discovered Claude CLI and Desktop
+rows stay hidden. This is a privacy control within one trusted Gateway domain;
+see [Multi-user mode](/concepts/multi-user).
+
 Terminal takeover resolves `claude` from the owning host user's login-shell
 PATH before the service/daemon PATH. This keeps app-launched sessions aligned
 with the Claude CLI the operator gets in a normal terminal.
@@ -286,9 +293,9 @@ macOS app nodes also remain view-only until the app advertises the run command.
 <Note>
 Paired-node Claude sessions remain read-only unless the headless node explicitly
 advertises `agent.cli.claude.run.v1`. OpenClaw never modifies Claude Desktop
-metadata or archives Claude sessions. The page requires an operator connection
-with write scope because it uses authenticated `node.invoke`; list and read
-remain read-only even on a continuation-enabled node.
+metadata or archives Claude sessions. Catalog list and read use `operator.read`,
+while continuation uses `operator.write`. Paired-node command advertisement and
+Gateway node policy remain additional requirements for node-backed rows.
 </Note>
 
 See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)

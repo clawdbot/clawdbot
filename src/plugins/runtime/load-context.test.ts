@@ -9,15 +9,12 @@ const fingerprintPluginAutoEnableConfigMock = vi.fn((config: OpenClawConfig) =>
   JSON.stringify(config),
 );
 const fingerprintPluginAutoEnableEnvMock = vi.fn((env: NodeJS.ProcessEnv) => JSON.stringify(env));
-const resolveAgentWorkspaceDirMock = vi.fn<
-  typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
->(() => "/resolved-workspace");
-const resolveDefaultAgentIdMock = vi.fn<
-  typeof import("../../agents/agent-scope.js").resolveDefaultAgentId
->(() => "default");
-const tryResolveConfiguredAgentWorkspaceDirMock = vi.fn<
-  typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
->(() => "/resolved-workspace");
+const resolvePluginControlPlaneWorkspaceMock = vi.fn(
+  (params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv; workspaceDir?: string }) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected" as const,
+  }),
+);
 const manifestRegistry = { diagnostics: [], plugins: [] };
 const metadataSnapshot = {
   configFingerprint: "fingerprint",
@@ -58,10 +55,8 @@ vi.mock("../../config/plugin-auto-enable.apply.js", () => ({
   fingerprintPluginAutoEnableEnv: fingerprintPluginAutoEnableEnvMock,
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
-  resolveDefaultAgentId: resolveDefaultAgentIdMock,
-  tryResolveConfiguredAgentWorkspaceDir: tryResolveConfiguredAgentWorkspaceDirMock,
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: resolvePluginControlPlaneWorkspaceMock,
 }));
 
 vi.mock("../../config/io.plugin-metadata.js", () => ({
@@ -101,9 +96,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     resolveConfigWidePluginManifestRegistryMock.mockClear();
     getCurrentPluginMetadataSnapshotMock.mockClear();
     setCurrentPluginMetadataSnapshotMock.mockClear();
-    resolveAgentWorkspaceDirMock.mockClear();
-    resolveDefaultAgentIdMock.mockClear();
-    tryResolveConfiguredAgentWorkspaceDirMock.mockClear();
+    resolvePluginControlPlaneWorkspaceMock.mockClear();
 
     loadConfigMock.mockReturnValue({ plugins: {} });
     applyPluginAutoEnableMock.mockImplementation((params) => ({
@@ -169,12 +162,16 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
       workspaceDir: "/resolved-workspace",
     });
-    expect(tryResolveConfiguredAgentWorkspaceDirMock).toHaveBeenNthCalledWith(1, rawConfig, env);
-    expect(tryResolveConfiguredAgentWorkspaceDirMock).toHaveBeenNthCalledWith(
-      2,
-      resolvedConfig,
+    expect(resolvePluginControlPlaneWorkspaceMock).toHaveBeenNthCalledWith(1, {
+      config: rawConfig,
       env,
-    );
+      workspaceDir: undefined,
+    });
+    expect(resolvePluginControlPlaneWorkspaceMock).toHaveBeenNthCalledWith(2, {
+      config: resolvedConfig,
+      env,
+      workspaceDir: undefined,
+    });
     expect(resolveConfigWidePluginManifestRegistryMock).toHaveBeenCalledWith({
       config: rawConfig,
       env,

@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
-  type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
@@ -17,6 +16,7 @@ import {
   createCodexNativeHookRelay,
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
+  type CodexNativeHookRelay,
 } from "./native-hook-relay.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
@@ -68,7 +68,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     routeActivated: false,
     detachRouteAbort: (() => undefined) as () => void,
     trajectoryEndRecorded: false,
-    nativeHookRelay: undefined as NativeHookRelayRegistrationHandle | undefined,
+    nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
     nativeSubagentMonitor: undefined as
       | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
       | undefined,
@@ -184,6 +184,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
       retainParentThread: (protectedThreadId) =>
         protectCodexAppServerLiveThread(state.client, protectedThreadId),
+      claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
+      rejectPendingDirectChild: (childThreadId, reason) =>
+        state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
     });
   };
   const releaseCurrentRoute = () => {

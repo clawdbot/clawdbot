@@ -14,9 +14,22 @@ import {
 } from "./lib/local-heavy-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { TSGO_CORE_TEST_SHARDS, type TsgoCoreTestShard } from "./lib/tsgo-core-test-shards.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const artifactRoot = path.resolve(repoRoot, ".artifacts/tsgo-profile");
 const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
+
+type GraphDefinition = { config: string; description: string };
+type CoreTestGraphName = `core-test-${TsgoCoreTestShard["name"]}`;
+const CORE_TEST_GRAPH_DEFINITIONS = Object.fromEntries(
+  TSGO_CORE_TEST_SHARDS.map((shard) => [
+    `core-test-${shard.name}`,
+    {
+      config: shard.config,
+      description: `bounded core test shard: ${shard.name}`,
+    },
+  ]),
+) as Record<CoreTestGraphName, GraphDefinition>;
 
 const GRAPH_DEFINITIONS = {
   core: {
@@ -27,18 +40,7 @@ const GRAPH_DEFINITIONS = {
     config: "tsconfig.ui.json",
     description: "UI production graph",
   },
-  "core-test": {
-    config: "test/tsconfig/tsconfig.core.test.json",
-    description: "core colocated test graph",
-  },
-  "core-test-agents": {
-    config: "test/tsconfig/tsconfig.core.test.agents.json",
-    description: "diagnostic slice: core agent colocated tests",
-  },
-  "core-test-non-agents": {
-    config: "test/tsconfig/tsconfig.core.test.non-agents.json",
-    description: "diagnostic slice: core tests excluding agent test roots",
-  },
+  ...CORE_TEST_GRAPH_DEFINITIONS,
   extensions: {
     config: "tsconfig.extensions.json",
     description: "bundled extension production graph",
@@ -50,6 +52,10 @@ const GRAPH_DEFINITIONS = {
 } as const;
 
 type GraphName = keyof typeof GRAPH_DEFINITIONS;
+const DEFAULT_GRAPHS = [
+  ...TSGO_CORE_TEST_SHARDS.map((shard) => `core-test-${shard.name}` as CoreTestGraphName),
+  "extensions-test",
+] satisfies GraphName[];
 type ProfileOptions = {
   all: boolean;
   deep: boolean;
@@ -73,19 +79,19 @@ function usage(): string {
     "",
     "Graphs:",
     ...Object.entries(GRAPH_DEFINITIONS).map(
-      ([name, graph]) => `  ${name.padEnd(16)} ${graph.description}`,
+      ([name, graph]) => `  ${name.padEnd(26)} ${graph.description}`,
     ),
     "",
     "Options:",
     "  --all              Profile all graphs",
     "  --reuse            Reuse profile tsbuildinfo files instead of forcing fresh checks",
-    "  --deep             Also write --generateTrace and --generateCpuProfile artifacts",
-    "  --explain          Also write --explainFiles artifacts",
+    "  --deep             Also write --generateTrace and --pprofDir artifacts",
+    "  --explain          Also write list-only --explainFiles artifacts",
     "  --out=<dir>        Output directory (default: .artifacts/tsgo-profile)",
     "  --json             Print JSON report to stdout",
     "  --help             Show this help",
     "",
-    "Default graphs: core-test extensions-test",
+    "Default graphs: all bounded core-test shards and extensions-test",
   ].join("\n");
 }
 
@@ -138,7 +144,7 @@ function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: G
     ? (Object.keys(GRAPH_DEFINITIONS) as GraphName[])
     : graphNames.length > 0
       ? graphNames
-      : (["core-test", "extensions-test"] satisfies GraphName[]);
+      : DEFAULT_GRAPHS;
 
   return { options, selectedGraphs };
 }
@@ -351,7 +357,7 @@ function renderTextReport(report: ProfileReport): string {
       lines.push(`- ${group.key}: ${group.count}`);
     }
     if (graph.deep) {
-      lines.push(`Deep artifacts: ${graph.deep.traceDir}, ${graph.deep.cpuProfile}`);
+      lines.push(`Deep artifacts: ${graph.deep.traceDir}, ${graph.deep.profileDir}`);
     }
     if (graph.explain) {
       lines.push(`Explain: ${graph.explain.artifact}`);
@@ -397,25 +403,30 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
     checkBuildInfo,
     "--extendedDiagnostics",
   ];
-  let deep: { cpuProfile: string; traceDir: string } | undefined;
+  let deep: { profileDir: string; traceDir: string } | undefined;
   if (options.deep) {
     const traceDir = path.join(outDir, `${name}-trace`);
-    const cpuProfile = path.join(outDir, `${name}.cpuprofile`);
+    const profileDir = path.join(outDir, `${name}-pprof`);
     fs.rmSync(traceDir, { force: true, recursive: true });
-    fs.rmSync(cpuProfile, { force: true });
-    checkArgs.push("--generateTrace", traceDir, "--generateCpuProfile", cpuProfile);
+    fs.rmSync(profileDir, { force: true, recursive: true });
+    fs.mkdirSync(profileDir, { recursive: true });
+    checkArgs.push("--generateTrace", traceDir, "--pprofDir", profileDir);
     deep = {
       traceDir: path.relative(repoRoot, traceDir),
-      cpuProfile: path.relative(repoRoot, cpuProfile),
+      profileDir: path.relative(repoRoot, profileDir),
     };
   }
   const check = runTsgo(`${name}:check`, checkArgs);
   let explain: { artifact: string; elapsedMs: number } | undefined;
   if (options.explain) {
     const explainArtifact = path.join(outDir, `${name}.explain.txt`);
-    const explainResult = runTsgo(`${name}:explainFiles`, [...baseArgs, "--explainFiles"], {
-      maxBuffer: 256 * 1024 * 1024,
-    });
+    const explainResult = runTsgo(
+      `${name}:explainFiles`,
+      [...baseArgs, "--listFilesOnly", "--explainFiles"],
+      {
+        maxBuffer: 256 * 1024 * 1024,
+      },
+    );
     fs.writeFileSync(explainArtifact, `${explainResult.stdout}${explainResult.stderr}`);
     explain = {
       artifact: path.relative(repoRoot, explainArtifact),

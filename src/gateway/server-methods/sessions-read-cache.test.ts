@@ -17,6 +17,7 @@ import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { bumpSessionAutomationVersion } from "../session-automation-index.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -305,6 +306,28 @@ describe("sessions.list single-flight", () => {
       });
       const refreshed = await listSessions({ client, context, request });
       expect(refreshed).not.toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("invalidates a completed result when a cron automation binding changes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      // Cron job add/remove/enable changes hasAutomation on projected rows but
+      // historically bumped only the automation memo, so cached lists served
+      // stale badges forever.
+      bumpSessionAutomationVersion();
+      await listSessions({ client, context, request });
       expect(loader.calls).toHaveBeenCalledTimes(2);
     });
   });

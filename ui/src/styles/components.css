@@ -615,15 +615,13 @@ openclaw-session-owner-chip {
   line-height: 1;
 }
 
-/* Passive notification, so it sits in the trailing bottom corner rather than
- * centered over the content column, where it landed on top of the chat composer's
- * controls. Overlapping the composer region from the corner is accepted. The host
- * shows one toast at a time (`show()` replaces the active one), so there is no
- * stack to offset against. */
+/* Passive notifications stay in the trailing top corner, away from the chat
+ * composer and other bottom-docked controls. The host shows one toast at a time
+ * (`show()` replaces the active one), so there is no stack to offset against. */
 .app-toast {
   position: fixed;
   right: calc(20px + var(--safe-area-right));
-  bottom: calc(20px + var(--safe-area-bottom));
+  top: calc(20px + var(--safe-area-top));
   z-index: var(--z-toast);
   display: flex;
   align-items: center;
@@ -638,7 +636,7 @@ openclaw-session-owner-chip {
 }
 
 /* A corner toast degenerates at phone widths, where it would span nearly the
- * whole viewport anyway. Use the full-width bottom idiom instead. */
+ * whole viewport anyway. Use the full-width top idiom instead. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .app-toast {
     left: max(12px, var(--safe-area-left));
