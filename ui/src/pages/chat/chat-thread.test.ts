@@ -2586,6 +2586,31 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
+  it("keeps an unkeyed preamble from corrupting the accumulated prefix tracker", () => {
+    // A standalone (itemId-less) preamble whose text is not part of the
+    // cumulative run text must not become the prefix baseline — pre-fix the
+    // next cumulative snapshot re-rendered every earlier segment's text.
+    const items = buildCachedChatItems(
+      createProps({
+        streamSegments: [
+          { text: "First thought.", ts: 1, toolCallId: "call-1" },
+          { text: "Standalone preamble", ts: 2 },
+          { text: "First thought. After tool.", ts: 3, toolCallId: "call-2" },
+        ],
+        toolMessages: [
+          chatMessage("toolResult", "Tool one", 2),
+          chatMessage("toolResult", "Tool two", 4),
+        ],
+      }),
+    );
+
+    expect(items.filter((item) => item.kind === "stream")).toMatchObject([
+      { text: "First thought." },
+      { text: "Standalone preamble" },
+      { text: "After tool." },
+    ]);
+  });
+
   it("deduplicates accumulated stream snapshots around tool cards", () => {
     const items = buildCachedChatItems(
       createProps({

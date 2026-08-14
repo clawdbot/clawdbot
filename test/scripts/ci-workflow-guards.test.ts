@@ -3009,6 +3009,7 @@ NODE
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
       "check-docs": "ubuntu-24.04",
+      "check-lint-hosted-core-shard": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
       "checks-fast-core": "ubuntu-24.04",
@@ -3034,6 +3035,9 @@ NODE
       ...expectedHostedRunners,
       android: "blacksmith-8vcpu-ubuntu-2404",
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
+      "check-lint-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
+      "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
+      "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "sqlite-session-lifecycle": "blacksmith-8vcpu-ubuntu-2404",
       "macos-node": "blacksmith-6vcpu-macos-15",
       "macos-swift": "blacksmith-12vcpu-macos-26",
@@ -3092,6 +3096,92 @@ NODE
         }),
         jobName,
       ).toBe(hostedRunner);
+    }
+
+    const widenedHybridMatrixRows = [
+      {
+        jobName: "check-shard",
+        matrix: { runner: "blacksmith-32vcpu-ubuntu-2404", task: "lint" },
+        runner: "blacksmith-32vcpu-ubuntu-2404",
+      },
+      {
+        jobName: "check-shard",
+        matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
+        runner: "blacksmith-16vcpu-ubuntu-2404",
+      },
+      {
+        jobName: "check-additional-shard",
+        matrix: {
+          group: "extension-package-boundary",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
+        },
+        runner: "blacksmith-32vcpu-ubuntu-2404",
+      },
+    ] as const;
+    for (const { jobName, matrix, runner } of widenedHybridMatrixRows) {
+      const expression = jobs[jobName]?.["runs-on"];
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          matrix,
+          runnerBackend: "hybrid",
+        }),
+        `${jobName}: hybrid attempt 1`,
+      ).toBe(runner);
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          matrix,
+          runnerBackend: "hybrid",
+          runAttempt: 2,
+        }),
+        `${jobName}: hybrid retry`,
+      ).toBe("ubuntu-24.04");
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          matrix,
+          runnerBackend: "github",
+        }),
+        `${jobName}: github backend`,
+      ).toBe("ubuntu-24.04");
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          headRepository: "contributor/openclaw",
+          matrix,
+          runnerBackend: "hybrid",
+        }),
+        `${jobName}: fork pull request`,
+      ).toBe("ubuntu-24.04");
+    }
+
+    for (const jobName of [
+      "check-additional-shard",
+      "check-lint-hosted-core-shard",
+      "check-shard",
+      "checks-ui-e2e",
+      "qa-smoke-ci-profile",
+    ]) {
+      const setup = expectDefined(
+        workflow.jobs[jobName].steps.find(
+          (step: WorkflowStep) => step.name === "Setup Node environment",
+        ),
+        `${jobName} Node setup`,
+      );
+      const context = {
+        ...canonicalPullRequest,
+        matrix:
+          widenedHybridMatrixRows.find((row) => row.jobName === jobName)?.matrix ??
+          canonicalPullRequest.matrix,
+        runnerBackend: "hybrid" as const,
+      };
+      expect(evaluateWorkflowExpression(setup.with?.["dependency-cache"], context), jobName).toBe(
+        "false",
+      );
+      expect(evaluateWorkflowExpression(setup.with?.["use-actions-cache"], context), jobName).toBe(
+        "true",
+      );
     }
   });
 
@@ -6216,15 +6306,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const routedUiE2eJobs = [
       {
         job: uiE2e,
+        hybridFirstAttempt: true,
         name: "checks-ui-e2e",
         setup: uiE2eSetup,
         blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
+        runsOn:
+          "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
       },
       {
         job: uiE2eRealGateway,
+        hybridFirstAttempt: false,
         name: "checks-ui-e2e-real-gateway",
         setup: realGatewaySetup,
         blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+        runsOn:
+          "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
       },
     ] as const;
     const routingScenarios = [
@@ -6299,15 +6395,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expected: { blacksmith: true, dependencyCache: "true", useActionsCache: "false" },
       },
     ] as const;
-    for (const { blacksmithRunner, job, name: jobName, setup } of routedUiE2eJobs) {
-      expect(job["runs-on"]).toBe(
-        "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && '" +
-          blacksmithRunner +
-          "' || 'ubuntu-24.04') }}",
-      );
+    for (const {
+      blacksmithRunner,
+      hybridFirstAttempt,
+      job,
+      name: jobName,
+      runsOn,
+      setup,
+    } of routedUiE2eJobs) {
+      expect(job["runs-on"]).toBe(runsOn);
       for (const { context, expected, name: scenarioName } of routingScenarios) {
         const assertionName = `${jobName}: ${scenarioName}`;
-        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
+        const useBlacksmith =
+          scenarioName === "same-repo pull request with hybrid backend"
+            ? hybridFirstAttempt
+            : expected.blacksmith;
+        const expectedRunner = useBlacksmith ? blacksmithRunner : "ubuntu-24.04";
         expect(evaluateWorkflowExpression(job["runs-on"], context), assertionName).toBe(
           expectedRunner,
         );

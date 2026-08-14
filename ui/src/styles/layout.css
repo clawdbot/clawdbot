@@ -912,7 +912,7 @@ openclaw-settings-save-indicator {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
-  /* One rhythm for every group boundary in the sidebar (Pages, Pinned, and each
+  /* One rhythm for every group boundary in the sidebar (Pages and each
      session section) so the column reads as separate shelves, not one list. */
   --sidebar-group-gap: var(--space-4);
   --scrollbar-size: 6px;
@@ -3116,12 +3116,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-nav__head .sidebar-recent-sessions__label-text {
   flex: 1 1 auto;
-}
-
-/* Pinned sessions are their own group, so they take the sidebar's inter-group
-   rhythm instead of butting against the Pages list. */
-.sidebar-nav__head--pinned {
-  margin-top: var(--sidebar-group-gap);
 }
 
 .sidebar-nav__head-action {

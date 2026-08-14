@@ -10,11 +10,18 @@ import {
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../../worker/node-workspace-protocol.js";
+import {
+  NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+  NodeWorkerWorkspaceTransferError,
+} from "../../worker/node-workspace-transfer-protocol.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { createNodeWorkerWorkspaceFallback } from "./node-worker-workspace-fallback.js";
+import {
+  createNodeWorkerWorkspaceFallback,
+  recordNodeSyncPath,
+} from "./node-worker-workspace-fallback.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import type {
@@ -288,13 +295,17 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
       if (!result.ok) {
         const code = result.error?.code ?? "UNAVAILABLE";
+        if (code === NODE_WORKSPACE_TRANSFER_ERROR_CODE) {
+          throw new NodeWorkerWorkspaceTransferError(
+            result.error?.message ?? "workspace-transfer-failed: transfer did not complete",
+          );
+        }
         if (command.transportRetry === "idempotent" && RETRYABLE_TRANSPORT_CODES.has(code)) {
           await sleepWithAbort(Math.min(RETRY_DELAY_MS, remainingMs), signal);
           continue;
         }
         throw new Error(
-          result.error?.message &&
-            (code === "INVALID_REQUEST" || result.error.message.startsWith("workspace-transfer-"))
+          result.error?.message && code === "INVALID_REQUEST"
             ? `node workspace command failed (${code}): ${result.error.message}`
             : `node workspace command failed (${code})`,
         );
@@ -559,9 +570,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             signal: entry.abortController.signal,
           });
           try {
+            const originStartedAt = performance.now();
             const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
-            if (origin) {
-              return origin;
+            recordNodeSyncPath(entry.environmentId, entry.sessionId, origin, originStartedAt);
+            if (origin.kind === "synced") {
+              return origin.result;
             }
             const transferred = await exec({
               argv: ["openclaw-internal-workspace-transfer"],

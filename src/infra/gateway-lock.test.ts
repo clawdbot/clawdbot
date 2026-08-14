@@ -295,9 +295,11 @@ describe("gateway lock", () => {
     const firstLock = expectGatewayLock(await acquireForTest(env, options));
     const firstConfigPayload = JSON.parse(await fs.readFile(firstLock.lockPath, "utf8")) as {
       ownerId?: string;
+      cronOwnerProjection?: string;
     };
     const firstStatePayload = JSON.parse(await fs.readFile(firstLock.stateLockPath, "utf8")) as {
       ownerId?: string;
+      cronOwnerProjection?: string;
     };
     const firstIdentity = await readActiveGatewayLockIdentity({
       env,
@@ -306,6 +308,8 @@ describe("gateway lock", () => {
       readProcessCmdline: options.readProcessCmdline,
     });
     expect(firstConfigPayload.ownerId).toBe(firstStatePayload.ownerId);
+    expect(firstConfigPayload.cronOwnerProjection).toBe("dynamic-default-v1");
+    expect(firstStatePayload.cronOwnerProjection).toBe("dynamic-default-v1");
     await firstLock.release();
 
     const secondLock = expectGatewayLock(await acquireForTest(env, options));
@@ -319,11 +323,13 @@ describe("gateway lock", () => {
       expect(firstIdentity).toMatchObject({
         pid: process.pid,
         ownerId: expect.any(String),
+        cronOwnerProjection: "dynamic-default-v1",
         port: 48789,
       });
       expect(secondIdentity).toMatchObject({
         pid: process.pid,
         ownerId: expect.any(String),
+        cronOwnerProjection: "dynamic-default-v1",
         port: 48789,
       });
       expect(secondIdentity?.ownerId).not.toBe(firstIdentity?.ownerId);
