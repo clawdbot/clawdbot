@@ -613,4 +613,79 @@ describe("buildTelegramMessageContext prompt context", () => {
       }),
     ]);
   });
+
+  it("fails closed for malformed persisted watermark ids at the group-history boundary", async () => {
+    const storePath = createTempSessionStorePath();
+    const sessionKey = "agent:main:telegram:group:-1001234567890";
+    const key = resolveAmbientTranscriptWatermarkKey({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+    const timestampMs = 1_700_000_000_000;
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "session-current", updatedAt: timestampMs },
+    });
+    await updateAmbientTranscriptWatermark({
+      storePath,
+      sessionKey,
+      key,
+      messageId: "1e3",
+      timestampMs,
+    });
+
+    const persistedWatermark = readAmbientTranscriptWatermark(
+      getSessionEntry({ storePath, sessionKey }),
+      key,
+    );
+    expect(persistedWatermark).toMatchObject({ messageId: "1e3", timestampMs });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 1003,
+        date: (timestampMs + 2000) / 1000,
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "@bot current",
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      },
+      historyLimit: 10,
+      groupHistories: new Map([
+        [
+          "-1001234567890",
+          [
+            {
+              messageId: "1001",
+              sender: "Sam",
+              timestamp: timestampMs,
+              body: "same-timestamp candidate",
+            },
+            {
+              messageId: "1002",
+              sender: "Lee",
+              timestamp: timestampMs + 1000,
+              body: "later group message",
+            },
+          ],
+        ],
+      ]),
+      sessionRuntime: {
+        readAmbientTranscriptWatermark,
+        resolveAmbientTranscriptWatermarkKey,
+        resolveStorePath: () => storePath,
+      },
+    });
+
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
+      expect.objectContaining({
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [expect.objectContaining({ message_id: "1002", body: "later group message" })],
+        }),
+      }),
+    ]);
+  });
 });
