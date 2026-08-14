@@ -11,6 +11,7 @@ import {
   fetchMattermostChannel,
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
+  parseMattermostApiStatus,
 } from "./client.js";
 import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -136,19 +137,6 @@ function isExplicitMattermostTarget(raw: string): boolean {
     trimmed.startsWith("@") ||
     trimmed.startsWith("#")
   );
-}
-
-function parseMattermostApiStatus(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const msg = "message" in err && typeof err.message === "string" ? err.message : "";
-  const match = /Mattermost API (\d{3})\b/.exec(msg);
-  if (!match) {
-    return undefined;
-  }
-  const code = Number(match[1]);
-  return Number.isFinite(code) ? code : undefined;
 }
 
 export async function resolveMattermostOpaqueTarget(params: {

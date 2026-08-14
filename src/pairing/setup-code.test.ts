@@ -14,11 +14,41 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   })),
 }));
 
-const { encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js");
+const { decodePairingSetupCode, encodePairingSetupCode, resolvePairingSetupFromConfig } =
+  await import("./setup-code.js");
 const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
 
 describe("pairing setup code", () => {
+  it("round-trips bare and wrapped setup codes without normalizing payload case", () => {
+    const payload = {
+      url: "wss://gateway.example:8443/openclaw-gw",
+      bootstrapToken: "Bootstrap-AbC123",
+      tlsFingerprint: "sha256:AA:BB",
+      expiresAtMs: 20_000,
+    };
+    const setupCode = encodePairingSetupCode(payload);
+    expect(setupCode).toMatch(/[A-Z]/u);
+
+    expect(decodePairingSetupCode(setupCode, { nowMs: 10_000 })).toEqual(payload);
+    expect(decodePairingSetupCode(`oc-pair://${setupCode}`, { nowMs: 10_000 })).toEqual(payload);
+  });
+
+  it("rejects garbage and expired shipped payload shapes", () => {
+    expect(() => decodePairingSetupCode("not-json")).toThrow("Invalid pairing setup");
+    const expired = encodePairingSetupCode({
+      url: "wss://gateway.example",
+      bootstrapToken: "bootstrap-123",
+      expiresAtMs: 10_000,
+    });
+    expect(() => decodePairingSetupCode(expired, { nowMs: 10_000 })).toThrow("expired");
+  });
+
+  it("accepts older payloads without a TLS fingerprint or expiry", () => {
+    const payload = { url: "wss://gateway.example", bootstrapToken: "bootstrap-123" };
+    expect(decodePairingSetupCode(encodePairingSetupCode(payload))).toEqual(payload);
+  });
+
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
   type ResolveSetupConfig = Parameters<typeof resolvePairingSetupFromConfig>[0];
   type ResolveSetupOptions = Parameters<typeof resolvePairingSetupFromConfig>[1];
@@ -281,6 +311,20 @@ describe("pairing setup code", () => {
       expected: {
         authLabel: "token",
         url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+      },
+    });
+  });
+
+  it("preserves context paths in fully qualified setup urls", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        publicUrl: "wss://gateway.example.test:18789/openclaw-gw",
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789/openclaw-gw",
         urlSource: "plugins.entries.device-pair.config.publicUrl",
       },
     });
@@ -937,5 +981,36 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupOptions,
       expectedError: "Service MagicDNS could not be derived",
     });
+  });
+
+  it("pins the prepared leaf only for a direct TLS gateway URL", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = { ...config.gateway, tls: { enabled: true } };
+    const direct = await resolvePairingSetupFromConfig(config, {
+      localTlsFingerprint: "sha256:direct-leaf",
+    });
+    const proxied = await resolvePairingSetupFromConfig(config, {
+      publicUrl: "wss://proxy.example",
+      localTlsFingerprint: "sha256:direct-leaf",
+    });
+
+    expect(direct.ok && direct.payload.tlsFingerprint).toBe("sha256:direct-leaf");
+    expect(proxied.ok && proxied.payload.tlsFingerprint).toBeUndefined();
+  });
+
+  it("omits a configured remote TLS pin from a cleartext setup URL", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = {
+      ...config.gateway,
+      remote: {
+        url: "ws://127.0.0.1:18789",
+        tlsFingerprint: "sha256:stale-remote-leaf",
+      },
+    };
+
+    const resolved = await resolvePairingSetupFromConfig(config, { preferRemoteUrl: true });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.ok && resolved.payload.tlsFingerprint).toBeUndefined();
   });
 });

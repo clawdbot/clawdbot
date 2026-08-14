@@ -24,6 +24,18 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
 }
 
 enum PermissionManager {
+    /// UNUserNotificationCenter.current() aborts with NSInternalInconsistencyException
+    /// ("bundleProxyForCurrentProcess is nil") in unbundled processes such as
+    /// `swift build` dev binaries. Every notification-center call must check this
+    /// first so unbundled invocations degrade to not-granted instead of crashing.
+    static var notificationCenterAvailable: Bool {
+        Bundle.main.bundleIdentifier != nil
+    }
+
+    static func isNotificationAuthorized(status: UNAuthorizationStatus) -> Bool {
+        status == .authorized || status == .provisional
+    }
+
     static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways: Bool) -> Bool {
         if requireAlways { return status == .authorizedAlways }
         switch status {
@@ -71,26 +83,22 @@ enum PermissionManager {
     }
 
     private static func ensureNotifications(interactive: Bool) async -> Bool {
+        guard self.notificationCenterAvailable else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
-
-        switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
+        if self.isNotificationAuthorized(status: settings.authorizationStatus) {
             return true
-        case .notDetermined:
+        }
+        if settings.authorizationStatus == .notDetermined {
             guard interactive else { return false }
             let granted = await (try? center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
             let updated = await center.notificationSettings()
-            return granted &&
-                (updated.authorizationStatus == .authorized || updated.authorizationStatus == .provisional)
-        case .denied:
-            if interactive {
-                NotificationPermissionHelper.openSettings()
-            }
-            return false
-        @unknown default:
-            return false
+            return granted && self.isNotificationAuthorized(status: updated.authorizationStatus)
         }
+        if settings.authorizationStatus == .denied, interactive {
+            NotificationPermissionHelper.openSettings()
+        }
+        return false
     }
 
     private static func ensureAppleScript(interactive: Bool) async -> Bool {
@@ -214,10 +222,14 @@ enum PermissionManager {
         for cap in caps {
             switch cap {
             case .notifications:
+                guard self.notificationCenterAvailable else {
+                    results[cap] = .notGranted
+                    break
+                }
                 let center = UNUserNotificationCenter.current()
                 let settings = await center.notificationSettings()
-                results[cap] = settings.authorizationStatus == .authorized
-                    || settings.authorizationStatus == .provisional ? .granted : .notGranted
+                results[cap] = self.isNotificationAuthorized(status: settings.authorizationStatus)
+                    ? .granted : .notGranted
 
             case .appleScript:
                 results[cap] = await TerminalAutomationPermission.authorizationStatus()

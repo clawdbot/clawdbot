@@ -13,7 +13,7 @@ export const AGENTS_WAIT_TOOL_DISPLAY_SUMMARY = "Wait for collector subagents.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answer.";
-export const SPAWN_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
+export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 
 // Mirrors plugin-sdk SessionToolsVisibility; kept local because importing that

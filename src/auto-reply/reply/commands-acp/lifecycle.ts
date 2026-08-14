@@ -16,10 +16,15 @@ import {
 } from "../../../acp/policy.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import {
+  closeAdmittedRunDelegatedAuthority,
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../../agents/admitted-run-context.js";
+import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
+import {
   resolveAcpSpawnRuntimePolicyError,
   resolveRuntimeCwdForAcpSpawn,
-} from "../../../agents/acp-spawn.js";
-import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
+} from "../../../agents/subagents/spawn/acp-spawn.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -28,6 +33,8 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpBindingLabelNoun,
@@ -42,7 +49,6 @@ import {
   parseSpawnInput,
   parseSteerInput,
   resolveCommandRequestId,
-  stopWithText,
   withAcpCommandErrorBoundary,
 } from "./shared.js";
 import { resolveAcpTargetSessionKey } from "./targets.js";
@@ -107,12 +113,12 @@ export async function handleAcpSpawnAction(
   restTokens: string[],
 ): Promise<CommandHandlerResult> {
   if (!isAcpEnabledByPolicy(params.cfg)) {
-    return stopWithText("ACP is disabled by policy (`acp.enabled=false`).");
+    return commandReply("ACP is disabled by policy (`acp.enabled=false`).");
   }
 
   const parsed = parseSpawnInput(params, restTokens);
   if (!parsed.ok) {
-    return stopWithText(`⚠️ ${parsed.error}`);
+    return commandReply(`⚠️ ${parsed.error}`);
   }
 
   const spawn = parsed.value;
@@ -121,11 +127,11 @@ export async function handleAcpSpawnAction(
     requesterSessionKey: params.sessionKey,
   });
   if (runtimePolicyError) {
-    return stopWithText(`⚠️ ${runtimePolicyError}`);
+    return commandReply(`⚠️ ${runtimePolicyError}`);
   }
   const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
   if (agentPolicyError) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error: agentPolicyError,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -149,7 +155,7 @@ export async function handleAcpSpawnAction(
       explicitCwd: spawn.cwd,
     });
   } catch (error) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -176,7 +182,7 @@ export async function handleAcpSpawnAction(
     initializedBackend = initialized.handle.backend || initialized.meta.backend;
     initializedMeta = initialized.meta;
   } catch (err) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error: err,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -202,7 +208,7 @@ export async function handleAcpSpawnAction(
         shouldDeleteSession: true,
         initializedRuntime,
       });
-      return stopWithText(`⚠️ ${bound.error}`);
+      return commandReply(`⚠️ ${bound.error}`);
     }
     binding = bound.binding;
   } else if (spawn.thread !== "off") {
@@ -221,7 +227,7 @@ export async function handleAcpSpawnAction(
         shouldDeleteSession: true,
         initializedRuntime,
       });
-      return stopWithText(`⚠️ ${bound.error}`);
+      return commandReply(`⚠️ ${bound.error}`);
     }
     binding = bound.binding;
   }
@@ -240,7 +246,7 @@ export async function handleAcpSpawnAction(
       initializedRuntime,
     });
     const message = formatErrorMessage(err);
-    return stopWithText(`⚠️ ACP spawn failed: ${message}`);
+    return commandReply(`⚠️ ACP spawn failed: ${message}`);
   }
 
   const parts = [
@@ -286,7 +292,7 @@ export async function handleAcpSpawnAction(
     parts.push(`ℹ️ ${dispatchNote}`);
   }
 
-  return stopWithText(parts.join(" "));
+  return commandReply(parts.join(" "));
 }
 
 function resolveAcpSessionForCommandOrStop(params: {
@@ -300,7 +306,7 @@ function resolveAcpSessionForCommandOrStop(params: {
   });
   const error = resolveAcpSessionResolutionError(resolved);
   if (error) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -321,7 +327,7 @@ async function resolveAcpTokenTargetSessionKeyOrStop(params: {
     token,
   });
   if (!target.ok) {
-    return stopWithText(`⚠️ ${target.error}`);
+    return commandReply(`⚠️ ${target.error}`);
   }
   return target.sessionKey;
 }
@@ -373,7 +379,7 @@ export async function handleAcpCancelAction(
           }),
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP cancel failed before completion.",
-        onSuccess: () => stopWithText(`✅ Cancel requested for ACP session ${sessionKey}.`),
+        onSuccess: () => commandReply(`✅ Cancel requested for ACP session ${sessionKey}.`),
       }),
   });
 }
@@ -386,29 +392,43 @@ async function runAcpSteer(params: {
 }): Promise<string> {
   const acpManager = getAcpSessionManager();
   let output = "";
-
-  await acpManager.runTurn({
+  const admittedRunContext = await prepareAgentRunAdmission({
     cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    provenance: "agent",
-    text: params.instruction,
-    mode: "steer",
-    requestId: params.requestId,
-    onEvent: (event) => {
-      if (event.type !== "text_delta") {
-        return;
-      }
-      if (event.stream && event.stream !== "output") {
-        return;
-      }
-      if (event.text) {
-        output += event.text;
-        if (output.length > ACP_STEER_OUTPUT_LIMIT) {
-          output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
-        }
-      }
+    operationalRunInstance: createOperationalRunInstanceRef(params.requestId),
+    facts: {
+      runId: params.requestId,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      ingress: { kind: "acp", boundary: "acp.command.steer", state: "present" },
     },
-  });
+  }).admit("acp");
+
+  try {
+    await acpManager.runTurn({
+      admittedRunContext,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      provenance: "agent",
+      text: params.instruction,
+      mode: "steer",
+      requestId: params.requestId,
+      onEvent: (event) => {
+        if (event.type !== "text_delta") {
+          return;
+        }
+        if (event.stream && event.stream !== "output") {
+          return;
+        }
+        if (event.text) {
+          output += event.text;
+          if (output.length > ACP_STEER_OUTPUT_LIMIT) {
+            output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
+          }
+        }
+      },
+    });
+  } finally {
+    closeAdmittedRunDelegatedAuthority(admittedRunContext);
+  }
   return output.trim();
 }
 
@@ -418,7 +438,7 @@ export async function handleAcpSteerAction(
 ): Promise<CommandHandlerResult> {
   const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
   if (dispatchPolicyError) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error: dispatchPolicyError,
         fallbackCode: "ACP_DISPATCH_DISABLED",
@@ -429,7 +449,7 @@ export async function handleAcpSteerAction(
 
   const parsed = parseSteerInput(restTokens);
   if (!parsed.ok) {
-    return stopWithText(`⚠️ ${parsed.error}`);
+    return commandReply(`⚠️ ${parsed.error}`);
   }
   const acpManager = getAcpSessionManager();
 
@@ -438,7 +458,7 @@ export async function handleAcpSteerAction(
     token: parsed.value.sessionToken,
   });
   if (!target.ok) {
-    return stopWithText(`⚠️ ${target.error}`);
+    return commandReply(`⚠️ ${target.error}`);
   }
 
   const guardFailure = resolveAcpSessionForCommandOrStop({
@@ -462,9 +482,9 @@ export async function handleAcpSteerAction(
     fallbackMessage: "ACP steer failed before completion.",
     onSuccess: (steerOutput) => {
       if (!steerOutput) {
-        return stopWithText(`✅ ACP steer sent to ${target.sessionKey}.`);
+        return commandReply(`✅ ACP steer sent to ${target.sessionKey}.`);
       }
-      return stopWithText(`✅ ACP steer sent to ${target.sessionKey}.\n${steerOutput}`);
+      return commandReply(`✅ ACP steer sent to ${target.sessionKey}.\n${steerOutput}`);
     },
   });
 }
@@ -488,7 +508,7 @@ export async function handleAcpCloseAction(
         });
         runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
       } catch (error) {
-        return stopWithText(
+        return commandReply(
           collectAcpErrorText({
             error,
             fallbackCode: "ACP_TURN_FAILED",
@@ -502,7 +522,7 @@ export async function handleAcpCloseAction(
         reason: "manual",
       });
 
-      return stopWithText(
+      return commandReply(
         `✅ Closed ACP session ${sessionKey}${runtimeNotice}. Removed ${removedBindings.length} binding${removedBindings.length === 1 ? "" : "s"}.`,
       );
     },

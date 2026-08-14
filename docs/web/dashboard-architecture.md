@@ -58,10 +58,11 @@ Principles:
 - **Graduation:** agent calls `show_widget` in any chat → widget renders inline
   in the transcript exactly as today → hover shows **Pin to dashboard** → widget
   appears on the session's board. The agent can pass `pin: true` to do the same.
-- **Board view:** a session with a board gets a face toggle (Chat / Dashboard).
-  Board view = tab strip (only when >1 tab) + fluid grid + docked chat pane.
-  Chat dock is resizable, movable (left/right/bottom), and collapsible exactly
-  like the sidebar. Per-tab dock state is remembered.
+- **Board view:** a session with a board gets a view switch (Chat / Split /
+  Dashboard). Split = tab strip (only when >1 tab) + fluid grid + docked chat
+  pane; Dashboard is the same without the chat. The chat dock is resizable and
+  movable (left/right/bottom) via the switch's dock picker. Per-tab dock state
+  is remembered.
 - **Drag:** user drags widgets; grid auto-compacts (widgets float up, neighbors
   reflow). Resize by handle snaps to size steps. No pixel placement — for
   anyone.

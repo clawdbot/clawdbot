@@ -1,5 +1,6 @@
 // Covers TUI session action routing and backend calls.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
@@ -30,15 +31,6 @@ describe("tui session actions", () => {
     clear: vi.fn(),
     showResult: vi.fn(),
   });
-  const createDeferred = <T>() => {
-    let resolve: (value: T) => void = () => {};
-    let reject: (reason?: unknown) => void = () => {};
-    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
-    return { promise, resolve, reject };
-  };
   const createHistoryChatLog = () => {
     const addSystem = vi.fn();
     const addUser = vi.fn();
@@ -128,7 +120,10 @@ describe("tui session actions", () => {
       agentNames: new Map(),
       initialSessionInput: "",
       initialSessionAgentId: null,
-      resolveSessionKey: vi.fn((raw?: string) => raw ?? "agent:main:main"),
+      resolveSessionSelection: vi.fn((raw?: string) => ({
+        key: raw ?? "agent:main:main",
+        agentId: "main",
+      })),
       updateHeader: vi.fn(),
       updateFooter: vi.fn(),
       updateAutocompleteProvider: vi.fn(),
@@ -166,6 +161,27 @@ describe("tui session actions", () => {
     expect(state.sessionScope).toBe("per-sender");
     expect([...agentNames]).toEqual([["cached", "Cached Agent"]]);
     expect(addSystem).toHaveBeenCalledWith("agents list failed: gateway unavailable");
+  });
+
+  it("switches colliding global sessions as an owner-key pair", async () => {
+    const state = createBaseState({
+      currentAgentId: "research",
+      currentSessionKey: "global",
+    });
+    const loadHistory = vi.fn().mockResolvedValue({ messages: [] });
+    const { setSession } = createTestSessionActions({
+      client: { loadHistory, listSessions: vi.fn() } as unknown as TuiBackend,
+      state,
+      resolveSessionSelection: vi.fn(() => ({ key: "global", agentId: "ops" })),
+    });
+
+    await setSession("agent:ops:global");
+
+    expect(state.currentAgentId).toBe("ops");
+    expect(state.currentSessionKey).toBe("global");
+    expect(loadHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    );
   });
 
   it("returns success after applying a normalized fresh agent roster", async () => {
@@ -1668,7 +1684,10 @@ describe("tui session actions", () => {
       agentNames: new Map(),
       initialSessionInput: "",
       initialSessionAgentId: null,
-      resolveSessionKey: vi.fn(),
+      resolveSessionSelection: vi.fn((raw?: string) => ({
+        key: raw ?? "agent:main:main",
+        agentId: "main",
+      })),
       updateHeader: vi.fn(),
       updateFooter: vi.fn(),
       updateAutocompleteProvider: vi.fn(),
@@ -1952,7 +1971,10 @@ describe("tui session actions", () => {
       agentNames: new Map(),
       initialSessionInput: "",
       initialSessionAgentId: null,
-      resolveSessionKey: vi.fn((raw?: string) => raw ?? "agent:main:main"),
+      resolveSessionSelection: vi.fn((raw?: string) => ({
+        key: raw ?? "agent:main:main",
+        agentId: "main",
+      })),
       updateHeader: vi.fn(),
       updateFooter: vi.fn(),
       updateAutocompleteProvider: vi.fn(),
@@ -2147,6 +2169,10 @@ describe("tui session actions", () => {
       chatLog: Object.assign(chatLog, { dropPendingUser }),
       state,
       setActivityStatus,
+      resolveSessionSelection: vi.fn((raw?: string) => ({
+        key: raw ?? state.currentSessionKey,
+        agentId: state.currentAgentId,
+      })),
     });
 
     const pendingAbort = abortActive();

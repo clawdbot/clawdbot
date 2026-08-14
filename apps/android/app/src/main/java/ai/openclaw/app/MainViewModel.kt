@@ -517,6 +517,8 @@ class MainViewModel private constructor(
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
     runtimeState(initial = null) { it.gatewayControlPage }
+  val desktopObserveAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.desktopObserveAvailable }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
@@ -671,6 +673,8 @@ class MainViewModel private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
+  val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
+    runtimeState(initial = emptyMap()) { it.chatSubagentActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
@@ -840,6 +844,7 @@ class MainViewModel private constructor(
             host = config.host,
             port = config.port,
             tlsEnabled = config.tls,
+            contextPath = config.contextPath,
           )
         val targetAlreadyPaired =
           prefs.gatewayRegistry.entries.value
@@ -874,6 +879,7 @@ class MainViewModel private constructor(
             host = config.host,
             port = config.port,
             tls = config.tls,
+            contextPath = config.contextPath,
           ),
         )
 
@@ -1063,6 +1069,15 @@ class MainViewModel private constructor(
 
   fun requestHomeDestination(destination: HomeDestination) {
     _requestedHomeDestination.value = destination
+  }
+
+  internal fun openConversationNotification(target: ConversationNotificationTarget) {
+    resumeNodeServiceForConnection()
+    viewModelScope.launch(Dispatchers.Default) {
+      if (ensureRuntime().openConversationNotificationTarget(target)) {
+        _requestedHomeDestination.value = HomeDestination.Chat
+      }
+    }
   }
 
   internal fun consumeChatDraft(
@@ -1608,6 +1623,7 @@ class MainViewModel private constructor(
   suspend fun patchChatSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -1619,6 +1635,7 @@ class MainViewModel private constructor(
     ensureRuntime().patchChatSession(
       key = key,
       ownerAgentId = ownerAgentId,
+      expectedSessionId = expectedSessionId,
       label = label,
       clearLabel = clearLabel,
       category = category,

@@ -57,17 +57,17 @@ function createStartupAbortScope(parent?: AbortSignal): {
   };
 }
 
-export function readStringParam(
+export function readTranscriptStringParam(
   params: Record<string, unknown>,
   key: string,
   options: { required: true; trim?: boolean },
 ): string;
-export function readStringParam(
+export function readTranscriptStringParam(
   params: Record<string, unknown>,
   key: string,
   options?: { required?: false; trim?: boolean },
 ): string | undefined;
-export function readStringParam(
+export function readTranscriptStringParam(
   params: Record<string, unknown>,
   key: string,
   options: { required?: boolean; trim?: boolean } = {},
@@ -86,20 +86,21 @@ export function readStringParam(
   return normalized || undefined;
 }
 
-export function createSessionId(): string {
+export function createTranscriptSessionId(): string {
   return `transcript-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 }
 
 // Provider routing comes from tool params so manual imports and live providers
 // share one persisted source descriptor.
 export function sourceFromParams(params: Record<string, unknown>): TranscriptSourceLocator {
-  const providerId = readStringParam(params, "providerId", { trim: true }) ?? "manual-transcript";
+  const providerId =
+    readTranscriptStringParam(params, "providerId", { trim: true }) ?? "manual-transcript";
   return {
     providerId,
-    accountId: readStringParam(params, "accountId", { trim: true }),
-    guildId: readStringParam(params, "guildId", { trim: true }),
-    channelId: readStringParam(params, "channelId", { trim: true }),
-    meetingUrl: readStringParam(params, "meetingUrl", { trim: true }),
+    accountId: readTranscriptStringParam(params, "accountId", { trim: true }),
+    guildId: readTranscriptStringParam(params, "guildId", { trim: true }),
+    channelId: readTranscriptStringParam(params, "channelId", { trim: true }),
+    meetingUrl: readTranscriptStringParam(params, "meetingUrl", { trim: true }),
   };
 }
 
@@ -157,8 +158,10 @@ export async function startTranscripts(params: {
     throw new Error(`transcripts provider ${providerSource.providerId} cannot start live capture`);
   }
   const session: TranscriptSessionDescriptor = {
-    sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
-    title: readStringParam(params.rawParams, "title", { trim: true }),
+    sessionId:
+      readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
+      createTranscriptSessionId(),
+    title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),

@@ -71,6 +71,18 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
+export interface ContextEngineTurnOutbox {
+  advancement_key: string;
+  attempt_count: Generated<number>;
+  created_at: number;
+  engine_id: string;
+  last_attempt_at: number | null;
+  last_error: string | null;
+  owner_plugin_id: string | null;
+  payload_json: string;
+  session_id: string;
+}
+
 export interface ConversationDeliveries {
   conversation_id: string;
   created_at: number;
@@ -234,6 +246,7 @@ export interface SessionNodes {
   last_read_at: number | null;
   parent_session_key: string | null;
   pinned_at: number | null;
+  project_id: string | null;
   session_key: string;
   spawned_by: string | null;
   status: string | null;
@@ -381,17 +394,6 @@ export interface StandingIntentsFtsIdx {
   term: string;
 }
 
-export interface StateLeases {
-  created_at: number;
-  expires_at: number | null;
-  heartbeat_at: number | null;
-  lease_key: string;
-  owner: string;
-  payload_json: string | null;
-  scope: string;
-  updated_at: number;
-}
-
 export interface TrajectoryRuntimeEvents {
   created_at: number;
   event_json: string;
@@ -430,6 +432,7 @@ export interface DB {
   board_tabs: BoardTabs;
   board_widgets: BoardWidgets;
   cache_entries: CacheEntries;
+  context_engine_turn_outbox: ContextEngineTurnOutbox;
   conversation_deliveries: ConversationDeliveries;
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
@@ -461,7 +464,6 @@ export interface DB {
   standing_intents_fts_data: StandingIntentsFtsData;
   standing_intents_fts_docsize: StandingIntentsFtsDocsize;
   standing_intents_fts_idx: StandingIntentsFtsIdx;
-  state_leases: StateLeases;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_events: TranscriptEvents;

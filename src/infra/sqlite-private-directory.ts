@@ -1,9 +1,12 @@
 // Creates private SQLite staging directories without pulling higher-level runtime modules.
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSystemBin } from "./resolve-system-bin.js";
+import { decodeWindowsOutputBuffer } from "./windows-encoding.js";
 
 const SQLITE_DIRECTORY_MODE = 0o700;
 const WINDOWS_DIRECTORY_EXISTS_MARKER = "OPENCLAW_SQLITE_DIRECTORY_EXISTS";
@@ -70,19 +73,77 @@ public static class OpenClawPrivateDirectory
 }
 `;
 
-function runPrivateDirectoryPowerShell(powershell: string, encodedCommand: string): Promise<void> {
+function failureText(value: unknown): string {
+  const text = Buffer.isBuffer(value)
+    ? decodeWindowsOutputBuffer({ buffer: value })
+    : typeof value === "string"
+      ? value
+      : "";
+  return truncateUtf16Safe(
+    text
+      .split(/\r?\n/u)
+      .filter((line) => !line.toLowerCase().includes("encodedcommand"))
+      .join("\n")
+      .trim(),
+    1000,
+  );
+}
+
+function privateDirectoryError(
+  directoryPath: string,
+  error: unknown,
+  stdout?: unknown,
+  stderr?: unknown,
+): Error {
+  const failure = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  if (
+    [error, stderr, stdout, failure.stderr, failure.stdout].some((value) =>
+      String(value).includes(WINDOWS_DIRECTORY_EXISTS_MARKER),
+    )
+  ) {
+    const existsError = new Error(`Private SQLite directory already exists: ${directoryPath}`);
+    (existsError as NodeJS.ErrnoException).code = "EEXIST";
+    return existsError;
+  }
+  const status = [
+    typeof failure.status === "number" ? `status=${failure.status}` : "",
+    typeof failure.code === "number"
+      ? `exit=${failure.code}`
+      : typeof failure.code === "string"
+        ? `code=${failure.code}`
+        : "",
+    typeof failure.killed === "boolean" ? `killed=${failure.killed}` : "",
+    typeof failure.signal === "string" ? `signal=${failure.signal}` : "",
+  ].filter(Boolean);
+  const stderrText = failureText(stderr) || failureText(failure.stderr);
+  const stdoutText = failureText(stdout) || failureText(failure.stdout);
+  const detail = stderrText ? `stderr: ${stderrText}` : stdoutText ? `stdout: ${stdoutText}` : "";
+  const cause = new Error(
+    `PowerShell failed${status.length ? ` (${status.join(", ")})` : ""}${detail ? `; ${detail}` : ""}`,
+  );
+  return new Error(`Unable to create private Windows SQLite directory: ${directoryPath}`, {
+    cause,
+  });
+}
+
+function runPrivateDirectoryPowerShell(
+  directoryPath: string,
+  powershell: string,
+  encodedCommand: string,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(
       powershell,
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
       {
+        encoding: "buffer",
         maxBuffer: 64 * 1024,
         timeout: 10_000,
         windowsHide: true,
       },
-      (error) => {
+      (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(error.message, { cause: error }));
+          reject(privateDirectoryError(directoryPath, error, stdout, stderr));
           return;
         }
         resolve();
@@ -91,12 +152,10 @@ function runPrivateDirectoryPowerShell(powershell: string, encodedCommand: strin
   });
 }
 
-export async function createPrivateSqliteDirectory(directoryPath: string): Promise<void> {
-  if (process.platform !== "win32") {
-    await fs.mkdir(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
-    return;
-  }
-  // This raw Win32 call bypasses Node's automatic long-path normalization.
+function resolvePrivateDirectoryPowerShell(directoryPath: string): {
+  encodedCommand: string;
+  powershell: string;
+} {
   const nativeDirectoryPath = path.toNamespacedPath(path.resolve(directoryPath));
   const encodedPath = Buffer.from(nativeDirectoryPath, "utf8").toString("base64");
   const encodedNativeSource = Buffer.from(WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE, "utf8").toString(
@@ -124,18 +183,40 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
   if (!powershell) {
     throw new Error("Unable to resolve PowerShell for private Windows SQLite staging.");
   }
-  const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
+  return {
+    powershell,
+    encodedCommand: Buffer.from(command, "utf16le").toString("base64"),
+  };
+}
+
+export async function createPrivateSqliteDirectory(directoryPath: string): Promise<void> {
+  if (process.platform !== "win32") {
+    await fs.mkdir(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
+    return;
+  }
+  // This raw Win32 call bypasses Node's automatic long-path normalization.
+  const { encodedCommand, powershell } = resolvePrivateDirectoryPowerShell(directoryPath);
+  await runPrivateDirectoryPowerShell(directoryPath, powershell, encodedCommand);
+}
+
+function createPrivateSqliteDirectorySync(directoryPath: string): void {
+  if (process.platform !== "win32") {
+    fsSync.mkdirSync(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
+    return;
+  }
+  const { encodedCommand, powershell } = resolvePrivateDirectoryPowerShell(directoryPath);
   try {
-    await runPrivateDirectoryPowerShell(powershell, encodedCommand);
+    execFileSync(
+      powershell,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
+      {
+        maxBuffer: 64 * 1024,
+        timeout: 10_000,
+        windowsHide: true,
+      },
+    );
   } catch (error) {
-    if (String(error).includes(WINDOWS_DIRECTORY_EXISTS_MARKER)) {
-      const existsError = new Error(`Private SQLite directory already exists: ${directoryPath}`);
-      (existsError as NodeJS.ErrnoException).code = "EEXIST";
-      throw existsError;
-    }
-    throw new Error(`Unable to create private Windows SQLite directory: ${directoryPath}`, {
-      cause: error,
-    });
+    throw privateDirectoryError(directoryPath, error);
   }
 }
 
@@ -148,5 +229,14 @@ export async function createPrivateSqliteTempDirectory(
   }
   const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
   await createPrivateSqliteDirectory(directoryPath);
+  return directoryPath;
+}
+
+export function createPrivateSqliteTempDirectorySync(rootPath: string, prefix: string): string {
+  if (process.platform !== "win32") {
+    return fsSync.mkdtempSync(path.join(rootPath, prefix));
+  }
+  const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
+  createPrivateSqliteDirectorySync(directoryPath);
   return directoryPath;
 }

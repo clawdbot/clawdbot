@@ -1,18 +1,15 @@
 /** CLI entrypoint for `openclaw gateway status`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
+import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
+import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
-import {
-  buildNetworkHints,
-  parseTimeoutMs,
-  resolveTargets,
-  sanitizeSshTarget,
-} from "./gateway-status/helpers.js";
+import { buildNetworkHints, resolveTargets, sanitizeSshTarget } from "./gateway-status/helpers.js";
 import {
   buildGatewayStatusWarnings,
   pickPrimaryProbedTarget,
@@ -52,11 +49,17 @@ export async function gatewayStatusCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  ensureExplicitGatewayAuth({
+    urlOverride: opts.url?.trim(),
+    urlOverrideSource: "cli",
+    explicitAuth: resolveExplicitGatewayAuth(opts),
+    errorHint: "Fix: pass --token or --password with --url.",
+  });
   const startedAt = Date.now();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
-  const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
+  const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs);
   const portOverride = parseGatewayPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,

@@ -647,7 +647,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
-  it("preserves sessions_yield detection in attempt results", () => {
+  it("preserves accepted session spawns as yield continuation evidence", () => {
     const projector = new CodexAppServerEventProjector(
       {
         prompt: "hello",
@@ -664,8 +664,20 @@ describe("CodexAppServerEventProjector commentary projection", () => {
       TURN_ID,
     );
 
-    const result = projector.buildResult(buildEmptyToolTelemetry(), { yieldDetected: true });
+    const result = projector.buildResult(
+      {
+        ...buildEmptyToolTelemetry(),
+        acceptedSessionSpawns: [
+          { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+        ],
+      },
+      { yieldDetected: true },
+    );
 
     expect(result.yieldDetected).toBe(true);
+    expect(result.acceptedSessionSpawns).toEqual([
+      { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+    ]);
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
 });

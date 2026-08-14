@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   validateQaRuntimePairReport,
   validateQaRuntimePairSummary,
-} from "../../scripts/validate-qa-runtime-pair-summary.mjs";
+} from "../../scripts/validate-qa-runtime-pair-summary.mts";
 
 type CellStatus = "pass" | "fail" | "skip";
 
@@ -76,6 +76,7 @@ const frozenCoreScenarioIds = [
   "thread-memory-isolation",
   "model-switch-tool-continuity",
   "approval-turn-tool-followthrough",
+  // Mirrors the immutable report shape for the fixed candidate SHAs, not the live catalog.
   "codex-plugin-pinned-new",
   "codex-plugin-pinned-old",
   "compaction-retry-mutating-tool",

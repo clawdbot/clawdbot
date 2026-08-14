@@ -9,16 +9,13 @@ import {
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
-  buildChannelAccountSnapshot,
+  resolveChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
 } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
-import {
-  type OfficialExternalPluginRepairHint,
-  resolveMissingOfficialExternalChannelPluginRepairHint,
-} from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -90,7 +87,7 @@ export async function formatConfigChannelsStatusLines(
         cfg: sourceConfig,
         accountId,
       });
-      const resolvedSnapshot = await buildChannelAccountSnapshot({
+      const resolvedSnapshot = await resolveChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,
@@ -109,31 +106,20 @@ export async function formatConfigChannelsStatusLines(
     }
   }
 
-  const missingHints: OfficialExternalPluginRepairHint[] = [];
   const missingChannelIds = [
     ...new Set([
       ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
       ...listExplicitConfiguredChannelIdsForConfig(cfg),
     ]),
-  ];
-  for (const channelId of missingChannelIds) {
-    if (requestedChannel && channelId !== requestedChannel) {
-      continue;
-    }
-    if (visibleChannelIds.has(channelId)) {
-      continue;
-    }
-    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
-      config: cfg,
-      activationSourceConfig: sourceConfig,
-      channelId,
-    });
-    if (!hint?.channelId || visibleChannelIds.has(hint.channelId)) {
-      continue;
-    }
-    missingHints.push(hint);
-    visibleChannelIds.add(hint.channelId);
-  }
+  ].filter(
+    (channelId) =>
+      (!requestedChannel || channelId === requestedChannel) && !visibleChannelIds.has(channelId),
+  );
+  const missingHints = resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    activationSourceConfig: sourceConfig,
+    channelIds: missingChannelIds,
+  });
   if (missingHints.length > 0) {
     lines.push("");
     lines.push(theme.warn("Missing official external plugins:"));

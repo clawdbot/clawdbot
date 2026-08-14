@@ -48,10 +48,4 @@ describe("tryResolveLoadedOutboundTarget", () => {
       }),
     ).toEqual({ ok: true, to: "room-one" });
   });
-
-  it("trims channel ids before reading the loaded registry", () => {
-    tryResolveLoadedOutboundTarget({ channel: " alpha " as never, to: "room-one" });
-
-    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("alpha");
-  });
 });

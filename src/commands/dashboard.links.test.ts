@@ -12,6 +12,7 @@ const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const issueDeviceBootstrapTokenMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const ensureGatewayReadyForOperationMock = vi.hoisted(() => vi.fn());
+const waitForControlUiDocumentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -35,6 +36,11 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 
 vi.mock("./gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: ensureGatewayReadyForOperationMock,
+}));
+
+vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-handoff.js")>()),
+  waitForControlUiDocument: waitForControlUiDocumentMock,
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -105,6 +111,8 @@ describe("dashboardCommand", () => {
       status: {},
       recovered: false,
     });
+    waitForControlUiDocumentMock.mockReset();
+    waitForControlUiDocumentMock.mockResolvedValue({ ready: true });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
@@ -135,20 +143,22 @@ describe("dashboardCommand", () => {
       profile: {
         roles: ["operator"],
         scopes: [
+          "operator.admin",
           "operator.approvals",
+          "operator.pairing",
           "operator.questions",
           "operator.read",
           "operator.talk.secrets",
           "operator.write",
         ],
-        purpose: "control-ui",
+        purpose: "control-ui-owner",
       },
     });
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Opened in your browser. Keep that tab to control OpenClaw.",
@@ -166,10 +176,10 @@ describe("dashboardCommand", () => {
 
     // Clipboard and browser receive only the short-lived browser bootstrap.
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
 
     // The logged output must never contain the token — it flows into
@@ -315,7 +325,7 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
     expectNoLogWith("Token auto-auth unavailable");
     expectNoLogWith("missing env var");
@@ -336,10 +346,10 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
     expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
     expectNoLogWith("Token auto-auth unavailable");
@@ -354,10 +364,10 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
     expectNoLogWith("Token auto-auth unavailable");
     expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");

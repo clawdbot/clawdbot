@@ -34,6 +34,7 @@ describe("evidence summary", () => {
         },
       ],
       channelId: "qa-channel",
+      channelDriver: "local-shim",
       env: {
         OPENCLAW_QA_CHANNEL_DRIVER: "local-shim",
         OPENCLAW_QA_REF: "abc123",
@@ -154,23 +155,7 @@ describe("evidence summary", () => {
       false,
     ],
     [
-      "live driver selected through the QA environment",
-      "custom-live-transport",
-      undefined,
-      { OPENCLAW_QA_CHANNEL_DRIVER: "live" },
-      "live",
-      true,
-    ],
-    [
-      "live driver selected through the E2E environment",
-      "custom-live-transport",
-      undefined,
-      { OPENCLAW_E2E_CHANNEL_DRIVER: "live" },
-      "live",
-      true,
-    ],
-    [
-      "explicit synthetic driver overriding live environment",
+      "explicit synthetic driver ignores requested environment metadata",
       "telegram",
       "qa-channel",
       { OPENCLAW_QA_CHANNEL_DRIVER: "live" },

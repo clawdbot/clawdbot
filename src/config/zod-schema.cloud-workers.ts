@@ -87,6 +87,10 @@ const CloudWorkerProfileIdSchema = z
   );
 
 const CloudWorkersConfigShape = {
+  desktop: z.boolean().optional().register(configUiMetadata, {
+    label: "Cloud Worker Desktop (Labs)",
+    help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",
+  }),
   profiles: z
     .record(CloudWorkerProfileIdSchema, CloudWorkerProfileSchema)
     .optional()
@@ -99,6 +103,7 @@ const CloudWorkersConfigShape = {
 export const CloudWorkersConfigSchema = z.object(CloudWorkersConfigShape).strict().optional();
 
 const CLOUD_WORKER_FIELD_SCHEMAS = {
+  "cloudWorkers.desktop": CloudWorkersConfigShape.desktop,
   "cloudWorkers.profiles": CloudWorkersConfigShape.profiles,
   "cloudWorkers.profiles.*": CloudWorkerProfileSchema,
   "cloudWorkers.profiles.*.provider": CloudWorkerProfileShape.provider,

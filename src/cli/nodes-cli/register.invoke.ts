@@ -8,10 +8,10 @@ import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodePositiveInteger,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -52,7 +52,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             );
           }
           const params = parseNodeInvokeParams(opts.params);
-          const nodeId = await resolveNodeId(opts, nodeQuery);
+          const nodeId = await resolveCliNodeId(opts, nodeQuery);
           const timeoutMs = parseOptionalNodePositiveInteger(
             opts.invokeTimeout,
             "--invoke-timeout",
@@ -68,7 +68,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           defaultRuntime.writeJson(result);
         });
       }),

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { stubAuditChannelPlugin } from "./audit-channel-test-helpers.js";
-import { collectChannelSecurityFindings } from "./audit-channel.js";
+import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
 
 function stubSlackPlugin(params: {
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -123,7 +123,7 @@ describe("security audit channel source-config fallback slack", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const findings = await collectChannelSecurityFindings({
+      const findings = await collectChannelSecurityFindingsCore({
         cfg: testCase.resolvedConfig,
         sourceConfig: testCase.sourceConfig,
         plugins: [testCase.plugin(testCase.sourceConfig)],

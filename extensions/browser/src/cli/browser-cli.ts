@@ -106,7 +106,6 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
-      command("extract", "Answer a question from the current page"),
       command("console", "Get recent console messages"),
       command("pdf", "Save page as PDF"),
       command("responsebody", "Wait for a network response and return its body"),
@@ -140,7 +139,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
     },
   },
   {
-    placeholders: [command("extension", "Chrome extension load path and pairing")],
+    placeholders: [command("extension", "Chrome extension install, status, and pairing")],
     register: async (args) => {
       const module = await import("./browser-cli-extension.js");
       module.registerBrowserExtensionCommands(args.browser, args.parentOpts, args.pluginRoot);

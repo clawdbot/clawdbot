@@ -11,6 +11,7 @@ import {
   listCliRuntimeModelBackendBindings,
   listCliRuntimeProviderIds,
   resolveCliBackendConfig,
+  resolveCliBackendLiveSessionRequirement,
   resolveCliBackendLiveTest,
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
@@ -29,6 +30,12 @@ const runtimeArtifact: CliBackendRuntimeArtifactPolicy = {
   packageName: "@fixture/acme-cli",
   entrypoint: "command",
 };
+const liveSessionRequirement = {
+  capability: "acme_lifecycle_v1",
+  minimumVersion: "1.2.3",
+  versionArgs: ["--version"],
+  updateCommand: "acme update",
+} as const;
 
 function createBackend(overrides: Partial<CliBackendPlugin> = {}): CliBackendPlugin {
   return {
@@ -46,6 +53,7 @@ function createBackend(overrides: Partial<CliBackendPlugin> = {}): CliBackendPlu
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     runtimeArtifact,
+    liveSessionRequirement,
     liveTest: {
       defaultModelRef: "acme/acme-large",
       defaultImageProbe: true,
@@ -110,6 +118,7 @@ describe("resolveCliBackendConfig", () => {
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
       runtimeArtifact,
+      liveSessionRequirement,
       config: {
         command: "acme",
         args: ["chat", "--json"],
@@ -192,7 +201,9 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.pluginId).toBeUndefined();
     expect(resolved.config).toEqual({ command: "setup-acme", args: ["run"] });
     expect(resolved.runtimeArtifact).toEqual(runtimeArtifact);
+    expect(resolved.liveSessionRequirement).toEqual(liveSessionRequirement);
     expect(resolved.parseJsonlEvent).toBe(parseJsonlEvent);
+    expect(resolveCliBackendLiveSessionRequirement("acme-cli")).toEqual(liveSessionRequirement);
   });
 
   it("returns null when no plugin owns the backend", () => {

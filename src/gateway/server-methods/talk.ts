@@ -15,15 +15,7 @@ import {
   validateTalkModeParams,
   validateTalkSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  withSpeakerSelectionCompat,
-  withSpeakerSelectionFallbackCompat,
-} from "../../../packages/speech-core/speaker.js";
-import {
-  CODE_HEAVY_SPOKEN_FALLBACK,
-  isCodeHeavySpeechText,
-} from "../../../packages/speech-core/src/speech-text.js";
-import { getVoiceProviderConfig } from "../../../packages/speech-core/voice-models.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -55,11 +47,17 @@ import {
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
 import {
+  withSpeakerSelectionCompat,
+  withSpeakerSelectionFallbackCompat,
+} from "../../tts/speaker.js";
+import { CODE_HEAVY_SPOKEN_FALLBACK, isCodeHeavySpeechText } from "../../tts/speech-text.js";
+import {
   getResolvedSpeechProviderConfig,
   resolveTtsConfig,
   synthesizeSpeech,
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
+import { getVoiceProviderConfig } from "../../tts/voice-models.js";
 import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { resolveConfiguredSecretInputString } from "../resolve-configured-secret-input-string.js";
 import { formatForLog } from "../ws-log.js";
@@ -740,7 +738,16 @@ export const talkHandlers: GatewayRequestHandlers = {
     try {
       respond(true, buildTalkCatalog(context.getRuntimeConfig()), undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(
+          err instanceof AgentSelectionRequiredError
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          formatForLog(err),
+        ),
+      );
     }
   },
   "talk.config": async ({ params, respond, client, context }) => {

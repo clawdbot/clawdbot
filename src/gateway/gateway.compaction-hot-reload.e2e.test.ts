@@ -10,12 +10,12 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEventsSync,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -216,9 +216,9 @@ describe("gateway compaction hot reload", () => {
           agentId: "dev",
           sessionId,
           sessionKey,
-          storePath: resolveStorePath(undefined, { agentId: "dev" }),
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "dev" }),
         };
-        await upsertSessionEntry(scope, {
+        await upsertSessionEntryCore(scope, {
           sessionId,
           updatedAt: Date.now(),
           compactionCount: 0,

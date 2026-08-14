@@ -908,18 +908,18 @@ describe("deliverFollowupDecision", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("does not retry an intentionally suppressed routed follow-up", async () => {
+  it("does not retry a channel-transform-suppressed routed follow-up", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.routeReply.mockReset();
     deliveryState.routeReply.mockResolvedValue({
       ok: true,
       delivered: false,
       suppressed: true,
-      reason: "reasoning_payload_not_external",
+      reason: "channel_transform",
     });
 
     await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads: [{ text: "internal reasoning", isReasoning: true }] },
+      decision: { kind: "deliver", payloads: [{ text: "private reply" }] },
       turn: createTurn(),
       defaults: createDefaults(onBlockReply),
       runId: "run-1",

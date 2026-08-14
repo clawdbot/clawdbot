@@ -1,9 +1,12 @@
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import {
+  tryGetLegacyDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
@@ -19,6 +22,14 @@ import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
+import {
+  loadGatewayModelCatalog,
+  loadGatewayModelCatalogSnapshot,
+  loadPreparedGatewayModelCatalogSnapshot,
+  readPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogOwnerSnapshot,
+} from "./server-model-catalog.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
 // methods without starting the full gateway. Unsupported subsystems fail loudly
@@ -73,8 +84,10 @@ function createLocalGatewayRequestContext(
         cronEnabled: cfg.cron?.enabled !== false,
         cronConfig: cfg.cron,
         log: getChildLogger({ module: "cron", storePath }),
-        defaultAgentId: resolveDefaultAgentId(cfg),
-        resolveDefaultAgentId: () => resolveDefaultAgentId(params.getRuntimeConfig()),
+        defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
+        legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
+        resolveDefaultAgentId: () =>
+          tryResolveLegacyCompatibilityAgentId(params.getRuntimeConfig()),
         isAgentAvailable: (id) =>
           !isAgentDeletionBlocked(id) &&
           listAgentIds(params.getRuntimeConfig()).some(
@@ -95,19 +108,21 @@ function createLocalGatewayRequestContext(
   };
   const sessionEvents = new Set<string>();
   const chatRunState = createChatRunState();
-  const loadModelCatalogOwner = async ({
-    agentId,
-    agentDir,
-    readOnly,
-    workspaceDir,
-  }: NonNullable<Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0]> = {}) =>
-    loadResolvedPublishedModelCatalogOwner({
-      ...(agentId ? { agentId } : {}),
-      ...(agentDir ? { agentDir } : {}),
-      config: params.getRuntimeConfig(),
-      readOnly: readOnly !== false,
-      ...(workspaceDir ? { workspaceDir } : {}),
-    });
+  const loadCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (
+    loadParams,
+  ) => loadGatewayModelCatalogSnapshot({ ...loadParams, getConfig: params.getRuntimeConfig });
+  registerGatewayModelCatalogPrivateAccess(loadCatalogSnapshot, {
+    loadDeferred: (loadParams) =>
+      loadPreparedGatewayModelCatalogSnapshot({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+    readPrepared: (loadParams) =>
+      readPreparedGatewayModelCatalogOwnerSnapshot({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+  });
   return {
     deps: params.deps,
     cron,
@@ -116,17 +131,16 @@ function createLocalGatewayRequestContext(
     notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
-    loadGatewayModelCatalog: async (loadParams) =>
-      (await loadModelCatalogOwner(loadParams)).modelCatalog.entries,
-    loadGatewayModelCatalogSnapshot: async (loadParams) => {
-      const owner = await loadModelCatalogOwner(loadParams);
-      return {
-        ...owner.modelCatalog,
-        agentId: owner.agentId,
-        agentDir: owner.agentDir,
-        workspaceDir: owner.workspaceDir,
-        config: owner.config,
-      };
+    loadGatewayModelCatalog: (loadParams) =>
+      loadGatewayModelCatalog({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+    loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
+    readPreparedGatewayModelCatalog: (loadParams) =>
+      readPreparedGatewayModelCatalog({ ...loadParams, getConfig: params.getRuntimeConfig }),
+    readChatMetadata: async () => {
+      throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
     },
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>

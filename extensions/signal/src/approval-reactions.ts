@@ -17,7 +17,8 @@ import {
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -82,7 +83,10 @@ type SignalApprovalDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+  (runtime) => runtime.resolveApprovalOverGateway,
+);
 
 const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
   getOptionalSignalRuntime,
@@ -100,8 +104,6 @@ const signalApprovalReactionTargets =
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget,
   });
-
-const loadApprovalResolver = resolverRuntimeLoader;
 
 function resolveApprovalForwardingConfig(params: {
   cfg: OpenClawConfig;
@@ -907,13 +909,15 @@ export async function maybeResolveSignalApprovalReaction(params: {
     return true;
   }
 
-  const { isApprovalNotFoundError, resolveSignalApproval } = await loadApprovalResolver();
+  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
   try {
-    const result = await resolveSignalApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
       decision: target.decision,
+      channel: "signal",
+      accountId: params.accountId,
       senderId: actorId,
       gatewayUrl: params.gatewayUrl,
     });
@@ -954,6 +958,6 @@ export async function maybeResolveSignalApprovalReaction(params: {
 
 export function clearSignalApprovalReactionTargetsForTest(): void {
   signalApprovalReactionTargets.clearForTest();
-  resolverRuntimeLoader.clear();
+  loadResolveApprovalOverGateway.clear();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

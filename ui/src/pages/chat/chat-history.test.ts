@@ -10,6 +10,7 @@ import {
   type ChatHistoryResult,
   type ChatState,
 } from "./chat-history.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import {
   cacheChatSessionSnapshot,
@@ -23,41 +24,31 @@ type TestState = ChatState &
   Parameters<typeof handleAgentEvent>[0] & {
     requestUpdate: () => void;
   };
+type TestSessions = NonNullable<ChatState["sessions"]> &
+  Parameters<typeof handleAgentEvent>[0]["sessions"];
 
 function createState(result: ChatHistoryResult): TestState {
-  const client = {
-    request: vi.fn().mockResolvedValue(result),
-  } as unknown as GatewayBrowserClient;
-  return {
-    client,
-    connected: true,
-    connectionEpoch: 1,
+  const host = makeChatHost({
+    requestHandlers: { "chat.history": result },
     sessionKey: "main",
-    chatLoading: false,
-    chatMessages: [],
+  });
+  const sessions: TestSessions = { setModelOverride: vi.fn() };
+  return {
+    ...host,
+    chatToolMessages: host.chatToolMessages ?? [],
+    chatStreamSegments: host.chatStreamSegments ?? [],
+    connectionEpoch: 1,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
-    chatSending: false,
-    chatMessage: "",
-    chatAttachments: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatStream: null,
     chatStreamStartedAt: null,
-    chatStreamSegments: [],
-    toolStreamById: new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: [],
-    chatToolMessages: [],
-    toolStreamSyncTimer: null,
     planStatus: {
       runId: "stale-run",
       steps: [{ step: "Reset me", status: "in_progress" }],
     },
-    lastError: null,
-    hello: null,
-    sessions: {
-      setModelOverride: vi.fn(),
-    },
+    sessions,
+    toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
+    toolStreamOrder: host.toolStreamOrder ?? [],
+    toolStreamSyncTimer: host.toolStreamSyncTimer ?? null,
     requestUpdate: vi.fn(),
   };
 }

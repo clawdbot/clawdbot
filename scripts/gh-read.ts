@@ -261,7 +261,7 @@ export async function readBoundedGitHubJson<T>(
   options: GitHubBodyReadOptions = {},
 ): Promise<T> {
   const text = await readBoundedResponseText(response, "GitHub API", maxBytes, {
-    createTooLargeError: (message) =>
+    createTooLargeError: (message: string) =>
       Object.assign(new Error(message), {
         code: "ETOOBIG",
       }),

@@ -15,6 +15,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
@@ -35,6 +36,7 @@ import {
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   loadOrCreateProcessDeviceIdentity,
   loadSessionEntry,
   normalizeChannelId,
@@ -43,14 +45,16 @@ import {
   parseMessageWithAttachments,
   registerApnsRegistration,
   requestHeartbeat,
+  resolveSystemMainSessionTarget,
   resolveChatAttachmentMaxBytes,
   resolveGatewayModelSupportsImages,
   resolveOutboundTarget,
   resolveSessionAgentId,
   resolveSessionModelRef,
   persistInboundImagesForTranscript,
-  sendDurableMessageBatch,
-  upsertSessionEntry,
+  sendDurableMessageBatchCore,
+  upsertSessionEntryCore,
+  withSystemEventOwner,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -172,13 +176,7 @@ function shouldDropDuplicateVoiceTranscript(params: {
         break;
       }
     }
-    while (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
-      const oldestKey = recentVoiceTranscripts.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentVoiceTranscripts.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentVoiceTranscripts, MAX_RECENT_VOICE_TRANSCRIPTS);
   }
 
   return false;
@@ -328,13 +326,7 @@ function shouldDropDuplicateExecFinished(params: {
         break;
       }
     }
-    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
-      const oldestKey = recentExecFinishedRuns.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentExecFinishedRuns.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentExecFinishedRuns, MAX_RECENT_EXEC_FINISHED_RUNS);
   }
 
   return false;
@@ -356,13 +348,7 @@ function pruneBoundedTimestampMap(
       return;
     }
   }
-  while (map.size > params.maxEntries) {
-    const oldestKey = map.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    map.delete(oldestKey);
-  }
+  pruneMapToMaxSize(map, params.maxEntries);
 }
 
 function compactExecEventOutput(raw: string) {
@@ -402,7 +388,7 @@ async function touchSessionStore(params: {
   if (!storePath) {
     return;
   }
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     {
       sessionKey: params.canonicalKey,
       storePath,
@@ -531,7 +517,7 @@ async function sendReceiptAck(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  const send = await sendDurableMessageBatch({
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
@@ -624,11 +610,11 @@ export const handleNodeEvent = async (
             isConnectionCurrent: opts?.isConnectionCurrent,
           });
 
-          // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-          // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+          // Voice now has a unique per-turn run id, so it is also the stable
+          // client identity for chat streaming and abort lifecycle ownership.
           ctx.addChatRun(runId, {
             sessionKey: canonicalKey,
-            clientRunId: `voice-${randomUUID()}`,
+            clientRunId: runId,
           });
         },
       });
@@ -673,11 +659,11 @@ export const handleNodeEvent = async (
       }
 
       let message = (link?.message ?? "").trim();
-      const transcriptMessage = message;
+      let transcriptMessage = message;
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
-      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let images: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
       let imageOrder: PromptImageOrderEntry[] = [];
       let offloadedRefs: Awaited<ReturnType<typeof parseMessageWithAttachments>>["offloadedRefs"] =
         [];
@@ -807,22 +793,23 @@ export const handleNodeEvent = async (
       }
       const persistedTranscriptMedia = await persistInboundImagesForTranscript({
         images,
-        imageOrder,
         offloadedRefs,
         log: ctx.logGateway,
         logContext: "agent.request",
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
         await cleanupNodeEventMedia(
-          persistedTranscriptMedia.map((media) => media.id),
+          persistedTranscriptMedia.entries.map((media) => media.id),
           ctx,
         );
         return pairingChangedResult(evt.event);
       }
-      const transcriptMedia = persistedTranscriptMedia.map((media) => ({
-        path: media.path,
-        contentType: media.contentType,
-      }));
+      if (persistedTranscriptMedia.omission === "inline-image-save-failed") {
+        transcriptMessage = [transcriptMessage, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
+          .filter(Boolean)
+          .join("\n");
+      }
+      const transcriptMedia = persistedTranscriptMedia.entries.map((media) => media.fact);
 
       if (wantsReceipt && deliveryChannel && deliveryTo) {
         // Delivery stays detached from agent startup, but remains part of the
@@ -856,7 +843,10 @@ export const handleNodeEvent = async (
           message,
           images,
           imageOrder,
-          ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
+          ...(transcriptMedia.length > 0 ||
+          persistedTranscriptMedia.omission === "inline-image-save-failed"
+            ? { transcriptMessage, ...(transcriptMedia.length > 0 ? { transcriptMedia } : {}) }
+            : {}),
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
@@ -871,7 +861,7 @@ export const handleNodeEvent = async (
         opts?.isConnectionCurrent,
         () =>
           cleanupNodeEventMedia(
-            persistedTranscriptMedia.map((media) => media.id),
+            persistedTranscriptMedia.entries.map((media) => media.id),
             ctx,
           ),
       );
@@ -893,7 +883,19 @@ export const handleNodeEvent = async (
         return undefined;
       }
       const key = keyRaw;
-      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
+      const requestedSessionKey = normalizeOptionalString(obj.sessionKey);
+      let target: { sessionKey: string; agentId?: string };
+      try {
+        target = requestedSessionKey
+          ? { sessionKey: requestedSessionKey }
+          : resolveSystemMainSessionTarget(getRuntimeConfig());
+      } catch (error) {
+        ctx.logGateway.warn(
+          `notification event not delivered node=${nodeId}: ${formatErrorMessage(error)}`,
+        );
+        return undefined;
+      }
+      const sessionKeyRaw = target.sessionKey;
       const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
@@ -915,15 +917,20 @@ export const handleNodeEvent = async (
         }
       }
 
-      const queued = enqueueSystemEvent(summary, {
+      const eventOptions = {
         sessionKey,
         contextKey: `notification:${keyRaw}`,
-      });
+      };
+      const queued = enqueueSystemEvent(
+        summary,
+        target.agentId ? withSystemEventOwner(eventOptions, target.agentId) : eventOptions,
+      );
       if (queued) {
         requestHeartbeat({
           source: "notifications-event",
           intent: "event",
           reason: "notifications-event",
+          ...(target.agentId ? { agentId: target.agentId } : {}),
           sessionKey,
         });
       }

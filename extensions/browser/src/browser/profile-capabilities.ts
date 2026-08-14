@@ -15,6 +15,8 @@ type BrowserProfileMode =
 type BrowserProfileCapabilities = {
   mode: BrowserProfileMode;
   isRemote: boolean;
+  /** Browser process reads paths from the same filesystem as OpenClaw. */
+  browserFilesystemLocal: boolean;
   /** Profile uses the Chrome DevTools MCP server (existing-session driver). */
   usesChromeMcp: boolean;
   usesPersistentPlaywright: boolean;
@@ -32,6 +34,7 @@ export function getBrowserProfileCapabilities(
     return {
       mode: "local-existing-session",
       isRemote: false,
+      browserFilesystemLocal: false,
       usesChromeMcp: true,
       usesPersistentPlaywright: false,
       supportsPerTabWs: false,
@@ -48,6 +51,7 @@ export function getBrowserProfileCapabilities(
     return {
       mode: "local-extension",
       isRemote: false,
+      browserFilesystemLocal: true,
       usesChromeMcp: false,
       usesPersistentPlaywright: true,
       supportsPerTabWs: false,
@@ -61,6 +65,7 @@ export function getBrowserProfileCapabilities(
     return {
       mode: "remote-cdp",
       isRemote: true,
+      browserFilesystemLocal: false,
       usesChromeMcp: false,
       usesPersistentPlaywright: true,
       supportsPerTabWs: false,
@@ -73,6 +78,9 @@ export function getBrowserProfileCapabilities(
   return {
     mode: "local-managed",
     isRemote: false,
+    // A loopback attach-only endpoint can terminate in Docker or a tunnel.
+    // Only an OpenClaw-owned browser is known to share this filesystem.
+    browserFilesystemLocal: !profile.attachOnly,
     usesChromeMcp: false,
     usesPersistentPlaywright: false,
     supportsPerTabWs: true,

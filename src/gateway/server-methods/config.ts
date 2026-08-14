@@ -660,10 +660,6 @@ export function clearConfigSchemaResponseCacheForTests() {
   invalidateConfigGetResponseCache();
 }
 
-export function loadConfigSchemaResponseForTests(): ConfigSchemaResponse {
-  return loadSchemaWithPlugins();
-}
-
 function clearConfigSchemaResponseCache() {
   configSchemaResponseCache = null;
 }

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { quoteCmdScriptArg } from "./cmd-argv.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import type { GatewayLifecycleMutationMode, GatewayServiceEnv } from "./service-types.js";
 
 const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
@@ -47,7 +47,7 @@ export function resolveGatewayLogPaths(env: GatewayServiceEnv): GatewayLogPaths 
 }
 
 function resolveMacLaunchAgentLogPaths(env: GatewayServiceEnv): GatewayLogPaths {
-  const home = resolveHomeDir(env).replaceAll("\\", "/");
+  const home = resolveDaemonHomeDir(env).replaceAll("\\", "/");
   const logDir = path.posix.join(home, "Library", "Logs", "openclaw");
   const prefix = resolveMacLaunchAgentLogPrefix(env);
   return {

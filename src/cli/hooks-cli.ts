@@ -19,7 +19,6 @@ import {
   type HookStatusReport,
 } from "../hooks/hooks-status.js";
 import { resolveHookEntries } from "../hooks/policy.js";
-import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadGatewayStartupPluginPlanWithMetadata } from "../plugins/channel-plugin-ids.js";
@@ -53,10 +52,6 @@ type HooksUpdateOptions = {
 
 const GATEWAY_HOOKS_STATUS_TIMEOUT_MS = 1_500;
 
-function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
-  return resolveHookEntries([...pluginEntries, ...workspaceEntries]);
-}
-
 function buildHooksReport(config: OpenClawConfig): HookStatusReport {
   // Plugin-managed and workspace hooks share one resolved policy view for status/actions.
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
@@ -75,7 +70,7 @@ function buildHooksReport(config: OpenClawConfig): HookStatusReport {
     metadataSnapshot: startup.metadataSnapshot,
   });
   const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
-  const entries = mergeHookEntries(pluginEntries, workspaceEntries);
+  const entries = resolveHookEntries([...pluginEntries, ...workspaceEntries]);
   return buildWorkspaceHookStatus(workspaceDir, { config, entries });
 }
 

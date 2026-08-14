@@ -22,11 +22,30 @@ export type StreamGroupPart = Extract<
   { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
 >;
 
-export type StreamGroupOptions = {
+type StreamMessageOptions = Pick<
+  Parameters<typeof renderGroupedMessage>[2],
+  | "sessionKey"
+  | "boardProvider"
+  | "agentId"
+  | "runActive"
+  | "onRequestUpdate"
+  | "canvasPluginSurfaceUrl"
+  | "basePath"
+  | "localMediaPreviewRoots"
+  | "assistantAttachmentAuthToken"
+  | "resolveArtifactDownload"
+  | "onAssistantAttachmentLoaded"
+  | "onRequestOpenImage"
+  | "onOpenImage"
+  | "embedSandboxMode"
+  | "allowExternalEmbedUrls"
+  | "onOpenWorkspaceFile"
+>;
+
+export type StreamGroupOptions = StreamMessageOptions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
-  basePath?: string;
-  authToken?: string | null;
+  showAssistantAvatar?: boolean;
   planStatus?: PlanStatus | null;
   planActive?: boolean;
   startupPhase?: ChatRunStartupPhase;
@@ -70,7 +89,26 @@ export function renderStreamGroupParts(
                 timestamp: part.startedAt,
               },
               part.key,
-              { isStreaming: part.isStreaming, showReasoning: false },
+              {
+                isStreaming: part.isStreaming,
+                showReasoning: false,
+                sessionKey: opts.sessionKey,
+                boardProvider: opts.boardProvider,
+                agentId: opts.agentId,
+                runActive: opts.runActive,
+                onRequestUpdate: opts.onRequestUpdate,
+                canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+                basePath: opts.basePath,
+                localMediaPreviewRoots: opts.localMediaPreviewRoots,
+                assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+                resolveArtifactDownload: opts.resolveArtifactDownload,
+                onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
+                onRequestOpenImage: opts.onRequestOpenImage,
+                onOpenImage: opts.onOpenImage,
+                embedSandboxMode: opts.embedSandboxMode,
+                allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+                onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
+              },
               opts.onOpenSidebar,
             ),
   );
@@ -80,7 +118,7 @@ export function renderStreamGroupParts(
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, basePath, authToken } = opts;
+  const { assistant, basePath, assistantAttachmentAuthToken } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -88,11 +126,12 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
-  // arrives with the first stream part.
+  // arrives with the first stream part unless the presentation opts out.
   const workingOnly = parts.every((part) => part.kind !== "stream");
-  const avatar = workingOnly
-    ? nothing
-    : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
+  const avatar =
+    workingOnly || opts.showAssistantAvatar === false
+      ? nothing
+      : renderChatAvatar("assistant", assistant, undefined, basePath, assistantAttachmentAuthToken);
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
@@ -115,14 +154,14 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
 
 /**
  * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
- * for the turn's intermediate work once the run is done. The check/x icon is
+ * for the turn's intermediate work once the run is done. The check icon is
  * the turn's done indicator; the expanded groups render after this row.
  */
 export function renderWorkGroupSummary(
-  item: { key: string; durationMs: number | null; hasError: boolean },
+  item: { key: string; durationMs: number | null },
   opts: { expanded: boolean; onToggle: () => void },
 ) {
-  const duration = formatDurationCompact(item.durationMs, { spaced: true });
+  const duration = formatDurationCompact(item.durationMs);
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   return html`
     <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
@@ -130,25 +169,16 @@ export function renderWorkGroupSummary(
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
           <button
-            class="chat-activity-group__summary ${item.hasError
-              ? "chat-activity-group__summary--error"
-              : ""}"
+            class="chat-activity-group__summary"
             type="button"
             aria-expanded=${String(opts.expanded)}
-            aria-label=${item.hasError
-              ? duration
-                ? t("chat.workRun.workedForError", { duration })
-                : t("chat.workRun.workedError")
-              : nothing}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
                 opts.onToggle();
               }
             }}
           >
-            <span class="chat-activity-group__icon">
-              ${item.hasError ? icons.x : icons.check}
-            </span>
+            <span class="chat-activity-group__icon">${icons.check}</span>
             <span class="chat-activity-group__label" title=${label}>${label}</span>
             <span
               class="collapse-chevron ${opts.expanded ? "" : "collapse-chevron--collapsed"}"

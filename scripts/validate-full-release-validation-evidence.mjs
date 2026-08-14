@@ -11,6 +11,70 @@ const PINNED_BRANCH_PATTERN = /^release-ci\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 
+/** @param {unknown} value */
+function scalarString(value) {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  return "";
+}
+
+/** @param {unknown} value */
+function displayValue(value) {
+  if (value === null || value === undefined) {
+    return "<missing>";
+  }
+  const scalar = scalarString(value);
+  if (scalar) {
+    return scalar;
+  }
+  try {
+    return JSON.stringify(value) ?? "<unserializable>";
+  } catch {
+    return "<unserializable>";
+  }
+}
+
+/**
+ * @typedef {object} StrictReleaseEvidence
+ * @property {unknown} [schema]
+ * @property {unknown} [valid]
+ * @property {{ runId?: unknown, targetSha?: unknown }} [current]
+ * @property {{ runId?: unknown, targetSha?: unknown }} [root]
+ * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, rootRunId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
+ * @property {{ allRequiredSucceeded?: unknown }} [conclusions]
+ */
+/**
+ * @typedef {object} FullReleaseValidationManifest
+ * @property {unknown} [version]
+ * @property {unknown} [workflowName]
+ * @property {unknown} [runId]
+ * @property {unknown} [runAttempt]
+ * @property {unknown} [workflowRef]
+ * @property {unknown} [workflowSha]
+ * @property {unknown} [workflowFullRef]
+ * @property {unknown} [workflowRefType]
+ * @property {unknown} [targetRef]
+ * @property {unknown} [targetSha]
+ * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
+ */
+/**
+ * @typedef {object} FullReleaseValidationEvidenceOptions
+ * @property {unknown} run
+ * @property {FullReleaseValidationManifest} manifest
+ * @property {string} expectedRepository
+ * @property {string | number} expectedRunId
+ * @property {string} expectedTargetSha
+ * @property {string} [expectedWorkflowBranch]
+ * @property {(sha: string) => boolean} [isTrustedMainAncestor]
+ * @property {(params: { repository: string, runId: string, targetSha: string }) => StrictReleaseEvidence} [validateEvidenceReuseStrictly]
+ */
+
 function normalizeWorkflowPathRef(ref) {
   if (!ref || ref.startsWith("refs/")) {
     return ref;
@@ -43,6 +107,7 @@ export function isShaPinnedReleaseValidationBranch(branch) {
   return PINNED_BRANCH_PATTERN.test(branch ?? "");
 }
 
+/** @param {FullReleaseValidationEvidenceOptions} options */
 export function validateFullReleaseValidationEvidence({
   run: rawRun,
   manifest,
@@ -88,7 +153,7 @@ export function validateFullReleaseValidationEvidence({
 
   if (manifest.version !== 3) {
     throw new Error(
-      `Full release validation manifest must use version 3, got ${manifest.version}.`,
+      `Full release validation manifest must use version 3, got ${displayValue(manifest.version)}.`,
     );
   }
   const manifestChecks = [
@@ -102,9 +167,9 @@ export function validateFullReleaseValidationEvidence({
     ["targetSha", expectedTargetSha],
   ];
   for (const [key, expected] of manifestChecks) {
-    if (String(manifest[key] ?? "") !== expected) {
+    if (scalarString(manifest[key]) !== expected) {
       throw new Error(
-        `Full release validation manifest ${key} mismatch: expected ${expected}, got ${manifest[key] ?? "<missing>"}.`,
+        `Full release validation manifest ${key} mismatch: expected ${expected}, got ${displayValue(manifest[key])}.`,
       );
     }
   }
@@ -136,7 +201,7 @@ export function validateFullReleaseValidationEvidence({
   }
   if (manifest.targetRef !== expectedTargetSha) {
     throw new Error(
-      `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${manifest.targetRef ?? "<missing>"}.`,
+      `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${displayValue(manifest.targetRef)}.`,
     );
   }
   if (!isTrustedMainAncestor?.(run.headSha)) {
@@ -162,8 +227,8 @@ export function validateFullReleaseValidationEvidence({
       typeof reuse !== "object" ||
       Array.isArray(reuse) ||
       (!exactTarget && !changelogOnly) ||
-      !/^[1-9][0-9]*$/u.test(String(reuse.runId ?? "")) ||
-      !/^[1-9][0-9]*$/u.test(String(reuse.selectedRunId ?? ""))
+      !/^[1-9][0-9]*$/u.test(scalarString(reuse.runId)) ||
+      !/^[1-9][0-9]*$/u.test(scalarString(reuse.selectedRunId))
     ) {
       throw new Error("SHA-pinned validation evidence reuse is invalid.");
     }
@@ -178,15 +243,16 @@ export function validateFullReleaseValidationEvidence({
     if (
       strictEvidence?.schema !== "openclaw.release-validation-evidence/v3" ||
       strictEvidence.valid !== true ||
-      String(strictEvidence.current?.runId ?? "") !== String(expectedRunId) ||
+      scalarString(strictEvidence.current?.runId) !== String(expectedRunId) ||
       strictEvidence.current?.targetSha !== expectedTargetSha ||
       strictEvidence.root?.targetSha !== reuse.evidenceSha ||
       strictEvidence.evidenceReuse?.evidenceSha !== reuse.evidenceSha ||
       strictEvidence.evidenceReuse?.policy !== reuse.policy ||
       JSON.stringify(strictEvidence.evidenceReuse?.changedPaths) !==
         JSON.stringify(reuse.changedPaths) ||
-      String(strictEvidence.evidenceReuse?.rootRunId ?? "") !== String(reuse.runId) ||
-      String(strictEvidence.evidenceReuse?.selectedRunId ?? "") !== String(reuse.selectedRunId) ||
+      scalarString(strictEvidence.evidenceReuse?.rootRunId) !== scalarString(reuse.runId) ||
+      scalarString(strictEvidence.evidenceReuse?.selectedRunId) !==
+        scalarString(reuse.selectedRunId) ||
       strictEvidence.conclusions?.allRequiredSucceeded !== true
     ) {
       throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
@@ -195,6 +261,14 @@ export function validateFullReleaseValidationEvidence({
   return { run, source: "sha-pinned-main" };
 }
 
+/**
+ * @param {{
+ *   repository: string;
+ *   runId: string | number;
+ *   validatorFile?: string;
+ *   verifierSourceSha?: string;
+ * }} params
+ */
 export function runStrictReleaseEvidenceValidation({
   repository,
   runId,

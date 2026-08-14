@@ -151,6 +151,24 @@ describe("models cli", () => {
     expect(detected).toBe(true);
   });
 
+  it("does not apply the parent status alias to a child action", async () => {
+    const program = createProgram();
+    let detected = true;
+    program.hook("preAction", (_command, actionCommand) => {
+      detected = isCommandJsonOutputMode(actionCommand, process.argv);
+    });
+
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "models", "--status-json", "list"];
+    try {
+      await program.parseAsync(["models", "--status-json", "list"], { from: "user" });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(detected).toBe(false);
+  });
+
   it("forwards bare --json to the default status report", async () => {
     await runModelsCommand(["models", "--json"]);
 

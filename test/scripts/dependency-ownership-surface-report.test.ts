@@ -9,7 +9,7 @@ import {
   packageNameFromLockKey,
   parseArgs,
   renderDependencyOwnershipSurfaceMarkdownReport,
-} from "../../scripts/dependency-ownership-surface-report.mjs";
+} from "../../scripts/dependency-ownership-surface-report.mts";
 
 const tempDirs: string[] = [];
 

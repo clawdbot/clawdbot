@@ -1,4 +1,5 @@
 /** Process-local prompt projection state owned by an embedded session lifecycle. */
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentMessage } from "../runtime/index.js";
 
@@ -56,13 +57,7 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
   }
   const created = createSessionPromptState();
   sessionPromptStates.set(sessionId, created);
-  while (sessionPromptStates.size > MAX_SESSION_PROMPT_STATES) {
-    const oldest = sessionPromptStates.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    sessionPromptStates.delete(oldest);
-  }
+  pruneMapToMaxSize(sessionPromptStates, MAX_SESSION_PROMPT_STATES);
   return created;
 }
 

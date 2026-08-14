@@ -170,13 +170,43 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for health",
+      commandPath: ["health"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for logs",
       commandPath: ["logs"],
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for sessions",
+      commandPath: ["sessions"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for remote gateway calls",
       commandPath: ["gateway", "call"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config set",
+      commandPath: ["config", "set"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config patch",
+      commandPath: ["config", "patch"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config get",
+      commandPath: ["config", "get"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config unset",
+      commandPath: ["config", "unset"],
       expectedDoctorCalls: 0,
     },
     {
@@ -194,6 +224,16 @@ describe("ensureConfigReady", () => {
       commandPath: ["message"],
       expectedDoctorCalls: 1,
     },
+    {
+      name: "runs doctor flow for unknown commands",
+      commandPath: ["unknown-command"],
+      expectedDoctorCalls: 1,
+    },
+    {
+      name: "runs doctor flow when the command path is empty",
+      commandPath: [],
+      expectedDoctorCalls: 1,
+    },
   ])("$name", async ({ commandPath, expectedDoctorCalls }) => {
     await runEnsureConfigReady(commandPath);
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
@@ -202,6 +242,7 @@ describe("ensureConfigReady", () => {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        requireStateMigrationCheckpoint: true,
       });
     }
   });
@@ -238,6 +279,7 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
+      requireStateMigrationCheckpoint: true,
     });
   });
 
@@ -273,6 +315,7 @@ describe("ensureConfigReady", () => {
         migrateLegacyConfig: false,
         invalidConfigNote: false,
         observe: false,
+        requireStateMigrationCheckpoint: true,
       });
     },
   );
@@ -288,6 +331,7 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
+      requireStateMigrationCheckpoint: true,
     });
   });
 
@@ -323,13 +367,14 @@ describe("ensureConfigReady", () => {
     expect(runtime.exit).toHaveBeenCalledWith(78);
   });
 
-  it("does not require a startup migration checkpoint for gateway probes", async () => {
+  it("uses only the state migration checkpoint for gateway probes", async () => {
     await runEnsureConfigReady(["gateway", "health"]);
 
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      requireStateMigrationCheckpoint: true,
     });
   });
 
@@ -353,6 +398,21 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      requireStateMigrationCheckpoint: true,
+    });
+  });
+
+  it("checkpoints migration discovery for established canonical agent state", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "agents/main/sessions/sessions.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStateMigrationCheckpoint: true,
     });
   });
 
@@ -377,6 +437,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      requireStateMigrationCheckpoint: true,
     });
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       migratedSnapshot.runtimeConfig,

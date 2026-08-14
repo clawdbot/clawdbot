@@ -12,9 +12,9 @@ import {
   runGatewayNetworkClient,
   runGatewaySuspensionPostRestartClient,
   runGatewaySuspensionPreRestartClient,
-} from "../../scripts/e2e/lib/gateway-network/client.mjs";
-import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mjs";
-import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mjs";
+} from "../../scripts/e2e/lib/gateway-network/client.mts";
+import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mts";
+import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

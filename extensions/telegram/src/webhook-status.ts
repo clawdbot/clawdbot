@@ -1,6 +1,6 @@
 // Telegram plugin module implements webhook status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 
 type TelegramWebhookStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 
@@ -16,23 +16,22 @@ export function createTelegramWebhookStatusPublisher(setStatus?: TelegramWebhook
       });
     },
     noteWebhookAdvertised(at = Date.now()) {
-      setStatus?.({
-        ...createConnectedChannelStatusPatch(at),
-        mode: "webhook",
-        lifecycle: "ready",
-        terminalDisconnect: undefined,
-        lastError: null,
-      });
+      setStatus?.(
+        channelReadyPatch({
+          lastConnectedAt: at,
+          lastEventAt: at,
+          mode: "webhook",
+        }),
+      );
     },
     noteWebhookUpdateReceived(at = Date.now()) {
-      setStatus?.({
-        ...createConnectedChannelStatusPatch(at),
-        mode: "webhook",
-        lifecycle: "ready",
-        // Runtime patches merge, so a repaired token must clear the prior terminal auth fact.
-        terminalDisconnect: undefined,
-        lastError: null,
-      });
+      setStatus?.(
+        channelReadyPatch({
+          lastConnectedAt: at,
+          lastEventAt: at,
+          mode: "webhook",
+        }),
+      );
     },
     noteWebhookRecovery() {
       setStatus?.({ lifecycle: "recovering" });

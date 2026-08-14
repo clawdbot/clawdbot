@@ -103,9 +103,12 @@ vi.mock("../gateway/net.js", () => ({
     bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
 }));
 
-vi.mock("../infra/ports.js", () => ({
+vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortConnections,
   inspectPortUsage,
+}));
+
+vi.mock("../infra/ports-format.js", () => ({
   formatPortDiagnostics,
   isExpectedGatewayListeners,
 }));

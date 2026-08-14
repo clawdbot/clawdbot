@@ -2,6 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  downloadClawHubGitHubSkillArchive,
+  downloadClawHubSkillArchive,
+  downloadClawHubSkillArchiveUrl,
+  normalizeClawHubSha256Integrity,
+  type ClawHubDownloadResult,
+} from "../../infra/clawhub-artifacts.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
+import {
   type ClawHubTrustErrorCode,
   ensureClawHubPackageTrustAcknowledged,
   type ClawHubRiskAcknowledgementRequest,
@@ -9,22 +17,15 @@ import {
 import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
-  downloadClawHubGitHubSkillArchive,
-  downloadClawHubSkillArchive,
-  downloadClawHubSkillArchiveUrl,
   fetchClawHubSkillDetail,
   fetchClawHubSkillInstallResolution,
   fetchClawHubSkillVerification,
-  isDefaultClawHubBaseUrl,
-  normalizeClawHubSha256Integrity,
   reportClawHubSkillInstallTelemetry,
-  resolveClawHubBaseUrl,
-  type ClawHubDownloadResult,
   type ClawHubSkillDetail,
   type ClawHubSkillInstallResolutionResponse,
   type ClawHubSkillVerificationResponse,
   type ClawHubSkillsShTrustState,
-} from "../../infra/clawhub.js";
+} from "../../infra/clawhub-skills.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
@@ -430,6 +431,7 @@ export async function ensureClawHubSkillTrustAcknowledged(
     subject: {
       kind: "skill",
       packageName: params.slug,
+      workspaceDir: params.workspaceDir,
       ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
     },
     version: params.version,
@@ -648,7 +650,7 @@ export async function performClawHubSkillInstall(
         markClawPackageIndependentlyOwned({
           kind: "skill",
           source: "clawhub",
-          ref: params.slug,
+          ref: formatClawHubSkillRef(params),
           version,
           workspace: params.workspaceDir,
         });

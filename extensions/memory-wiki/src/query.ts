@@ -970,16 +970,10 @@ function assertSessionVisibilityAppConfig(params: {
   }
 }
 
-const SESSION_MEMORY_PATH_PREFIXES = ["sessions/", "qmd/sessions/", "qmd/sessions-"] as const;
-const SESSION_MEMORY_ROOT_PATHS = ["qmd/sessions"] as const;
-
 // Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
 function isSessionMemoryPath(relPath: string): boolean {
   const normalized = relPath.replace(/\\/g, "/");
-  return (
-    SESSION_MEMORY_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
-    SESSION_MEMORY_ROOT_PATHS.some((rootPath) => normalized === rootPath)
-  );
+  return normalized.startsWith("sessions/");
 }
 
 function shouldSearchWiki(config: ResolvedMemoryWikiConfig): boolean {
@@ -1259,7 +1253,7 @@ export function resolveQueryableWikiPageByLookup(
   );
 }
 
-export async function searchMemoryWiki(params: {
+export async function searchMemoryWiki(input: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -1272,7 +1266,16 @@ export async function searchMemoryWiki(params: {
   searchCorpus?: WikiSearchCorpus;
   mode?: WikiSearchMode;
 }): Promise<WikiSearchResult[]> {
-  const effectiveConfig = applySearchOverrides(params.config, params);
+  const agentId = resolveActiveMemoryAgentId(input);
+  const params = agentId ? { ...input, agentId } : input;
+  const protectedSessionRecall = params.conversationRecall?.corpus === "sessions";
+  // Recall scope is runtime-owned; model corpus/backend overrides cannot widen it.
+  const effectiveConfig = applySearchOverrides(
+    params.config,
+    protectedSessionRecall
+      ? { searchBackend: params.config.search.backend, searchCorpus: "memory" }
+      : params,
+  );
   assertSessionVisibilityAppConfig({
     config: effectiveConfig,
     appConfig: params.appConfig,
@@ -1306,12 +1309,17 @@ export async function searchMemoryWiki(params: {
     throw buildMemoryManagerContractError("search");
   }
   let rawMemoryResults = sharedMemoryManager
-    ? await sharedMemoryManager.search(params.query, { maxResults })
+    ? await sharedMemoryManager.search(params.query, {
+        maxResults,
+        ...(protectedSessionRecall
+          ? { sources: ["sessions" as const], sessionKey: params.agentSessionKey }
+          : {}),
+      })
     : [];
   if (
     params.appConfig &&
     shouldEnforceSessionVisibility(params) &&
-    rawMemoryResults.some((hit) => hit.source === "sessions")
+    (params.conversationRecall || rawMemoryResults.some((hit) => hit.source === "sessions"))
   ) {
     rawMemoryResults = await filterMemorySearchHitsBySessionVisibility({
       cfg: params.appConfig,
@@ -1333,18 +1341,21 @@ export async function searchMemoryWiki(params: {
   });
 }
 
-export async function getMemoryWikiPage(params: {
+export async function getMemoryWikiPage(input: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  conversationRecall?: ConversationRecallContext;
   lookup: string;
   fromLine?: number;
   lineCount?: number;
   searchBackend?: WikiSearchBackend;
   searchCorpus?: WikiSearchCorpus;
 }): Promise<WikiGetResult | null> {
+  const agentId = resolveActiveMemoryAgentId(input);
+  const params = agentId ? { ...input, agentId } : input;
   const effectiveConfig = applySearchOverrides(params.config, params);
   assertSessionVisibilityAppConfig({
     config: effectiveConfig,
@@ -1421,6 +1432,7 @@ export async function getMemoryWikiPage(params: {
               agentId: params.agentId,
               requesterSessionKey: params.agentSessionKey,
               sandboxed: params.sandboxed === true,
+              conversationRecall: params.conversationRecall,
               trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
               hits: lookupCandidates
                 .filter((relPath) => isSessionMemoryPath(relPath))
@@ -1438,28 +1450,31 @@ export async function getMemoryWikiPage(params: {
       : null;
 
   for (const relPath of lookupCandidates) {
-    if (visibleSessionPaths && isSessionMemoryPath(relPath) && !visibleSessionPaths.has(relPath)) {
+    // Raw session candidates still need visibility checks; memory readers accept Markdown only.
+    if (
+      !relPath.endsWith(".md") ||
+      (visibleSessionPaths && isSessionMemoryPath(relPath) && !visibleSessionPaths.has(relPath))
+    ) {
       continue;
     }
 
-    try {
-      const result = await manager.readFile({
-        relPath,
-        from: fromLine,
-        lines: lineCount,
-      });
-      return {
-        corpus: "memory",
-        path: result.path,
-        title: buildMemorySearchTitle(result.path),
-        kind: "memory",
-        content: result.text,
-        fromLine,
-        lineCount,
-      };
-    } catch {
+    const result = await manager.readFile({
+      relPath,
+      from: fromLine,
+      lines: lineCount,
+    });
+    if (result.path === relPath && result.text === "" && result.from === undefined) {
       continue;
     }
+    return {
+      corpus: "memory",
+      path: result.path,
+      title: buildMemorySearchTitle(result.path),
+      kind: "memory",
+      content: result.text,
+      fromLine,
+      lineCount,
+    };
   }
 
   return null;

@@ -23,11 +23,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
     label: "Vydra",
     defaultModel: DEFAULT_VYDRA_IMAGE_MODEL,
     models: [DEFAULT_VYDRA_IMAGE_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "vydra",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "vydra", ...ctx }),
     capabilities: {
       generate: {
         maxCount: 1,

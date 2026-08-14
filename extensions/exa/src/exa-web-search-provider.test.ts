@@ -54,6 +54,73 @@ function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }
 }
 
 describe("exa web search provider", () => {
+  it("does not send or cache an already canceled search", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const tool = createExaWebSearchProvider().createTool({
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort(new Error("Exa caller canceled"));
+
+    try {
+      await expect(
+        tool.execute({ query: "exa pre-canceled" }, { signal: controller.signal }),
+      ).rejects.toThrow("Exa caller canceled");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("aborts the guarded Exa request without losing the caller's reason", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          if (!init?.signal) {
+            reject(new Error("Exa request lost caller cancellation"));
+            return;
+          }
+          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const tool = createExaWebSearchProvider().createTool({
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    const result = tool.execute(
+      { query: "exa in-flight cancellation" },
+      { signal: controller.signal },
+    );
+
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error("Exa request canceled in flight"));
+      await expect(result).rejects.toThrow("Exa request canceled in flight");
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createExaWebSearchProvider();
     if (!provider.applySelectionConfig) {

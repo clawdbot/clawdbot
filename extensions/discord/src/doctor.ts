@@ -6,7 +6,7 @@ import {
   asObjectRecord,
   collectChannelAccountScopes,
   collectProviderDangerousNameMatchingScopes,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { resolveDefaultDiscordAccountId } from "./accounts.js";

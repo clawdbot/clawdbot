@@ -25,10 +25,6 @@ const PACKAGE_NAME = "@openclaw/discord";
 const PLUGIN_ID = "discord";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function makeStateDir(): string {
-  return tempDirs.make("openclaw-plugin-generation-precedence-");
-}
-
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -101,7 +97,7 @@ afterEach(() => {
 
 describe("managed npm generation-dir loader precedence", () => {
   it("loads the authoritative generation after an upgrade leaves the old flat install", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const staleVersion = "2026.6.11";
     const activeVersion = "2026.7.1";
 
@@ -151,7 +147,7 @@ describe("managed npm generation-dir loader precedence", () => {
   });
 
   it("preserves an intentional downgrade when a newer generation lingers", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const newerPackageDir = writeManagedGeneration({
       stateDir,
       version: "3.0.0",
@@ -184,7 +180,7 @@ describe("managed npm generation-dir loader precedence", () => {
 
   it("matches the authoritative generation case-insensitively on Windows", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const newerPackageDir = writeManagedGeneration({
       stateDir,
       version: "3.0.0",
@@ -221,7 +217,7 @@ describe("managed npm generation-dir loader precedence", () => {
   });
 
   it("uses install recency with a structured warning when no authority exists", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const recentPackageDir = writeManagedGeneration({
       stateDir,
       version: "1.0.0",
@@ -247,7 +243,7 @@ describe("managed npm generation-dir loader precedence", () => {
   });
 
   it("warns when install recency replaces a dangling managed authority", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const npmDir = path.join(stateDir, "npm");
     const recentPackageDir = writeManagedGeneration({
       stateDir,
@@ -292,7 +288,7 @@ describe("managed npm generation-dir loader precedence", () => {
   });
 
   it("does not treat unrelated legacy-root metadata changes as plugin recency", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const recentPackageDir = writeManagedGeneration({
       stateDir,
       version: "1.0.0",
@@ -318,7 +314,7 @@ describe("managed npm generation-dir loader precedence", () => {
   });
 
   it("excludes doctor-retired generations when recovering without authority", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const retiredPackageDir = writeManagedGeneration({
       stateDir,
       version: "3.0.0",
@@ -339,7 +335,7 @@ describe("managed npm generation-dir loader precedence", () => {
   });
 
   it("excludes a doctor-retired legacy-root package when recovering without authority", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const retiredPackageDir = writeManagedLegacy(stateDir, "3.0.0");
     const recoveredPackageDir = writeManagedGeneration({
       stateDir,
@@ -360,7 +356,7 @@ describe("managed npm generation-dir loader precedence", () => {
   });
 
   it("does not repoint an intentional custom npm install outside the managed root", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     // A managed generation with a higher version exists on disk...
     writeManagedGeneration({ stateDir, version: "2.0.0", generationKey: "discord-managed" });
     // ...but the persisted record points at a custom install outside the npm root.

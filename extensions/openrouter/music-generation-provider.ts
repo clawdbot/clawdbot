@@ -344,11 +344,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_OPENROUTER_MUSIC_MODEL,
     models: [...OPENROUTER_MUSIC_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "openrouter",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,

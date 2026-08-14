@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -59,11 +59,13 @@ function context(): GatewayRequestContext {
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
+    dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
 
 async function patchSession(
-  params: { key: string; archived: boolean; label?: string },
+  params: { key: string; archived: boolean; expectedSessionId: string; label?: string },
   requestClient: GatewayClient,
 ) {
   const responses = await invokePatchSession(params, requestClient);
@@ -72,7 +74,7 @@ async function patchSession(
 }
 
 async function invokePatchSession(
-  params: { key: string; archived: boolean; label?: string },
+  params: { key: string; archived: boolean; expectedSessionId: string; label?: string },
   requestClient: GatewayClient,
 ) {
   const responses: Parameters<RespondFn>[] = [];
@@ -90,25 +92,34 @@ describe("sessions.patch archive attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:archive-attribution";
       const sessionId = "session-archive-attribution";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId, updatedAt: 1, pinnedAt: 2 },
       );
 
-      await patchSession({ key: sessionKey, archived: true }, client("profile-ada", "Ada"));
+      await patchSession(
+        { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        client("profile-ada", "Ada"),
+      );
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
         archivedAt: expect.any(Number),
         archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
       });
 
-      await patchSession({ key: sessionKey, archived: true }, client("profile-bob", "Bob"));
+      await patchSession(
+        { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        client("profile-bob", "Bob"),
+      );
       expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedBy).toEqual({
         type: "human",
         id: "profile-ada",
         label: "Ada",
       });
 
-      await patchSession({ key: sessionKey, archived: false }, client("profile-bob", "Bob"));
+      await patchSession(
+        { key: sessionKey, archived: false, expectedSessionId: sessionId },
+        client("profile-bob", "Bob"),
+      );
       const restored = loadSessionEntry({ agentId: "main", sessionKey });
       expect(restored?.archivedAt).toBeUndefined();
       expect(restored?.archivedBy).toBeUndefined();
@@ -143,9 +154,12 @@ describe("sessions.patch archive attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:solo-archive";
       const sessionId = "session-solo-archive";
-      await upsertSessionEntry({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
 
-      await patchSession({ key: sessionKey, archived: true }, client());
+      await patchSession(
+        { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        client(),
+      );
 
       const archived = loadSessionEntry({ agentId: "main", sessionKey });
       expect(archived?.archivedAt).toEqual(expect.any(Number));
@@ -158,19 +172,26 @@ describe("sessions.patch archive attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const canonicalKey = "agent:main:alias-happy-archive";
       const aliasKey = "alias-happy-archive";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: canonicalKey },
         {
           sessionId: "session-canonical-happy-archive",
           updatedAt: 1,
         },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: aliasKey },
         { sessionId: "session-alias-happy-archive", updatedAt: 2 },
       );
 
-      await patchSession({ key: aliasKey, archived: true }, client("profile-ada", "Ada"));
+      await patchSession(
+        {
+          key: aliasKey,
+          archived: true,
+          expectedSessionId: "session-alias-happy-archive",
+        },
+        client("profile-ada", "Ada"),
+      );
 
       expect(loadGatewaySessionRow(canonicalKey, { agentId: "main" })).toMatchObject({
         archived: true,
@@ -185,7 +206,7 @@ describe("sessions.patch archive attribution", () => {
       const canonicalKey = "agent:main:alias-archive";
       const aliasKey = "alias-archive";
       const memberId = "profile-member";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: canonicalKey },
         {
           sessionId: "session-canonical-before-archive",
@@ -193,7 +214,7 @@ describe("sessions.patch archive attribution", () => {
           label: "canonical",
         },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: aliasKey },
         {
           sessionId: "session-alias-before-archive",
@@ -212,7 +233,7 @@ describe("sessions.patch archive attribution", () => {
       ]);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const readCandidateState = () => ({
-        entries: listSessionEntries({ agentId: "main" })
+        entries: listSessionEntriesCore({ agentId: "main" })
           .filter(({ sessionKey }) => sessionKey === canonicalKey || sessionKey === aliasKey)
           .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey)),
         members: listSessionMembers(memberScope),
@@ -226,7 +247,7 @@ describe("sessions.patch archive attribution", () => {
       let stateAtFailure: ReturnType<typeof readCandidateState> | undefined;
       let changesAtFailure: number | undefined;
       const append = vi
-        .spyOn(SessionManager.prototype, "appendMessage")
+        .spyOn(SessionManager, "appendMessageToTranscript")
         .mockImplementationOnce(() => {
           stateAtFailure = readCandidateState();
           changesAtFailure = readTotalChanges();
@@ -236,7 +257,11 @@ describe("sessions.patch archive attribution", () => {
 
       try {
         const responses = await invokePatchSession(
-          { key: aliasKey, archived: true },
+          {
+            key: aliasKey,
+            archived: true,
+            expectedSessionId: "session-alias-before-archive",
+          },
           client("profile-ada", "Ada"),
         );
         expect(responses).toHaveLength(1);

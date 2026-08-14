@@ -3,10 +3,11 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
+import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
@@ -72,12 +73,10 @@ export async function ensureLoadedForRead(state: CronServiceState) {
   if (!state.store) {
     return;
   }
-  // Use the maintenance-only version so that read-only operations never
-  // advance a past-due nextRunAtMs without executing the job (#16156).
-  const changed = recomputeNextRunsForMaintenance(state);
-  if (changed) {
-    await persist(state);
-  }
+  // Read repair is row-owned and never advances a past-due slot (#16156).
+  const maintenance = recomputeUnownedCronSchedules(state);
+  runPostPersistCronNotifications(state, maintenance.notifications);
+  applyCronRuntimeRowsToState(state, maintenance.jobs);
 }
 
 /** Resolves the current configured default agent without caching reloadable state. */

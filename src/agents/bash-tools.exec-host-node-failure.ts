@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -26,10 +27,6 @@ type NodeInvokeFailure =
 type NodeSystemRunInvokeResult =
   | { ok: true; raw: unknown }
   | { ok: false; failure: NodeInvokeFailure };
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 /** Only NOT_CONNECTED plus explicit pre-dispatch provenance proves a retry cannot duplicate work. */
 function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {

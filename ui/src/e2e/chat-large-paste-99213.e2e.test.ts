@@ -2,6 +2,7 @@
 // real chat composer and verify chat.send receives it without overflowing base64 handling.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -28,12 +29,7 @@ type RecordedPage = {
   rawVideoDir: string;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function requireString(value: unknown, label: string): string {
   if (typeof value !== "string" || !value) {

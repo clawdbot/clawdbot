@@ -170,7 +170,6 @@ export async function validatePackagePluginInstallSource(params: {
         pluginId,
         logger: params.logger,
         extensions,
-        ...(packageMetadata ? { packageMetadata } : {}),
         requestKind: params.installPolicyRequest?.kind,
         requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
         source: params.installPolicyRequest?.source,
@@ -208,7 +207,6 @@ export async function scanAndLinkInstalledPackage(params: {
   dependencyScanRootDir?: string;
   pluginId: string;
   peerDependencies: Record<string, string>;
-  dangerouslyForceUnsafeInstall?: boolean;
   trustedSourceLinkedOfficialInstall?: boolean;
   mode?: "install" | "update";
   requestKind?: PluginInstallPolicyRequest["kind"];
@@ -233,7 +231,6 @@ export async function scanAndLinkInstalledPackage(params: {
         allowManagedNpmRootPackagePeerSymlinks:
           params.dependencyScanRootDir !== undefined &&
           path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         dependencyScanRootDir: params.dependencyScanRootDir,
         logger: params.logger,
         mode: params.mode,
@@ -309,7 +306,6 @@ async function installPluginFromInstalledPackageDirInternal(
     dependencyScanRootDir: params.dependencyScanRootDir,
     pluginId: validated.plugin.pluginId,
     peerDependencies: validated.plugin.peerDependencies,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     mode: params.mode ?? "install",

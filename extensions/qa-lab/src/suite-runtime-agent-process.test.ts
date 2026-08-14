@@ -30,12 +30,12 @@ vi.mock("./suite-runtime-agent-session.js", () => ({
 }));
 
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
+import { runQaCli } from "./qa-cli-process.js";
 import {
   findManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
-  runQaCli,
   startAgentRun,
   waitForAgentRun,
   waitForAgentHistoryReply,
@@ -60,6 +60,17 @@ function createMockEmitter() {
 
 function createSpawnedProcess(params: { pid?: number } = {}) {
   const child = createMockEmitter() as MockChildProcess;
+  const emit = child.emit.bind(child);
+  let exited = false;
+  child.emit = (eventName, ...args) => {
+    if (eventName === "exit") {
+      exited = true;
+    } else if (eventName === "close" && !exited) {
+      exited = true;
+      emit("exit", ...args);
+    }
+    return emit(eventName, ...args);
+  };
   child.pid = params.pid;
   child.stdout = createMockEmitter();
   child.stderr = createMockEmitter();
@@ -173,7 +184,17 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it.runIf(process.platform !== "win32")("kills timed-out qa cli process groups", async () => {
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    let processGroupAlive = true;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === -12345 && signal === "SIGKILL") {
+        processGroupAlive = false;
+      }
+      if (pid === -12345 && signal === 0 && !processGroupAlive) {
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      return true;
+    });
+    vi.useFakeTimers();
     try {
       const child = createSpawnedProcess({ pid: 12345 });
       const { pending } = startMockQaCli({
@@ -181,18 +202,77 @@ describe("qa suite runtime agent process helpers", () => {
         child,
         options: { timeoutMs: 1 },
       });
-      const timeoutAssertion = expect(pending).rejects.toThrow(
-        "qa cli timed out: openclaw qa suite",
+      const errorPromise = pending.catch((value: unknown) => value);
+      await Promise.resolve();
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `stdout-head-marker\n${"x".repeat(QA_CHILD_STDOUT_MAX_BYTES)}\nstdout-tail-marker`,
+        ),
       );
+      child.stderr.emit(
+        "data",
+        Buffer.from(
+          `stderr-head-marker\n${"x".repeat(QA_CHILD_STDERR_TAIL_BYTES)}\nstderr-tail-marker`,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      child.emit("exit", null, "SIGKILL");
+      child.emit("close", null, "SIGKILL");
 
-      await waitForSpawnCount(1);
-      await timeoutAssertion;
+      const error = await errorPromise;
+      expect(error).toMatchObject({ code: "qa_cli_timeout" });
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain("qa cli timed out: openclaw qa suite");
+      expect(message).toContain("stdout:\n[qa cli stdout truncated to last");
+      expect(message).toContain("stdout-tail-marker");
+      expect(message).not.toContain("stdout-head-marker");
+      expect(message).toContain("stderr:\n[qa cli stderr truncated to last");
+      expect(message).toContain("stderr-tail-marker");
+      expect(message).not.toContain("stderr-head-marker");
       expect(killSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
+      vi.useRealTimers();
       killSpy.mockRestore();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a nonzero qa cli failure when process-group cleanup also fails",
+    async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === -12345 && signal === "SIGKILL") {
+          throw Object.assign(new Error("cleanup denied"), { code: "EPERM" });
+        }
+        return true;
+      });
+      vi.useFakeTimers();
+      try {
+        const child = createSpawnedProcess({ pid: 12345 });
+        const { pending } = startMockQaCli({ args: ["qa", "suite"], child });
+        const errorPromise = pending.catch((value: unknown) => value);
+        await Promise.resolve();
+        child.stderr.emit("data", Buffer.from("suite failed\n"));
+        child.emit("exit", 7, null);
+        child.emit("close", 7, null);
+        await vi.advanceTimersByTimeAsync(500);
+
+        const error = await errorPromise;
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error).toMatchObject({ message: "qa cli command and settlement failed" });
+        const failures = error instanceof AggregateError ? error.errors : [];
+        expect(failures).toEqual([
+          expect.objectContaining({ message: "qa cli failed (7): suite failed" }),
+          expect.any(Error),
+        ]);
+      } finally {
+        vi.useRealTimers();
+        killSpy.mockRestore();
+      }
+    },
+  );
 
   it("force-kills timed-out Windows qa cli process trees with taskkill", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -296,26 +376,38 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(pending).resolves.toEqual({ ok: true });
   });
 
-  it("parses json qa cli output after colored startup logs", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
+  it.each([
+    {
+      title: "parses json qa cli output after colored startup logs",
+      stdout:
         '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex loaded plugin package metadata\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("parses pretty json qa cli output after startup logs", async () => {
+    },
+    {
+      title: "parses pretty json qa cli output after startup logs",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
+    },
+    {
+      title: "parses pretty json qa cli output before trailing stdout logs",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores diagnostic json fragments before the qa cli payload",
+      stdout:
+        '[plugins] diagnostic context {"ok":true}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores leading json diagnostic records before the qa cli payload",
+      stdout:
+        '{"event":"startup-repair"}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores trailing json diagnostic records after the qa cli payload",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n{"event":"cleanup"}\n',
+    },
+  ])("$title", async ({ stdout }) => {
     const { child, pending } = startMockQaCli({
       env: QA_CLI_JSON_ENV,
       args: ["memory", "search", "--json"],
@@ -323,12 +415,7 @@ describe("qa suite runtime agent process helpers", () => {
     });
 
     await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
-      ),
-    );
+    child.stdout.emit("data", Buffer.from(stdout));
     child.emit("close", 0);
 
     await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
@@ -347,82 +434,6 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("close", 0);
 
     await expect(pending).resolves.toEqual({ results: [{ text: "LATE-STDOUT" }] });
-  });
-
-  it("parses pretty json qa cli output before trailing stdout logs", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores diagnostic json fragments before the qa cli payload", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] diagnostic context {"ok":true}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores leading json diagnostic records before the qa cli payload", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '{"event":"startup-repair"}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores trailing json diagnostic records after the qa cli payload", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n{"event":"cleanup"}\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
   });
 
   it("rejects oversized qa cli stdout instead of parsing truncated output", async () => {
@@ -582,10 +593,12 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it("accepts completed agent wait status as a successful terminal run", async () => {
+    const terminalReply = { disposition: "visible" as const, text: "completed reply" };
+    const terminalDelivery = { status: "sent" as const, resultCount: 1 };
     const gatewayCall = vi
       .fn()
       .mockResolvedValueOnce({ runId: "run-completed" })
-      .mockResolvedValueOnce({ status: "completed" });
+      .mockResolvedValueOnce({ status: "completed", terminalDelivery, terminalReply });
     const env = createAgentPromptEnv(gatewayCall);
 
     await expect(
@@ -595,7 +608,7 @@ describe("qa suite runtime agent process helpers", () => {
       }),
     ).resolves.toEqual({
       started: { runId: "run-completed" },
-      waited: { status: "completed" },
+      waited: { status: "completed", terminalDelivery, terminalReply },
     });
   });
 

@@ -3,6 +3,7 @@
  *
  * Converts route, sender, command, media, and supplemental facts into finalized message context.
  */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   commandTurnKindToSource,
   createCommandTurnContext,
@@ -19,6 +20,7 @@ import type {
   SessionTranscriptContext,
 } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
+import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type { InboundImplicitMentionKind } from "../mention-gating.js";
@@ -58,6 +60,8 @@ export type ChannelInboundSupplementalResolutionOptions = {
 };
 type BuildChannelInboundEventAccess = {
   commands?: Pick<ChannelIngressCommandAccess, "authorized">;
+  /** Channel-configured policy resolved at the trusted ingress boundary. */
+  toolPolicy?: GroupToolPolicyConfig;
   mentions?: {
     canDetectMention: boolean;
     wasMentioned: boolean;
@@ -246,10 +250,6 @@ function definedFields<T extends Record<string, unknown>>(fields: T): Partial<T>
       (entry): entry is [string, Exclude<unknown, undefined>] => entry[1] !== undefined,
     ),
   ) as Partial<T>;
-}
-
-function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
-  return Boolean(value) && typeof (value as { then?: unknown }).then === "function";
 }
 
 function stripQuoteRuntimeFields(
@@ -540,6 +540,7 @@ export function buildChannelInboundEventContext(
     ImplicitMentionKinds: params.access?.mentions?.implicitMentionKinds,
     MentionSource: params.access?.mentions?.mentionSource,
     CommandAuthorized: resolveIngressCommandAuthorized(params.access) === true,
+    ConversationToolPolicy: params.access?.toolPolicy,
     CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,

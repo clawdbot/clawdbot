@@ -2,6 +2,7 @@
 // of this entry so browser consumers share the wire engine without polyfills.
 export * from "./device-auth.js";
 export * from "./browser-device-auth.js";
+export * from "./gateway-origin-scope.js";
 export * from "./connect-auth.js";
 export * from "./protocol-client.js";
 export * from "./reconnect-policy.js";

@@ -1,7 +1,7 @@
 /** Tests Code Mode MCP namespace. */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -321,22 +321,30 @@ describe("Code Mode MCP namespace", () => {
     });
   });
 
-  it.each(["delete", "default", "return", "enum", "class"])(
-    "renders and executes reserved MCP tool name %s safely",
-    async (toolName) => {
+  describe("reserved MCP tool names", () => {
+    const toolNames = ["delete", "default", "return", "enum", "class"] as const;
+    const targets = new Map<string, ReturnType<typeof mcpTool>>();
+    let results: Record<string, unknown>;
+
+    beforeAll(async () => {
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-      const target = mcpTool({
-        name: `github__${toolName}`,
-        serverName: "github",
-        toolName,
-        parameters: {
-          type: "object",
-          properties: { value: { type: "string" } },
-          required: ["value"],
-        },
-      });
+      for (const toolName of toolNames) {
+        targets.set(
+          toolName,
+          mcpTool({
+            name: `github__${toolName}`,
+            serverName: "github",
+            toolName,
+            parameters: {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+            },
+          }),
+        );
+      }
       applyCodeModeCatalog({
-        tools: [...codeModeTools, target],
+        tools: [...codeModeTools, ...targets.values()],
         config,
         sessionId: "session-code-mode",
         sessionKey: "agent:main:main",
@@ -344,20 +352,29 @@ describe("Code Mode MCP namespace", () => {
         catalogRef,
       });
 
-      const safeName = `${toolName}2`;
       const details = await runUntilCompleted({
         execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
         waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
         code: `
           const file = await API.read("mcp/github.d.ts");
-          const api = await MCP.github.$api("${safeName}");
-          const result = await MCP.github.${safeName}({ value: "safe" });
-          return { file: file.content, header: api.header, result: result.details };
+          const results = {};
+          for (const toolName of ${JSON.stringify(toolNames)}) {
+            const safeName = toolName + "2";
+            const api = await MCP.github.$api(safeName);
+            const result = await MCP.github[safeName]({ value: "safe" });
+            results[toolName] = { file: file.content, header: api.header, result: result.details };
+          }
+          return results;
         `,
       });
 
       expect(details.status).toBe("completed");
-      expect(details.value).toEqual({
+      results = details.value as Record<string, unknown>;
+    });
+
+    it.each(toolNames)("renders and executes reserved MCP tool name %s safely", (toolName) => {
+      const safeName = `${toolName}2`;
+      expect(results[toolName]).toEqual({
         file: expect.stringContaining(`function ${safeName}(`),
         header: expect.stringContaining(`function ${safeName}(`),
         result: {
@@ -366,7 +383,7 @@ describe("Code Mode MCP namespace", () => {
           input: { value: "safe" },
         },
       });
-      expect(target.execute).toHaveBeenCalledTimes(1);
-    },
-  );
+      expect(targets.get(toolName)?.execute).toHaveBeenCalledTimes(1);
+    });
+  });
 });

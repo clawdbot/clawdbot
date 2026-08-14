@@ -10,6 +10,7 @@ import {
   buildOllamaModelDefinition,
   capLocalOllamaProviderContext,
   enrichOllamaModelsWithContext,
+  fetchLoadedOllamaModelNames,
   isOllamaCloudModel,
   fetchOllamaModels,
   queryOllamaModelShowInfo,
@@ -159,6 +160,26 @@ describe("ollama provider models", () => {
       }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads loaded models from /api/ps with remote auth", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      expect(requestUrl(input)).toBe("https://ollama.example.com/api/ps");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer private-key");
+      return jsonResponse({
+        models: [{ name: "qwen3.5:4b" }, { model: "llama3.3:70b" }, { name: "   " }, {}],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchLoadedOllamaModelNames("https://ollama.example.com/v1", {
+        apiKey: "private-key",
+      }),
+    ).resolves.toEqual({
+      reachable: true,
+      models: ["qwen3.5:4b", "llama3.3:70b"],
+    });
   });
 
   it("discovers a chat model after 200 embedding-only catalog entries", async () => {
@@ -532,6 +553,18 @@ describe("ollama provider models", () => {
       models: [],
     });
     expect(tagsResponse.wasCanceled()).toBe(true);
+
+    const psResponse = cancelTrackedResponse("process listing unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => psResponse.response),
+    );
+
+    await expect(fetchLoadedOllamaModelNames("http://127.0.0.1:11434")).resolves.toEqual({
+      reachable: true,
+      models: [],
+    });
+    expect(psResponse.wasCanceled()).toBe(true);
 
     const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
     vi.stubGlobal(

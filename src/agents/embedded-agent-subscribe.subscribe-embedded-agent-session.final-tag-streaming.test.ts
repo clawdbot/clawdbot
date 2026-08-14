@@ -88,7 +88,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
 
     // With enforceFinalTag, content is emitted via streaming (text_delta path),
-    // NOT recovered from message_end fallback. extractAssistantText strips
+    // NOT recovered from message_end fallback. extractEmbeddedAssistantText strips
     // <final> tags, so message_end would see plain text with no <final> markers
     // and correctly suppress it (treated as reasoning leak).
     emit({ type: "message_start", message: { role: "assistant" } });

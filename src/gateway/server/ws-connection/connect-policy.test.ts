@@ -33,7 +33,6 @@ function deviceRaw(id: string): DeviceRaw {
 function authPolicy(params: Partial<ControlUiAuthPolicyInput> = {}) {
   return resolveControlUiAuthPolicy({
     isControlUi: params.isControlUi ?? false,
-    controlUiConfig: params.controlUiConfig,
     deviceRaw: params.deviceRaw ?? null,
     deviceAuthMigrationPending: params.deviceAuthMigrationPending,
   });
@@ -93,16 +92,14 @@ function expectClearsUnboundScopes(overrides: Partial<ClearUnboundScopesInput>, 
 
 describe("ws connect policy", () => {
   test("resolves control-ui auth policy", () => {
-    const bypass = authPolicy({
+    const controlUi = authPolicy({
       isControlUi: true,
-      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
       deviceRaw: deviceRaw("dev-1"),
     });
-    expect(bypass.device?.id).toBe("dev-1");
+    expect(controlUi.device?.id).toBe("dev-1");
 
     const regular = authPolicy({
       isControlUi: false,
-      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
       deviceRaw: deviceRaw("dev-2"),
     });
     expect(regular.device?.id).toBe("dev-2");
@@ -160,18 +157,7 @@ describe("ws connect policy", () => {
 
   test("evaluates missing-device decisions", () => {
     const policy = authPolicy();
-    const controlUiStrict = authPolicy({
-      isControlUi: true,
-      controlUiConfig: { allowInsecureAuth: true, dangerouslyDisableDeviceAuth: false },
-    });
-    const controlUiNoInsecure = authPolicy({
-      isControlUi: true,
-      controlUiConfig: { dangerouslyDisableDeviceAuth: false },
-    });
-    const bypass = authPolicy({
-      isControlUi: true,
-      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
-    });
+    const controlUi = authPolicy({ isControlUi: true });
 
     expectMissingDeviceDecision(
       {
@@ -182,34 +168,21 @@ describe("ws connect policy", () => {
       "allow",
     );
 
-    // Remote Control UI with allowInsecureAuth -> still rejected.
     expectMissingDeviceDecision(
       {
         role: "operator",
         isControlUi: true,
-        controlUiAuthPolicy: controlUiStrict,
+        controlUiAuthPolicy: controlUi,
         isLocalClient: false,
       },
       "reject-control-ui-insecure-auth",
     );
 
-    // The retired insecure-auth flag no longer bypasses device identity locally.
     expectMissingDeviceDecision(
       {
         role: "operator",
         isControlUi: true,
-        controlUiAuthPolicy: controlUiStrict,
-        isLocalClient: true,
-      },
-      "reject-control-ui-insecure-auth",
-    );
-
-    // Control UI without allowInsecureAuth, even on localhost -> rejected.
-    expectMissingDeviceDecision(
-      {
-        role: "operator",
-        isControlUi: true,
-        controlUiAuthPolicy: controlUiNoInsecure,
+        controlUiAuthPolicy: controlUi,
         isLocalClient: true,
       },
       "reject-control-ui-insecure-auth",
@@ -263,7 +236,7 @@ describe("ws connect policy", () => {
       {
         role: "operator",
         isControlUi: true,
-        controlUiAuthPolicy: controlUiNoInsecure,
+        controlUiAuthPolicy: controlUi,
         trustedProxyAuthOk: true,
         sharedAuthOk: false,
         hasSharedAuth: false,
@@ -275,7 +248,7 @@ describe("ws connect policy", () => {
       {
         role: "operator",
         isControlUi: true,
-        controlUiAuthPolicy: bypass,
+        controlUiAuthPolicy: controlUi,
         sharedAuthOk: false,
         authOk: false,
         hasSharedAuth: false,
@@ -283,12 +256,11 @@ describe("ws connect policy", () => {
       "reject-control-ui-insecure-auth",
     );
 
-    // Retired bypass input cannot admit device-less node-role registrations.
     expectMissingDeviceDecision(
       {
         role: "node",
         isControlUi: true,
-        controlUiAuthPolicy: bypass,
+        controlUiAuthPolicy: controlUi,
         sharedAuthOk: false,
         authOk: false,
         hasSharedAuth: false,
@@ -297,15 +269,10 @@ describe("ws connect policy", () => {
     );
   });
 
-  test("retired device-auth bypass input does not skip pairing", () => {
-    const bypass = authPolicy({
-      isControlUi: true,
-      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
-    });
+  test("strict control-ui policy does not skip pairing", () => {
     const strict = authPolicy({ isControlUi: true });
 
-    expectSkipPairing(bypass, "operator", false);
-    expectSkipPairing(bypass, "node", false);
+    expectSkipPairing(strict, "node", false);
     expectSkipPairing(strict, "operator", false);
     expectSkipPairing(strict, "operator", false, { pairingComplete: true });
   });
@@ -413,10 +380,7 @@ describe("ws connect policy", () => {
 
   test("clears unbound scopes for device-less shared auth outside explicit preservation cases", () => {
     const nonControlUi = authPolicy();
-    const controlUi = authPolicy({
-      isControlUi: true,
-      controlUiConfig: { allowInsecureAuth: true },
-    });
+    const controlUi = authPolicy({ isControlUi: true });
 
     expectClearsUnboundScopes({ controlUiAuthPolicy: nonControlUi }, true);
     expectClearsUnboundScopes(

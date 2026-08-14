@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mjs";
+import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -429,14 +429,14 @@ describe("copyBundledPluginMetadata", () => {
   it("removes build-excluded bundled plugin metadata", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-excluded-meta-");
     createPlugin(repoRoot, {
-      id: "qqbot",
-      packageName: "@openclaw/qqbot",
+      id: "whatsapp",
+      packageName: "@openclaw/whatsapp",
       packageOpenClaw: {
         extensions: ["./index.ts"],
         setupEntry: "./setup-entry.ts",
       },
     });
-    const staleDistDir = path.join(repoRoot, "dist", "extensions", "qqbot");
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "whatsapp");
     fs.mkdirSync(staleDistDir, { recursive: true });
     fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
 
