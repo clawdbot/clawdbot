@@ -18,18 +18,18 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { readSessionTranscriptMessageEvents } from "./session-accessor.sqlite-active-events.js";
-import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { planSqliteSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
-  loadLatestSqliteAssistantText,
-  loadSqliteTranscriptEventsSync,
-  loadSqliteTranscriptTailEventsSync,
+  loadLatestAssistantText,
+  loadTranscriptEventsSync,
+  loadTranscriptTailEventsSync,
 } from "./session-accessor.sqlite-read.js";
 import { readActiveTranscriptAppendParentId } from "./session-accessor.sqlite-transcript-store.js";
 import {
-  appendSqliteTranscriptMessage,
-  trimSqliteTranscriptForManualCompact,
+  appendTranscriptMessage,
+  trimTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";
 import {
   readAuthorizedTranscriptEventSeqs,
@@ -132,7 +132,7 @@ async function appendWithRun(params: { env: NodeJS.ProcessEnv; runId: string; te
       withTranscriptWrite: async (run) => await run(),
     },
     async () => {
-      await appendSqliteTranscriptMessage(scope(params.env), {
+      await appendTranscriptMessage(scope(params.env), {
         message: { role: "assistant", content: [{ type: "text", text: params.text }] },
       });
     },
@@ -175,7 +175,7 @@ describe("transcript memory policy companions", () => {
     if (aliceContext.kind !== "current") {
       throw new Error("expected lifecycle-owned Alice subject context");
     }
-    await appendSqliteTranscriptMessage(
+    await appendTranscriptMessage(
       { ...alice, agentId: AGENT_ID, env },
       {
         message: {
@@ -237,7 +237,7 @@ describe("transcript memory policy companions", () => {
         withTranscriptWrite: async (run) => await run(),
       },
       async () => {
-        await appendSqliteTranscriptMessage(
+        await appendTranscriptMessage(
           { ...alice, agentId: AGENT_ID, env },
           {
             message: {
@@ -251,7 +251,7 @@ describe("transcript memory policy companions", () => {
     expect(readAuthorizedTranscriptEventSeqs(database.db, alice.sessionId)?.size).toBeGreaterThan(
       0,
     );
-    expect(loadSqliteTranscriptEventsSync({ ...alice, agentId: AGENT_ID, env })).toContainEqual(
+    expect(loadTranscriptEventsSync({ ...alice, agentId: AGENT_ID, env })).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({
           content: [{ type: "text", text: "alice scoped content" }],
@@ -270,26 +270,26 @@ describe("transcript memory policy companions", () => {
     expect(createCurrentMemorySessionContext({ ...bob, options })).toEqual({
       kind: "shadow-subject-mismatch",
     });
-    await appendSqliteTranscriptMessage(
+    await appendTranscriptMessage(
       { ...bob, agentId: AGENT_ID, env },
       {
         message: { role: "assistant", content: [{ type: "text", text: "bob denied content" }] },
       },
     );
     expect(readAuthorizedTranscriptEventSeqs(database.db, bob.sessionId)).toEqual(new Set());
-    expect(loadSqliteTranscriptEventsSync({ ...bob, agentId: AGENT_ID, env })).toEqual([]);
+    expect(loadTranscriptEventsSync({ ...bob, agentId: AGENT_ID, env })).toEqual([]);
   });
 
   it("fails closed for missing or stale run exposure while indexing only an authorized event", async () => {
     const env = createEnv();
     // Establish the SQLite session before the cut-over marker is written; its old row has no
     // companion and must disappear as soon as the enforced policy reader is active.
-    await appendSqliteTranscriptMessage(scope(env), {
+    await appendTranscriptMessage(scope(env), {
       message: { role: "assistant", content: [{ type: "text", text: "legacy private content" }] },
     });
     const database = markCutOver(env);
 
-    await appendSqliteTranscriptMessage(scope(env), {
+    await appendTranscriptMessage(scope(env), {
       message: { role: "assistant", content: [{ type: "text", text: "missing exposure content" }] },
     });
     persistExposure(database, { runId: "stale-run", subjectRevision: "stale-subject-revision" });
@@ -320,21 +320,21 @@ describe("transcript memory policy companions", () => {
     );
 
     expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)).toEqual(new Set([4]));
-    expect(loadSqliteTranscriptEventsSync(scope(env))).toEqual([
+    expect(loadTranscriptEventsSync(scope(env))).toEqual([
       expect.objectContaining({
         message: expect.objectContaining({
           content: [{ type: "text", text: "authorized exposure content" }],
         }),
       }),
     ]);
-    expect(loadSqliteTranscriptTailEventsSync(scope(env), 2)).toEqual([
+    expect(loadTranscriptTailEventsSync(scope(env), 2)).toEqual([
       expect.objectContaining({
         message: expect.objectContaining({
           content: [{ type: "text", text: "authorized exposure content" }],
         }),
       }),
     ]);
-    expect(loadLatestSqliteAssistantText(scope(env))).toMatchObject({
+    expect(loadLatestAssistantText(scope(env))).toMatchObject({
       text: "authorized exposure content",
     });
 
@@ -377,13 +377,13 @@ describe("transcript memory policy companions", () => {
       },
       async () => {
         authorizedMessageId = (
-          await appendSqliteTranscriptMessage(scope(env), {
+          await appendTranscriptMessage(scope(env), {
             message: { role: "assistant", content: [{ type: "text", text: "authorized" }] },
           })
         ).messageId;
       },
     );
-    const pending = await appendSqliteTranscriptMessage(scope(env), {
+    const pending = await appendTranscriptMessage(scope(env), {
       message: { role: "assistant", content: [{ type: "text", text: "pending" }] },
     });
 
@@ -394,13 +394,13 @@ describe("transcript memory policy companions", () => {
   it("does not pass a pending transcript event to manual compaction", async () => {
     const env = createEnv();
     const database = markCutOver(env);
-    await appendSqliteTranscriptMessage(scope(env), {
+    await appendTranscriptMessage(scope(env), {
       message: { role: "assistant", content: [{ type: "text", text: "pending" }] },
     });
     const selectRetainedLines = vi.fn(() => null);
 
     await expect(
-      trimSqliteTranscriptForManualCompact(scope(env), selectRetainedLines),
+      trimTranscriptForManualCompact(scope(env), selectRetainedLines),
     ).resolves.toEqual({ trimmed: false });
 
     expect(selectRetainedLines).not.toHaveBeenCalled();
@@ -480,7 +480,7 @@ describe("transcript memory policy companions", () => {
     expect(readAuthorizedTranscriptEventSeqs(fresh.db, SESSION_ID)?.size).toBe(
       committedAuthorizedCount,
     );
-    expect(loadSqliteTranscriptEventsSync(scope(env))).toContainEqual(
+    expect(loadTranscriptEventsSync(scope(env))).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({
           content: [{ type: "text", text: "committed companion content" }],
@@ -490,7 +490,7 @@ describe("transcript memory policy companions", () => {
 
     // A later durable row without a companion is pending. A separate database
     // consumer must not infer authority from the earlier committed exposure.
-    await appendSqliteTranscriptMessage(scope(env), {
+    await appendTranscriptMessage(scope(env), {
       message: { role: "assistant", content: [{ type: "text", text: "missing companion" }] },
     });
     closeOpenClawAgentDatabasesForTest();
@@ -498,7 +498,7 @@ describe("transcript memory policy companions", () => {
     expect(readAuthorizedTranscriptEventSeqs(fresh.db, SESSION_ID)?.size).toBe(
       committedAuthorizedCount,
     );
-    expect(loadSqliteTranscriptEventsSync(scope(env))).toContainEqual(
+    expect(loadTranscriptEventsSync(scope(env))).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({
           content: [{ type: "text", text: "committed companion content" }],
@@ -519,7 +519,7 @@ describe("transcript memory policy companions", () => {
     expect(readAuthorizedTranscriptEventSeqs(fresh.db, SESSION_ID)?.size).toBe(
       committedAuthorizedCount,
     );
-    expect(loadSqliteTranscriptEventsSync(scope(env))).toContainEqual(
+    expect(loadTranscriptEventsSync(scope(env))).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({
           content: [{ type: "text", text: "committed companion content" }],
@@ -539,7 +539,7 @@ describe("transcript memory policy companions", () => {
     closeOpenClawAgentDatabasesForTest();
     fresh = openOpenClawAgentDatabase({ agentId: AGENT_ID, env });
     expect(readAuthorizedTranscriptEventSeqs(fresh.db, SESSION_ID)).toEqual(new Set());
-    expect(loadSqliteTranscriptEventsSync(scope(env))).toEqual([]);
+    expect(loadTranscriptEventsSync(scope(env))).toEqual([]);
   });
 
   it("removes a stale companion from replay, search, projections, compaction, and export", async () => {
@@ -565,16 +565,16 @@ describe("transcript memory policy companions", () => {
       .run(999, SESSION_ID);
 
     expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)).toEqual(new Set());
-    expect(loadSqliteTranscriptEventsSync(scope(env))).toEqual([]);
+    expect(loadTranscriptEventsSync(scope(env))).toEqual([]);
     expect(search().hits).toEqual([]);
     expect(() => readSessionTranscriptMessageEvents(scope(env))).toThrow(
       /projection is rebuilding/i,
     );
-    await expect(trimSqliteTranscriptForManualCompact(scope(env), vi.fn())).resolves.toEqual({
+    await expect(trimTranscriptForManualCompact(scope(env), vi.fn())).resolves.toEqual({
       trimmed: false,
     });
 
-    const plan = planSqliteSessionStateDeleteIfUnreferenced({
+    const plan = planSessionStateDeleteIfUnreferenced({
       archiveDirectory: path.join(roots.at(-1) ?? "", "archives"),
       archiveTranscript: true,
       database,
@@ -583,7 +583,7 @@ describe("transcript memory policy companions", () => {
       sessionId: SESSION_ID,
     });
     expect(plan).not.toBeNull();
-    const materialized = await materializeSqliteSessionStateDeletePlans([plan!]);
+    const materialized = await materializeSessionStateDeletePlans([plan!]);
     expect(materialized[0]?.archivedTranscript).toBeNull();
   });
 });
