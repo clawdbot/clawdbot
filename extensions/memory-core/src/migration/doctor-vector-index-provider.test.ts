@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, describe, expect, it } from "vitest";
-import { createVectorIndexProviderDiagnostic } from "./doctor-vector-index-provider.js";
+import { createVectorIndexProviderDiagnostic } from "./doctor-vector-index-provider-diagnostic.js";
 
 const vectorIndexProviderDiagnostic = createVectorIndexProviderDiagnostic(async () => ({
   provider: "openai",
