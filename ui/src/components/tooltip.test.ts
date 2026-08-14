@@ -126,7 +126,10 @@ describe("openclaw-tooltip", () => {
     expect(styles).toContain("--wa-tooltip-border-color:");
     expect(styles).toContain("--wa-tooltip-border-width: 1px");
     expect(styles).toContain("--wa-tooltip-border-style: solid");
-    expect(styles).toContain("--wa-tooltip-arrow-size: 0px");
+    // Arrow, padding, and radius keep their defaults but stay caller-skinnable:
+    // a card-shaped tooltip needs a different shell from a one-line label.
+    expect(styles).toContain("--wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px)");
+    expect(styles).toContain("padding: var(--openclaw-tooltip-padding, 5px 7px)");
     expect(styles).toContain("var(--overlay-border)");
     expect(styles).toContain("var(--overlay-shadow)");
   });
@@ -265,6 +268,55 @@ describe("openclaw-tooltip", () => {
     const descriptionId = trigger.getAttribute("aria-describedby");
     expect(descriptionId).toBeTruthy();
     expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Accessible tooltip");
+  });
+
+  it("stays closed while an ancestor holds its hover surfaces still", async () => {
+    const scope = document.createElement("div");
+    scope.setAttribute("data-hover-suppressed", "");
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Suppressed tooltip");
+    provider.append(tooltip);
+    scope.append(provider);
+    document.body.append(scope);
+    await tooltip.updateComplete;
+
+    // The sidebar sets this while a row menu is open: reading that menu must not
+    // be interrupted by a card opening from whatever the pointer crossed.
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(400);
+    expectOpenCount(0);
+
+    scope.removeAttribute("data-hover-suppressed");
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(400);
+    expectOpenCount(1);
+
+    scope.remove();
+  });
+
+  it("describes the focusable element inside a wrapper trigger", async () => {
+    const tooltip = document.createElement("openclaw-tooltip") as TooltipElement;
+    const row = document.createElement("div");
+    const link = document.createElement("a");
+    link.href = "#session";
+    link.textContent = "Release notes";
+    row.append(link);
+    const card = document.createElement("div");
+    card.slot = "content";
+    card.textContent = "Branch feature/sidebar";
+    tooltip.append(row, card);
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+
+    // Keyboard focus lands on the link, not on the row that wraps it, and ARIA
+    // descriptions are not inherited: describing the wrapper would announce
+    // nothing to a reader who tabbed onto the session.
+    expect(row.hasAttribute("aria-describedby")).toBe(false);
+    const descriptionId = link.getAttribute("aria-describedby");
+    expect(descriptionId).toBeTruthy();
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe(
+      "Branch feature/sidebar",
+    );
   });
 
   it("describes rich content with its text content", async () => {

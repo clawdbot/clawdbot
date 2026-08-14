@@ -51,7 +51,9 @@ export function sessionRow(
     childSessions?: string[];
     execNode?: string;
     forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
-    worktree?: { id?: string; branch?: string; repoRoot?: string };
+    /** The Gateway always reports all three; an incomplete one is not a row
+        any session list can receive. */
+    worktree?: { id: string; branch: string; repoRoot: string };
   } = {},
 ) {
   return {
@@ -152,6 +154,17 @@ export function trimmedTextContents(locator: Locator): Promise<string[]> {
   return locator.evaluateAll((elements) =>
     elements.map((element) => element.textContent?.trim() ?? ""),
   );
+}
+
+/**
+ * Coding ships collapsed on a first visit, so a fresh browser context renders a
+ * bare section header and no work rows at all. Any scenario whose fixture puts
+ * a session in a checkout has to say otherwise before the page loads.
+ */
+export async function expandStoredSessionSections(page: Page): Promise<void> {
+  await page.addInitScript((key) => {
+    localStorage.setItem(key, "[]");
+  }, collapsedSessionSectionsStorageKey);
 }
 
 export function actionOpacity(button: Locator): Promise<string> {

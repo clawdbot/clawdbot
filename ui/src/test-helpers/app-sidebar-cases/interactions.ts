@@ -592,10 +592,13 @@ describe("AppSidebar catalog session rows", () => {
       expect(active[0]?.getAttribute("data-session-key")).toBe(
         "catalog:codex:gateway%3Alocal:thread-1",
       );
-      expect(active[0]?.getAttribute("role")).toBe("listitem");
+      expect(active[0]?.closest('[role="listitem"]')).not.toBeNull();
       expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");
       expect(active[0]?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
-      expect(active[0]?.querySelector("a")?.hasAttribute("aria-describedby")).toBe(false);
+      // The card describes every row; only a row with state adds a state id.
+      expect(active[0]?.querySelector("a")?.getAttribute("aria-describedby") ?? "").not.toContain(
+        "sidebar-session-state-",
+      );
       expect(active[0]?.querySelector(".session-row-trail")).toBeNull();
       // The raw catalog key must not surface as a synthesized chat row.
       // Catalogs nest inside the Coding zone, so classify each row by its
@@ -622,7 +625,7 @@ describe("AppSidebar catalog session rows", () => {
       const link = row?.querySelector("a");
       const state = row?.querySelector(".session-row-state");
 
-      expect(link?.getAttribute("aria-describedby")).toBe(state?.id);
+      expect(link?.getAttribute("aria-describedby")).toContain(state?.id);
       expect(link?.getAttribute("title")).toBe("Running catalog · Local Codex · Active run");
       expect(state?.getAttribute("aria-label")).toBe("Active run");
       expect(state?.querySelector(".session-run-spinner")).not.toBeNull();

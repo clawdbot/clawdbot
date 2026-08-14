@@ -741,7 +741,11 @@ suite.define(() => {
           withWork
             ? {
                 execNode: nodeHash,
-                worktree: { branch: "openclaw/wt-1", repoRoot: "/Users/dev/Projects/clawdbot" },
+                worktree: {
+                  id: "wt-1",
+                  branch: "openclaw/wt-1",
+                  repoRoot: "/Users/dev/Projects/clawdbot",
+                },
               }
             : {},
         ),
@@ -834,7 +838,11 @@ suite.define(() => {
     const rows = [
       ...Array.from({ length: 8 }, (_, index) =>
         sessionRow(`agent:main:work-${index}`, `Work session ${index}`, baseTime - index * 60_000, {
-          worktree: { branch: `openclaw/wt-${index}`, repoRoot: "/Users/dev/Projects/clawdbot" },
+          worktree: {
+            id: `wt-${index}`,
+            branch: `openclaw/wt-${index}`,
+            repoRoot: "/Users/dev/Projects/clawdbot",
+          },
         }),
       ),
       ...Array.from({ length: 30 }, (_, index) =>

@@ -237,7 +237,8 @@ export function buildSidebarSessionNavigationState(input: {
         Boolean(row.worktree || row.execNode) ||
         context?.sessions.isPreparedWorkSession(row.key) === true,
       acpSession: isAcpSessionKey(row.key),
-      worktreeId: row.worktree?.id,
+      worktree: row.worktree,
+      execCwd: normalizeOptionalString(row.execCwd),
       placementState: row.placement?.state,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,

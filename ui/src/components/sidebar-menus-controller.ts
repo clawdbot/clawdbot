@@ -345,7 +345,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
 
   private loadSessionMenuWork(session: SidebarRecentSession) {
     const version = ++this.sessionMenuWorkVersion;
-    if (!session.worktreeId) {
+    if (!session.worktree) {
       this.updateState("sessionMenuWork", null);
       return;
     }
@@ -380,7 +380,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       sessionKey: session.key,
       agentId: parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
       loadPullRequests: () => store.load(this, pullRequestKey),
-      worktreeId: session.worktreeId,
+      worktreeId: session.worktree.id,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
         this.updateState("sessionMenuWork", { loading: false, ...work });

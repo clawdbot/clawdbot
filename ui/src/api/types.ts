@@ -430,6 +430,9 @@ type SessionCompactionCheckpointPreview = Pick<
   "checkpointId" | "createdAt" | "reason"
 >;
 
+/** The Git checkout a session runs in, as the Gateway reports it. */
+export type SessionWorktreeSummary = NonNullable<SessionRow["worktree"]>;
+
 export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */

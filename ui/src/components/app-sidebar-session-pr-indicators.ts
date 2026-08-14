@@ -98,7 +98,7 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   }
 
   private eligibleRows(): readonly SidebarRecentSession[] {
-    return this.options.getRows().filter((session) => !session.isChild && session.worktreeId);
+    return this.options.getRows().filter((session) => !session.isChild && session.worktree);
   }
 
   private scopedKey(sessionKey: string): string {
@@ -115,7 +115,8 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     }
     let changed = false;
     for (const session of this.eligibleRows()) {
-      if (!session.worktreeId) {
+      const worktreeId = session.worktree?.id;
+      if (!worktreeId) {
         continue;
       }
       const snapshot = store.get(this.scopedKey(session.key));
@@ -126,7 +127,7 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       }
       const entry = {
         state: resolveSessionPullRequestIndicatorState(snapshot.pullRequests),
-        worktreeId: session.worktreeId,
+        worktreeId,
       };
       const current = this.states.get(session.key);
       if (current?.state !== entry.state || current.worktreeId !== entry.worktreeId) {

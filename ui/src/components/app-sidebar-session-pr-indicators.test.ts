@@ -96,7 +96,7 @@ describe("SessionPullRequestIndicatorsController", () => {
     const row = {
       key: "agent:main:demo",
       isChild: false,
-      worktreeId: "wt-demo",
+      worktree: { id: "wt-demo", branch: "main", repoRoot: "/repo" },
     } as SidebarRecentSession;
     const controller = new SessionPullRequestIndicatorsController(host, {
       getConnected: () => true,
@@ -132,7 +132,7 @@ describe("SessionPullRequestIndicatorsController", () => {
         },
       },
     });
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
+    expect(controller.state(row.key, row.worktree?.id ?? "")).toBe("open");
 
     harness.emit({
       sessions: {
@@ -143,14 +143,18 @@ describe("SessionPullRequestIndicatorsController", () => {
         },
       },
     });
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
+    expect(controller.state(row.key, row.worktree?.id ?? "")).toBe("open");
   });
 
   it("clears alias indicators when the selected agent changes", async () => {
     vi.useFakeTimers();
     const host = new TestHost();
     const harness = createGatewayHarness();
-    const row = { key: "global", isChild: false, worktreeId: "wt-global" } as SidebarRecentSession;
+    const row = {
+      key: "global",
+      isChild: false,
+      worktree: { id: "wt-global", branch: "main", repoRoot: "/repo" },
+    } as SidebarRecentSession;
     let selectedAgentId = "main";
     const controller = new SessionPullRequestIndicatorsController(host, {
       getConnected: () => true,
@@ -180,12 +184,12 @@ describe("SessionPullRequestIndicatorsController", () => {
         },
       },
     });
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
+    expect(controller.state(row.key, row.worktree?.id ?? "")).toBe("open");
 
     selectedAgentId = "work";
     controller.hostUpdated();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("none");
+    expect(controller.state(row.key, row.worktree?.id ?? "")).toBe("none");
   });
 });

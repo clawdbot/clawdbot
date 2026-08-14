@@ -2,10 +2,15 @@
 // wrapper API; Web Awesome owns popup positioning, rendering, and dismissal.
 import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import { css, html } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
+// What a description can land on: the elements keyboard focus actually
+// reaches, in the order a wrapper trigger would contain them.
+const DESCRIBABLE_SELECTOR =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+const HOVER_SUPPRESSED_SCOPE = "[data-hover-suppressed]";
 const HOVER_DELAY = 150;
 const TOUCH_DELAY = 450;
 const TOUCH_VISIBLE = 900;
@@ -98,9 +103,31 @@ class Tooltip extends OpenClawLitElement {
   /** Let a reveal-only trigger open on click instead of dismissing. */
   @property({ type: Boolean, attribute: "open-on-click" }) openOnClick = false;
 
+  /**
+   * Cold-open delay for this trigger alone. A quick label wants the provider's
+   * default; a surface that reveals a whole card wants the reader to have asked
+   * for it. The provider's skip-delay window still overrides both, so scanning
+   * siblings stays immediate once the first one has opened.
+   */
+  @property({ type: Number }) delay?: number;
+
+  /**
+   * Set while another surface owns the pointer — an open row menu, for
+   * instance. The tooltip closes at once and refuses to reopen until it clears.
+   */
+  @property({ type: Boolean, reflect: true }) suppressed = false;
+
+  /**
+   * Where the surface opens relative to its trigger. A one-line label reads
+   * above it; a card anchored to a full-width sidebar row has to open beside
+   * the row instead of covering the rows the reader is scanning.
+   */
+  @property() placement = "top";
+
   @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
 
   private triggerElement: HTMLElement | null = null;
+  private describedElement: HTMLElement | null = null;
   private openTimer: number | null = null;
   private closeTimer: number | null = null;
   private touchTimer: number | null = null;
@@ -124,7 +151,7 @@ class Tooltip extends OpenClawLitElement {
 
     wa-tooltip {
       --max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
-      --wa-tooltip-arrow-size: 0px;
+      --wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px);
       --wa-tooltip-background-color: var(
         --openclaw-tooltip-background-color,
         color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
@@ -165,7 +192,10 @@ class Tooltip extends OpenClawLitElement {
     this.style.display = "contents";
   }
 
-  protected override updated() {
+  protected override updated(changed: PropertyValues) {
+    if (changed.has("suppressed") && this.suppressed) {
+      this.close();
+    }
     this.attachTrigger();
     this.syncDescription();
     this.syncWebAwesomeTooltip();
@@ -187,7 +217,7 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private get hoverDelay() {
-    return Math.max(0, this.provider?.delay ?? HOVER_DELAY);
+    return Math.max(0, this.delay ?? this.provider?.delay ?? HOVER_DELAY);
   }
 
   private get touchDelay() {
@@ -367,7 +397,16 @@ class Tooltip extends OpenClawLitElement {
   };
 
   private scheduleOpen() {
-    if (this.webAwesomeTooltip?.open || this.openTimer !== null || this.isRedundant()) {
+    if (
+      this.suppressed ||
+      // A container can hold every hover surface inside it still -- the sidebar
+      // does this while a row menu is open, so an operator reading that menu is
+      // never interrupted by a card opening from whatever the pointer crossed.
+      this.closest(HOVER_SUPPRESSED_SCOPE) !== null ||
+      this.webAwesomeTooltip?.open ||
+      this.openTimer !== null ||
+      this.isRedundant()
+    ) {
       return;
     }
     const delay = this.provider?.shouldDelayOpen() === false ? 0 : this.hoverDelay;
@@ -422,11 +461,28 @@ class Tooltip extends OpenClawLitElement {
     return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
   }
 
-  private syncDescription() {
+  /**
+   * Where the description belongs. A trigger can be a non-focusable wrapper —
+   * a whole session row, say — and ARIA descriptions are not inherited, so
+   * describing the wrapper tells a keyboard reader nothing when focus lands on
+   * the link inside it.
+   */
+  private resolveDescribedElement(): HTMLElement | null {
     const trigger = this.triggerElement;
+    if (!trigger) {
+      return null;
+    }
+    return trigger.matches(DESCRIBABLE_SELECTOR)
+      ? trigger
+      : (trigger.querySelector<HTMLElement>(DESCRIBABLE_SELECTOR) ?? trigger);
+  }
+
+  private syncDescription() {
+    const trigger = this.resolveDescribedElement();
     if (!trigger) {
       return;
     }
+    this.describedElement = trigger;
     const current = trigger.getAttribute("aria-describedby");
     if (!this.descriptionCaptured) {
       this.describedBy = current;
@@ -446,14 +502,16 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private restoreDescription() {
-    if (!this.triggerElement) {
+    const described = this.describedElement ?? this.triggerElement;
+    if (!described) {
       return;
     }
     if (this.describedBy) {
-      this.triggerElement.setAttribute("aria-describedby", this.describedBy);
+      described.setAttribute("aria-describedby", this.describedBy);
     } else {
-      this.triggerElement.removeAttribute("aria-describedby");
+      described.removeAttribute("aria-describedby");
     }
+    this.describedElement = null;
     this.descriptionElement?.remove();
     this.descriptionElement = null;
     this.describedBy = null;
@@ -555,7 +613,7 @@ class Tooltip extends OpenClawLitElement {
   override render() {
     return html`
       <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.tooltipId} trigger="manual">
+      <wa-tooltip id=${this.tooltipId} trigger="manual" placement=${this.placement}>
         <span class="tooltip-content">${this.content}</span>
         <span
           class="tooltip-rich-content"

@@ -72,8 +72,8 @@ describe("AppSidebar project session activity", () => {
       [...(projectList?.children ?? [])].every((item) => item.getAttribute("role") === "listitem"),
     ).toBe(true);
     expect(idle?.closest('[role="list"]')).toBe(projectList);
-    expect(loose?.parentElement).toBe(hostList);
-    expect(loose?.getAttribute("role")).toBe("listitem");
+    const looseItem = loose?.closest('[role="listitem"]');
+    expect(looseItem?.parentElement).toBe(hostList);
     const activeState = active?.querySelector(".session-row-state");
     expect(activeState?.getAttribute("role")).toBe("img");
     expect(activeState?.getAttribute("aria-label")).toBe("Active run");

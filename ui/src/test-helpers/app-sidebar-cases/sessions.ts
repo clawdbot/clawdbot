@@ -375,7 +375,7 @@ describe("AppSidebar session accessibility", () => {
       "Quarterly launch plan",
     );
     expect(link?.getAttribute("title")).toBe("Quarterly launch plan · now");
-    expect(link?.hasAttribute("aria-describedby")).toBe(false);
+    expect(link?.getAttribute("aria-describedby") ?? "").not.toContain("sidebar-session-state-");
     expect(row?.querySelector(".session-row-trail")).toBeNull();
   });
 });

@@ -226,8 +226,10 @@ describe("AppSidebar interleaved zone", () => {
     sidebar.sidebarEntries = ["route:usage", "session:agent:main:alpha", "route:plugins"];
     await sidebar.updateComplete;
 
+    // Read each entry's own label: a session entry also carries its hover-card
+    // content, which is not part of the entry's visible text.
     const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-zone-entry")].map((entry) =>
-      entry.textContent?.trim(),
+      (entry.querySelector(".sidebar-recent-session__name") ?? entry).textContent?.trim(),
     );
     expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();

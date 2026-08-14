@@ -250,11 +250,14 @@ describe("AppSidebar session indicators", () => {
 
     for (const key of [keys.unread, keys.runningUnread]) {
       const link = sidebar.querySelector(`[data-session-key="${key}"] a`);
-      const descriptionId = link?.getAttribute("aria-describedby");
-      expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
-      expect(sidebar.querySelector(`[id="${descriptionId}"]`)).not.toBeNull();
+      const stateId = `sidebar-session-state-${encodeURIComponent(key)}`;
+      expect(link?.getAttribute("aria-describedby")).toContain(stateId);
+      expect(sidebar.querySelector(`[id="${stateId}"]`)).not.toBeNull();
     }
-    expect(forked?.querySelector("a")?.getAttribute("aria-describedby")).toBeNull();
+    // A forked row reports no state, so nothing but the card describes its link.
+    expect(forked?.querySelector("a")?.getAttribute("aria-describedby") ?? "").not.toContain(
+      "sidebar-session-state-",
+    );
     expect(unread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
     expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Active run");
     // A live run supersedes unread, in the title as well as in the endcap.

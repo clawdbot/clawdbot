@@ -3481,6 +3481,108 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: color-mix(in srgb, var(--border-strong) 68%, transparent);
 }
 
+/* Session information card. It answers what the compact row could not fit: the
+   whole title, when the session last moved, and the context facts the Gateway
+   knows. Width and rhythm are fixed so scanning from one row to the next reads
+   as one surface following the pointer, not a new panel each time. */
+openclaw-tooltip.session-hover-tooltip {
+  --openclaw-tooltip-max-width: min(320px, calc(100vw - 24px));
+  --openclaw-tooltip-padding: 12px;
+  --openclaw-tooltip-radius: 12px;
+  --openclaw-tooltip-arrow-size: 0;
+}
+
+.session-hover-card {
+  width: 296px;
+}
+
+.session-hover-card__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.session-hover-card__title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  color: var(--text-strong);
+  font-weight: 550;
+}
+
+.session-hover-card__age {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.session-hover-card__divider {
+  height: 1px;
+  margin: 8px 0;
+  background: color-mix(in srgb, var(--border-strong) 68%, transparent);
+}
+
+.session-hover-card__body {
+  display: flex;
+  flex-direction: column;
+}
+
+.session-hover-card__row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.session-hover-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.session-hover-card__icon svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-hover-card__text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The label names the fact quietly; the value is what the reader opened the
+   card for, so it takes the emphasis and the room to wrap in full. Truncating
+   a path here would only repeat the truncation the row already made. */
+.session-hover-card__label {
+  flex: none;
+  color: var(--muted);
+}
+
+.session-hover-card__value {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.session-hover-card__row--danger .session-hover-card__icon,
+.session-hover-card__row--danger .session-hover-card__value {
+  color: var(--danger);
+}
+
 .sidebar-hover-card__server-details {
   display: flex;
   flex-direction: column;
