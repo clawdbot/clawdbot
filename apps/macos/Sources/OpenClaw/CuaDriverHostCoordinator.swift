@@ -113,6 +113,9 @@ final class CuaDriverStderrRelay: @unchecked Sendable {
 @MainActor
 protocol CuaDriverProcessControlling: AnyObject {
     var isRunning: Bool { get }
+    /// Spawned daemon pid. OpenClaw records this itself because `serve` ignores
+    /// `--pid-file` and writes only the machine-global default path.
+    var processIdentifier: pid_t { get }
     func closeLiveness()
     func terminate()
     func forceKill()
@@ -137,6 +140,10 @@ private final class FoundationCuaDriverProcess: CuaDriverProcessControlling {
 
     var isRunning: Bool {
         self.process.isRunning
+    }
+
+    var processIdentifier: pid_t {
+        self.process.processIdentifier
     }
 
     func closeLiveness() {
@@ -361,6 +368,10 @@ final class CuaDriverHostCoordinator {
                     self?.processExited(generation: generation, status: status)
                 }
             }
+            // Record the pid we spawned so startup/teardown reaping can attribute and
+            // terminate exactly this daemon; without it a reaper can only delete the
+            // directory and would leave an orphaned privileged process running.
+            Self.writeProcessIdentifier(process.processIdentifier, to: socketDirectory)
             self.runningChild = RunningChild(
                 generation: generation,
                 process: process,
@@ -520,10 +531,10 @@ final class CuaDriverHostCoordinator {
                 "--no-permissions-gate",
                 "--socket",
                 socketPath,
-                "--pid-file",
-                URL(fileURLWithPath: socketPath)
-                    .deletingLastPathComponent()
-                    .appendingPathComponent("cua.pid", isDirectory: false).path,
+                // No --pid-file: `serve` ignores it and always writes the driver's
+                // global default path, which every cua-driver on the machine shares.
+                // OpenClaw records the spawned pid itself so reaping can attribute
+                // exactly the daemon this app owns.
                 "--host-bundle-id",
                 hostBundleID,
                 "--permission-mode",

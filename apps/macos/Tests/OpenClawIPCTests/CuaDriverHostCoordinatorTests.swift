@@ -188,6 +188,35 @@ struct CuaDriverHostCoordinatorTests {
         await coordinator.setEnabled(false)
     }
 
+    @Test func `launch records the spawned daemon pid for later reaping`() async throws {
+        // Without this record the reaper can only delete the directory and leaves the
+        // privileged daemon running: `serve` ignores --pid-file and writes a global path.
+        let root = self.shortTemporaryDirectory("launch-pidfile")
+        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launcher = CuaProcessLauncherProbe()
+        let coordinator = CuaDriverHostCoordinator(
+            artifactURL: { executable },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true })
+
+        await coordinator.setEnabled(true)
+
+        let directories = try FileManager.default.contentsOfDirectory(
+            at: root.appendingPathComponent("OpenClaw", isDirectory: true)
+                .appendingPathComponent("cua", isDirectory: true),
+            includingPropertiesForKeys: nil)
+        let pidFile = try #require(directories.first?.appendingPathComponent("cua.pid"))
+        let recorded = try String(contentsOf: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(recorded == String(launcher.lastProcessIdentifier))
+        await coordinator.setEnabled(false)
+    }
+
     @Test func `startup refuses to signal a pid owned by another executable`() async throws {
         let root = self.shortTemporaryDirectory("startup-pid-reuse")
         let expectedExecutable = try self.expectedExecutable(in: root, target: "/bin/cat")
@@ -216,8 +245,9 @@ struct CuaDriverHostCoordinatorTests {
         #expect(unrelated.isRunning)
         #expect(FileManager.default.fileExists(atPath: stale.url.path))
         let launch = try #require(launcher.launches.first)
-        let pidFileArgument = try #require(launch.arguments.firstIndex(of: "--pid-file")) + 1
-        #expect(launch.arguments[pidFileArgument].hasSuffix("/cua.pid"))
+        // `serve` ignores --pid-file (it always writes the machine-global default),
+        // so OpenClaw must never pass it and records the pid itself instead.
+        #expect(!launch.arguments.contains("--pid-file"))
         await coordinator.setEnabled(false)
         #expect(unrelated.isRunning)
     }
@@ -491,6 +521,10 @@ private final class CuaProcessLauncherProbe {
     private(set) var launches: [CuaDriverProcessLaunch] = []
     private(set) var processes: [CuaProcessProbe] = []
 
+    var lastProcessIdentifier: pid_t {
+        self.processes.last?.processIdentifier ?? 0
+    }
+
     func launch(
         _ launch: CuaDriverProcessLaunch,
         onTermination: @escaping @Sendable (Int32) -> Void) -> CuaProcessProbe
@@ -506,9 +540,11 @@ private final class CuaProcessLauncherProbe {
 private final class CuaProcessProbe: CuaDriverProcessControlling {
     private(set) var isRunning = true
     private(set) var closeLivenessCount = 0
+    let processIdentifier: pid_t
     private let onTermination: @Sendable (Int32) -> Void
 
-    init(onTermination: @escaping @Sendable (Int32) -> Void) {
+    init(processIdentifier: pid_t = 424_242, onTermination: @escaping @Sendable (Int32) -> Void) {
+        self.processIdentifier = processIdentifier
         self.onTermination = onTermination
     }
 

@@ -94,6 +94,27 @@ extension CuaDriverHostCoordinator {
         }
     }
 
+    /// Records the spawned daemon pid inside its own owner-only socket directory.
+    /// `serve` ignores `--pid-file` and writes only a machine-global path shared by
+    /// every cua-driver, so the spawning app is the one authoritative source.
+    @discardableResult
+    static func writeProcessIdentifier(
+        _ processIdentifier: pid_t,
+        to directory: CuaDriverSocketDirectory) -> Bool
+    {
+        guard self.directoryIsUnchangedAndOwned(directory) else { return false }
+        let descriptor = Darwin.open(
+            directory.pidFilePath,
+            O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+            0o600)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        let contents = Array("\(processIdentifier)".utf8)
+        return contents.withUnsafeBytes { bytes in
+            Darwin.write(descriptor, bytes.baseAddress, bytes.count) == bytes.count
+        }
+    }
+
     private static func readProcessIdentifier(in directory: CuaDriverSocketDirectory) -> pid_t? {
         guard self.directoryIsUnchangedAndOwned(directory) else { return nil }
         let descriptor = Darwin.open(directory.pidFilePath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
