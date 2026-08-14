@@ -1654,6 +1654,8 @@ export const en: TranslationMap = {
     applying: "Applying…",
     autoSaveSaving: "Saving…",
     autoSaveSaved: "Saved",
+    autoSavePaused: "Autosave paused after reconnect",
+    saveNow: "Save",
     autoSaveFailed: "Save failed",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
