@@ -130,6 +130,39 @@ suite.define(() => {
     }
   });
 
+  it("omits the group category for a legacy Gateway", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["sessions.create", "sessions.groups.list"],
+      methodResponses: {
+        "sessions.create": { key: "agent:main:legacy-group", runStarted: true },
+        "sessions.list": sessionsListResponse([]),
+      },
+      sessionGroups: ["Client work"],
+      workspace: "/home/peter/openclaw",
+      workspaceGit: false,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?group=Client+work`);
+      await page.locator(".new-session-page__message").fill("start on an older Gateway");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "start on an older Gateway",
+      });
+      expect(create.params).not.toHaveProperty("category");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("revalidates an open group route when its defaults or identity change", async () => {
     const initialCwd = "/home/peter/client-work";
     const refreshedCwd = "/home/peter/refreshed-client-work";

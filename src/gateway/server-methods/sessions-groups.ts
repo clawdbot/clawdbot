@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateSessionsGroupsDefaultsParams,
   validateSessionsGroupsDeleteParams,
   validateSessionsGroupsListParams,
@@ -11,6 +12,7 @@ import {
   validateSessionsGroupsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   deleteSessionGroup,
   listSessionGroupDefaults,
@@ -25,6 +27,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 export const sessionGroupHandlers: GatewayRequestHandlers = {
   "sessions.groups.list": async ({ params, respond }) => {
@@ -95,7 +98,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "sessions.groups.update": async ({ params, respond, context }) => {
+  "sessions.groups.update": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -114,8 +117,22 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    let cwd = params.cwd;
+    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (cwd && !clientScopes.includes(ADMIN_SCOPE)) {
+      const containment = await resolveWorkspacePathContainment(cwd, context.getRuntimeConfig());
+      if (!containment) {
+        respond(
+          false,
+          undefined,
+          missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+        );
+        return;
+      }
+      cwd = containment.path;
+    }
     const defaults = updateSessionGroupDefaults(params.name, {
-      cwd: params.cwd,
+      cwd,
       worktree: params.worktree,
     });
     if (!defaults) {

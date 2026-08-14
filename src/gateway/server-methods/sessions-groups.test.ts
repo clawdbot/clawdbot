@@ -7,6 +7,9 @@ const groupMocks = vi.hoisted(() => ({
   rename: vi.fn(),
   update: vi.fn(),
 }));
+const pathMocks = vi.hoisted(() => ({
+  resolveContainment: vi.fn(),
+}));
 
 vi.mock("../session-groups.js", () => ({
   deleteSessionGroup: vi.fn(),
@@ -18,11 +21,26 @@ vi.mock("../session-groups.js", () => ({
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
 }));
+vi.mock("./workspace-path-containment.js", () => ({
+  resolveWorkspacePathContainment: pathMocks.resolveContainment,
+}));
 
 import { sessionGroupHandlers } from "./sessions-groups.js";
 
-function updateOptions(params: Record<string, unknown>, respond: ReturnType<typeof vi.fn>) {
-  return { params, respond, context: {} } as unknown as GatewayRequestHandlerOptions;
+function updateOptions(
+  params: Record<string, unknown>,
+  respond: ReturnType<typeof vi.fn>,
+  scopes = ["operator.write", "operator.admin"],
+) {
+  return {
+    params,
+    respond,
+    client: { connect: { scopes } },
+    context: {
+      getRuntimeConfig: () => ({}),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+    },
+  } as unknown as GatewayRequestHandlerOptions;
 }
 
 function renameOptions(params: Record<string, unknown>, respond: ReturnType<typeof vi.fn>) {
@@ -36,6 +54,7 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
 describe("sessions.groups.update", () => {
   beforeEach(() => {
     groupMocks.update.mockReset();
+    pathMocks.resolveContainment.mockReset();
   });
 
   it("rejects a relative cwd before mutating defaults", async () => {
@@ -69,6 +88,58 @@ describe("sessions.groups.update", () => {
         code: "INVALID_REQUEST",
         message: "unknown session group: Travel",
       }),
+    );
+  });
+
+  it("rejects a non-admin cwd outside configured workspaces", async () => {
+    pathMocks.resolveContainment.mockResolvedValue(null);
+    const respond = vi.fn();
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.update"],
+      'sessionGroupHandlers["sessions.groups.update"] test invariant',
+    )(
+      updateOptions({ name: "Travel", cwd: "/outside/travel", worktree: false }, respond, [
+        "operator.write",
+      ]),
+    );
+
+    expect(groupMocks.update).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
+    );
+  });
+
+  it("persists the canonical workspace-contained cwd for a write caller", async () => {
+    pathMocks.resolveContainment.mockResolvedValue({
+      path: "/workspace/client",
+      workspaceRoot: "/workspace",
+    });
+    groupMocks.update.mockReturnValue([
+      { name: "Client", cwd: "/workspace/client", worktree: true },
+    ]);
+    const respond = vi.fn();
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.update"],
+      'sessionGroupHandlers["sessions.groups.update"] test invariant',
+    )(
+      updateOptions({ name: "Client", cwd: "/workspace/link", worktree: true }, respond, [
+        "operator.write",
+      ]),
+    );
+
+    expect(groupMocks.update).toHaveBeenCalledWith("Client", {
+      cwd: "/workspace/client",
+      worktree: true,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        defaults: [{ name: "Client", cwd: "/workspace/client", worktree: true }],
+      },
+      undefined,
     );
   });
 });

@@ -188,6 +188,16 @@ export class DraftGatewayState {
     return this.preferenceModeValue === "loading";
   }
 
+  resolvedGroupCategory(): string | undefined {
+    const snapshot = this.read();
+    return isGatewayMethodAdvertised(
+      snapshot.context?.gateway.snapshot ?? {},
+      "sessions.groups.defaults",
+    ) === true
+      ? catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions)
+      : undefined;
+  }
+
   refreshCloudProfiles() {
     return this.cloudProfileTask.run();
   }

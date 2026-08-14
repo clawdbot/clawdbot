@@ -161,7 +161,7 @@ export class DraftSubmissionFlow {
       workspace: this.place.workspacePath(),
       execNode: this.place.execNode,
       catalogId: snapshot.data?.catalogId,
-      category: catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions),
+      category: this.gateway.resolvedGroupCategory(),
     });
   }
 

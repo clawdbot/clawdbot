@@ -75,22 +75,6 @@ function ensureSidebarSectionsSchema(env: NodeJS.ProcessEnv): void {
   ensuredSidebarSectionDatabases.add(database.db);
 }
 
-function ensureSessionGroupDefaultsSchema(env: NodeJS.ProcessEnv): void {
-  const database = openOpenClawStateDatabase({ env });
-  if (ensuredSessionGroupDefaultsDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      ensureColumn(db, "session_groups", "cwd TEXT");
-      ensureColumn(db, "session_groups", "worktree INTEGER");
-    },
-    { env },
-    { operationLabel: "session-groups.defaults.schema.ensure" },
-  );
-  ensuredSessionGroupDefaultsDatabases.add(database.db);
-}
-
 function hasSessionGroupDefaultsSchema(db: DatabaseSync): boolean {
   return (
     tableHasColumn(db, "session_groups", "cwd") && tableHasColumn(db, "session_groups", "worktree")
@@ -379,13 +363,27 @@ export function updateSessionGroupDefaults(
   if (!normalized) {
     throw new Error("group defaults update requires a non-empty name");
   }
-  ensureSessionGroupDefaultsSchema(env);
+  const database = openOpenClawStateDatabase({ env });
   let updated = false;
+  let defaultsSchemaEnsured = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const kysely = kyselyFor(db);
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select("name").where("name", "=", normalized).limit(1),
+      ).rows[0];
+      if (!existing) {
+        return;
+      }
+      if (!ensuredSessionGroupDefaultsDatabases.has(db)) {
+        ensureColumn(db, "session_groups", "cwd TEXT");
+        ensureColumn(db, "session_groups", "worktree INTEGER");
+        defaultsSchemaEnsured = true;
+      }
       const result = executeSqliteQuerySync(
         db,
-        kyselyFor(db)
+        kysely
           .updateTable("session_groups")
           .set({
             cwd: normalizeOptionalString(defaults.cwd) ?? null,
@@ -397,6 +395,9 @@ export function updateSessionGroupDefaults(
     },
     { env },
   );
+  if (defaultsSchemaEnsured) {
+    ensuredSessionGroupDefaultsDatabases.add(database.db);
+  }
   return updated ? listSessionGroupDefaults(env) : null;
 }
 

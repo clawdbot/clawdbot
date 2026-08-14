@@ -226,6 +226,26 @@ describe("session groups catalog", () => {
     expect(listSessionGroups(env)).toEqual([]);
   });
 
+  it("keeps a stale defaults update schema-free on a legacy database", () => {
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("ALTER TABLE session_groups DROP COLUMN cwd;");
+    legacy.exec("ALTER TABLE session_groups DROP COLUMN worktree;");
+    legacy.close();
+
+    expect(
+      updateSessionGroupDefaults("Missing", { cwd: "/repos/missing", worktree: true }, env),
+    ).toBeNull();
+    const columns = openOpenClawStateDatabase({ env })
+      .db.prepare("PRAGMA table_info(session_groups)")
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).not.toEqual(
+      expect.arrayContaining(["cwd", "worktree"]),
+    );
+  });
+
   it("absorbs ad-hoc categories at the end of the catalog", () => {
     putSessionGroups(["Work"], undefined, env);
     ensureSessionGroupRegistered("Travel", env);
