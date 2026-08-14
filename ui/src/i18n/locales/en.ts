@@ -1273,6 +1273,8 @@ export const en: TranslationMap = {
     noCustomEntries: "No custom entries.",
     key: "Key",
     removeEntry: "Remove entry",
+    renameRedactedBlocked:
+      "This entry holds a stored secret. Add the new key with its value, then remove this one.",
     schemaUnavailable: "Schema unavailable.",
     unsupportedSchema: "Unsupported schema. Use Raw.",
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
