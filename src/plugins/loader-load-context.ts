@@ -184,6 +184,7 @@ function buildCacheKey(params: {
   preferBuiltPluginArtifacts?: boolean;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
+  registerNodeHostCommands?: boolean;
   loadModules?: boolean;
   runtimeSubagentMode?: PluginRuntimeSubagentMode;
   runtimeBindingIdentity?: string;
@@ -228,6 +229,8 @@ function buildCacheKey(params: {
     params.resolveRawConfigEnvVars === true ? "resolve-raw-env" : "runtime-config";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
+  const nodeHostCommandMode =
+    params.registerNodeHostCommands === true ? "node-host-commands" : "default-node-host";
   const activationMode = params.activate === false ? "snapshot" : "active";
   const cacheIdentity = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
     {
@@ -240,7 +243,7 @@ function buildCacheKey(params: {
       activationMetadataKey: params.activationMetadataKey ?? "",
       allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
     },
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${nodeHostCommandMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
   return createHash("sha256").update(cacheIdentity).digest("hex");
 }
 
@@ -384,6 +387,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     preferBuiltPluginArtifacts,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
+    registerNodeHostCommands: options.registerNodeHostCommands,
     loadModules: options.loadModules,
     runtimeSubagentMode,
     runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),
@@ -407,6 +411,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     channelPluginLoadIntent,
     preferBuiltPluginArtifacts,
     shouldActivate: options.activate !== false,
+    registerNodeHostCommands: options.registerNodeHostCommands === true,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
     installRecords,

@@ -45,6 +45,7 @@ export async function ensureNodeHostPluginRegistry(params: {
     config: params.config,
     activationSourceConfig: params.config,
     env: params.env,
+    registerNodeHostCommands: true,
   });
 }
 

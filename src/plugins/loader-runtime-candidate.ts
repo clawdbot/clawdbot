@@ -262,6 +262,7 @@ export function loadRuntimePluginCandidate(params: {
     env: context.env,
     channelPluginLoadIntent: context.channelPluginLoadIntent,
     toolDiscovery: params.options.toolDiscovery === true,
+    registerNodeHostCommands: params.options.registerNodeHostCommands === true,
   });
   if (!registrationPlan) {
     record.status = "disabled";
@@ -489,13 +490,15 @@ export function loadRuntimePluginCandidate(params: {
       record.memorySlotSelected = true;
     }
   }
-  if (registrationPlan.runFullActivationOnlyRegistrations) {
-    if (definition?.reload) {
-      params.registryBuilder.registerReload(record, definition.reload);
-    }
+  if (registrationPlan.runFullActivationOnlyRegistrations && definition?.reload) {
+    params.registryBuilder.registerReload(record, definition.reload);
+  }
+  if (registrationPlan.registerNodeHostCommands) {
     for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
       params.registryBuilder.registerNodeHostCommand(record, nodeHostCommand);
     }
+  }
+  if (registrationPlan.runFullActivationOnlyRegistrations) {
     for (const collector of definition?.securityAuditCollectors ?? []) {
       params.registryBuilder.registerSecurityAuditCollector(record, collector);
     }

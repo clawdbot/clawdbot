@@ -44,6 +44,8 @@ export type PluginLoadOptions = {
   /** Prefer bundled JavaScript artifacts over source TypeScript entrypoints. */
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
+  /** Include node-host command registrations without activating the root registry. */
+  registerNodeHostCommands?: boolean;
   activate?: boolean;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
