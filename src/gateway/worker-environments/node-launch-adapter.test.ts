@@ -488,11 +488,19 @@ describe("node worker launch adapter", () => {
       request.onDispatchReady?.("invoke-1");
       return wire(receipt(input, "running"));
     });
+    // Scheduling lag lands the clock read that sizes the RPC budget ahead of the timer wheel,
+    // so the per-RPC timer expires just before the cancellation deadline it was derived from.
+    // That must stay a terminal deadline, not a retryable RPC timeout that funds a second
+    // cancel dispatch out of the residue.
+    let cancelling = false;
+    let cancelClockReads = 0;
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () => transportWith(invoke),
       cancellationTimeoutMs: 25,
+      now: () => Date.now() + (cancelling && ++cancelClockReads === 3 ? 5 : 0),
       sleep: async () => {
         controller.abort();
+        cancelling = true;
       },
     });
 
