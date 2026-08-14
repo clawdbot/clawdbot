@@ -214,9 +214,9 @@ function createFixture(options: { aborted?: boolean } = {}) {
   });
   mocks.runSettledPhase.mockImplementation(async (settledInput) => {
     order.push("settled-phase");
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(false);
-    mocks.installStreamGuards.mock.calls[0]?.[0].onRejectedThinkingReplayRepaired();
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(true);
+    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(false);
+    mocks.installStreamGuards.mock.calls[0]?.[0].onRejectedProviderReplayRepaired();
+    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(true);
     return result;
   });
 
@@ -284,7 +284,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const settledInput = mocks.runSettledPhase.mock.calls[0]?.[0];
     expect(settledInput).toEqual(
       expect.objectContaining({
-        getRepairedRejectedThinkingReplay: expect.any(Function),
+        getRepairedRejectedProviderReplay: expect.any(Function),
         preparedStreamRuntime: expect.objectContaining({
           cache: {
             observabilityEnabled: true,
@@ -297,7 +297,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         }),
       }),
     );
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(true);
+    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(true);
 
     const guardInput = mocks.installStreamGuards.mock.calls[0]?.[0];
     expect(guardInput).toEqual(

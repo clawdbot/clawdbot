@@ -108,7 +108,7 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
 
 export async function runEmbeddedAttemptSettledPhase(
   input: EmbeddedAttemptExecutionPhaseInput & {
-    getRepairedRejectedThinkingReplay: () => boolean;
+    getRepairedRejectedProviderReplay: () => boolean;
     preparedStreamRuntime: PreparedStreamRuntime;
   },
 ): Promise<EmbeddedRunAttemptWithReceiptEvidence> {
@@ -373,7 +373,7 @@ export async function runEmbeddedAttemptSettledPhase(
     }
     let settledStream: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>;
     try {
-      if (input.getRepairedRejectedThinkingReplay() && !rewoundBeforeAgentFinalizeRevision) {
+      if (input.getRepairedRejectedProviderReplay() && !rewoundBeforeAgentFinalizeRevision) {
         activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
           sessionManager.buildSessionContext().messages,
         );

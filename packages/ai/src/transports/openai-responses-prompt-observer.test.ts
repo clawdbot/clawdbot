@@ -431,6 +431,7 @@ describe("OpenAI Responses provider prompt observer", () => {
         code: "invalid_encrypted_content",
       });
     const onPayload = vi.fn((request: unknown) => request);
+    const onCompactionRejected = vi.fn();
     sdkState.outcomes = [
       invalidEncryptedContent(),
       invalidEncryptedContent(),
@@ -441,6 +442,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       createOpenAIResponsesTransportStreamFn()(openAIModel, context, {
         apiKey: "test-key",
         ...identity,
+        onCompactionRejected,
         onPayload,
       } as never),
     );
@@ -456,6 +458,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(sdkState.requests[2]?.input)).toContain(SDK_FULL_HISTORY_PREFIX);
     expect(JSON.stringify(sdkState.requests[2]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
     expect(onPayload).toHaveBeenCalledTimes(2);
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
   });
 
   it("does not invoke the provider or retry when prompt observation throws", async () => {
