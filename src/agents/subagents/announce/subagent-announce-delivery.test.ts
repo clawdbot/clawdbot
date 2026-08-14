@@ -1644,7 +1644,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("marks a sent-then-failed direct text completion terminal", async () => {
+  it("marks a sent-then-failed direct text completion ambiguous and terminal", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = vi.fn(async () => {
       throw Object.assign(
@@ -1659,7 +1659,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
     });
 
-    expectRecordFields(result, { delivered: false, path: "direct", terminal: true });
+    // `ambiguous` is what actually stops the steer fallback and the registry
+    // retry; `terminal` alone is not consulted on the completion-handoff path.
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      terminal: true,
+      disposition: "ambiguous",
+    });
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -1675,7 +1682,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
     });
 
-    expect(expectRecord(result, "never-sent direct text completion").terminal).toBeUndefined();
+    const record = expectRecord(result, "never-sent direct text completion");
+    expect(record.terminal).toBeUndefined();
+    expect(record.disposition).toBeUndefined();
   });
 
   it("logs why a direct text completion salvage declined", async () => {

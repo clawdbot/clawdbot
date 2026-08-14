@@ -177,13 +177,18 @@ export async function deliverCompletionDirect(params: {
       // retryable failure and send the same completion twice.
       return committedDelivery;
     }
-    // A send-then-throw already put the text on the platform. Reporting it as
-    // undelivered would retry and post the same completion again.
+    // A send-then-throw already put the text on the platform. Reporting a plain
+    // failure would fall back to steering and then retry the announce, posting
+    // the same completion again. `ambiguous` is the existing disposition for
+    // "may already be visible": it stops fallback steering in the dispatcher and
+    // stops the registry retry, which `terminal` alone does not do.
     return {
       delivered: false,
       path: "direct",
       error: `text completion direct delivery failed: ${summarizeDeliveryError(err)}`,
-      ...(hasAnnounceSendEvidence(err) ? { terminal: true } : {}),
+      ...(hasAnnounceSendEvidence(err)
+        ? { terminal: true, disposition: "ambiguous" as const }
+        : {}),
     };
   }
 }

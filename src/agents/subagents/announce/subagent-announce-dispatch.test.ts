@@ -170,6 +170,41 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("does not fallback-steer after a send-evidence completion direct failure", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "text completion direct delivery failed: post-send bookkeeping failed",
+      terminal: true,
+      disposition: "ambiguous" as const,
+    }));
+
+    // This is the shape `deliverCompletionDirect` returns for a send-then-throw:
+    // the text is already on the platform, so steering the requester would post
+    // the same completion a second time.
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.terminal).toBe(true);
+    expect(result.disposition).toBe("ambiguous");
+    expect(result.phases).toEqual([
+      {
+        phase: "direct-primary",
+        delivered: false,
+        path: "direct",
+        error: "text completion direct delivery failed: post-send bookkeeping failed",
+      },
+    ]);
+  });
+
   it("returns direct failure when completion fallback steering cannot deliver", async () => {
     const steer = vi.fn(async () => ({ status: "none" }) as const);
     const direct = vi.fn(async () => ({
