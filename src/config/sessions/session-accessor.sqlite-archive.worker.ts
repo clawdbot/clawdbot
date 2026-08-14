@@ -4,19 +4,21 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  sqliteSessionStateDeleteSnapshotsEqual,
   encodeMaterializedSessionTranscriptArchive,
   hashSessionArchiveBytes,
   publishEncodedSessionTranscriptArchive,
   type TranscriptArchivePublishPlan,
   type TranscriptArchivePublishResult,
   type TranscriptArchivePublishWorkerMessage,
-  type SessionStateDeleteSnapshot,
   type TranscriptArchiveWorkerMessage,
   type TranscriptArchiveWorkerPlan,
   type TranscriptArchiveWorkerResult,
 } from "./session-accessor.sqlite-archive.js";
-import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import {
+  readSessionStateDeleteSnapshot,
+  sqliteSessionStateDeleteSnapshotsEqual,
+} from "./session-accessor.sqlite-delete-snapshot.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
 
 type TranscriptArchiveDatabase = Pick<

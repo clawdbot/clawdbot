@@ -1,6 +1,21 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-archive.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+
+export function sqliteSessionStateDeleteSnapshotsEqual(
+  left: SessionStateDeleteSnapshot,
+  right: SessionStateDeleteSnapshot,
+): boolean {
+  return (
+    left.acpParentStreamEventCount === right.acpParentStreamEventCount &&
+    left.generation === right.generation &&
+    left.lastSeq === right.lastSeq &&
+    left.sessionKey === right.sessionKey &&
+    left.sessionUpdatedAt === right.sessionUpdatedAt &&
+    left.trajectoryLastSeq === right.trajectoryLastSeq &&
+    left.transcriptUpdatedAt === right.transcriptUpdatedAt
+  );
+}
 
 type SessionStateDeleteSnapshotDatabase = Pick<
   OpenClawAgentKyselyDatabase,

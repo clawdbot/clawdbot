@@ -11,7 +11,6 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-archive.js";
 import type {
   LatestTranscriptAssistantMessage,
   LatestTranscriptAssistantText,
@@ -21,6 +20,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
   getSessionKysely,

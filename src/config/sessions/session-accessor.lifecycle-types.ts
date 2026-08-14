@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionUnreferencedArtifactSweepResult } from "./disk-budget.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-archive.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
 import type { SessionMaintenanceApplyReport } from "./store-maintenance-operations.js";
 import type { SessionEntry } from "./types.js";

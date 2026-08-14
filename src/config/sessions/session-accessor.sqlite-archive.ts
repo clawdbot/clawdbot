@@ -6,6 +6,7 @@ import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   encodeSessionArchiveContent,
   readSessionArchiveContentSync,
@@ -13,16 +14,11 @@ import {
 } from "./archive-compression.js";
 import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
-
-export type SessionStateDeleteSnapshot = {
-  acpParentStreamEventCount: number;
-  generation: string | null;
-  lastSeq: number | null;
-  sessionKey: string | null;
-  sessionUpdatedAt: number | null;
-  trajectoryLastSeq: number | null;
-  transcriptUpdatedAt: number | null;
-};
+import {
+  readSessionStateDeleteSnapshot,
+  sqliteSessionStateDeleteSnapshotsEqual,
+} from "./session-accessor.sqlite-delete-snapshot.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 
 export type SessionStateDeletePlan = {
   agentId: string;
@@ -79,21 +75,6 @@ export type TranscriptArchivePublishWorkerMessage = {
   type: "published";
   results: TranscriptArchivePublishResult[];
 };
-
-export function sqliteSessionStateDeleteSnapshotsEqual(
-  left: SessionStateDeleteSnapshot,
-  right: SessionStateDeleteSnapshot,
-): boolean {
-  return (
-    left.acpParentStreamEventCount === right.acpParentStreamEventCount &&
-    left.generation === right.generation &&
-    left.lastSeq === right.lastSeq &&
-    left.sessionKey === right.sessionKey &&
-    left.sessionUpdatedAt === right.sessionUpdatedAt &&
-    left.trajectoryLastSeq === right.trajectoryLastSeq &&
-    left.transcriptUpdatedAt === right.transcriptUpdatedAt
-  );
-}
 
 function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
@@ -388,6 +369,23 @@ export function runSqliteTranscriptArchivePublishWorker(
   );
 }
 
+function validateEmptyTranscriptArchivePlan(plan: TranscriptArchiveWorkerPlan): void {
+  const opened = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionStateDeleteSnapshot(database.db, plan.sessionId),
+    { agentId: plan.agentId, path: plan.databasePath },
+  );
+  if (!opened.found) {
+    throw new Error(
+      `Cannot archive SQLite transcript ${plan.sessionId}: ${opened.reason.replaceAll("-", " ")}`,
+    );
+  }
+  if (!sqliteSessionStateDeleteSnapshotsEqual(opened.value, plan.snapshot)) {
+    throw new Error(
+      `SQLite session state changed before archive materialization for ${plan.sessionId}`,
+    );
+  }
+}
+
 // Reads and encodes one consistent generation outside SQLite write transactions
 // and off the gateway event loop. The lifecycle Worker queue and per-call
 // dedupe prevent concurrent whole-buffer spikes within this path.
@@ -401,6 +399,13 @@ export async function materializeSessionStateDeletePlans(
   // Archive bytes must never accumulate for an unbounded cleanup batch. One
   // generation crosses the Worker boundary at a time, then becomes transaction input.
   for (const archivePlan of archivePlans) {
+    if (archivePlan.snapshot.lastSeq === null) {
+      // Empty transcripts still need a fresh snapshot fence, but have no bytes
+      // to encode off-thread and should not pay Worker startup latency.
+      validateEmptyTranscriptArchivePlan(archivePlan);
+      workerResults.push({ archive: null, sessionId: archivePlan.sessionId });
+      continue;
+    }
     const [result] = await runSqliteTranscriptArchiveWorker([archivePlan]);
     if (result) {
       materializedBytes += result.archive?.bytes.byteLength ?? 0;

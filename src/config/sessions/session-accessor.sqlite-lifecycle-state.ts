@@ -10,7 +10,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archive-store.js";
 import {
-  sqliteSessionStateDeleteSnapshotsEqual,
   type MaterializedSessionStateDeletePlan,
   type SessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
@@ -19,7 +18,10 @@ import type {
   SessionEntryLifecycleUpsert,
   SessionLifecycleArchivedTranscript,
 } from "./session-accessor.sqlite-contract.js";
-import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import {
+  readSessionStateDeleteSnapshot,
+  sqliteSessionStateDeleteSnapshotsEqual,
+} from "./session-accessor.sqlite-delete-snapshot.js";
 import {
   deleteSessionEntryRows,
   readExactSessionEntryJsonForCanonicalRepair,
