@@ -185,6 +185,12 @@ export async function buildDiscordMessageProcessContext(params: {
         })
       : body;
   const bodyWithMediaNotice = appendMediaUnavailableNotice(text) ?? text;
+  // Agent-facing body prefers the framed transcript and falls back to typed
+  // text; machine transcriptions are always labeled untrusted for the model.
+  const agentFacingBody =
+    preflightAudioTranscript !== undefined
+      ? formatDiscordAudioTranscriptForAgent(preflightAudioTranscript)
+      : (baseText ?? text);
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -413,13 +419,8 @@ export async function buildDiscordMessageProcessContext(params: {
       // transcripts never enter command classification (telegram/whatsapp parity).
       rawBody: baseText,
       // BodyForAgent wins over Body for the model's text, so the notice has to
-      // ride the agent-facing source too. Transcripts are framed as untrusted
-      // machine input, keeping precedence over typed text like before.
-      bodyForAgent: appendMediaUnavailableNotice(
-        preflightAudioTranscript !== undefined
-          ? formatDiscordAudioTranscriptForAgent(preflightAudioTranscript)
-          : (baseText ?? text),
-      ),
+      // ride the agent-facing source too.
+      bodyForAgent: appendMediaUnavailableNotice(agentFacingBody),
       commandBody: baseText,
       inboundHistory,
     },
