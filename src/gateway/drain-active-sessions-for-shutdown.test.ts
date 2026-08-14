@@ -72,6 +72,7 @@ function trackSessionForShutdown(params: { sessionId: string; sessionKey?: strin
     sessionKey: params.sessionKey ?? "agent:main:main",
     sessionId: params.sessionId,
     storePath: "/tmp/store.json",
+    agentId: "main",
   });
 }
 
@@ -141,6 +142,7 @@ describe("drainActiveSessionsForShutdown", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
       reason: "reset",
     });
     runSessionEndMock.mockClear();
@@ -214,6 +216,7 @@ describe("drainActiveSessionsForShutdown", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
       reason: "deleted",
     });
 
@@ -233,6 +236,7 @@ describe("drainActiveSessionsForShutdown", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
       reason: "idle",
       nextSessionId: "sess-B",
     });

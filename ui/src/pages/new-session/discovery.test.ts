@@ -28,6 +28,30 @@ describe("readDraftNodes", () => {
       },
     ]);
   });
+
+  it("keeps execution capability independent from connectivity", () => {
+    expect(
+      readDraftNodes([
+        {
+          nodeId: "offline",
+          connected: false,
+          commands: ["system.run", "fs.listDir"],
+        },
+      ]),
+    ).toEqual([
+      {
+        nodeId: "offline",
+        displayName: "offline",
+        platform: undefined,
+        deviceFamily: undefined,
+        modelIdentifier: undefined,
+        remoteIp: undefined,
+        connected: false,
+        canExec: true,
+        canBrowse: false,
+      },
+    ]);
+  });
 });
 describe("readDraftCloudProfiles", () => {
   it("keeps closed profile summaries in stable order", () => {
@@ -82,6 +106,10 @@ describe("readDraftEnvironments", () => {
           type: "node",
           platform: " darwin ",
           sessionHost: false,
+          lastConnectedAtMs: 1_000.9,
+          lastDisconnectedAtMs: 2_000,
+          lastSeenAtMs: 1_500,
+          lastSeenReason: " silent_push ",
           trust: "persistent",
           capabilities: [" camera.snap ", 42, "custom.unknown", "system.run", null],
         },
@@ -100,6 +128,10 @@ describe("readDraftEnvironments", () => {
         type: "node",
         platform: "darwin",
         sessionHost: false,
+        lastConnectedAtMs: 1_000,
+        lastDisconnectedAtMs: 2_000,
+        lastSeenAtMs: 1_500,
+        lastSeenReason: "silent_push",
         trust: "persistent",
         capabilities: ["camera.snap", "custom.unknown", "system.run"],
       },

@@ -334,7 +334,7 @@ export function resolveMessageGroupSenderLabel(
     : normalizedRole === "assistant"
       ? (userLabel ?? assistantName)
       : normalizedRole === "tool"
-        ? "Tool"
+        ? t("chat.messages.toolSender")
         : group.messages.every((item) =>
               Boolean(workspaceResultConflictFromTranscript(item.message)),
             )

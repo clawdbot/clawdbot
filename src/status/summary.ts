@@ -357,7 +357,7 @@ export async function getStatusSummary(
       summary.target === "last"
         ? Boolean(route?.channel && route.to)
         : summary.target === "owner"
-          ? hasResolvableHeartbeatOwnerRoute({ cfg, entry, heartbeat })
+          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
           : true;
     return {
       agentId: agent.id,

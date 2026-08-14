@@ -15,6 +15,7 @@ import {
   analyzeControlUiCatalogs,
   flattenControlUiCatalog,
   formatControlUiCatalogFallbackDriftError,
+  verifyControlUiReferencedKeys,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   appendBoundedProcessOutput,
@@ -249,6 +250,29 @@ describe("control-ui-i18n process runner", () => {
   it("rejects invalid catalog leaf values", () => {
     expect(() => flattenControlUiCatalog({ group: { title: 42 } }, "fr")).toThrow(
       "fr:group.title must be a string or object",
+    );
+  });
+
+  it("rejects literal keys and template prefixes missing from the English catalog", () => {
+    const source = flattenControlUiCatalog(
+      { common: { ok: "OK" }, workboard: { status: { ready: "Ready" } } },
+      "en",
+    );
+    const content = [
+      't("common.ok");',
+      't("common.missing");',
+      "t(`workboard.status.${status}`);",
+      "t(`workboard.missing.${status}`);",
+    ].join("\n");
+
+    expect(() =>
+      verifyControlUiReferencedKeys(source, [{ content, relativeFile: "ui/src/pages/example.ts" }]),
+    ).toThrowError(
+      [
+        "control-ui referenced translation key verification failed.",
+        'ui/src/pages/example.ts:2: missing English catalog key "common.missing"',
+        'ui/src/pages/example.ts:4: missing English catalog subtree "workboard.missing."',
+      ].join("\n"),
     );
   });
 

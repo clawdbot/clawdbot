@@ -814,14 +814,14 @@
       "translated": "Підключіть Gateway, щоб переглядати навички ClawHub."
     },
     {
-      "id": "native.android.57c31cd4bd7c5146",
-      "source": "ClawHub did not return an installable version for ${skill.slug}.",
-      "translated": "ClawHub не повернув версію ${skill.slug}, придатну для встановлення."
+      "id": "native.android.e5b0558c26183ff4",
+      "source": "ClawHub did not return an installable version for ${skill.reference}.",
+      "translated": "ClawHub не повернув версію для встановлення для ${skill.reference}."
     },
     {
-      "id": "native.android.ecf82b1ac9d18307",
-      "source": "Could not load ClawHub details for ${skill.slug}.",
-      "translated": "Не вдалося завантажити відомості ClawHub для ${skill.slug}."
+      "id": "native.android.5d4e8b19fbd1204f",
+      "source": "Could not load ClawHub details for ${skill.reference}.",
+      "translated": "Не вдалося завантажити деталі ClawHub для ${skill.reference}."
     },
     {
       "id": "native.android.4154579c8cb1c995",
@@ -2027,6 +2027,26 @@
       "id": "native.android.2d809753c1f15194",
       "source": "Unknown",
       "translated": "Невідомо"
+    },
+    {
+      "id": "native.android.dbe524469f9dabaa",
+      "source": "Back",
+      "translated": "Назад"
+    },
+    {
+      "id": "native.android.3c19f8c172f78ded",
+      "source": "Desktop",
+      "translated": "Робочий стіл"
+    },
+    {
+      "id": "native.android.469c6e10b238c851",
+      "source": "Desktop needs a connected gateway",
+      "translated": "Для робочого стола потрібен підключений gateway"
+    },
+    {
+      "id": "native.android.7efb67654e5a6cd0",
+      "source": "Connect to your gateway to view a machine screen.",
+      "translated": "Підключіться до свого gateway, щоб переглянути екран машини."
     },
     {
       "id": "native.android.b735fb6c7d284ecf",
@@ -3822,6 +3842,11 @@
       "id": "native.android.09fa98489fd0881b",
       "source": "Dashboard",
       "translated": "Панель керування"
+    },
+    {
+      "id": "native.android.e8f14c8f388c0264",
+      "source": "Open desktop",
+      "translated": "Відкрити робочий стіл"
     },
     {
       "id": "native.android.285be3399daf82ee",
@@ -6084,6 +6109,16 @@
       "translated": "Термінал"
     },
     {
+      "id": "native.android.afe0cca470817261",
+      "source": "Desktop",
+      "translated": "Робочий стіл"
+    },
+    {
+      "id": "native.android.508d63f629607328",
+      "source": "View a machine screen",
+      "translated": "Переглянути екран машини"
+    },
+    {
       "id": "native.android.345d2424511d2d53",
       "source": "Speaker muted",
       "translated": "Динамік вимкнено"
@@ -8234,6 +8269,11 @@
       "translated": "Зображення"
     },
     {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "Вкладення"
+    },
+    {
       "id": "native.android.952a88e71b4aaee4",
       "source": "Additional images hidden: ${omittedImageCount}",
       "translated": "Додаткові зображення приховано: ${omittedImageCount}"
@@ -8329,11 +8369,6 @@
       "translated": "Закрити попередження про спільне зображення"
     },
     {
-      "id": "native.android.76d574acfac94fee",
-      "source": "Stop",
-      "translated": "Зупинити"
-    },
-    {
       "id": "native.android.be42506226307680",
       "source": "Switch branch",
       "translated": "Змінити гілку"
@@ -8389,34 +8424,39 @@
       "translated": "Gateway офлайн"
     },
     {
-      "id": "native.android.36ed01582459bc10",
-      "source": "Close thinking level selector",
-      "translated": "Закрити вибір рівня мислення"
+      "id": "native.android.3fea3a91bbd7ee4e",
+      "source": "Add attachment",
+      "translated": "Додати вкладення"
     },
     {
-      "id": "native.android.82d6389036a1e211",
-      "source": "Open thinking level selector",
-      "translated": "Відкрити вибір рівня мислення"
+      "id": "native.android.9db5d4b832ddaf20",
+      "source": "Photos",
+      "translated": "Фото"
     },
     {
-      "id": "native.android.623e434c83e3c020",
-      "source": "Attach image",
-      "translated": "Прикріпити зображення"
+      "id": "native.android.827fd291f6fd3120",
+      "source": "Videos",
+      "translated": "Відео"
     },
     {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "Вкладення"
-    },
-    {
-      "id": "native.android.1bf18cef7a720c58",
-      "source": "Attach video",
-      "translated": "Прикріпити відео"
+      "id": "native.android.8c3f70be12db2b69",
+      "source": "Files",
+      "translated": "Файли"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
       "source": "Message OpenClaw",
       "translated": "Написати OpenClaw"
+    },
+    {
+      "id": "native.android.96cbc35556fd6f2e",
+      "source": "Context ${contextPercent}% used",
+      "translated": "Використано ${contextPercent}% контексту"
+    },
+    {
+      "id": "native.android.3332655e560cb682",
+      "source": "${contextPercent}%",
+      "translated": "${contextPercent}%"
     },
     {
       "id": "native.android.9b42791ed9da90d3",
@@ -8427,6 +8467,11 @@
       "id": "native.android.1d55fe6bab0d3f74",
       "source": "Start Talk",
       "translated": "Почати розмову"
+    },
+    {
+      "id": "native.android.76d574acfac94fee",
+      "source": "Stop",
+      "translated": "Зупинити"
     },
     {
       "id": "native.android.6f4dc5330b262dea",
@@ -8477,21 +8522,6 @@
       "id": "native.android.4e03ec248c0d5428",
       "source": "Gateway authentication needs attention.",
       "translated": "Автентифікація Gateway потребує уваги."
-    },
-    {
-      "id": "native.android.4d756c15804130ff",
-      "source": "Context ${(it * 100).roundToInt()}%",
-      "translated": "Контекст ${(it * 100).roundToInt()}%"
-    },
-    {
-      "id": "native.android.5d9cafb38a925db9",
-      "source": "Context --",
-      "translated": "Контекст --"
-    },
-    {
-      "id": "native.android.4e6c67df44d588d3",
-      "source": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}",
-      "translated": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}"
     },
     {
       "id": "native.android.c83c512c569b1b14",
@@ -9987,6 +10017,11 @@
       "id": "native.apple.91108e396155b531",
       "source": "Dashboard",
       "translated": "Панель керування"
+    },
+    {
+      "id": "native.apple.bebd98273fb20c83",
+      "source": "Open Desktop",
+      "translated": "Відкрити робочий стіл"
     },
     {
       "id": "native.apple.8a315564807ba77d",
@@ -15639,6 +15674,31 @@
       "translated": "Готово"
     },
     {
+      "id": "native.apple.db66c78d803f4677",
+      "source": "Desktop",
+      "translated": "Робочий стіл"
+    },
+    {
+      "id": "native.apple.f20de570e816a565",
+      "source": "Gateway settings",
+      "translated": "Налаштування Gateway"
+    },
+    {
+      "id": "native.apple.6bb0be75b4d9c9ef",
+      "source": "Desktop needs a connected gateway",
+      "translated": "Для робочого стола потрібен підключений gateway"
+    },
+    {
+      "id": "native.apple.fb0f1f1544fe7faa",
+      "source": "Connect to your gateway to view an observable machine.",
+      "translated": "Підключіться до свого gateway, щоб переглянути спостережувану машину."
+    },
+    {
+      "id": "native.apple.49c60ec037c1cb4d",
+      "source": "Open Gateway Settings",
+      "translated": "Відкрити налаштування Gateway"
+    },
+    {
       "id": "native.apple.c218ef5194d0ee56",
       "source": "Run OpenClaw agent?",
       "translated": "Запустити агент OpenClaw?"
@@ -17197,6 +17257,11 @@
       "id": "native.apple.fca6a390e072ada9",
       "source": "Automations",
       "translated": "Автоматизації"
+    },
+    {
+      "id": "native.apple.a06ea85267dd561c",
+      "source": "Desktop",
+      "translated": "Робочий стіл"
     },
     {
       "id": "native.apple.b3b5114b91a8db8f",

@@ -231,11 +231,10 @@ export function resolveSystemAgentTargetAgentId(
     return normalizeAgentId(configuredAgentId);
   }
   return normalizeAgentId(
-    tryResolveLegacyCompatibilityAgentId(cfg) ??
-      resolveDefaultAgentId(cfg, {
-        surface: "system-agent consult routing",
-        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
-      }),
+    resolveSoleAgentId(cfg, {
+      surface: "system-agent consult routing",
+      hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
+    }),
   );
 }
 

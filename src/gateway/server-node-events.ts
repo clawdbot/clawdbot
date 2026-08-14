@@ -45,6 +45,7 @@ import {
   parseMessageWithAttachments,
   registerApnsRegistration,
   requestHeartbeat,
+  resolveSystemMainSessionTarget,
   resolveChatAttachmentMaxBytes,
   resolveGatewayModelSupportsImages,
   resolveOutboundTarget,
@@ -53,6 +54,7 @@ import {
   persistInboundImagesForTranscript,
   sendDurableMessageBatchCore,
   upsertSessionEntryCore,
+  withSystemEventOwner,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -881,7 +883,19 @@ export const handleNodeEvent = async (
         return undefined;
       }
       const key = keyRaw;
-      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
+      const requestedSessionKey = normalizeOptionalString(obj.sessionKey);
+      let target: { sessionKey: string; agentId?: string };
+      try {
+        target = requestedSessionKey
+          ? { sessionKey: requestedSessionKey }
+          : resolveSystemMainSessionTarget(getRuntimeConfig());
+      } catch (error) {
+        ctx.logGateway.warn(
+          `notification event not delivered node=${nodeId}: ${formatErrorMessage(error)}`,
+        );
+        return undefined;
+      }
+      const sessionKeyRaw = target.sessionKey;
       const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
@@ -903,15 +917,20 @@ export const handleNodeEvent = async (
         }
       }
 
-      const queued = enqueueSystemEvent(summary, {
+      const eventOptions = {
         sessionKey,
         contextKey: `notification:${keyRaw}`,
-      });
+      };
+      const queued = enqueueSystemEvent(
+        summary,
+        target.agentId ? withSystemEventOwner(eventOptions, target.agentId) : eventOptions,
+      );
       if (queued) {
         requestHeartbeat({
           source: "notifications-event",
           intent: "event",
           reason: "notifications-event",
+          ...(target.agentId ? { agentId: target.agentId } : {}),
           sessionKey,
         });
       }

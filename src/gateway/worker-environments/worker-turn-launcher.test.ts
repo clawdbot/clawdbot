@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  WorkerConnectRequestFrameSchema,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -52,6 +54,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
+  buildWorkerConnectParams,
   parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
@@ -290,6 +293,7 @@ describe("worker turn launcher", () => {
         bundleHash: BUNDLE_HASH,
         openclawVersion: "2026.7.2",
         protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        installKind: "bundle",
       },
       ownerEpoch: OWNER_EPOCH,
       teardownTerminalState: null,
@@ -683,7 +687,7 @@ describe("worker turn launcher", () => {
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 
-  it("carries a non-main placement identity while reporting keep-local conflicts", async () => {
+  it("round-trips the stored bootstrap receipt while reporting keep-local conflicts", async () => {
     let admissionWork: ExecutionIdentityAdmissionWork | undefined;
     cleanupAdmissionSink = configureExecutionIdentityAdmissionSink((work) => {
       admissionWork = work;
@@ -768,6 +772,18 @@ describe("worker turn launcher", () => {
           owner: "worker",
           runId: "run-worker-turn",
           ownerEpoch: OWNER_EPOCH,
+        });
+        const connectFrame = {
+          type: "req" as const,
+          id: "launch-validation",
+          method: "connect" as const,
+          params: buildWorkerConnectParams(request.descriptor),
+        };
+        expect(Value.Check(WorkerConnectRequestFrameSchema, connectFrame)).toBe(true);
+        expect(request.descriptor.admission.handshake).toEqual({
+          bundleHash: BUNDLE_HASH,
+          openclawVersion: "2026.7.2",
+          protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
         });
         descriptor = parseWorkerLaunchDescriptor(structuredClone(request.descriptor));
         expect(request.timeoutMs).toBe(5_000);

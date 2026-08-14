@@ -52,7 +52,10 @@ import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
-import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
+import type {
+  WorkerPlacementDiskSpaceReader,
+  WorkerSessionPlacementReader,
+} from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
 import type {
   WorkerEnvironmentServiceContract,
@@ -350,6 +353,8 @@ type GatewayResidentBridgeContext = {
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService>;
+  /** Process-local health samples fenced to the exact active placement owner. */
+  workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */

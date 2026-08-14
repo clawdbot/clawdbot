@@ -1033,6 +1033,12 @@ describe("countFailedDeliveryQueueEntries", () => {
     } finally {
       vi.useRealTimers();
     }
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    db.prepare(
+      "UPDATE delivery_queue_entries SET failed_at = NULL WHERE queue_name = 'session'",
+    ).run();
 
     const counts = countFailedDeliveryQueueEntries(stateDir);
 
@@ -1041,8 +1047,7 @@ describe("countFailedDeliveryQueueEntries", () => {
     expect(outbound?.count).toBe(2);
     expect(outbound?.oldestFailedAt).toBe(50_000);
     const session = counts.find((queue) => queue.queueName === "session");
-    expect(session?.count).toBe(1);
-    expect(session?.oldestFailedAt).toBe(70_000);
+    expect(session).toEqual({ queueName: "session", count: 1 });
     expect(loadDeliveryQueueEntries("outbound", stateDir).map((entry) => entry.id)).toEqual([
       "still-pending",
     ]);

@@ -118,7 +118,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     const payload = buildSessionEndHookPayload({
       sessionId: params.previousEntry.sessionId,
       sessionKey: params.sessionKey,
-      cfg: params.cfg,
+      agentId,
       reason: "compaction",
       sessionFile:
         transcript.sessionFile ??
@@ -143,7 +143,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     const payload = buildSessionStartHookPayload({
       sessionId: params.nextEntry.sessionId,
       sessionKey: params.sessionKey,
-      cfg: params.cfg,
+      agentId,
       resumedFrom: params.previousEntry.sessionId,
     });
     void runWithGatewayIndependentRootWorkContinuation(async () => {
