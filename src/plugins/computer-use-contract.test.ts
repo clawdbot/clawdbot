@@ -15,12 +15,16 @@ type SchemaNode = { [key: string]: SchemaNode } & { maxItems?: number; maxProper
 const resultSchema = ComputerActResultSchema as unknown as SchemaNode;
 const resultElementCap = () => {
   const cap = resultSchema.properties?.observation?.properties?.elements?.maxItems;
-  if (typeof cap !== "number") throw new Error("elements maxItems missing from result schema");
+  if (typeof cap !== "number") {
+    throw new Error("elements maxItems missing from result schema");
+  }
   return cap;
 };
 const resultDetailKeyCap = () => {
   const cap = resultSchema.properties?.details?.maxProperties;
-  if (typeof cap !== "number") throw new Error("details maxProperties missing from result schema");
+  if (typeof cap !== "number") {
+    throw new Error("details maxProperties missing from result schema");
+  }
   return cap;
 };
 
