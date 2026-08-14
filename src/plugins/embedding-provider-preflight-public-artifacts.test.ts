@@ -44,6 +44,14 @@ const localConfig = {
   },
 };
 
+const bundledLlamaCppOwner = {
+  id: "llama-cpp",
+  origin: "bundled",
+  rootDir: "/unused",
+  enabledByDefault: true,
+  contracts: { embeddingProviders: ["local"] },
+} as never;
+
 describe("embedding provider preflight public artifacts", () => {
   it("resolves the bundled local inspector without plugin runtime activation", () => {
     const inspector = resolveMemoryEmbeddingProviderStartupInspector({
@@ -85,6 +93,66 @@ describe("embedding provider preflight public artifacts", () => {
               origin: "global",
               rootDir: pluginRoot,
               trustedOfficialInstall: true,
+              contracts: { embeddingProviders: ["local"] },
+            } as never,
+          ],
+        },
+      }),
+    ).toBeUndefined();
+    expect(fs.existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("ignores an inactive external owner shadowing the active bundled owner", () => {
+    const { pluginRoot, sentinelPath } = writeExternalInspector();
+    const inspector = resolveMemoryEmbeddingProviderStartupInspector({
+      providerId: "local",
+      config: {
+        ...localConfig,
+        plugins: {
+          entries: {
+            "inactive-local-shadow": { enabled: false },
+            "llama-cpp": { enabled: true },
+          },
+        },
+      },
+      manifestRegistry: {
+        plugins: [
+          bundledLlamaCppOwner,
+          {
+            id: "inactive-local-shadow",
+            origin: "global",
+            rootDir: pluginRoot,
+            contracts: { embeddingProviders: ["local"] },
+          } as never,
+        ],
+      },
+    });
+
+    expect(inspector?.id).toBe("local");
+    expect(fs.existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("fails closed when an active external owner shadows the active bundled owner", () => {
+    const { pluginRoot, sentinelPath } = writeExternalInspector();
+    expect(
+      resolveMemoryEmbeddingProviderStartupInspector({
+        providerId: "local",
+        config: {
+          ...localConfig,
+          plugins: {
+            entries: {
+              "active-local-shadow": { enabled: true },
+              "llama-cpp": { enabled: true },
+            },
+          },
+        },
+        manifestRegistry: {
+          plugins: [
+            bundledLlamaCppOwner,
+            {
+              id: "active-local-shadow",
+              origin: "global",
+              rootDir: pluginRoot,
               contracts: { embeddingProviders: ["local"] },
             } as never,
           ],

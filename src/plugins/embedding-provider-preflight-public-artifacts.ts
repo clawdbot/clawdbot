@@ -67,26 +67,23 @@ export function resolveMemoryEmbeddingProviderStartupInspector(params: {
       env: params.env,
       includeDisabled: true,
     });
-  const owners = registry.plugins.filter((plugin) =>
-    [
-      ...(plugin.contracts?.embeddingProviders ?? []),
-      ...(plugin.contracts?.memoryEmbeddingProviders ?? []),
-    ]
-      .map(normalizeProviderId)
-      .some((providerId) => ownerIds.has(providerId)),
+  const owners = registry.plugins.filter(
+    (plugin) =>
+      [
+        ...(plugin.contracts?.embeddingProviders ?? []),
+        ...(plugin.contracts?.memoryEmbeddingProviders ?? []),
+      ]
+        .map(normalizeProviderId)
+        .some((providerId) => ownerIds.has(providerId)) &&
+      canStartConfiguredMemoryEmbeddingProviderManifestOwner({
+        plugin,
+        config: params.config,
+      }),
   );
   if (owners.length !== 1 || owners[0]?.origin !== "bundled") {
     return undefined;
   }
   const owner = owners[0];
-  if (
-    !canStartConfiguredMemoryEmbeddingProviderManifestOwner({
-      plugin: owner,
-      config: params.config,
-    })
-  ) {
-    return undefined;
-  }
   return loadStartupInspectors(owner).find((inspector) =>
     ownerIds.has(normalizeProviderId(inspector.id)),
   );
