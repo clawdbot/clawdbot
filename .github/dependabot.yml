@@ -33,6 +33,17 @@ updates:
     registries:
       - npm-npmjs
 
+  # npm dependencies - trusted ClawHub release CLI
+  - package-ecosystem: npm
+    directory: /.github/release/clawhub-cli
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 2
+    open-pull-requests-limit: 1
+    registries:
+      - npm-npmjs
+
   # GitHub Actions
   - package-ecosystem: github-actions
     directory: /

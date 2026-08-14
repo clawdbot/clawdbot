@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -42,6 +43,7 @@ const clawhubCliLock = JSON.parse(
 ) as {
   packages?: Record<string, { integrity?: string; version?: string }>;
 };
+const clawhubCliLockBytes = readFileSync(".github/release/clawhub-cli/package-lock.json");
 
 function job(name: string): Job {
   const value = jobs[name];
@@ -327,20 +329,22 @@ describe("Plugin ClawHub New workflow", () => {
   });
 
   it("uses one lockfile-only ClawHub CLI graph and absolute binary path", () => {
-    expect(clawhubCliPackage.dependencies).toEqual({ clawhub: "0.23.1" });
-    expect(clawhubCliLock.packages?.["node_modules/clawhub"]).toMatchObject({
-      integrity:
-        "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==",
-      version: "0.23.1",
-    });
+    const lockedClawHub = clawhubCliLock.packages?.["node_modules/clawhub"];
+    if (!lockedClawHub?.integrity || !lockedClawHub.version) {
+      throw new Error("trusted ClawHub CLI lock identity is incomplete");
+    }
+    expect(lockedClawHub.version).toBe(clawhubCliPackage.dependencies?.clawhub);
+    expect(lockedClawHub.integrity).toMatch(/^sha512-/u);
     expect(materializerSource).toContain("npm ci");
     expect(materializerSource).toContain('cd "${destination}"');
     expect(materializerSource).not.toContain('--prefix "${destination}"');
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
     expect(materializerSource).toContain(
-      "f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816",
+      createHash("sha256").update(clawhubCliLockBytes).digest("hex"),
     );
+    expect(materializerSource).toContain(lockedClawHub.integrity);
+    expect(materializerSource).toContain(`== "${lockedClawHub.version}"`);
     expect(materializerSource).toContain("lock_sha256=");
     expect(materializerSource).toContain("integrity=${clawhub_integrity}");
     expect(materializerSource).toContain("cli=${clawhub_cli}");

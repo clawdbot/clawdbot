@@ -31,6 +31,16 @@ function createOutputBuffer() {
   };
 }
 
+describe("boundary check manifest", () => {
+  it("keeps trusted ClawHub CLI pin synchronization in required CI", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "deps:clawhub-cli-pins:check",
+      command: "pnpm",
+      args: ["deps:clawhub-cli-pins:check"],
+    });
+  });
+});
+
 function runCli(...args: string[]) {
   return spawnSync(
     process.execPath,
