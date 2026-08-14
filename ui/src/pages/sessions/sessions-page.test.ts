@@ -950,7 +950,6 @@ describe("sessions page lifecycle", () => {
       parentSessionKey: "main",
       fork: true,
       forkFrom: "last-completed",
-      agentId: "main",
     });
   });
 });
