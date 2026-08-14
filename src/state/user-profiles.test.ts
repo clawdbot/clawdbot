@@ -559,7 +559,7 @@ describe("user profiles", () => {
 
   it("bumps the sessions.list display fence only when linkEmail actually merges two profiles", () => {
     const options = stateOptions();
-    const source = ensureProfileForEmail("source@example.com", options);
+    ensureProfileForEmail("source@example.com", options);
     const target = ensureProfileForEmail("target@example.com", options);
     const before = readUserProfileDisplayVersion();
 
