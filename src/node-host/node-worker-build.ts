@@ -14,6 +14,11 @@ type NodeWorkerBuildOptions = {
   protocolFeatures?: readonly string[];
 };
 
+export type NodeWorkerInstallation = {
+  packageRoot: string;
+  build: WorkerAdmissionHandshake;
+};
+
 /** Computes the build identity of the node host's own worker-capable installation. */
 export async function resolveNodeWorkerBuild(
   options: NodeWorkerBuildOptions = {},
@@ -39,4 +44,25 @@ export async function resolveNodeWorkerBuild(
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true });
   }
+}
+
+/** Resolves and freezes the package root that produced the node's advertised worker build. */
+export async function resolveNodeWorkerInstallation(
+  options: NodeWorkerBuildOptions = {},
+): Promise<NodeWorkerInstallation> {
+  const packageRoot =
+    options.packageRoot ??
+    resolveOpenClawPackageRootSync({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    });
+  if (!packageRoot) {
+    throw new Error("Unable to locate the running OpenClaw package root for node worker hosting");
+  }
+  const canonicalRoot = await fs.realpath(packageRoot);
+  return {
+    packageRoot: canonicalRoot,
+    build: await resolveNodeWorkerBuild({ ...options, packageRoot: canonicalRoot }),
+  };
 }
