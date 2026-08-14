@@ -1,13 +1,27 @@
 export type CoreModelRequestOwnerGeneration = object;
 
+export type DiagnosticEmbeddedRunOwner = Readonly<{
+  generation: CoreModelRequestOwnerGeneration;
+  runId?: string;
+  sessionId: string;
+  sessionKey?: string;
+  workKey: string;
+}>;
+
 type CoreModelRequestLifecycleEvent = {
   type: "model.call.started" | "model.call.completed" | "model.call.error";
 };
 
-export type CoreModelRequestLifecycleProvenance = Readonly<{
-  generation: CoreModelRequestOwnerGeneration;
-  phase: "started" | "ended";
-}>;
+export type CoreModelRequestLifecycleProvenance =
+  | Readonly<{
+      generation: CoreModelRequestOwnerGeneration;
+      phase: "started";
+      requestTimeoutMs?: number;
+    }>
+  | Readonly<{
+      generation: CoreModelRequestOwnerGeneration;
+      phase: "ended";
+    }>;
 
 export const CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY = "coreModelRequestLifecycle";
 

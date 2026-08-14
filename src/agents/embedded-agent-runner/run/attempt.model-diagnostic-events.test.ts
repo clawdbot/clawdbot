@@ -1,4 +1,5 @@
 // Coverage for model-call diagnostic events around attempt stream functions.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,8 +8,10 @@ import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPrivateData,
+  type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../../../infra/diagnostic-model-request.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import {
   resetDiagnosticRunActivityForTest,
@@ -17,11 +20,15 @@ import {
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
-async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
+async function collectModelCallEvents(
+  run: () => Promise<void>,
+  onEvent?: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void,
+): Promise<DiagnosticEventPayload[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
   // events and flush one tick after the stream completes.
   const events: DiagnosticEventPayload[] = [];
-  const stop = onInternalDiagnosticEvent((event) => {
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    onEvent?.(event, metadata);
     if (event.type.startsWith("model.call.")) {
       events.push(event);
     }
@@ -162,7 +169,6 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
     expect(startedEvent.observationUnit).toBe("request");
-    expect(startedEvent.requestTimeoutMs).toBe(300_000);
     expect(events[0]?.trace?.parentSpanId).toBe("00f067aa0ba902b7");
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
@@ -176,8 +182,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
   });
 
-  it("reads the timeout from each exact model request", async () => {
+  it("normalizes the timeout from each exact model request", async () => {
     let callSequence = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const ownerGeneration = Object.freeze({});
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       (() =>
         (async function* () {
@@ -191,20 +199,35 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         model: "gpt-5.4",
         trace: createDiagnosticTraceContext(),
         nextCallId: () => `call-${++callSequence}`,
+        ownerGeneration,
       },
     );
 
-    const events = await collectModelCallEvents(async () => {
-      await drain(await wrapped({ requestTimeoutMs: 60_000 } as never, {} as never, {} as never));
-      await drain(await wrapped({} as never, {} as never, {} as never));
-      await drain(await wrapped({ requestTimeoutMs: 90_000 } as never, {} as never, {} as never));
-    });
+    await collectModelCallEvents(
+      async () => {
+        await drain(await wrapped({ requestTimeoutMs: 60_000 } as never, {} as never, {} as never));
+        await drain(await wrapped({} as never, {} as never, {} as never));
+        await drain(await wrapped({ requestTimeoutMs: 90_000 } as never, {} as never, {} as never));
+        await drain(
+          await wrapped(
+            { requestTimeoutMs: Number.MAX_SAFE_INTEGER } as never,
+            {} as never,
+            {} as never,
+          ),
+        );
+        await drain(await wrapped({ requestTimeoutMs: -1 } as never, {} as never, {} as never));
+      },
+      (event, metadata) => {
+        if (event.type === "model.call.started") {
+          const lifecycle = resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata);
+          requestTimeouts.push(
+            lifecycle?.phase === "started" ? lifecycle.requestTimeoutMs : undefined,
+          );
+        }
+      },
+    );
 
-    expect(
-      events
-        .filter((event) => event.type === "model.call.started")
-        .map((event) => event.requestTimeoutMs),
-    ).toEqual([60_000, undefined, 90_000]);
+    expect(requestTimeouts).toEqual([60_000, undefined, 90_000, MAX_TIMER_TIMEOUT_MS, undefined]);
   });
 
   it("captures output and completes when callers only await stream.result()", async () => {

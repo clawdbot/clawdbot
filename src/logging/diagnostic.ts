@@ -548,11 +548,16 @@ function isActiveAbortRecoveryEligible(params: {
     params.stuckSessionAbortMs,
     params.activity?.activeModelCallRequestTimeoutMs ?? 0,
   );
+  const activeModelCallRequestTimeoutMs = params.activity?.activeModelCallRequestTimeoutMs;
+  const activeModelCallAllowanceExpired =
+    activeModelCallRequestTimeoutMs === undefined ||
+    (params.activity?.lastProgressAgeMs ?? 0) >= activeModelCallRequestTimeoutMs;
   return (
     (params.classification?.eventType === "session.stalled" &&
       params.classification.classification === "stalled_agent_run" &&
       params.activity?.hasActiveEmbeddedRun === true &&
-      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= effectiveModelAbortMs) ||
+      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= effectiveModelAbortMs &&
+      activeModelCallAllowanceExpired) ||
     isStalledEmbeddedRunRecoveryEligible(params) ||
     isBlockedToolCallRecoveryEligible(params) ||
     isStalledModelCallRecoveryEligible(params)

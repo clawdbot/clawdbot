@@ -644,8 +644,6 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
-  /** Provider transport allowance for this exact request; diagnostic policy only. */
-  requestTimeoutMs?: number;
   /** Defaults to request for emitters created before turn-level CLI diagnostics. */
   observationUnit?: "request" | "turn";
   contextTokenBudget?: number;

@@ -331,9 +331,9 @@ describe("embedded run registry lifecycle generations", () => {
         callId: "queued-call",
         provider: "mock",
         model: "slow-model",
-        requestTimeoutMs: 300_000,
       },
       owner.generation,
+      300_000,
     );
 
     expect(() => rotateAgentEventLifecycleGeneration()).toThrow(
@@ -369,9 +369,9 @@ describe("embedded run registry lifecycle generations", () => {
         callId: "stale-call",
         provider: "mock",
         model: "stale-model",
-        requestTimeoutMs: 300_000,
       },
       staleOwner.generation,
+      300_000,
     );
     await waitForDiagnosticEventsDrained();
 

@@ -7,6 +7,7 @@ import {
 import type {
   CoreModelRequestLifecycleProvenance,
   CoreModelRequestOwnerGeneration,
+  DiagnosticEmbeddedRunOwner,
 } from "../infra/diagnostic-model-request-provenance.js";
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../infra/diagnostic-model-request.js";
 import { isCoreSemanticRunProgressDiagnosticMetadata } from "../infra/diagnostic-semantic-run-progress.js";
@@ -31,6 +32,9 @@ import {
   clearRecoveredOwnerEmbeddedRuns,
   clearRecoveredOwnerMarkers,
   countActiveCoreModelCalls,
+  type DiagnosticRecoveryEmbeddedRun,
+  type DiagnosticRecoveryModelCall,
+  type DiagnosticRecoveryTool,
   hasEmbeddedRunStartedAfter,
   markerBelongsToRecoveredOwner,
   ownerRefsForRecovery,
@@ -45,46 +49,23 @@ import {
 } from "./diagnostic-run-activity-snapshot.js";
 
 export type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity-snapshot.js";
+export type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 
 type SessionActivity = DiagnosticArgumentChurnActivity &
   DiagnosticRepeatedRequestActivity & {
     sessionId?: string;
     sessionKey?: string;
-    activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
-    activeTools: Map<string, ActiveTool>;
-    activeModelCalls: Map<string, ActiveModelCall>;
-    activeCoreModelCalls: Map<CoreModelRequestOwnerGeneration, Map<string, ActiveModelCall>>;
+    activeEmbeddedRuns: Map<string, DiagnosticRecoveryEmbeddedRun>;
+    activeTools: Map<string, DiagnosticRecoveryTool>;
+    activeModelCalls: Map<string, DiagnosticRecoveryModelCall>;
+    activeCoreModelCalls: Map<
+      CoreModelRequestOwnerGeneration,
+      Map<string, DiagnosticRecoveryModelCall>
+    >;
     recoveredOwnerStartEventCutoffs: Map<string, number>;
     lastProgressAt: number;
     lastProgressReason?: string;
   };
-
-type ActiveEmbeddedRun = {
-  runId: string;
-  sessionId?: string;
-  sessionKey?: string;
-  sequence: number;
-  generation?: CoreModelRequestOwnerGeneration;
-};
-
-type ActiveTool = {
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  sequence?: number;
-  toolName: string;
-  toolCallId?: string;
-  startedAt: number;
-  lastProgressAt: number;
-};
-
-type ActiveModelCall = {
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  sequence?: number;
-  requestTimeoutMs?: number;
-};
 
 type DiagnosticToolStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
@@ -93,23 +74,8 @@ type DiagnosticToolStartedActivityEvent = Pick<
 
 type ModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-  | "runId"
-  | "sessionId"
-  | "sessionKey"
-  | "provider"
-  | "model"
-  | "callId"
-  | "requestTimeoutMs"
-  | "observationUnit"
+  "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "callId" | "observationUnit"
 > & { seq?: number };
-
-export type DiagnosticEmbeddedRunOwner = Readonly<{
-  generation: CoreModelRequestOwnerGeneration;
-  runId?: string;
-  sessionId: string;
-  sessionKey?: string;
-  workKey: string;
-}>;
 
 type RunProgressEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
@@ -382,7 +348,7 @@ function recordModelStarted(
       sessionId: event.sessionId,
       sessionKey: event.sessionKey,
       sequence: event.seq,
-      requestTimeoutMs: event.requestTimeoutMs,
+      requestTimeoutMs: provenance.requestTimeoutMs,
     });
     activity.activeCoreModelCalls.set(provenance.generation, calls);
     touchSessionActivity(activity, "model_call:started");

@@ -25,6 +25,7 @@ type CoreModelRequestStartedMetadata = DiagnosticEventMetadata &
 export function emitCoreModelRequestStartedDiagnosticEvent(
   event: CoreModelRequestStartedEventInput,
   generation?: CoreModelRequestOwnerGeneration,
+  requestTimeoutMs?: number,
   privateData?: DiagnosticEventPrivateData,
 ): void {
   const startedEvent = {
@@ -37,6 +38,7 @@ export function emitCoreModelRequestStartedDiagnosticEvent(
       ? markCoreModelRequestLifecycleDiagnosticEvent(startedEvent, {
           generation,
           phase: "started",
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         })
       : startedEvent,
     privateData,

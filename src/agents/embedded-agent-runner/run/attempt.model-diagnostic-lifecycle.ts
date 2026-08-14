@@ -119,7 +119,6 @@ function baseModelCallEvent(
   callId: string,
   trace: DiagnosticTraceContext,
   promptStats: ModelCallPromptStats | undefined,
-  requestTimeoutMs: number | undefined,
 ): ModelCallEventBase {
   return {
     runId: ctx.runId,
@@ -130,7 +129,6 @@ function baseModelCallEvent(
     model: ctx.model,
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
-    ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
     observationUnit: "request",
     ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
     ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
@@ -413,16 +411,11 @@ export function createModelLifecycle(params: {
   const callId = params.ctx.nextCallId();
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(areDiagnosticsEnabledForProcess());
-  const eventBase = baseModelCallEvent(
-    params.ctx,
-    callId,
-    trace,
-    observer.promptStats,
-    params.requestTimeoutMs,
-  );
+  const eventBase = baseModelCallEvent(params.ctx, callId, trace, observer.promptStats);
   emitCoreModelRequestStartedDiagnosticEvent(
     eventBase,
     params.ctx.ownerGeneration,
+    params.requestTimeoutMs,
     modelContentPrivateData(observer.modelContent),
   );
   if (params.ctx.suppressPluginHooks !== true) {

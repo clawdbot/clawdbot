@@ -59,9 +59,9 @@ describe("core model owner generations", () => {
         callId: "call-1",
         provider: "core",
         model: "slow-model",
-        requestTimeoutMs: 300_000,
       },
       owner.generation,
+      300_000,
     );
     await waitForDiagnosticEventsDrained();
 
@@ -104,9 +104,9 @@ describe("core model owner generations", () => {
         callId: "old-call",
         provider: "core",
         model: "slow-model",
-        requestTimeoutMs: 300_000,
       },
       ownerA.generation,
+      300_000,
     );
     closeDiagnosticEmbeddedRunOwner(ownerA);
 
@@ -119,9 +119,9 @@ describe("core model owner generations", () => {
         callId: "new-call",
         provider: "core",
         model: "replacement-model",
-        requestTimeoutMs: 420_000,
       },
       ownerB.generation,
+      420_000,
     );
     markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerA });
     emitCoreModelRequestStartedDiagnosticEvent(
@@ -131,9 +131,9 @@ describe("core model owner generations", () => {
         callId: "resurrected-old-call",
         provider: "core",
         model: "stale-model",
-        requestTimeoutMs: 600_000,
       },
       ownerA.generation,
+      600_000,
     );
     await waitForDiagnosticEventsDrained();
     emitCoreModelRequestEndedDiagnosticEvent(

@@ -1333,7 +1333,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("defers direct and repeated model recovery to the active provider allowance", async () => {
+  it("defers direct and repeated recovery until the latest model request allowance expires", async () => {
     const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
     const ref = { sessionId: "allowance-session", sessionKey: "agent:main:allowance" };
     const runId = "allowance-run";
@@ -1348,24 +1348,38 @@ describe("stuck session diagnostics threshold", () => {
     );
     logSessionStateChange({ ...ref, state: "processing" });
     markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
-    for (const callId of ["call-1", "call-2"]) {
-      emitCoreModelRequestStartedDiagnosticEvent(
-        {
-          ...ref,
-          runId,
-          callId,
-          provider: "mock",
-          model: "slow-model",
-          requestTimeoutMs,
-        },
-        owner.generation,
-      );
-    }
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-1",
+        provider: "mock",
+        model: "slow-model",
+      },
+      owner.generation,
+      requestTimeoutMs,
+    );
     await vi.advanceTimersByTimeAsync(0);
 
     vi.advanceTimersByTime(120_000);
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-2",
+        provider: "mock",
+        model: "slow-model",
+      },
+      owner.generation,
+      requestTimeoutMs,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The first request has exceeded the provider allowance, but the active
+    // retry has not. Recovery must honor the exact request currently in flight.
     vi.advanceTimersByTime(30_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(120_000);
 
     expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true }, [
       "ageMs",

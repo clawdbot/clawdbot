@@ -1,21 +1,39 @@
 import type { CoreModelRequestOwnerGeneration } from "../infra/diagnostic-model-request-provenance.js";
 
-type RecoveryMarker = {
+type DiagnosticRecoveryMarker = {
   runId?: string;
   sessionId?: string;
   sequence?: number;
 };
 
-type RecoveryEmbeddedRun = RecoveryMarker & {
+export type DiagnosticRecoveryEmbeddedRun = DiagnosticRecoveryMarker & {
   runId: string;
+  sessionKey?: string;
   sequence: number;
+  generation?: CoreModelRequestOwnerGeneration;
+};
+
+export type DiagnosticRecoveryTool = DiagnosticRecoveryMarker & {
+  sessionKey?: string;
+  toolName: string;
+  toolCallId?: string;
+  startedAt: number;
+  lastProgressAt: number;
+};
+
+export type DiagnosticRecoveryModelCall = DiagnosticRecoveryMarker & {
+  sessionKey?: string;
+  requestTimeoutMs?: number;
 };
 
 type DiagnosticRecoveryActivity = {
-  activeEmbeddedRuns: Map<string, RecoveryEmbeddedRun>;
-  activeTools: Map<string, RecoveryMarker>;
-  activeModelCalls: Map<string, RecoveryMarker>;
-  activeCoreModelCalls: Map<CoreModelRequestOwnerGeneration, Map<string, RecoveryMarker>>;
+  activeEmbeddedRuns: Map<string, DiagnosticRecoveryEmbeddedRun>;
+  activeTools: Map<string, DiagnosticRecoveryTool>;
+  activeModelCalls: Map<string, DiagnosticRecoveryModelCall>;
+  activeCoreModelCalls: Map<
+    CoreModelRequestOwnerGeneration,
+    Map<string, DiagnosticRecoveryModelCall>
+  >;
   recoveredOwnerStartEventCutoffs: Map<string, number>;
 };
 
@@ -37,7 +55,7 @@ export function ownerRefsForStartedEvent(event: { runId?: string; sessionId?: st
 }
 
 export function markerBelongsToRecoveredOwner(
-  marker: RecoveryMarker,
+  marker: DiagnosticRecoveryMarker,
   ownerRefs: Set<string>,
 ): boolean {
   return (
@@ -47,14 +65,14 @@ export function markerBelongsToRecoveredOwner(
 }
 
 function embeddedRunStartedAfter(
-  embeddedRun: RecoveryEmbeddedRun,
+  embeddedRun: DiagnosticRecoveryEmbeddedRun,
   sequence: number | undefined,
 ): boolean {
   return sequence !== undefined && embeddedRun.sequence > sequence;
 }
 
 export function activityMarkerStartedAfter(
-  marker: RecoveryMarker,
+  marker: DiagnosticRecoveryMarker,
   sequence: number | undefined,
 ): boolean {
   return sequence !== undefined && marker.sequence !== undefined && marker.sequence > sequence;
