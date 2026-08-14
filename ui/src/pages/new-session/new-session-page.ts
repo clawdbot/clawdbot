@@ -25,6 +25,7 @@ import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
+import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -215,6 +216,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     document.removeEventListener("keydown", this, true);
     document.removeEventListener("pointerdown", this, true);
+    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
     this.subscriptions.clear();
     this.gateway.invalidateDiscovery(
       true,
@@ -256,9 +258,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.openedAgentId = resolvedAgentId;
       this.place.setAgentsHydrated(agentsReady);
       this.resetDraft();
-      if (ownedMessage) {
-        this.setMessage(ownedMessage, openKey);
-      }
+      this.messageOwnerKey = restoreDraft(this.context, this.submission, openKey, ownedMessage);
       return;
     }
     if (this.openedAgentId !== resolvedAgentId) {
