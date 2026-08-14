@@ -250,6 +250,5 @@ export {
   createOpenAIResponsesAssistantOutput,
   encodeTextSignatureV1,
   prepareOpenAIResponsesReasoningItemForReplay,
-  readOpenAIResponsesReasoningReplayBlockMetadata,
   tagOpenAIResponsesReasoningReplayItem,
 } from "./openai-responses-replay-messages-internal.js";

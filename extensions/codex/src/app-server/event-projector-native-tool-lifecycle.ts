@@ -70,7 +70,7 @@ export class CodexNativeToolLifecycleProjector {
 
   handleNotification(notification: CodexServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
+    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     if (notification.method === "turn/completed") {

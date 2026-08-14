@@ -101,7 +101,7 @@ function isOpenAIResponsesReasoningReplayMetadata(
   return record.v === 1 && record.source === "openai-responses";
 }
 
-export function readOpenAIResponsesReasoningReplayBlockMetadata(
+function readOpenAIResponsesReasoningReplayBlockMetadata(
   block: Record<string, unknown>,
 ): OpenAIResponsesReasoningReplayMetadata | null | undefined {
   if (!Object.hasOwn(block, OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY)) {
