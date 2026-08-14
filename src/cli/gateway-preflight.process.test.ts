@@ -236,11 +236,15 @@ async function snapshotTree(
   return entries.toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
-async function runPreflight(fixture: Awaited<ReturnType<typeof createFixture>>) {
+async function runCli(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  args: string[],
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
   try {
     const result = await execFileAsync(
       process.execPath,
-      ["--import", "tsx", "src/entry.ts", "gateway", "preflight", "--json"],
+      ["--import", "tsx", "src/entry.ts", ...args],
       {
         cwd: path.resolve("."),
         encoding: "utf8",
@@ -254,10 +258,13 @@ async function runPreflight(fixture: Awaited<ReturnType<typeof createFixture>>) 
           NODE_OPTIONS: undefined,
           OPENCLAW_CONFIG_PATH: fixture.configPath,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+          OPENCLAW_GATEWAY_TOKEN: undefined,
           OPENCLAW_HOME: fixture.root,
           OPENCLAW_NO_RESPAWN: "1",
           OPENCLAW_STATE_DIR: fixture.stateDir,
           VITEST: undefined,
+          ...envOverrides,
         },
       },
     );
@@ -273,6 +280,17 @@ async function runPreflight(fixture: Awaited<ReturnType<typeof createFixture>>) 
       stderr: failure.stderr ?? "",
     };
   }
+}
+
+async function runPreflight(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
+  return runCli(fixture, ["gateway", "preflight", "--json"], envOverrides);
+}
+
+async function runGateway(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  return runCli(fixture, ["gateway", "run", "--port", "39411"]);
 }
 
 function localMemoryConfig() {
@@ -321,6 +339,157 @@ function configuredLlamaCppMemoryConfig() {
 }
 
 describe("gateway preflight CLI process", () => {
+  it("blocks the same missing password prerequisite as direct Gateway startup", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: { mode: "local", auth: { mode: "password" } },
+        memory: { search: { provider: "none" } },
+      },
+    });
+    const before = await snapshotTree(fixture.root);
+
+    const preflight = await runPreflight(fixture);
+
+    expect(preflight.code).toBe(1);
+    expect(JSON.parse(preflight.stdout)).toMatchObject({
+      ok: false,
+      status: "blocked",
+      blockers: [
+        {
+          id: "core/gateway-auth/password-missing",
+          pluginId: "core",
+          migrationId: "gateway-auth",
+          code: "gateway-password-missing",
+          configPath: "gateway.auth.password",
+        },
+      ],
+      errors: [],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+
+    const startup = await runGateway(fixture);
+    expect(startup.code).toBe(78);
+    expect(startup.stderr).toContain(
+      "Gateway auth is set to password, but no password is configured.",
+    );
+  });
+
+  it("accepts password inputs already present in config or the target environment", async () => {
+    const configured = await createFixture({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: { mode: "password", password: "configured-password" },
+        },
+        memory: { search: { provider: "none" } },
+      },
+    });
+    const environment = await createFixture({
+      config: {
+        gateway: { mode: "local", auth: { mode: "password" } },
+        memory: { search: { provider: "none" } },
+      },
+    });
+
+    const results = [
+      await runPreflight(configured),
+      await runPreflight(environment, {
+        OPENCLAW_GATEWAY_PASSWORD: "environment-password",
+      }),
+    ];
+
+    for (const result of results) {
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        status: "ready",
+        blockers: [],
+        errors: [],
+      });
+    }
+  });
+
+  it("returns indeterminate for active auth refs without resolving them", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "password",
+            password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+        memory: { search: { provider: "none" } },
+      },
+    });
+    const before = await snapshotTree(fixture.root);
+
+    const result = await runPreflight(fixture, {
+      GW_PASSWORD: "preflight-must-not-resolve-this",
+    });
+
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      status: "indeterminate",
+      blockers: [],
+      errors: [
+        {
+          id: "core/gateway-auth",
+          pluginId: "core",
+          migrationId: "gateway-auth",
+          code: "credential-inspection-required",
+          message: expect.stringContaining("gateway.auth.password"),
+        },
+      ],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+  });
+
+  it("keeps token bootstrap, auth disablement, and inactive refs ready", async () => {
+    const fixtures = [
+      await createFixture({
+        config: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              password: { source: "env", provider: "default", id: "INACTIVE_PASSWORD" },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          memory: { search: { provider: "none" } },
+        },
+      }),
+      await createFixture({
+        config: {
+          gateway: { mode: "local", auth: { mode: "none" } },
+          memory: { search: { provider: "none" } },
+        },
+      }),
+    ];
+
+    for (const fixture of fixtures) {
+      const result = await runPreflight(fixture);
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        status: "ready",
+        blockers: [],
+        errors: [],
+      });
+    }
+  });
+
   it("reports a startup-blocking unreadable session store without mutation", async () => {
     const fixture = await createFixture({
       config: {

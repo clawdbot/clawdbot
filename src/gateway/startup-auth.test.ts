@@ -3,7 +3,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
-import { ensureGatewayStartupAuth, mergeGatewayTailscaleConfig } from "./startup-auth.js";
+import {
+  ensureGatewayStartupAuth,
+  inspectGatewayStartupAuth,
+  mergeGatewayTailscaleConfig,
+} from "./startup-auth.js";
 
 const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
   "change-me-to-a-long-random-token",
@@ -73,6 +77,94 @@ describe("mergeGatewayTailscaleConfig", () => {
         { serviceName: "svc:openclaw" },
       ),
     ).toEqual({ mode: "serve", serviceName: "svc:openclaw", resetOnExit: false });
+  });
+});
+
+describe("inspectGatewayStartupAuth", () => {
+  it("reports a missing selected password without generating credentials", () => {
+    const result = inspectGatewayStartupAuth({
+      cfg: gatewayAuthConfig({ mode: "password" }),
+      env: emptyEnv(),
+    });
+
+    expect(result).toMatchObject({
+      passwordMissing: true,
+      hasSharedSecret: false,
+      activeSecretRefPaths: [],
+      auth: { mode: "password" },
+    });
+  });
+
+  it.each([
+    {
+      name: "plaintext config",
+      cfg: gatewayAuthConfig({
+        mode: "password",
+        password: "configured-password", // pragma: allowlist secret
+      }),
+      env: emptyEnv(),
+    },
+    {
+      name: "target environment",
+      cfg: gatewayAuthConfig({ mode: "password" }),
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: "environment-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    },
+  ])("accepts a password supplied through $name", ({ cfg, env }) => {
+    expect(inspectGatewayStartupAuth({ cfg, env })).toMatchObject({
+      passwordMissing: false,
+      hasSharedSecret: true,
+      activeSecretRefPaths: [],
+      auth: { mode: "password" },
+    });
+  });
+
+  it("marks active SecretRefs indeterminate without resolving them", () => {
+    const result = inspectGatewayStartupAuth({
+      cfg: gatewayAuthConfigWithDefaultEnvProvider({
+        mode: "password",
+        password: gatewayEnvSecretRef("GW_PASSWORD"),
+      }),
+      env: {
+        GW_PASSWORD: "must-not-be-read-by-inspection", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toMatchObject({
+      passwordMissing: false,
+      hasSharedSecret: true,
+      activeSecretRefPaths: ["gateway.auth.password"],
+      auth: { mode: "password", password: undefined },
+    });
+  });
+
+  it("keeps token generation and inactive password refs outside the blocker", () => {
+    const cfg = gatewayAuthConfigWithDefaultEnvProvider({
+      mode: "token",
+      password: gatewayEnvSecretRef("GW_PASSWORD"),
+    });
+
+    expect(inspectGatewayStartupAuth({ cfg, env: emptyEnv() })).toMatchObject({
+      passwordMissing: false,
+      hasSharedSecret: false,
+      activeSecretRefPaths: [],
+      auth: { mode: "token" },
+    });
+  });
+
+  it("keeps explicit auth disablement ready", () => {
+    expect(
+      inspectGatewayStartupAuth({
+        cfg: gatewayAuthConfig({ mode: "none" }),
+        env: emptyEnv(),
+      }),
+    ).toMatchObject({
+      passwordMissing: false,
+      hasSharedSecret: false,
+      activeSecretRefPaths: [],
+      auth: { mode: "none" },
+    });
   });
 });
 

@@ -2006,6 +2006,33 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("blocks password mode when no password input is configured", async () => {
+    configState.cfg = {
+      gateway: {
+        auth: {
+          mode: "password",
+        },
+      },
+    };
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: configState.cfg,
+      parsed: configState.cfg,
+    };
+
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:78",
+      );
+    });
+
+    expect(runtimeErrors.join("\n")).toContain(
+      "Gateway auth is set to password, but no password is configured.",
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
   it("allows password mode preflight when password is configured via SecretRef", async () => {
     configState.cfg = {
       gateway: {

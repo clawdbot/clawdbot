@@ -24,7 +24,6 @@ import {
 } from "../../config/io.invalid-config.js";
 import { CONFIG_PATH, normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import {
   defaultGatewayBindMode,
@@ -1030,35 +1029,17 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           ...(passwordRaw ? { password: passwordRaw } : {}),
         }
       : undefined;
-  const { resolveGatewayAuth } = await import("../../gateway/auth.js");
-  const resolvedAuth = await startupTrace.measure("cli.auth-resolve", () =>
-    resolveGatewayAuth({
-      authConfig: cfg.gateway?.auth,
+  const { inspectGatewayStartupAuth } = await import("../../gateway/startup-auth.js");
+  const authInspection = await startupTrace.measure("cli.auth-resolve", () =>
+    inspectGatewayStartupAuth({
+      cfg,
       authOverride,
       env: process.env,
-      tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+      tailscaleOverride: tailscaleMode ? { mode: tailscaleMode } : undefined,
     }),
   );
+  const resolvedAuth = authInspection.auth;
   const resolvedAuthMode = resolvedAuth.mode;
-  const tokenValue = resolvedAuth.token;
-  const passwordValue = resolvedAuth.password;
-  const hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
-  const hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
-  const tokenConfigured =
-    hasToken ||
-    hasConfiguredSecretInput(
-      authOverride?.token ?? cfg.gateway?.auth?.token,
-      cfg.secrets?.defaults,
-    );
-  const passwordConfigured =
-    hasPassword ||
-    hasConfiguredSecretInput(
-      authOverride?.password ?? cfg.gateway?.auth?.password,
-      cfg.secrets?.defaults,
-    );
-  const hasSharedSecret =
-    (resolvedAuthMode === "token" && tokenConfigured) ||
-    (resolvedAuthMode === "password" && passwordConfigured);
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
     authHints.push('Found "gateway.token" in config. Use "gateway.auth.token" instead.');
@@ -1068,7 +1049,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
     );
   }
-  if (resolvedAuthMode === "password" && !passwordConfigured) {
+  if (authInspection.passwordMissing) {
     defaultRuntime.error(
       [
         "Gateway auth is set to password, but no password is configured.",
@@ -1090,7 +1071,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   if (
     shouldBlockGatewayBindWithoutExplicitAuth({
       bindHost: healthHost,
-      hasSharedSecret,
+      hasSharedSecret: authInspection.hasSharedSecret,
       resolvedAuthMode,
     })
   ) {

@@ -91,7 +91,7 @@ describe("gateway startup preflight command", () => {
       protocolVersion: 1,
       ok: true,
       status: "ready",
-      checksRun: 2,
+      checksRun: 3,
       blockers: [],
       errors: [],
     });
@@ -159,7 +159,7 @@ describe("gateway startup preflight command", () => {
     expect(result).toMatchObject({
       ok: false,
       status: "indeterminate",
-      checksRun: 2,
+      checksRun: 3,
       blockers: [],
       errors: [
         {
@@ -231,7 +231,7 @@ describe("gateway startup preflight command", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         ok: false,
-        checksRun: 2,
+        checksRun: 3,
         blockers: evaluation.blockers,
         errors: evaluation.errors,
       }),
@@ -270,7 +270,7 @@ describe("gateway startup preflight command", () => {
     expect(result).toMatchObject({
       ok: false,
       status: "blocked",
-      checksRun: 1,
+      checksRun: 2,
       blockers: [
         {
           id: "core/session-sqlite/main/store_unreadable/1",
@@ -285,5 +285,78 @@ describe("gateway startup preflight command", () => {
       errors: [],
     });
     expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+  });
+
+  it("reports a core Gateway auth blocker when password mode has no password", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      config: { gateway: { mode: "local", auth: { mode: "password" } } },
+      sourceConfig: { gateway: { mode: "local", auth: { mode: "password" } } },
+    });
+    mocks.collectGatewayStartupPreflight.mockResolvedValue({
+      checksRun: 0,
+      blockers: [],
+      errors: [],
+    });
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      checksRun: 2,
+      blockers: [
+        {
+          id: "core/gateway-auth/password-missing",
+          pluginId: "core",
+          migrationId: "gateway-auth",
+          code: "gateway-password-missing",
+          configPath: "gateway.auth.password",
+        },
+      ],
+      errors: [],
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+  });
+
+  it("returns indeterminate for an active Gateway auth SecretRef", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+        },
+      },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      config,
+      sourceConfig: config,
+    });
+    mocks.collectGatewayStartupPreflight.mockResolvedValue({
+      checksRun: 0,
+      blockers: [],
+      errors: [],
+    });
+
+    const { result, runtime } = await runJsonPreflight();
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "indeterminate",
+      checksRun: 2,
+      blockers: [],
+      errors: [
+        {
+          id: "core/gateway-auth",
+          pluginId: "core",
+          migrationId: "gateway-auth",
+          code: "credential-inspection-required",
+          message: expect.stringContaining("gateway.auth.password"),
+        },
+      ],
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(2, { resetStream: process.stderr });
   });
 });

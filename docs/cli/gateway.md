@@ -169,7 +169,7 @@ Before stopping a healthy Gateway for an external upgrade, run the target releas
 openclaw gateway preflight --json
 ```
 
-The command inspects deterministic startup prerequisites declared by core and plugin startup-migration owners, including session SQLite import validation and selected embedding providers. It does not run migrations, resolve credentials, download models, start provider services, write config or state, or perform network requests. A reported remediation is operator guidance only; preflight never performs it.
+The command inspects deterministic startup prerequisites declared by core and plugin startup-migration owners, including Gateway authentication selection, session SQLite import validation, and selected embedding providers. It does not run migrations, resolve credentials, download models, start provider services, write config or state, or perform network requests. Active credential references therefore make the result `indeterminate` instead of being resolved. A reported remediation is operator guidance only; preflight never performs it.
 
 Exit codes:
 

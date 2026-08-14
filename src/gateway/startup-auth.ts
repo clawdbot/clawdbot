@@ -5,6 +5,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  GATEWAY_AUTH_SURFACE_PATHS,
+  evaluateGatewayAuthSurfaceStates,
+} from "../secrets/runtime-gateway-auth-surfaces.js";
+import {
   hasConfiguredGatewayAuthSecretInput,
   resolveGatewayPasswordSecretRefValue,
   resolveGatewayTokenSecretRefValue,
@@ -69,6 +73,69 @@ export function mergeGatewayTailscaleConfig(
     merged.preserveFunnel = override.preserveFunnel;
   }
   return merged;
+}
+
+export type GatewayStartupAuthInspection = {
+  auth: ResolvedGatewayAuth;
+  hasSharedSecret: boolean;
+  passwordMissing: boolean;
+  activeSecretRefPaths: string[];
+};
+
+/**
+ * Inspect startup auth without resolving SecretRefs or generating credentials.
+ * Direct startup may continue through unresolved refs, but cutover preflight
+ * must report that state as indeterminate instead of guessing availability.
+ */
+export function inspectGatewayStartupAuth(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  authOverride?: GatewayAuthConfig;
+  tailscaleOverride?: GatewayTailscaleConfig;
+}): GatewayStartupAuthInspection {
+  const env = params.env ?? process.env;
+  const hasOverrides = Boolean(params.authOverride || params.tailscaleOverride);
+  const effectiveConfig = hasOverrides
+    ? {
+        ...params.cfg,
+        gateway: {
+          ...params.cfg.gateway,
+          auth: mergeGatewayAuthConfig(params.cfg.gateway?.auth, params.authOverride),
+          tailscale: mergeGatewayTailscaleConfig(
+            params.cfg.gateway?.tailscale,
+            params.tailscaleOverride,
+          ),
+        },
+      }
+    : params.cfg;
+  const auth = resolveGatewayAuth({
+    authConfig: effectiveConfig.gateway?.auth,
+    env,
+    tailscaleMode: effectiveConfig.gateway?.tailscale?.mode ?? "off",
+  });
+  const tokenConfigured =
+    Boolean(normalizeOptionalString(auth.token)) ||
+    hasConfiguredGatewayAuthSecretInput(effectiveConfig, "gateway.auth.token");
+  const passwordConfigured =
+    Boolean(normalizeOptionalString(auth.password)) ||
+    hasConfiguredGatewayAuthSecretInput(effectiveConfig, "gateway.auth.password");
+  const states = evaluateGatewayAuthSurfaceStates({
+    config: effectiveConfig,
+    env,
+    defaults: effectiveConfig.secrets?.defaults,
+  });
+  const activeSecretRefPaths = GATEWAY_AUTH_SURFACE_PATHS.filter((path) => {
+    const state = states[path];
+    return state.active && state.hasSecretRef;
+  });
+  const hasSharedSecret =
+    (auth.mode === "token" && tokenConfigured) || (auth.mode === "password" && passwordConfigured);
+  return {
+    auth,
+    hasSharedSecret,
+    passwordMissing: auth.mode === "password" && !passwordConfigured,
+    activeSecretRefPaths,
+  };
 }
 
 function resolveGatewayAuthFromConfig(params: {

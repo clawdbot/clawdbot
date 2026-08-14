@@ -5,6 +5,10 @@ import {
   inspectStartupSessionMigrationPrerequisites,
   type SessionStartupPreflightResult,
 } from "../gateway/server-startup-session-migration.js";
+import {
+  inspectGatewayStartupAuth,
+  type GatewayStartupAuthInspection,
+} from "../gateway/startup-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withReadOnlyPathCaseProbe } from "../infra/path-case.js";
 import {
@@ -37,8 +41,9 @@ type GatewayStartupPreflightResult = {
   errors: GatewayStartupPreflightError[];
 };
 
-const CORE_SESSION_PREFLIGHT_PLUGIN_ID = "core";
+const CORE_PREFLIGHT_PLUGIN_ID = "core";
 const CORE_SESSION_PREFLIGHT_MIGRATION_ID = "session-sqlite";
+const CORE_AUTH_PREFLIGHT_MIGRATION_ID = "gateway-auth";
 
 function createResult(params: {
   checksRun?: number;
@@ -59,26 +64,51 @@ function createResult(params: {
   };
 }
 
-function combineSessionStartupPreflight(
+function combineCoreStartupPreflight(
   pluginResult: {
     checksRun: number;
     blockers: GatewayStartupPreflightBlocker[];
     errors: GatewayStartupPreflightError[];
   },
-  sessionResult: SessionStartupPreflightResult,
+  authResult: GatewayStartupAuthInspection,
+  sessionResult?: SessionStartupPreflightResult,
 ): {
   checksRun: number;
   blockers: GatewayStartupPreflightBlocker[];
   errors: GatewayStartupPreflightError[];
 } {
-  const inspectionId = `${CORE_SESSION_PREFLIGHT_PLUGIN_ID}/${CORE_SESSION_PREFLIGHT_MIGRATION_ID}`;
+  const inspectionId = `${CORE_PREFLIGHT_PLUGIN_ID}/${CORE_SESSION_PREFLIGHT_MIGRATION_ID}`;
   const blockers = [...pluginResult.blockers];
   const errors = [...pluginResult.errors];
-  if (sessionResult.status === "blocked") {
+  const authInspectionId = `${CORE_PREFLIGHT_PLUGIN_ID}/${CORE_AUTH_PREFLIGHT_MIGRATION_ID}`;
+  if (authResult.passwordMissing) {
+    blockers.push({
+      id: `${authInspectionId}/password-missing`,
+      pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+      migrationId: CORE_AUTH_PREFLIGHT_MIGRATION_ID,
+      code: "gateway-password-missing",
+      message: "Gateway auth is set to password, but no password is configured.",
+      remediation: [
+        "Set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD for the target Gateway.",
+      ],
+      configPath: "gateway.auth.password",
+    });
+  }
+  if (authResult.activeSecretRefPaths.length > 0) {
+    errors.push({
+      id: authInspectionId,
+      pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+      migrationId: CORE_AUTH_PREFLIGHT_MIGRATION_ID,
+      code: "credential-inspection-required",
+      message: `Gateway startup depends on credential references that preflight does not resolve: ${authResult.activeSecretRefPaths.join(", ")}.`,
+    });
+  }
+
+  if (sessionResult?.status === "blocked") {
     for (const finding of sessionResult.findings) {
       blockers.push({
         id: `${inspectionId}/${finding.id}`,
-        pluginId: CORE_SESSION_PREFLIGHT_PLUGIN_ID,
+        pluginId: CORE_PREFLIGHT_PLUGIN_ID,
         migrationId: CORE_SESSION_PREFLIGHT_MIGRATION_ID,
         code: finding.code,
         message: finding.message,
@@ -86,17 +116,17 @@ function combineSessionStartupPreflight(
         ...(finding.agentId ? { agentId: finding.agentId } : {}),
       });
     }
-  } else if (sessionResult.status === "indeterminate") {
+  } else if (sessionResult?.status === "indeterminate") {
     errors.push({
       id: inspectionId,
-      pluginId: CORE_SESSION_PREFLIGHT_PLUGIN_ID,
+      pluginId: CORE_PREFLIGHT_PLUGIN_ID,
       migrationId: CORE_SESSION_PREFLIGHT_MIGRATION_ID,
       code: "inspection-indeterminate",
       message: sessionResult.reason,
     });
   }
   return {
-    checksRun: pluginResult.checksRun + 1,
+    checksRun: pluginResult.checksRun + 1 + (sessionResult ? 1 : 0),
     blockers: blockers.toSorted((left, right) => left.id.localeCompare(right.id)),
     errors: errors.toSorted((left, right) => left.id.localeCompare(right.id)),
   };
@@ -170,6 +200,10 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
     });
   }
 
+  const authResult = inspectGatewayStartupAuth({
+    cfg: snapshot.config,
+    env: process.env,
+  });
   try {
     await ensureCliPluginRegistryLoaded({
       scope: "memory-embedding-providers",
@@ -188,17 +222,24 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
         env: process.env,
       }),
     ]);
-    return createResult(combineSessionStartupPreflight(pluginResult, sessionResult));
+    return createResult(combineCoreStartupPreflight(pluginResult, authResult, sessionResult));
   } catch (error) {
-    return createResult({
-      errors: [
+    return createResult(
+      combineCoreStartupPreflight(
         {
-          id: "plugins/memory",
-          code: "plugin-inspection-unavailable",
-          message: formatErrorMessage(error),
+          checksRun: 0,
+          blockers: [],
+          errors: [
+            {
+              id: "plugins/memory",
+              code: "plugin-inspection-unavailable",
+              message: formatErrorMessage(error),
+            },
+          ],
         },
-      ],
-    });
+        authResult,
+      ),
+    );
   }
 }
 
