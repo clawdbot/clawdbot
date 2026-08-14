@@ -191,7 +191,7 @@ function runCiManifestFixture(options: {
   nodeFastPluginContracts?: boolean;
   nodeFastCiRouting?: boolean;
   runNode?: boolean;
-  runnerBackend?: "blacksmith" | "github";
+  runnerBackend?: "blacksmith" | "github" | "hybrid";
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
