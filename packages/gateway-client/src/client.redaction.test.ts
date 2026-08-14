@@ -1,5 +1,6 @@
 // Gateway Client tests cover credential redaction in connect-failure logging.
 import { execFileSync } from "node:child_process";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
@@ -135,6 +136,91 @@ describe("GatewayClient connect-failure logging", () => {
         `safe-param=preserved secret-output=${everythingLogged.includes(SESSION_SECRET)}\n` +
         `[gateway-client redaction proof] server_saw=${requestTargetsSeenByServer[0]}\n` +
         `[gateway-client redaction proof] logged=${logLine}\n` +
+        "proof_marker_verified=true",
+    );
+  }, 30_000);
+});
+
+const UPGRADE_BODY_CREDENTIAL = "AKIAUPGRADEBODYCREDENTIAL";
+const UPGRADE_BODY_SIGNATURE = "UPGRADEBODYSIGNATUREVALUE";
+// A signed-URL form body, the shape a cloud proxy reflects back when it refuses
+// the upgrade. Its first pair carries no `?`/`&`, because the body is appended
+// to the error text after `: ` rather than parsed out of a URL.
+const UPGRADE_REJECTION_BODY =
+  `X-Amz-Credential=${UPGRADE_BODY_CREDENTIAL}` +
+  `&X-Amz-Signature=${UPGRADE_BODY_SIGNATURE}` +
+  "&X-Amz-Date=20260813T000000Z";
+
+describe("GatewayClient rejected-upgrade diagnostics", () => {
+  const servers: http.Server[] = [];
+  const clients: GatewayClient[] = [];
+
+  afterEach(async () => {
+    for (const client of clients.splice(0)) {
+      client.stop();
+    }
+    await Promise.all(
+      servers.splice(0).map(
+        async (server) =>
+          await new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  });
+
+  it("redacts signed fields of a rejected upgrade body before hosts see the error", async () => {
+    // Real loopback HTTP server: it answers the websocket upgrade with an HTTP
+    // rejection instead of a 101, which is the path that appends the response
+    // body to the client's error text. Nothing is stubbed, so this is the exact
+    // string a host receives, and hosts log it verbatim -- `node-host/runner.ts`
+    // writes `error.message` straight to stderr from `onConnectError`.
+    const server = http.createServer((_req, res) => {
+      res.writeHead(403, { "Content-Type": "application/x-www-form-urlencoded" });
+      res.end(UPGRADE_REJECTION_BODY);
+    });
+    servers.push(server);
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve((server.address() as AddressInfo).port);
+      });
+    });
+
+    const loggedLines: string[] = [];
+    const connectErrorMessage = await new Promise<string>((resolve) => {
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        onConnectError: (error) => resolve(error.message),
+        hostDeps: {
+          logDebug: (message) => loggedLines.push(message),
+          logError: (message) => loggedLines.push(message),
+        },
+      });
+      clients.push(client);
+      client.start();
+    });
+
+    expect(connectErrorMessage).toContain("gateway rejected websocket upgrade (HTTP 403)");
+    // The leading pair has no `?`/`&` in front of it, so query-shaped redaction
+    // alone leaves it in the clear.
+    expect(connectErrorMessage).toContain("X-Amz-Credential=***");
+    expect(connectErrorMessage).toContain("X-Amz-Signature=***");
+    // The non-credential field stays readable, so the rejection keeps the
+    // diagnostic value that made it worth surfacing.
+    expect(connectErrorMessage).toContain("X-Amz-Date=20260813T000000Z");
+
+    const everythingSurfaced = [connectErrorMessage, ...loggedLines].join("\n");
+    for (const secret of [UPGRADE_BODY_CREDENTIAL, UPGRADE_BODY_SIGNATURE]) {
+      expect(everythingSurfaced).not.toContain(secret);
+    }
+
+    console.log(
+      `[gateway-client upgrade-body redaction proof] head=${resolveHeadSha()} ` +
+        "leading_field=redacted trailing_field=redacted non_credential_field=preserved " +
+        `secret-output=${everythingSurfaced.includes(UPGRADE_BODY_CREDENTIAL)}\n` +
+        `[gateway-client upgrade-body redaction proof] server_sent=${UPGRADE_REJECTION_BODY}\n` +
+        `[gateway-client upgrade-body redaction proof] host_saw=${connectErrorMessage}\n` +
         "proof_marker_verified=true",
     );
   }, 30_000);

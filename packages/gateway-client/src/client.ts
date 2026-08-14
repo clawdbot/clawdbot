@@ -20,9 +20,9 @@ import {
 } from "@openclaw/gateway-protocol/version";
 import { WebSocket } from "ws";
 import {
-  isSensitiveUrlQueryParamName,
   normalizeFingerprint,
   normalizeGatewayErrorText,
+  redactSensitiveKeyValuePairs,
 } from "./client-address-utils.js";
 import {
   buildGatewayConnectAuth,
@@ -294,12 +294,11 @@ function isGatewayClientStoppedError(err: unknown): boolean {
 }
 
 function formatGatewayClientErrorForLog(err: unknown): string {
-  const redactedUrlLikeString = String(err)
-    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
-    .replace(/(Authorization:\s*Bearer\s+)[^\s]+/giu, "$1***")
-    .replace(/([?&])([^=&\s]+)=([^&#\s"'<>)]*)/g, (match, prefix: string, key: string) =>
-      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
-    );
+  const redactedUrlLikeString = redactSensitiveKeyValuePairs(
+    String(err)
+      .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
+      .replace(/(Authorization:\s*Bearer\s+)[^\s]+/giu, "$1***"),
+  );
   return redactedUrlLikeString;
 }
 
@@ -542,8 +541,13 @@ export class GatewayClient {
       handlers.close(code, reasonText);
     });
     ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
-      void readUpgradeErrorBody(response).then((body) => {
+      void readUpgradeErrorBody(response).then((rawBody) => {
         const statusCode = response.statusCode;
+        // The body is peer-controlled and every host logs this message: the node
+        // host writes it straight to stderr from `onConnectError`. Redact here,
+        // at the boundary where untrusted response text enters our error, rather
+        // than trusting each sink to redact it again.
+        const body = redactSensitiveKeyValuePairs(rawBody);
         const message = `gateway rejected websocket upgrade (HTTP ${statusCode ?? "unknown"})${body ? `: ${body}` : ""}`;
         upgradeError = new GatewayClientRequestError({
           code: "UNAVAILABLE",
