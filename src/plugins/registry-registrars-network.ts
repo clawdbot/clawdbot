@@ -27,6 +27,61 @@ import type {
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 
+type ChannelReload = NonNullable<ChannelPlugin["reload"]>;
+type ManifestChannelReload = NonNullable<
+  NonNullable<PluginRecord["channelConfigs"]>[string]["reload"]
+>;
+
+function mergeUniqueStrings(...lists: Array<readonly string[] | undefined>): string[] | undefined {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const value of list ?? []) {
+      if (!seen.has(value)) {
+        seen.add(value);
+        merged.push(value);
+      }
+    }
+  }
+  return merged.length > 0 ? merged : undefined;
+}
+
+function mergeChannelReloadMetadata(
+  runtimeReload: ChannelPlugin["reload"],
+  manifestReload: ManifestChannelReload,
+): ChannelReload {
+  const noopPrefixes = mergeUniqueStrings(runtimeReload?.noopPrefixes, manifestReload.noopPrefixes);
+  const accountIndexReloadPaths = mergeUniqueStrings(
+    runtimeReload?.accountIndexReloadPaths,
+    manifestReload.accountIndexReloadPaths,
+  );
+  const accountScopedRestart =
+    typeof runtimeReload?.accountScopedRestart === "boolean"
+      ? runtimeReload.accountScopedRestart
+      : manifestReload.accountScopedRestart;
+  return {
+    configPrefixes:
+      mergeUniqueStrings(runtimeReload?.configPrefixes, manifestReload.configPrefixes) ?? [],
+    ...(noopPrefixes ? { noopPrefixes } : {}),
+    ...(accountIndexReloadPaths ? { accountIndexReloadPaths } : {}),
+    ...(typeof accountScopedRestart === "boolean" ? { accountScopedRestart } : {}),
+  };
+}
+
+function mergeManifestChannelReloadMetadata(params: {
+  record: PluginRecord;
+  plugin: ChannelPlugin;
+}): ChannelPlugin {
+  const manifestReload = params.record.channelConfigs?.[params.plugin.id]?.reload;
+  if (!manifestReload) {
+    return params.plugin;
+  }
+  return {
+    ...params.plugin,
+    reload: mergeChannelReloadMetadata(params.plugin.reload, manifestReload),
+  };
+}
+
 function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
   return async (opts) => {
     let responded = false;
@@ -318,10 +373,14 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
         ? (registration as OpenClawPluginChannelRegistration)
         : { plugin: registration as ChannelPlugin };
+    const registrationPlugin = mergeManifestChannelReloadMetadata({
+      record,
+      plugin: normalized.plugin,
+    });
     const plugin = normalizeRegisteredChannelPlugin({
       pluginId: record.id,
       source: record.source,
-      plugin: normalized.plugin,
+      plugin: registrationPlugin,
       pushDiagnostic,
     });
     if (!plugin) {
