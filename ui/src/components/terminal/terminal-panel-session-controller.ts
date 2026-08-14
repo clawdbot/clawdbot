@@ -13,7 +13,6 @@ import {
 } from "./terminal-controller-lifecycle.ts";
 import {
   forceTerminalRender,
-  persistLiveTerminalSessions,
   shellBasename,
   TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
@@ -24,7 +23,10 @@ import {
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
 import { TerminalPendingActions } from "./terminal-pending-actions.ts";
-import { loadPersistedTerminalSessionIds } from "./terminal-session-storage.ts";
+import {
+  loadPersistedTerminalSessionIds,
+  persistLiveTerminalSessions,
+} from "./terminal-session-storage.ts";
 import { createTerminalStartupInput } from "./terminal-startup-input.ts";
 import { TerminalTabReadinessController } from "./terminal-tab-readiness.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";

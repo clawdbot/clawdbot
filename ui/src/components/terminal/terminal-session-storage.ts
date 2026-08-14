@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   TerminalPanelAction,
   TerminalPanelCatalogReference,
+  TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
 
 const TERMINAL_SESSIONS_KEY = "openclaw.terminal.sessions.v1";
@@ -77,6 +78,14 @@ export function persistTerminalSessionIds(ids: readonly string[]): void {
   } catch {
     // Storage may be unavailable (private mode); reattach just won't work.
   }
+}
+
+export function persistLiveTerminalSessions(tabs: readonly TerminalPanelSessionTab[]): void {
+  persistTerminalSessionIds(
+    tabs
+      .filter((tab) => tab.status === "live" && tab.gatewaySessionId)
+      .map((tab) => tab.gatewaySessionId),
+  );
 }
 
 export function loadPersistedTerminalActions(): TerminalPanelAction[] {

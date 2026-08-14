@@ -7,7 +7,6 @@ import type { ReactiveControllerHost } from "lit";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
-import { persistTerminalSessionIds } from "./terminal-session-storage.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
 
@@ -86,12 +85,4 @@ export function forceTerminalRender(controller: GhosttyTerminalController): void
     // An omitted opacity defaults to 1; repaint without inventing a visible scrollbar.
     term.renderer.render(term.wasmTerm, true, term.viewportY, term, 0);
   }
-}
-
-export function persistLiveTerminalSessions(tabs: readonly TerminalPanelSessionTab[]): void {
-  persistTerminalSessionIds(
-    tabs
-      .filter((tab) => tab.status === "live" && tab.gatewaySessionId)
-      .map((tab) => tab.gatewaySessionId),
-  );
 }
