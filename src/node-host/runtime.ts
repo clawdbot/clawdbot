@@ -324,15 +324,16 @@ export async function prepareNodeHostRuntime(params?: {
     initialInventory,
     start({ client, onInventoryChanged, onManifestChanged, onRunnerAvailabilityChanged }) {
       const mcpAbort = new AbortController();
+      const workerWorkspace = workerInstallation
+        ? new NodeWorkerWorkspaceRuntime({ env })
+        : undefined;
       const workerSupervisor = workerInstallation
         ? createNodeWorkerSupervisor({
             env,
             localInstallation: workerInstallation,
             onAvailabilityChanged: onRunnerAvailabilityChanged,
+            workspace: workerWorkspace,
           })
-        : undefined;
-      const workerWorkspace = workerInstallation
-        ? new NodeWorkerWorkspaceRuntime({ env })
         : undefined;
       if (workerSupervisor) {
         void workerSupervisor.initialize().catch((error: unknown) => {

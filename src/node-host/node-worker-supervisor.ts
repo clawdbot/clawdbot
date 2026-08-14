@@ -35,6 +35,7 @@ import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
+import { NodeWorkerRetention } from "./node-worker-retention.js";
 import {
   nodeWorkerPlanHash,
   type NodeWorkerLaunchInput,
@@ -45,6 +46,7 @@ import {
   signalOwnedNodeWorkerTree,
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const STOP_GRACE_MS = 1_000;
 const FORCE_STOP_WAIT_MS = 4_000;
@@ -79,6 +81,15 @@ type ObservedTerminal = ActiveBase & {
   persistenceError?: unknown;
 };
 type ActiveOwnership = RunningChild | ObservedTerminal;
+type NodeWorkerSupervisorOptions = {
+  bundleRoot?: string;
+  env?: NodeJS.ProcessEnv;
+  localInstallation?: NodeWorkerInstallation;
+  capacity?: number;
+  capacityWaitMs?: number;
+  onAvailabilityChanged?: (available: boolean) => void;
+  workspace?: NodeWorkerWorkspaceRuntime;
+};
 
 function sameProcessIdentity(
   left: NodeWorkerProcessIdentity | null,
@@ -111,21 +122,14 @@ class NodeWorkerSupervisor {
   private readonly workerEnv: NodeJS.ProcessEnv;
   private readonly localInstallation?: NodeWorkerInstallation;
   private readonly capacity: NodeWorkerCapacity;
+  private readonly workspace?: NodeWorkerWorkspaceRuntime;
+  private retention?: NodeWorkerRetention;
   private supervisorIdentity?: NodeWorkerProcessIdentity;
   private initializationPromise?: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
 
-  constructor(
-    options: {
-      bundleRoot?: string;
-      env?: NodeJS.ProcessEnv;
-      localInstallation?: NodeWorkerInstallation;
-      capacity?: number;
-      capacityWaitMs?: number;
-      onAvailabilityChanged?: (available: boolean) => void;
-    } = {},
-  ) {
+  constructor(options: NodeWorkerSupervisorOptions = {}) {
     const env = options.env ?? process.env;
     this.bundleRoot = path.resolve(
       options.bundleRoot ?? path.join(resolveStateDir(env), "node-host"),
@@ -133,7 +137,19 @@ class NodeWorkerSupervisor {
     this.store = new NodeWorkerLaunchStore({ env });
     this.workerEnv = snapshotNodeWorkerEnv(env);
     this.localInstallation = options.localInstallation;
-    this.capacity = new NodeWorkerCapacity(this.store, options);
+    this.workspace = options.workspace;
+    this.capacity = new NodeWorkerCapacity(this.store, {
+      ...options,
+      onTerminal: () => void this.retentionOwner().schedule("terminal-transition"),
+    });
+  }
+
+  private retentionOwner(): NodeWorkerRetention {
+    return (this.retention ??= new NodeWorkerRetention(
+      this.store,
+      this.workspace ??
+        new NodeWorkerWorkspaceRuntime({ root: this.bundleRoot, env: this.workerEnv }),
+    ));
   }
 
   private requireSupervisorIdentity(): NodeWorkerProcessIdentity {
@@ -141,9 +157,11 @@ class NodeWorkerSupervisor {
   }
 
   initialize(): Promise<void> {
-    return (this.initializationPromise ??= this.capacity.initialize(async (receipt) => {
-      await this.recoverRunning(receipt, false);
-    }));
+    return (this.initializationPromise ??= this.capacity
+      .initialize(async (receipt) => {
+        await this.recoverRunning(receipt, false);
+      })
+      .then(async () => await this.retentionOwner().schedule("supervisor-start")));
   }
 
   async launch(
@@ -365,6 +383,9 @@ class NodeWorkerSupervisor {
         } catch (error) {
           errors.push(error);
         }
+      }
+      if (this.retention) {
+        await this.retention.schedule("supervisor-close");
       }
       if (errors.length === 1) {
         throw errors[0];
@@ -670,14 +691,7 @@ class NodeWorkerSupervisor {
 }
 
 export function createNodeWorkerSupervisor(
-  options: {
-    bundleRoot?: string;
-    env?: NodeJS.ProcessEnv;
-    localInstallation?: NodeWorkerInstallation;
-    capacity?: number;
-    capacityWaitMs?: number;
-    onAvailabilityChanged?: (available: boolean) => void;
-  } = {},
+  options: NodeWorkerSupervisorOptions = {},
 ): NodeWorkerSupervisor {
   return new NodeWorkerSupervisor(options);
 }

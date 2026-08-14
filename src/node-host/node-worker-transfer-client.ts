@@ -364,7 +364,7 @@ async function initializeGitWorkspace(params: {
 
 const workspaceTransferQueues = new Map<string, Promise<void>>();
 
-async function serializeWorkspaceTransfer<T>(
+export async function serializeNodeWorkerWorkspace<T>(
   workspaceDir: string,
   operation: () => Promise<T>,
 ): Promise<T> {
@@ -699,7 +699,7 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
   signal?: AbortSignal;
 }): Promise<string> {
   try {
-    return await serializeWorkspaceTransfer(params.workspaceDir, async () => {
+    return await serializeNodeWorkerWorkspace(params.workspaceDir, async () => {
       await recoverWorkspaceReplacement(params.workspaceDir);
       return params.transfer.direction === "download"
         ? await downloadWorkspace({
