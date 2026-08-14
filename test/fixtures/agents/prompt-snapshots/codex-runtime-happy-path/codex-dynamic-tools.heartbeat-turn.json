@@ -45,15 +45,10 @@
           "type": "function"
         },
         {
-          "description": "End turn after subagent spawn; results arrive next message. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
+          "description": "End turn to await a pending continuation (subagent spawn, async tool, cron add, or similar); results arrive next message. Calling it with nothing pending parks the session with no automatic wake, so do the requested work or reply instead.",
           "inputSchema": {
             "properties": {
-              "acknowledgment": {
-                "description": "Optional waiting reply for an otherwise-silent interactive parent turn.",
-                "type": "string"
-              },
               "message": {
-                "description": "Private context for the resumed turn; not sent to the user.",
                 "type": "string"
               }
             },

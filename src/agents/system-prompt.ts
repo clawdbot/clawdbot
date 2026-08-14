@@ -943,7 +943,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_spawn: acpSpawnRuntimeEnabled
       ? `Spawn isolated subagent/ACP. Transcript needed: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""}.`
       : 'Spawn isolated subagent; transcript needed: context="fork"',
-    sessions_yield: "End turn; await subagent events. Only after a spawn, else parks with no wake",
+    sessions_yield: "End turn; await pending continuation. Nothing pending parks with no wake",
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
     skill_workshop: "Manage reusable-skill proposals",
