@@ -327,6 +327,9 @@ export function countOutboundMessageProgressForRun(params: {
 
 export function readOutboundMessageProgressForRun(params: {
   runId: string;
+  action: OutboundMessageProgressInput["action"];
+  after?: { occurredAt: number; sequence: number };
+  limit: number;
   now?: number;
   database?: OpenClawStateDatabaseOptions;
 }): OutboundMessageAuditEventRecord[] {
@@ -335,19 +338,31 @@ export function readOutboundMessageProgressForRun(params: {
       if (!tableExists(db, "outbound_message_progress")) {
         return [];
       }
+      let query = progressDb(db)
+        .selectFrom("outbound_message_progress")
+        .selectAll()
+        .where("run_id", "=", params.runId)
+        .where("action", "=", params.action)
+        .where(
+          "occurred_at",
+          ">=",
+          (params.now ?? Date.now()) - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS,
+        );
+      const after = params.after;
+      if (after) {
+        query = query.where((expression) =>
+          expression.or([
+            expression("occurred_at", ">", after.occurredAt),
+            expression.and([
+              expression("occurred_at", "=", after.occurredAt),
+              expression("sequence", ">", after.sequence),
+            ]),
+          ]),
+        );
+      }
       return executeSqliteQuerySync(
         db,
-        progressDb(db)
-          .selectFrom("outbound_message_progress")
-          .selectAll()
-          .where("run_id", "=", params.runId)
-          .where(
-            "occurred_at",
-            ">=",
-            (params.now ?? Date.now()) - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS,
-          )
-          .orderBy("occurred_at", "asc")
-          .orderBy("sequence", "asc"),
+        query.orderBy("occurred_at", "asc").orderBy("sequence", "asc").limit(params.limit),
       ).rows.map(rowToProgressEvent);
     }, params.database) ?? []
   );

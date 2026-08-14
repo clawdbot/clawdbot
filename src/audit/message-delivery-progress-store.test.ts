@@ -235,6 +235,71 @@ describe("outbound message progress companion", () => {
     ).toEqual(["queued", "platform_started", "sent"]);
   });
 
+  it("pages large offsets across bounded owner-stream chunks", () => {
+    const database = databaseOptions();
+    const occurredAt = Date.now();
+    recordOutboundMessageProgress(
+      progressInput("message.outbound.queued", { occurredAt }),
+      database,
+    );
+    const { db } = openOpenClawStateDatabase(database);
+    db.prepare("DELETE FROM outbound_message_progress").run();
+    const insert = db.prepare(`
+      INSERT INTO outbound_message_progress (
+        progress_id, source_id, source_sequence, schema_version, occurred_at,
+        action, outcome, actor_type, actor_id, agent_id, run_id, channel,
+        conversation_kind, duration_ms
+      ) VALUES (?, ?, ?, 1, ?, ?, ?, 'agent', 'main', 'main', 'run-progress',
+        'qa-channel', 'direct', 1)
+    `);
+    db.exec("BEGIN");
+    try {
+      for (let index = 0; index < 300; index += 1) {
+        for (const [stage, action, outcome] of [
+          ["queued", "message.outbound.queued", "queued"],
+          ["platform", "message.outbound.platform-started", "platform_started"],
+        ] as const) {
+          insert.run(
+            `progress:${index}:${stage}`,
+            `source:${index}:${stage}`,
+            index * 2 + (stage === "queued" ? 1 : 2),
+            occurredAt + index,
+            action,
+            outcome,
+          );
+        }
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+
+    const page = pageOutboundMessageAuditEventsForRun({
+      runId: "run-progress",
+      database,
+      now: occurredAt,
+      offset: 510,
+      limit: 4,
+    });
+    expect(page.events.map((event) => event.outcome)).toEqual([
+      "queued",
+      "platform_started",
+      "queued",
+      "platform_started",
+    ]);
+    expect(page.nextCursor).toBeDefined();
+    expect(
+      pageOutboundMessageAuditEventsForRun({
+        runId: "run-progress",
+        database,
+        now: occurredAt,
+        after: page.nextCursor,
+        limit: 2,
+      }).events.map((event) => event.outcome),
+    ).toEqual(["queued", "platform_started"]);
+  });
+
   it("rejects a cursor whose owner row was pruned while preserving the other owner", () => {
     const database = databaseOptions();
     const occurredAt = Date.now();
