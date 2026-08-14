@@ -1,10 +1,6 @@
-// Ambient health chips in the sidebar footer: failing/overdue cron jobs and
-// expiring model auth. This replaces the removed Overview page's attention
-// list — alerts surface where the user already is instead of on a dashboard
-// they have to visit.
 import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
-import { html, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
@@ -16,32 +12,20 @@ import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
+import "./menu-surface.ts";
 import {
-  addDismissal,
-  dismissalStoreKey,
-  loadDismissals,
-  pruneDismissals,
-  saveDismissals,
-  type SidebarAttentionDismissals,
-} from "./sidebar-attention-dismissals.ts";
-import {
-  buildSidebarAutomationAttention,
-  buildSidebarAttentionItems,
+  buildSidebarIssuesSnapshot,
   type SidebarAutomationAttention,
-  type SidebarAttentionItem,
+  type SidebarIssueAction,
+  type SidebarIssueCondition,
 } from "./sidebar-attention-items.ts";
-import "./tooltip.ts";
 
-// Reloads are connection-scoped; a visibility change only refetches after the
-// snapshot is older than this, so tab switches stay free of request bursts.
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
-// Always-visible windows (the macOS app) never fire visibilitychange, so a
-// slow lifecycle-owned interval keeps the chips from going permanently stale.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
-const SIDEBAR_AUTOMATION_ATTENTION_CHANGE_EVENT = "sidebar-automation-attention-change";
+const SIDEBAR_ISSUES_CHANGE_EVENT = "sidebar-issues-change";
 
-export type SidebarAutomationAttentionChangeDetail = {
+export type SidebarIssuesChangeDetail = {
   automationAttention: SidebarAutomationAttention;
 };
 
@@ -51,25 +35,26 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   @state() private cronJobs: CronJob[] = [];
   @state() private modelAuthStatus: ModelAuthStatusResult | null = null;
-  @state() private dismissed: SidebarAttentionDismissals = {};
+  @state() private panelOpen = false;
+  @state() private panelPosition = { left: 8, bottom: 8 };
 
+  @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) onOpenApprovals?: () => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
   private loadedAgentId: string | null = null;
-  // Cron events may restart the combined task; retain the committed auth owner so an
-  // interrupted agent switch reissues auth instead of displaying the prior agent's alert.
+  // A cron event can restart the task mid-switch; retain the committed auth
+  // owner so the next task cannot display the prior agent's status.
   private modelAuthAgentId: string | null = null;
   private loadedAtMs = 0;
-  private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
-  private lastAutomationSummary = "";
+  private panelTrigger: HTMLElement | null = null;
+  private lastAutomationAttention: SidebarAutomationAttention | null = null;
 
   private readonly loadTask = new Task(this, {
     autoRun: false,
-    // Gateway identity matters when a replacement source reuses the same client object.
     args: () =>
       [
         null as ApplicationContext["gateway"] | null,
@@ -82,19 +67,19 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         return initialState;
       }
       const cron = createInitialCronState({ client, connected: true });
-      const loads: Promise<unknown>[] = [
-        loadCronJobsPage(cron).then(() => {
-          if (!signal.aborted) {
-            this.cronJobs = cron.cronJobs;
-          }
-        }),
-      ];
+      const cronLoad = async () => {
+        await loadCronJobsPage(cron);
+        while (cron.cronJobsHasMore && !cron.cronError) {
+          await loadCronJobsPage(cron, { append: true });
+        }
+        if (!signal.aborted) {
+          this.cronJobs = cron.cronJobs;
+        }
+      };
+      const loads: Promise<unknown>[] = [cronLoad()];
       if (refreshModelAuth && agentId) {
         loads.push(
-          loadModelAuthStatus(client, {
-            agentId,
-            signal,
-          })
+          loadModelAuthStatus(client, { agentId, signal })
             .catch(() => null)
             .then((modelAuthStatus) => {
               if (!signal.aborted) {
@@ -112,7 +97,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     },
     onComplete: () => {
       this.loadedAtMs = Date.now();
-      this.pruneAfterRefresh();
     },
   });
 
@@ -141,8 +125,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
           if (this.context?.gateway !== gateway || event.event !== "cron") {
             return;
           }
-          // The Automations page refreshes from the same event. Refresh this
-          // independent snapshot too so its ambient alert cannot contradict it.
           this.loadedClient = null;
           this.synchronize(gateway, { refreshModelAuth: false });
         }),
@@ -151,17 +133,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       () => this.context?.overlays,
       (overlays, notify) => overlays.subscribe(() => notify()),
     );
-
-  // Cross-tab sync: another tab's dismiss/prune fires "storage" here, so this
-  // tab re-reads instead of rendering (or later writing) a stale snapshot.
-  private readonly syncDismissalsFromStorage = (event: StorageEvent) => {
-    if (!this.dismissedScope) {
-      return;
-    }
-    if (event.key === null || event.key === dismissalStoreKey(this.dismissedScope)) {
-      this.dismissed = loadDismissals(this.dismissedScope);
-    }
-  };
 
   private readonly refreshIfStale = () => {
     if (document.visibilityState !== "visible") {
@@ -174,16 +145,22 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
   };
 
+  private readonly closeOnOutsidePointer = (event: PointerEvent) => {
+    if (!this.panelOpen || event.composedPath().includes(this)) {
+      return;
+    }
+    this.closePanel(false);
+  };
+
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("visibilitychange", this.refreshIfStale);
-    globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
     this.idleRefreshTimer = globalThis.setInterval(this.refreshIfStale, IDLE_REFRESH_INTERVAL_MS);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.refreshIfStale);
-    globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
+    document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
     if (this.idleRefreshTimer !== null) {
       globalThis.clearInterval(this.idleRefreshTimer);
       this.idleRefreshTimer = null;
@@ -197,16 +174,39 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
+  protected override willUpdate(changed: PropertyValues<this>) {
+    if (changed.has("activeRouteId") && changed.get("activeRouteId") !== undefined) {
+      this.closePanel(false);
+    }
+    if (this.panelOpen && this.currentSnapshot().conditions.length === 0) {
+      this.closePanel(false);
+    }
+  }
+
+  protected override updated(changed: PropertyValues<this>) {
+    super.updated(changed);
+    const snapshot = this.currentSnapshot();
+    const attention = snapshot.automationAttention;
+    if (
+      attention.count !== this.lastAutomationAttention?.count ||
+      attention.severity !== this.lastAutomationAttention?.severity
+    ) {
+      this.lastAutomationAttention = attention;
+      this.dispatchEvent(
+        new CustomEvent<SidebarIssuesChangeDetail>(SIDEBAR_ISSUES_CHANGE_EVENT, {
+          bubbles: true,
+          composed: true,
+          detail: { automationAttention: attention },
+        }),
+      );
+    }
+  }
+
   private synchronize(
     gateway: ApplicationContext["gateway"],
     options: { refreshModelAuth?: boolean } = {},
   ) {
     const snapshot = gateway.snapshot;
-    const gatewayUrl = gateway.connection.gatewayUrl;
-    if (gatewayUrl && gatewayUrl !== this.dismissedScope) {
-      this.dismissedScope = gatewayUrl;
-      this.dismissed = loadDismissals(gatewayUrl);
-    }
     if (snapshot.phase !== "connected" || !snapshot.client) {
       void this.loadTask.run([null, null, null, false]);
       this.loadedClient = null;
@@ -236,115 +236,164 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     ]);
   }
 
-  // Re-arm stale snoozes only right after this tab's own data refresh: fresh
-  // data is the only safe basis for deciding a chip is gone. Pruning from
-  // render/update hooks would let a hidden tab with stale data clobber a
-  // dismissal another tab just wrote (its storage event triggers an update
-  // here). Against the persisted map, not the in-memory snapshot, for the
-  // same lost-update reason as addDismissal. A failed fetch (empty cron list,
-  // null auth status) prunes those kinds, which fails safe — re-nag, never
-  // stay hidden.
-  private pruneAfterRefresh() {
-    if (!this.dismissedScope) {
-      return;
-    }
-    const items = buildSidebarAttentionItems({
+  private currentSnapshot() {
+    return buildSidebarIssuesSnapshot({
       cronJobs: this.cronJobs,
-      modelAuthStatus: this.modelAuthStatus,
-      modelAuthAgentId: this.modelAuthAgentId,
+      modelAuthStatus: this.modelAuthAgentId === this.loadedAgentId ? this.modelAuthStatus : null,
       approvalQueue: this.context?.overlays.snapshot.approvalQueue ?? [],
       now: Date.now(),
     });
-    const stored = loadDismissals(this.dismissedScope);
-    const pruned = pruneDismissals(stored, items);
-    if (pruned !== stored) {
-      saveDismissals(this.dismissedScope, pruned);
-    }
-    this.dismissed = pruned;
   }
 
-  private dismiss(item: SidebarAttentionItem) {
-    if (!this.dismissedScope) {
+  private openPanel(trigger: HTMLElement) {
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(304, globalThis.innerWidth - 16);
+    this.panelTrigger = trigger;
+    this.panelPosition = {
+      left: Math.max(8, Math.min(rect.right - width, globalThis.innerWidth - width - 8)),
+      bottom: Math.max(8, globalThis.innerHeight - rect.top + 6),
+    };
+    this.panelOpen = true;
+    document.addEventListener("pointerdown", this.closeOnOutsidePointer, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-issues-panel [data-autofocus]")?.focus();
+    });
+  }
+
+  private closePanel(restoreFocus: boolean) {
+    if (!this.panelOpen) {
       return;
     }
-    this.dismissed = addDismissal(this.dismissedScope, item.kind, item.signature);
+    const trigger = this.panelTrigger;
+    this.panelOpen = false;
+    this.panelTrigger = null;
+    document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
+    if (restoreFocus) {
+      void this.updateComplete.then(() => trigger?.focus());
+    }
   }
 
-  private open(item: SidebarAttentionItem) {
-    if (item.action.kind === "openApprovals") {
+  private runAction(action: SidebarIssueAction) {
+    this.closePanel(false);
+    if (action.kind === "openApprovals") {
       this.onOpenApprovals?.();
       return;
     }
-    this.onNavigate?.(item.action.routeId);
+    this.onNavigate?.(action.routeId);
   }
 
-  protected override updated() {
-    const automationAttention = buildSidebarAutomationAttention({
-      cronJobs: this.cronJobs,
-      now: Date.now(),
-    });
-    const summary = `${automationAttention.count}:${automationAttention.severity ?? ""}`;
-    if (summary === this.lastAutomationSummary) {
+  private readonly handlePanelKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.closePanel(true);
       return;
     }
-    this.lastAutomationSummary = summary;
-    this.dispatchEvent(
-      new CustomEvent<SidebarAutomationAttentionChangeDetail>(
-        SIDEBAR_AUTOMATION_ATTENTION_CHANGE_EVENT,
-        {
-          bubbles: true,
-          composed: true,
-          detail: { automationAttention },
-        },
-      ),
+    if (event.key !== "Tab") {
+      return;
+    }
+    const panel = event.currentTarget as HTMLElement;
+    const focusable = Array.from(
+      panel.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex="0"]'),
     );
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+  };
+
+  private renderCondition(condition: SidebarIssueCondition, autofocus: boolean) {
+    const actionLabel = condition.sourceKind === "provider" ? t("attention.reconnect") : undefined;
+    return html`
+      <button
+        type="button"
+        class="sidebar-issues-panel__row sidebar-issues-panel__row--${condition.severity}"
+        data-sidebar-issue-id=${condition.id}
+        data-autofocus=${autofocus ? "true" : nothing}
+        aria-label=${`${condition.entityLabel}: ${condition.stateLabel}${
+          actionLabel ? `, ${actionLabel}` : ""
+        }`}
+        @click=${() => this.runAction(condition.action)}
+      >
+        <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[condition.icon]}</span>
+        <span class="sidebar-issues-panel__content">
+          <span class="sidebar-issues-panel__entity" title=${condition.entityLabel}
+            >${condition.entityLabel}</span
+          >
+          <span class="sidebar-issues-panel__state">${condition.stateLabel}</span>
+        </span>
+        ${actionLabel
+          ? html`<span class="sidebar-issues-panel__action">${actionLabel}</span>`
+          : html`<span class="sidebar-issues-panel__chevron" aria-hidden="true"
+              >${icons.chevronRight}</span
+            >`}
+      </button>
+    `;
   }
+
 
   override render() {
     if (this.context?.gateway.snapshot.phase !== "connected") {
       return nothing;
     }
-    const items = buildSidebarAttentionItems({
-      cronJobs: this.cronJobs,
-      modelAuthStatus: this.modelAuthStatus,
-      modelAuthAgentId: this.modelAuthAgentId,
-      approvalQueue: this.context.overlays.snapshot.approvalQueue,
-      now: Date.now(),
-    }).filter((item) => this.dismissed[item.kind] !== item.signature);
-    if (items.length === 0) {
-      return nothing;
-    }
+    const conditions = this.currentSnapshot().conditions;
+    const count = conditions.length;
+    const blocking = conditions.filter((condition) => condition.severity === "blocking").length;
+    const issueLabel = t(count === 1 ? "attention.issue" : "attention.issues", {
+      count: String(count),
+    });
+    const ariaLabel = t("attention.issuesAria", {
+      issues: issueLabel,
+      blocking: String(blocking),
+    });
     return html`
-      <div class="sidebar-attention" role="status">
-        ${items.map(
-          (item) => html`
-            <div class="sidebar-attention__item sidebar-attention__item--${item.severity}">
-              <openclaw-tooltip .content=${item.detail ?? item.label}>
-                <button
-                  type="button"
-                  class="sidebar-attention__open"
-                  @click=${() => this.open(item)}
-                >
-                  <span class="sidebar-attention__icon" aria-hidden="true"
-                    >${icons[item.icon]}</span
-                  >
-                  <span class="sidebar-attention__label">${item.label}</span>
-                </button>
-              </openclaw-tooltip>
-              <openclaw-tooltip .content=${t("common.dismiss")}>
-                <button
-                  type="button"
-                  class="sidebar-attention__dismiss"
-                  aria-label=${t("common.dismiss")}
-                  @click=${() => this.dismiss(item)}
-                >
-                  ${icons.x}
-                </button>
-              </openclaw-tooltip>
-            </div>
-          `,
-        )}
-      </div>
+      ${count > 0
+        ? html`
+            <span class="sr-only" role="status" aria-live="polite">${ariaLabel}</span>
+            <button
+              type="button"
+              class="sidebar-issues-button"
+              aria-expanded=${String(this.panelOpen)}
+              aria-haspopup="dialog"
+              aria-label=${ariaLabel}
+              @click=${(event: MouseEvent) =>
+                this.panelOpen
+                  ? this.closePanel(true)
+                  : this.openPanel(event.currentTarget as HTMLElement)}
+            >
+              <span class="sidebar-issues-button__icon" aria-hidden="true">${icons.bell}</span>
+              <span class="sidebar-issues-button__count" aria-hidden="true"
+                >${count > 9 ? "9+" : count}</span
+              >
+            </button>
+          `
+        : nothing}
+      ${this.panelOpen
+        ? html`
+            <openclaw-menu-surface>
+              <section
+                class="sidebar-issues-panel"
+                role="dialog"
+                aria-label=${t("attention.issuesTitle")}
+                style=${`left:${this.panelPosition.left}px;bottom:${this.panelPosition.bottom}px`}
+                @keydown=${this.handlePanelKeydown}
+              >
+                <header class="sidebar-issues-panel__header">
+                  <h2 class="sidebar-issues-panel__heading">${t("attention.issuesTitle")}</h2>
+                </header>
+                <div class="sidebar-issues-panel__list">
+                  ${conditions.map((condition, index) =>
+                    this.renderCondition(condition, index === 0),
+                  )}
+                </div>
+              </section>
+            </openclaw-menu-surface>
+          `
+        : nothing}
     `;
   }
 }

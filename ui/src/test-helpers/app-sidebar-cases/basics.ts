@@ -32,7 +32,7 @@ describe("AppSidebar update card wiring", () => {
     expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
   });
 
-  it("renders the update card in the footer after the attention slot and forwards its action", async () => {
+  it("renders updates above the footer bar and forwards its action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onUpdate = vi.fn();
@@ -48,8 +48,10 @@ describe("AppSidebar update card wiring", () => {
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-shell__footer");
-    // Attention chips (when present) stack above the update card.
-    expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-attention");
+    expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-update-card");
+    expect(
+      footer?.querySelector(".sidebar-footer-bar > openclaw-sidebar-attention"),
+    ).not.toBeNull();
     const card = footer?.querySelector("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
     const restoreDialogPolyfill = installDialogPolyfill();
@@ -209,6 +211,7 @@ describe("AppSidebar viewer presence", () => {
     expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
       "button",
       "span",
+      "openclaw-sidebar-attention",
     ]);
     gatewayHarness.gateway.updateSelfUser?.({
       name: "Augusta Ada",

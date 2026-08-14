@@ -22,25 +22,6 @@ import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from
 
 type SidebarMenuPosition = { x: number; y: number };
 
-function renderAutomationAttentionBadge(attention: SidebarAutomationAttention | undefined) {
-  if (!attention || attention.count <= 0) {
-    return nothing;
-  }
-  const label = t(
-    attention.count === 1
-      ? "attention.automationNeedsAttention"
-      : "attention.automationsNeedAttention",
-    { count: String(attention.count) },
-  );
-  return html`<openclaw-tooltip .content=${label}>
-    <span
-      class="sidebar-nav-health-badge sidebar-nav-health-badge--${attention.severity ?? "warning"}"
-      role="status"
-      aria-label=${label}
-      >${attention.count > 9 ? "9+" : attention.count}</span
-    >
-  </openclaw-tooltip>`;
-}
 
 /** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
@@ -82,6 +63,24 @@ type SidebarNavRouteParams = {
   attention?: SidebarAutomationAttention;
 };
 
+function renderAutomationAttentionIndicator(attention: SidebarAutomationAttention | undefined) {
+  if (!attention?.count || !attention.severity) {
+    return nothing;
+  }
+  const label = t(
+    attention.count === 1
+      ? "attention.automationNeedsAttention"
+      : "attention.automationsNeedAttention",
+    { count: String(attention.count) },
+  );
+  return html`<span
+    class="sidebar-automation-attention-badge sidebar-automation-attention-badge--${attention.severity}"
+    role="img"
+    aria-label=${label}
+    >${attention.count > 9 ? "9+" : attention.count}</span
+  >`;
+}
+
 export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
   return html`
     <a
@@ -104,7 +103,7 @@ export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
         >${icons[navigationIconForRoute(params.routeId)]}</span
       >
       <span class="nav-item__text">${titleForRoute(params.routeId)}</span>
-      ${renderAutomationAttentionBadge(params.attention)}
+      ${renderAutomationAttentionIndicator(params.attention)}
     </a>
   `;
 }
@@ -150,7 +149,7 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   activeRouteId: NavigationRouteId | undefined;
   activeWorkboardBoardId: string;
   sidebarEntries: readonly string[];
-  automationAttention: SidebarAutomationAttention;
+  automationAttention?: SidebarAutomationAttention;
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
   onTabAway: () => void;
@@ -182,7 +181,9 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
           >${icons[navigationIconForRoute(routeId)]}</span
         >
         <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-        ${routeId === "cron" ? renderAutomationAttentionBadge(params.automationAttention) : nothing}
+        ${routeId === "cron"
+          ? renderAutomationAttentionIndicator(params.automationAttention)
+          : nothing}
       </a>
     </wa-dropdown-item>
   `;

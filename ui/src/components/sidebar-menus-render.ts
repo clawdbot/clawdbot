@@ -355,7 +355,7 @@ export function renderSidebarMoreMenuForController(controller: SidebarMenusContr
     activeRouteId: host.activeRouteId,
     activeWorkboardBoardId: activeWorkboardBoardIsPinned(host) ? host.activeWorkboardBoardId : "",
     sidebarEntries: host.reconciledSidebarZone().sidebarEntries,
-    automationAttention: host.automationAttention,
+    automationAttention: host.sidebarAutomationAttention,
     isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
     onTabAway: () => trigger?.focus(),
     onClose: (restoreFocus) => {

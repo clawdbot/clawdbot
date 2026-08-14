@@ -1405,113 +1405,6 @@ openclaw-settings-save-indicator {
   }
 }
 
-/* Ambient health chips (failed cron, expiring model auth) above the footer bar. */
-.sidebar-attention {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 0 8px 10px;
-}
-
-.sidebar-attention__item {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-hover);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-}
-
-/* Navigate + dismiss are sibling buttons inside the pill (buttons can't nest);
-   the open button carries the click padding so the whole pill stays a target. */
-.sidebar-attention__open {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0 6px 8px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.sidebar-attention__dismiss {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 8px 6px 6px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-  opacity: 0.6;
-}
-
-.sidebar-attention__dismiss:hover {
-  color: var(--text);
-  opacity: 1;
-}
-
-.sidebar-attention__dismiss svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-attention__item--warning {
-  border-color: var(--warn-subtle);
-  background: rgba(234, 179, 8, 0.06);
-}
-
-.sidebar-attention__item--error {
-  border-color: var(--danger-subtle);
-  background: rgba(239, 68, 68, 0.06);
-}
-
-.sidebar-attention__item:hover {
-  border-color: var(--border-strong);
-}
-
-.sidebar-attention__icon {
-  display: inline-flex;
-  flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  color: var(--warn);
-}
-
-.sidebar-attention__item--error .sidebar-attention__icon {
-  color: var(--danger);
-}
-
-.sidebar-attention__icon svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-attention__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sidebar-update-card {
   margin: 0 8px 10px;
 }
@@ -3495,8 +3388,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   height: 6px;
 }
 
-.sidebar-agent-approval-count,
-.sidebar-nav-health-badge {
+.sidebar-agent-approval-count {
   display: inline-flex;
   min-width: 18px;
   height: 18px;
@@ -3522,20 +3414,11 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   text-align: left;
 }
 
-.sidebar-nav-health-badge {
-  margin-left: auto;
-}
-
 .sidebar-session-sort:focus-visible,
 .sidebar-session-group-actions:focus-visible,
 .sidebar-child-session-toggle:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 1px var(--sidebar-focus-visible);
-}
-
-.sidebar-nav-health-badge--danger {
-  background: color-mix(in srgb, var(--danger) 18%, transparent);
-  color: var(--danger);
 }
 
 /* Home keeps run state plus outbox/draft counts together at the row edge. */
@@ -3563,6 +3446,208 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   gap: 4px;
   min-height: 60px;
   padding: 4px 0 2px;
+}
+
+openclaw-sidebar-attention {
+  display: contents;
+}
+
+.sidebar-issues-button {
+  position: relative;
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.sidebar-issues-button:hover,
+.sidebar-issues-button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.sidebar-issues-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  color: var(--text);
+}
+
+.sidebar-issues-button__icon,
+.sidebar-issues-button__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sidebar-issues-button__icon {
+  display: inline-flex;
+}
+
+.sidebar-issues-button__count,
+.sidebar-automation-attention-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: calc(10px * var(--control-ui-text-scale));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.sidebar-issues-button__count {
+  position: absolute;
+  inset: 1px 0 auto auto;
+  background: var(--danger);
+  color: var(--danger-foreground, white);
+}
+
+.sidebar-automation-attention-badge {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+.sidebar-automation-attention-badge--danger {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.sidebar-automation-attention-badge--warning {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.sidebar-issues-panel {
+  position: fixed;
+  z-index: 121;
+  width: min(304px, calc(100vw - 16px));
+  max-height: min(560px, 60vh);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+  animation: menu-in 140ms var(--ease-out);
+}
+
+.sidebar-issues-panel__header {
+  padding: 12px 12px 8px;
+}
+
+.sidebar-issues-panel__heading {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.sidebar-issues-panel__list {
+  max-height: min(508px, calc(60vh - 44px));
+  overflow-y: auto;
+  padding: 0 6px 6px;
+}
+
+.sidebar-issues-panel__row {
+  display: flex;
+  width: 100%;
+  min-height: 46px;
+  align-items: center;
+  gap: 9px;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.sidebar-issues-panel__row:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-issues-panel__row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-issues-panel__icon {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+
+.sidebar-issues-panel__row--blocking .sidebar-issues-panel__icon {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.sidebar-issues-panel__icon svg,
+.sidebar-issues-panel__chevron svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-issues-panel__content {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-issues-panel__entity,
+.sidebar-issues-panel__state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-issues-panel__entity {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+}
+
+.sidebar-issues-panel__state {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-issues-panel__action {
+  flex: none;
+  color: var(--accent);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-issues-panel__chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
 }
 
 .sidebar-identity-card {

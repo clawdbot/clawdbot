@@ -28,8 +28,8 @@ const RENAMED_FEATURE_KEYS = [
   "subtitles.automation",
   "memoryPage.dreaming.intro",
   "tasksPage.runtime.cron",
-  "attention.cronFailed",
-  "attention.cronOverdue",
+  "attention.failingRepeatedly",
+  "attention.overdue",
   "palette.items.scheduled",
 ] as const;
 

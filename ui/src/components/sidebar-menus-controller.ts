@@ -69,7 +69,6 @@ type SidebarMenusRenderer = {
 export interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
-  readonly automationAttention: SidebarAutomationAttention;
   readonly activeWorkboardBoardId: string;
   readonly basePath: string;
   readonly canPairDevice: boolean;
@@ -100,6 +99,7 @@ export interface SidebarMenusControllerHost
   readonly sessionCreatorOptions: readonly SessionCreatorOption[];
   readonly sessionOwnershipVisible: boolean;
   readonly sidebarEntries: readonly string[];
+  readonly sidebarAutomationAttention?: SidebarAutomationAttention;
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;
   hideSessionCatalog(catalogId: string): void;
@@ -546,12 +546,12 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       active:
         isSidebarRouteActive(this.host.activeRouteId, routeId) &&
         !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
+      attention: routeId === "cron" ? this.host.sidebarAutomationAttention : undefined,
       onNavigate: () => {
         this.host.onNavigate?.(routeId, sessionTarget?.options);
       },
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,
-      attention: routeId === "cron" ? this.host.automationAttention : undefined,
     });
   }
 

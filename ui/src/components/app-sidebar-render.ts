@@ -37,11 +37,13 @@ import {
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
+import type { SidebarAutomationAttention } from "./sidebar-attention-items.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   activeWorkboardBoardId: string;
+  sidebarAutomationAttention: SidebarAutomationAttention;
   offline: boolean;
   onOpenApprovals?: () => void;
   getRouteSessionKey(): string;
@@ -309,6 +311,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span
       >
+      ${renderAppSidebarAttention(host)}
     </div>
   `;
 }
@@ -400,8 +403,9 @@ function renderWorkboardBoard(
   );
 }
 
-export function renderAppSidebarAttention(host: AppSidebarRenderHost) {
+function renderAppSidebarAttention(host: AppSidebarRenderHost) {
   return html`<openclaw-sidebar-attention
+    .activeRouteId=${host.activeRouteId}
     .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
     .onOpenApprovals=${() => host.onOpenApprovals?.()}
   ></openclaw-sidebar-attention>`;
