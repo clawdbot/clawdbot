@@ -69,7 +69,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Gateway concurrent-turn responsiveness:** prepare enabled plugin tool runtimes at the Gateway lifecycle boundary, reuse lifecycle plugin metadata across workspaces without local plugins, yield between serialized runtime generations, and collapse workspace-transfer owner reads so handshakes and health checks remain responsive during node-host fan-out.
 - **Codex subagent fan-out:** settle successful terminal yields immediately and preserve requester ownership so completed children reliably resume their parent.
 - **Control UI session companion:** load bounded visible session context before answering, keep unavailable questions retryable, and prevent private companion reference wrappers from appearing as answers. Fixes #120746. Thanks @shakkernerd.
 - **Telegram live locations:** expose initial, moving, and stopped live-location updates through the channel-neutral `message_received` hook without starting agent turns for edits.
