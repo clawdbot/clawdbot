@@ -511,6 +511,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
+      attachmentLimits: this.context.gateway.snapshot.hello?.policy?.attachments,
       getAttachments: () => state.chatAttachments,
       pendingAttachmentReads: attachmentReads.pendingReads,
       getPendingAttachmentReads: () => attachmentReads.pendingReads,
