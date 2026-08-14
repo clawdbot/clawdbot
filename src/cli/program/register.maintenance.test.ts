@@ -113,11 +113,17 @@ describe("registerMaintenanceCommands doctor action", () => {
   });
 
   it("writes JSON when Doctor maintenance fails before producing a report", async () => {
-    doctorCommand.mockRejectedValue(new Error("maintenance failed"));
+    const token = "sk-abcdefghijklmnopqrstuv";
+    doctorCommand.mockRejectedValue(
+      new Error(`maintenance failed: Authorization: Bearer ${token}`),
+    );
 
     await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
 
-    expect(runtime.writeJson).toHaveBeenCalledWith({ error: "Error: maintenance failed" });
+    expect(runtime.writeJson).toHaveBeenCalledWith({
+      error: expect.stringContaining("Error: maintenance failed: Authorization: Bearer"),
+    });
+    expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });

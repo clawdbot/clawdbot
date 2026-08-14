@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
@@ -147,7 +147,11 @@ export function registerMaintenanceCommands(program: Command) {
             });
             defaultRuntime.exit(exitCode);
           },
-          (err) => exitDoctorError(String(err), opts.json === true || !process.stdout.isTTY),
+          (err) =>
+            exitDoctorError(
+              formatError(new Error(String(err))),
+              opts.json === true || !process.stdout.isTTY,
+            ),
         );
         return;
       }
@@ -196,7 +200,9 @@ export function registerMaintenanceCommands(program: Command) {
           });
           defaultRuntime.exit(0);
         },
-        opts.json ? (err: unknown) => exitDoctorError(String(err), true) : undefined,
+        opts.json
+          ? (err: unknown) => exitDoctorError(formatError(new Error(String(err))), true)
+          : undefined,
       );
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
