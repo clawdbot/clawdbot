@@ -14,6 +14,19 @@ export const desktopPanelStyles = css`
   .bp-title {
     min-width: 0;
   }
+  .bp-icon[aria-disabled="true"] {
+    opacity: 0.4;
+  }
+  .desktop-fullscreen-icon > svg {
+    width: 15px;
+    height: 15px;
+  }
+  .bp:fullscreen {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
   .desktop-content {
     display: flex;
     flex: 1;

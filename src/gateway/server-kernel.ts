@@ -8,6 +8,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
+import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -17,6 +18,10 @@ type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
 type ReadPreparedGatewayModelCatalog =
   typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
+type LoadPreparedGatewayModelCatalogSnapshot =
+  typeof import("./server-model-catalog.js").loadPreparedGatewayModelCatalogSnapshot;
+type ReadPreparedGatewayModelCatalogOwnerSnapshot =
+  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalogOwnerSnapshot;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -77,6 +82,22 @@ const readPreparedGatewayModelCatalog: ReadPreparedGatewayModelCatalog = async (
   const mod = await loadGatewayModelCatalogModule();
   return mod.readPreparedGatewayModelCatalog(...args);
 };
+const loadPreparedGatewayModelCatalogSnapshot: LoadPreparedGatewayModelCatalogSnapshot = async (
+  ...args
+) => {
+  const mod = await loadGatewayModelCatalogModule();
+  return mod.loadPreparedGatewayModelCatalogSnapshot(...args);
+};
+const readPreparedGatewayModelCatalogOwnerSnapshot: ReadPreparedGatewayModelCatalogOwnerSnapshot =
+  async (...args) => {
+    const mod = await loadGatewayModelCatalogModule();
+    return mod.readPreparedGatewayModelCatalogOwnerSnapshot(...args);
+  };
+
+registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+  loadDeferred: (params) => loadPreparedGatewayModelCatalogSnapshot(params),
+  readPrepared: readPreparedGatewayModelCatalogOwnerSnapshot,
+});
 
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =

@@ -13,6 +13,9 @@ import { FsSafeError } from "../../infra/fs-safe.js";
 /* ------------------------------------------------------------------ */
 
 const mocks = vi.hoisted(() => ({
+  sharedAuthStoreOwnership: { location: "legacy-main" } as {
+    location: "legacy-main" | "state-db";
+  },
   loadConfigReturn: {} as Record<string, unknown>,
   listAgentEntries: vi.fn((_cfg?: unknown) => [] as Array<Record<string, unknown>>),
   findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
@@ -178,7 +181,7 @@ vi.mock("../../agents/auth-profiles/path-resolve.js", async () => ({
   ...(await vi.importActual<typeof import("../../agents/auth-profiles/path-resolve.js")>(
     "../../agents/auth-profiles/path-resolve.js",
   )),
-  resolveSharedAuthStoreOwnership: () => ({ location: "legacy-main" }),
+  resolveSharedAuthStoreOwnership: () => mocks.sharedAuthStoreOwnership,
   resolveSharedAuthStorePath: () => "/resolved/agents/main/agent/openclaw-agent.sqlite",
 }));
 
@@ -360,6 +363,7 @@ const { testing: agentsTesting, agentsHandlers } = await import("./agents.js");
 beforeEach(() => {
   agentsTesting.resetDepsForTests();
   mocks.omitConfigMutationResult = false;
+  mocks.sharedAuthStoreOwnership = { location: "legacy-main" };
   mocks.withAgentExecApprovalsRemoved
     .mockReset()
     .mockImplementation(async (_agentId: string, commit: () => Promise<unknown>) => await commit());
@@ -2940,6 +2944,23 @@ describe("agents.delete", () => {
     expectRespondErrorContaining(respond, "owns the legacy shared auth store");
     expectRespondErrorContaining(respond, "openclaw doctor --fix");
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("deletes main through the normal journal path after shared auth relocation", async () => {
+    mocks.sharedAuthStoreOwnership = { location: "state-db" };
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+    };
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "main",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "main" });
+    expect(mocks.beginAgentDeletionCommit).toHaveBeenCalledOnce();
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
   it("returns not found when a concurrent delete wins the delete race", async () => {

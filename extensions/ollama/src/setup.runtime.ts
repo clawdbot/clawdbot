@@ -31,7 +31,6 @@ import {
   buildOllamaProvider,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
-  isReasoningModelHeuristic,
   isOllamaCloudModel,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
@@ -43,7 +42,7 @@ import {
   inspectOllamaModelsForSetup,
   mergeUniqueModelNames,
   normalizeOllamaModelName,
-  selectAppGuidedOllamaModelId,
+  selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
 import { pullOllamaModel, pullOllamaModelNonInteractive } from "./setup-pull.js";
 
@@ -366,18 +365,9 @@ async function promptAndConfigureHostBackedOllama(params: {
     baseUrl,
     prompter: params.prompter,
   });
-  const localDefaultModelId = selectAppGuidedOllamaModelId(
-    [...discoveredModelsByName.values()].map((model) => ({
-      id: model.name,
-      contextWindow: model.contextWindow,
-      supportsTools: model.capabilities?.includes("tools") === true,
-      reasoning:
-        model.capabilities?.includes("thinking") === true || isReasoningModelHeuristic(model.name),
-      size: model.size,
-    })),
-  );
   const cloudDefaultModelId = suggestedModelNames.find(isOllamaCloudModel);
-  const defaultModelId = localDefaultModelId ?? cloudDefaultModelId;
+  const defaultModelId =
+    selectAppGuidedOllamaModelFromDiscovery(discoveredModelsByName.values()) ?? cloudDefaultModelId;
 
   return {
     ...(defaultModelId ? { defaultModel: `ollama/${defaultModelId}` } : {}),
@@ -485,6 +475,7 @@ export async function configureOllamaNonInteractive(params: {
 
   const requestedDefaultModelId =
     explicitModel ??
+    selectAppGuidedOllamaModelFromDiscovery(discoveredModelsByName.values()) ??
     expectDefined(OLLAMA_SUGGESTED_MODELS_LOCAL[0], "default suggested Ollama model");
   const availableModelNames = new Set(modelNames);
   const availableDefaultModelId = findAvailableOllamaModelName(

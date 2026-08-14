@@ -211,7 +211,10 @@ function runCiManifestFixture(options: {
           export const createNodeTestShardBundles = (options = {}) => [{
             checkName: "bundled-node-plan",
             configs: ["test/vitest/bundled.config.ts"],
-            env: { OPENCLAW_CI_TEST_COMPACT_MODE: options.compactMode ?? "full" },
+            env: {
+              OPENCLAW_CI_TEST_COMPACT_MODE: options.compactMode ?? "full",
+              OPENCLAW_CI_TEST_RUNNER_BACKEND: options.runnerBackend ?? "",
+            },
             requiresDist: false,
             runner: "ubuntu-24.04",
             shardName: "bundled-node-plan",
@@ -2624,6 +2627,49 @@ NODE
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+  });
+
+  it("splits Windows tests only for the GitHub-hosted backend", () => {
+    const workflow = readCiWorkflow();
+    const runStep = workflow.jobs["checks-windows"].steps.find(
+      (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+    const blacksmith = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "push",
+      historicalCompatibility: false,
+      runnerBackend: "blacksmith",
+    });
+    const github = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "push",
+      historicalCompatibility: false,
+      runnerBackend: "github",
+    });
+
+    expect(blacksmith.status, blacksmith.output).toBe(0);
+    expect(github.status, github.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(blacksmith.outputs.checks_windows_matrix, "Blacksmith Windows matrix"),
+      ).include,
+    ).toEqual([
+      {
+        check_name: "checks-windows-node-test",
+        runtime: "node",
+        task: "test",
+        runner: "blacksmith-8vcpu-windows-2025",
+      },
+    ]);
+    expect(
+      JSON.parse(expectDefined(github.outputs.checks_windows_matrix, "GitHub Windows matrix"))
+        .include,
+    ).toEqual([
+      { check_name: "checks-windows-node-test-1", runtime: "node", task: "test-1" },
+      { check_name: "checks-windows-node-test-2", runtime: "node", task: "test-2" },
+    ]);
+    expect(runStep.run).toContain("test-1)\n    pnpm test:windows:ci:1");
+    expect(runStep.run).toContain("test-2)\n    pnpm test:windows:ci:2");
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -5397,7 +5443,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContainEqual(
       expect.objectContaining({
         check_name: "bundled-node-plan",
-        env: { OPENCLAW_CI_TEST_COMPACT_MODE: "full" },
+        env: {
+          OPENCLAW_CI_TEST_COMPACT_MODE: "full",
+          OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
+        },
         shard_name: "bundled-node-plan",
       }),
     );
@@ -5417,7 +5466,33 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContainEqual(
       expect.objectContaining({
         check_name: "bundled-node-plan",
-        env: { OPENCLAW_CI_TEST_COMPACT_MODE: "push" },
+        env: {
+          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
+          OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
+        },
+      }),
+    );
+
+    const githubPush = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "push",
+      runnerBackend: "github",
+    });
+    expect(githubPush.status, githubPush.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          githubPush.outputs.checks_node_core_nondist_matrix,
+          "GitHub-hosted push node core nondist matrix output",
+        ),
+      ).include,
+    ).toContainEqual(
+      expect.objectContaining({
+        check_name: "bundled-node-plan",
+        env: {
+          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
+          OPENCLAW_CI_TEST_RUNNER_BACKEND: "github",
+        },
       }),
     );
 
@@ -5474,7 +5549,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect.arrayContaining([
         expect.objectContaining({
           check_name: "bundled-node-plan",
-          env: { OPENCLAW_CI_TEST_COMPACT_MODE: "pull-request" },
+          env: {
+            OPENCLAW_CI_TEST_COMPACT_MODE: "pull-request",
+            OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
+          },
         }),
         expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
       ]),
@@ -6433,6 +6511,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifyStep.run).toContain("Required CI job did not succeed");
     expect(verifyStep.run).toContain("success | skipped");
     expect(verifyStep.run).toContain("Selected CI job did not succeed");
+  });
+
+  it("runs Node 22 compatibility only from manual CI dispatches", () => {
+    const workflow = readCiWorkflow();
+    const compatibilityJob = workflow.jobs["checks-node-compat"];
+    const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
+    const fullReleaseDispatch = fullReleaseWorkflow.jobs.normal_ci.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and monitor CI",
+    );
+
+    expect(compatibilityJob.name).toBe("checks-node-compat-node22");
+    expect(compatibilityJob.if).toBe(
+      "needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'",
+    );
+    expect(fullReleaseDispatch.env.CHILD_WORKFLOW_KIND).toBe("ci");
+    expect(fullReleaseDispatch.run).toContain('dispatch_and_wait ci.yml "$dispatch_run_name"');
+    expect(fullReleaseDispatch.run).toContain('-f target_ref="$TARGET_SHA"');
   });
 
   it.skipIf(process.platform === "win32")(
@@ -7652,21 +7747,64 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);
-    expect(smokeProfileJob.strategy["max-parallel"]).toBe(4);
-    expect(
-      smokeProfileJob.strategy.matrix.include.map((entry: { slug: string }) => entry.slug),
-    ).toEqual(["profile-1-of-4", "profile-2-of-4", "profile-3-of-4", "profile-4-of-4"]);
-    expect(
-      smokeProfileJob.strategy.matrix.include.filter(
-        (entry: { docker_cache?: boolean }) => entry.docker_cache,
-      ),
-    ).toEqual([
+    expect(smokeProfileJob.strategy["max-parallel"]).toBe(
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 6 || 4 }}",
+    );
+    expect(smokeProfileJob.strategy.matrix).toBe(
+      "${{ fromJson(needs.preflight.outputs.qa_smoke_ci_matrix) }}",
+    );
+    const qaMatrices = Object.fromEntries(
+      (["blacksmith", "github"] as const).map((runnerBackend) => {
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          eventName: "push",
+          historicalCompatibility: false,
+          runnerBackend,
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        return [
+          runnerBackend,
+          JSON.parse(
+            expectDefined(manifest.outputs.qa_smoke_ci_matrix, `${runnerBackend} QA smoke matrix`),
+          ).include,
+        ];
+      }),
+    ) as Record<"blacksmith" | "github", Array<{ docker_cache?: boolean; slug: string }>>;
+    expect(qaMatrices.blacksmith.map((entry) => entry.slug)).toEqual([
+      "profile-1-of-4",
+      "profile-2-of-4",
+      "profile-3-of-4",
+      "profile-4-of-4",
+    ]);
+    expect(qaMatrices.github.map((entry) => entry.slug)).toEqual([
+      "profile-1-of-6",
+      "profile-2-of-6",
+      "profile-3-of-6",
+      "profile-4-of-6",
+      "profile-5-of-6",
+      "profile-6-of-6",
+    ]);
+    expect(qaMatrices.blacksmith.filter((entry) => entry.docker_cache)).toEqual([
       expect.objectContaining({
         lane: "profile-2",
         slug: "profile-2-of-4",
         docker_cache: true,
       }),
     ]);
+    expect(qaMatrices.github.filter((entry) => entry.docker_cache)).toEqual([]);
+    for (const [runnerBackend, expected] of [
+      ["blacksmith", 4],
+      ["github", 6],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(smokeProfileJob.strategy["max-parallel"], {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runnerBackend,
+          runAttempt: 1,
+        }),
+      ).toBe(expected);
+    }
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeDockerCacheStep.uses).toBe(
       "useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0",
@@ -7680,6 +7818,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(smokeDockerCacheStep.with["max-cache-size-mb"]).toBe(800000);
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
+    expect(smokeRunStep.run).toContain("createQaSmokeCiPart(partId, partCount)");
+    expect(smokeRunStep.env.PROFILE_PART_COUNT).toBe("${{ matrix.part_count }}");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
     expect(smokeRunStep.run).toContain("readQaScenarioPack");
     expect(smokeRunStep.run).toContain("isolate each scenario");

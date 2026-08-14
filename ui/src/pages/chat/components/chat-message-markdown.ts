@@ -52,16 +52,19 @@ export function detectJson(text: string): { parsed: unknown; pretty: string } | 
 /** Build a short summary label for collapsed JSON (type + key count or array length). */
 export function jsonSummaryLabel(parsed: unknown): string {
   if (Array.isArray(parsed)) {
-    return `Array (${parsed.length} item${parsed.length === 1 ? "" : "s"})`;
+    return t(
+      parsed.length === 1 ? "chat.codeBlock.jsonArrayItem" : "chat.codeBlock.jsonArrayItems",
+      { count: String(parsed.length) },
+    );
   }
   if (parsed && typeof parsed === "object") {
     const keys = Object.keys(parsed as Record<string, unknown>);
     if (keys.length <= 4) {
       return `{ ${keys.join(", ")} }`;
     }
-    return `Object (${keys.length} keys)`;
+    return t("chat.codeBlock.jsonObjectKeys", { count: String(keys.length) });
   }
-  return "JSON";
+  return t("chat.codeBlock.jsonBadge");
 }
 
 export type MessageActionDetails = {
