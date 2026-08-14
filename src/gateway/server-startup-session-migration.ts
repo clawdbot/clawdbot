@@ -50,7 +50,7 @@ type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["de
   writeSessionSqliteMigrationFailureReports?: SessionSqliteStartupFailureReportWriter;
 };
 
-export type SessionStartupPreflightFinding = {
+type SessionStartupPreflightFinding = {
   id: string;
   code: string;
   message: string;
