@@ -40,6 +40,7 @@
     "json5": "2.2.3",
     "lit": "3.3.3",
     "markdown-it": "14.3.0",
+    "markdown-it-cjk-friendly": "2.0.2",
     "markdown-it-task-lists": "2.1.1",
     "remend": "1.3.0"
   },

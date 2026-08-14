@@ -487,6 +487,23 @@ PY
       expect(html).toBe("<p><strong>bold</strong> and <em>italic</em></p>\n");
     });
 
+    it("renders CJK bold that contains quotes or full-width parentheses", () => {
+      // Regression: without markdown-it-cjk-friendly, `**` delimiters fail to
+      // close when a bold span wraps CJK text that also contains " or （）.
+      const quoted = toSanitizedMarkdownHtml('存在**"冷启动容器"**的TTFT');
+      expect(quoted).toBe('<p>存在<strong>"冷启动容器"</strong>的TTFT</p>\n');
+
+      const quotedBrace = toSanitizedMarkdownHtml(
+        '存在**"冷启动容器/实例"——如果X，这会造成偶发**的TTFT尖峰',
+      );
+      expect(quotedBrace).toBe(
+        '<p>存在<strong>"冷启动容器/实例"——如果X，这会造成偶发</strong>的TTFT尖峰</p>\n',
+      );
+
+      const parens = toSanitizedMarkdownHtml("存在**冷启动（容器/实例）**的TTFT");
+      expect(parens).toBe("<p>存在<strong>冷启动（容器/实例）</strong>的TTFT</p>\n");
+    });
+
     it("renders headings", () => {
       const html = toSanitizedMarkdownHtml("# Heading 1\n## Heading 2");
       expect(html).toBe("<h1>Heading 1</h1>\n<h2>Heading 2</h2>\n");

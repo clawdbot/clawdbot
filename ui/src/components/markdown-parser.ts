@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
@@ -103,6 +104,12 @@ export function createMarkdownParser(): MarkdownIt {
     breaks: true,
     linkify: true,
   });
+  // CJK-friendly emphasis flanking: without this, `**` delimiters cannot close
+  // when a bold span surrounds CJK text that also contains quotes (") or full-width
+  // parentheses (（）). This is the standard CJK styling pattern (e.g. **"术语"**),
+  // so missing the plugin leaves the markers raw in the rendered output.
+  // Matches packages/markdown-core/src/ir.ts, which already enables this plugin.
+  markdownParser.use(markdownItCjkFriendly);
   const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
 
   // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
