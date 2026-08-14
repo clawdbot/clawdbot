@@ -95,8 +95,9 @@ describe("orphan SQLite sidecar admission", () => {
             { suffix: testCase.suffix, contents: testCase.contents },
             ...testCase.benignSidecars,
           ].map((sidecar) => ({
-            ...sidecar,
+            contents: sidecar.contents,
             path: `${databasePath}${sidecar.suffix}`,
+            suffix: sidecar.suffix,
           }));
           for (const sidecar of sidecars) {
             fs.writeFileSync(sidecar.path, sidecar.contents);
