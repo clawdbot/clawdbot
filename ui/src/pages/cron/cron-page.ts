@@ -210,7 +210,7 @@ class CronPage extends OpenClawLightDomElement {
       connected: cronState.connected,
       cronModelSuggestions: this.cronModelSuggestions,
     };
-    await loadCronModelSuggestions(suggestionState, this.context.agentSelection.modelOwnerId);
+    await loadCronModelSuggestions(suggestionState, this.context.agentSelection.state.selectedId);
     if (
       this.isConnected &&
       this.cron === cronState &&

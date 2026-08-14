@@ -102,7 +102,6 @@ export const AgentOwnershipSchema = Type.Union([
 
 export const AgentsListResultSchema = closedObject({
   defaultId: NonEmptyString,
-  systemModelOwnerId: Type.Optional(NonEmptyString),
   ownership: Type.Optional(AgentOwnershipSchema),
   selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,

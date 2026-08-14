@@ -208,7 +208,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.modelAuthStatus = null;
       return;
     }
-    const agentId = this.context?.agentSelection.modelOwnerId ?? null;
+    const agentId = this.context?.agentSelection.state.selectedId ?? null;
     if (
       gateway === this.loadedGateway &&
       snapshot.client === this.loadedClient &&
@@ -242,6 +242,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const items = buildSidebarAttentionItems({
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
+      modelAuthAgentId: this.modelAuthAgentId,
       approvalQueue: this.context?.overlays.snapshot.approvalQueue ?? [],
       now: Date.now(),
     });
@@ -275,6 +276,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const items = buildSidebarAttentionItems({
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
+      modelAuthAgentId: this.modelAuthAgentId,
       approvalQueue: this.context.overlays.snapshot.approvalQueue,
       now: Date.now(),
     }).filter((item) => this.dismissed[item.kind] !== item.signature);

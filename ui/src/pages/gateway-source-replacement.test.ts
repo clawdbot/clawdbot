@@ -642,7 +642,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
     document.body.append(page);
     await page.updateComplete;
     page.debugStatus = null;
-    request.mockClear();
 
     const load = page.diagnosticsTask.run();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));

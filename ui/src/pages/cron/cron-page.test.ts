@@ -101,9 +101,6 @@ function createContext(
       get state() {
         return selectionState;
       },
-      get modelOwnerId() {
-        return selectionState.selectedId;
-      },
       set(agentId: string | null) {
         selectionState = { selectedId: agentId, scopeId: agentId };
         for (const listener of selectionListeners) {

@@ -2,7 +2,6 @@
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
-import { resolveModelOwnerAgentId } from "../../app/agent-selection.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
@@ -425,7 +424,6 @@ export async function dispatchChatSlashCommand(
       sessionsResultAgentId: host.sessionsResultAgentId,
       defaultAgentId: resolveUiDefaultAgentId(host),
       agentId: target.agentId,
-      modelOwnerAgentId: resolveModelOwnerAgentId(host.agentsList, target.agentId),
       ownsModelOverride: () => isChatCommandModelCacheOwnerCurrent(host, target),
     });
   } catch (err) {

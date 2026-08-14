@@ -98,9 +98,6 @@ function createHarness(initialScopeId: string) {
       selectedId: initialScopeId as string | null,
       scopeId: initialScopeId as string | null,
     },
-    get modelOwnerId() {
-      return this.state.selectedId;
-    },
     set: vi.fn(),
     setScope: vi.fn(),
     subscribe(listener: () => void) {

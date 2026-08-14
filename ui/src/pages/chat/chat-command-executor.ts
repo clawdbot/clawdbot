@@ -76,7 +76,6 @@ type SlashCommandContext = {
   sessionsResultAgentId?: string | null;
   defaultAgentId?: string;
   agentId?: string;
-  modelOwnerAgentId?: string | null;
   ownsModelOverride?: () => boolean;
 };
 
@@ -269,13 +268,11 @@ async function executeModel(
 ): Promise<SlashCommandResult> {
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
   const agentId = resolveSelectedAgentId(sessionKey, context);
-  const modelOwnerAgentId =
-    context.modelOwnerAgentId === undefined ? agentId : (context.modelOwnerAgentId ?? undefined);
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
         listSessions(context, selectedAgentListScope(sessionKey, context)),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, modelOwnerAgentId),
+        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
       ]);
       const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
       const model = session?.model || defaults?.model || "default";
@@ -310,7 +307,7 @@ async function executeModel(
     const requestedModel = args.trim();
     const resolvedModelCatalog = modelCatalog
       ? Promise.resolve(modelCatalog)
-      : loadModelCatalog(client, modelOwnerAgentId, { allowFailure: true });
+      : loadModelCatalog(client, agentId, { allowFailure: true });
     let resolvedOverride: ChatModelOverride | null = null;
     await patchSession(
       context,
@@ -781,11 +778,9 @@ async function loadThinkingCommandState(
 ) {
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
   const agentId = resolveSelectedAgentId(sessionKey, context);
-  const modelOwnerAgentId =
-    context.modelOwnerAgentId === undefined ? agentId : (context.modelOwnerAgentId ?? undefined);
   const [sessions, models] = await Promise.all([
     listSessions(context, selectedAgentListScope(sessionKey, context)),
-    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, modelOwnerAgentId),
+    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
   ]);
   const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {

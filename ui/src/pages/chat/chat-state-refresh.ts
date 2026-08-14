@@ -1,7 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { resolveModelOwnerAgentId } from "../../app/agent-selection.ts";
-import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -180,7 +178,7 @@ async function refreshCompatibilityModelCatalog(
   request: ChatMetadataRequest,
   opts?: { refresh?: boolean },
 ) {
-  const agentId = resolveModelOwnerAgentId(request.host.agentsList, request.agentId);
+  const agentId = request.agentId?.trim();
   if (!agentId) {
     return;
   }
@@ -274,17 +272,11 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
     return;
   }
   const client = host.client;
-  const agentId = resolveModelOwnerAgentId(host.agentsList, resolveChatAgentId(host));
-  if (!agentId) {
-    host.modelAuthStatusResult = { ts: 0, providers: [] };
-    host.modelAuthStatusError = null;
-    return;
-  }
   const connectionEpoch = host.connectionEpoch;
   try {
     const result = await loadModelAuthStatus(client, {
       ...opts,
-      agentId,
+      agentId: resolveChatAgentId(host),
     });
     if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
       return;
@@ -305,19 +297,13 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     return;
   }
   const client = host.client;
-  const chatAgentId = resolveChatAgentId(host);
-  const agentId = resolveModelOwnerAgentId(host.agentsList, chatAgentId);
-  if (!agentId) {
-    host.chatModelCatalogError = t("chat.modelControls.modelsUnavailable");
-    host.requestUpdate?.();
-    return;
-  }
+  const agentId = resolveChatAgentId(host);
   const connectionEpoch = host.connectionEpoch;
   const ownsRequest = () =>
     host.client === client &&
     host.connected &&
     host.connectionEpoch === connectionEpoch &&
-    resolveChatAgentId(host) === chatAgentId;
+    resolveChatAgentId(host) === agentId;
   host.chatModelsLoading = true;
   host.chatModelCatalogError = null;
   host.requestUpdate?.();

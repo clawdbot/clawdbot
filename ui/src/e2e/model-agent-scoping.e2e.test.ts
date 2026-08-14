@@ -36,11 +36,9 @@ suite.define(() => {
             type: "hello-ok",
           },
           "agents.list": {
-            systemModelOwnerId: "writer",
             agents: [
               { id: "writer", name: "Writer" },
               { id: "reviewer", name: "Reviewer" },
-              { id: "openclaw", kind: "system", name: "OpenClaw" },
             ],
             defaultId: "writer",
             ownership: "explicit",
@@ -76,27 +74,6 @@ suite.define(() => {
       ];
       expect(modelRequests.length).toBeGreaterThan(0);
       for (const request of modelRequests) {
-        expect(request.params).toEqual(expect.objectContaining({ agentId: "writer" }));
-      }
-
-      await page.goto(`${suite.server.baseUrl}chat/openclaw`);
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/openclaw");
-
-      const modelCountBeforeSystemRoutes = (await gateway.getRequests("models.list")).length;
-      await page.goto(`${suite.server.baseUrl}debug`);
-      await expect
-        .poll(async () => (await gateway.getRequests("models.list")).length)
-        .toBeGreaterThan(modelCountBeforeSystemRoutes);
-      const authCountBeforeSystemModels = (await gateway.getRequests("models.authStatus")).length;
-      await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThan(authCountBeforeSystemModels);
-
-      for (const request of [
-        ...(await gateway.getRequests("models.list")),
-        ...(await gateway.getRequests("models.authStatus")),
-      ]) {
         expect(request.params).toEqual(expect.objectContaining({ agentId: "writer" }));
       }
     });

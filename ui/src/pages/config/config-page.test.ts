@@ -453,7 +453,7 @@ describe("ConfigPage session observer models", () => {
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
     state.context = {
       gateway,
-      agentSelection: { state: { selectedId: "main" }, modelOwnerId: "main" },
+      agentSelection: { state: { selectedId: "main" } },
     } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 
@@ -506,7 +506,7 @@ describe("ConfigPage session observer models", () => {
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
     state.context = {
       gateway,
-      agentSelection: { state: { selectedId: "main" }, modelOwnerId: "main" },
+      agentSelection: { state: { selectedId: "main" } },
     } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 
@@ -550,12 +550,7 @@ describe("ConfigPage session observer models", () => {
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
     state.context = {
       gateway,
-      agentSelection: {
-        state: selectionState,
-        get modelOwnerId() {
-          return selectionState.selectedId;
-        },
-      },
+      agentSelection: { state: selectionState },
     } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 

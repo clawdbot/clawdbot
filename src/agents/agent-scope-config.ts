@@ -220,17 +220,13 @@ export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): strin
 }
 
 /** Resolves the configured owner for ambient system work and explicit consults. */
-export function tryResolveSystemAgentTargetAgentId(cfg: OpenClawConfig): string | undefined {
-  const configuredAgentId = normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId);
-  return configuredAgentId ? normalizeAgentId(configuredAgentId) : tryResolveSoleAgentId(cfg);
-}
-
 export function resolveSystemAgentTargetAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
 ): string {
   const configuredAgentId =
-    normalizeOptionalString(requestedAgentId) ?? tryResolveSystemAgentTargetAgentId(cfg);
+    normalizeOptionalString(requestedAgentId) ??
+    normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId);
   if (configuredAgentId) {
     return normalizeAgentId(configuredAgentId);
   }

@@ -13,7 +13,6 @@ import {
   resolveSystemAgentTargetAgentId,
   tryResolveDefaultAgentId,
   tryResolveSoleAgentId,
-  tryResolveSystemAgentTargetAgentId,
 } from "./agent-scope-config.js";
 
 vi.unmock("./agent-scope-config.js");
@@ -66,11 +65,6 @@ describe("agent roster resolution", () => {
       }),
     ).toBe("ops");
     expect(resolveSystemAgentTargetAgentId({ agents: { entries: { ops: {} } } })).toBe("ops");
-    expect(
-      tryResolveSystemAgentTargetAgentId({
-        agents: { entries: { main: { default: true }, ops: {} } },
-      }),
-    ).toBeUndefined();
     expect(() =>
       resolveSystemAgentTargetAgentId({
         agents: { entries: { main: { default: true }, ops: {} } },

@@ -173,7 +173,6 @@ describe("AgentsListResultSchema", () => {
   it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
     const result = {
       defaultId: "main",
-      systemModelOwnerId: "main",
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "custodian", kind: "system" }],

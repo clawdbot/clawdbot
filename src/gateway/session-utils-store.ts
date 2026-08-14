@@ -307,7 +307,6 @@ export function listAgentsForGateway(
   },
 ): {
   defaultId: string;
-  systemModelOwnerId?: string;
   ownership: GatewayAgentOwnership;
   selectionRequired: boolean;
   mainKey: string;
@@ -340,22 +339,21 @@ export function listAgentsForGateway(
   const agents = roster.map((entry) => {
     const { id } = entry;
     const meta = configuredById.get(id);
-    const modelOwnerId = entry.kind === "system" ? (basic.systemModelOwnerId ?? id) : id;
-    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: modelOwnerId });
-    const model = resolveGatewayAgentModel(cfg, modelOwnerId, resolvedModel);
-    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: modelOwnerId });
+    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+    const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
+    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
     const agentRuntime = resolveModelAgentRuntimeMetadata({
       cfg,
-      agentId: modelOwnerId,
+      agentId: id,
       provider: resolvedModel.provider,
       model: resolvedModel.model,
       sessionKey,
       acpRuntime: false,
     });
-    const agentModelCatalog = options?.modelCatalogByAgentId?.get(modelOwnerId) ?? modelCatalog;
+    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
     const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
-      agentId: modelOwnerId,
+      agentId: id,
       provider: resolvedModel.provider,
       model: resolvedModel.model,
       modelCatalog: agentModelCatalog,
@@ -384,7 +382,6 @@ export function listAgentsForGateway(
   });
   return {
     defaultId: basic.defaultId,
-    ...(basic.systemModelOwnerId ? { systemModelOwnerId: basic.systemModelOwnerId } : {}),
     ownership: basic.ownership!,
     selectionRequired: basic.selectionRequired!,
     mainKey: basic.mainKey,

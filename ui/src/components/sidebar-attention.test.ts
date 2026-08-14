@@ -87,6 +87,26 @@ function cronItems(cronJobs: readonly CronJob[], now = 0) {
   });
 }
 
+function authItems(agentId: string) {
+  return buildSidebarAttentionItems({
+    cronJobs: [],
+    modelAuthStatus: {
+      ts: 1,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "missing",
+          profiles: [],
+        },
+      ],
+    },
+    modelAuthAgentId: agentId,
+    approvalQueue: [],
+    now: 0,
+  }).filter((item) => item.kind === "modelAuthExpired");
+}
+
 describe("cron attention details", () => {
   it("lists each failed job with its preferred error", () => {
     const primary = cronJob("primary");
@@ -163,6 +183,13 @@ describe("pending approval attention", () => {
   });
 });
 
+describe("model auth attention", () => {
+  it("keeps identical provider warnings distinct across agents", () => {
+    expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
+    expect(authItems("writer")[0]?.signature).toBe("agent:writer\nopenai");
+  });
+});
+
 describe("sidebar attention refresh ownership", () => {
   afterEach(() => {
     document.body.replaceChildren();
@@ -215,9 +242,6 @@ describe("sidebar attention refresh ownership", () => {
     const selectionListeners = new Set<() => void>();
     const agentSelection = {
       state: selectionState,
-      get modelOwnerId() {
-        return selectionState.selectedId;
-      },
       subscribe: (listener: () => void) => {
         selectionListeners.add(listener);
         return () => selectionListeners.delete(listener);
@@ -344,9 +368,6 @@ describe("sidebar attention refresh ownership", () => {
       },
       agentSelection: {
         state: selectionState,
-        get modelOwnerId() {
-          return selectionState.selectedId;
-        },
         subscribe: (listener: () => void) => {
           selectionListeners.add(listener);
           return () => selectionListeners.delete(listener);
@@ -415,7 +436,6 @@ describe("sidebar attention refresh ownership", () => {
     } as unknown as ApplicationContext["overlays"];
     const agentSelection = {
       state: { selectedId: "main" },
-      modelOwnerId: "main",
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["agentSelection"];
     vi.stubGlobal("localStorage", createTestStorageMock());

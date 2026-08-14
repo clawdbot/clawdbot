@@ -3,7 +3,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { tryResolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -71,7 +70,6 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
 /** Lists gateway-visible agents with canonical membership, ordering, and semantic kind. */
 export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   defaultId: string;
-  systemModelOwnerId?: string;
   ownership?: GatewayAgentOwnership;
   selectionRequired?: boolean;
   mainKey: string;
@@ -82,7 +80,6 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
     OWNER_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
   );
   const selection = resolveGatewayAgentSelectionState(cfg);
-  const systemModelOwnerId = tryResolveSystemAgentTargetAgentId(cfg);
   const defaultId = selection.defaultId;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const scope = cfg.session?.scope ?? "per-sender";
@@ -132,11 +129,5 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
       !explicitIds.has(id) && diskIds.has(id) ? (ownerEntries.get(id)?.kind ?? "agent") : "agent",
     name: configuredById.get(id)?.name,
   }));
-  return {
-    ...selection,
-    ...(systemModelOwnerId ? { systemModelOwnerId } : {}),
-    mainKey,
-    scope,
-    agents,
-  };
+  return { ...selection, mainKey, scope, agents };
 }
