@@ -172,15 +172,22 @@ describe("worker placement startup health lifetime", () => {
     await vi.waitFor(() => expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalled());
     closeStarted = true;
     const stopping = sidecar?.stop();
-    if (!stopping) {
+    const repeatedStop = sidecar?.stop();
+    if (!stopping || !repeatedStop) {
       throw new Error("startup did not register its placement sidecar");
     }
+    let repeatedStopSettled = false;
+    void repeatedStop.then(() => {
+      repeatedStopSettled = true;
+    });
 
     await Promise.resolve();
+    expect(repeatedStop).toBe(stopping);
+    expect(repeatedStopSettled).toBe(false);
     expect(environments.stop).not.toHaveBeenCalled();
     evidence.resolve("current");
     await expect(starting).resolves.toBeNull();
-    await stopping;
+    await Promise.all([stopping, repeatedStop]);
     expect(environments.stop).toHaveBeenCalledOnce();
   });
 });

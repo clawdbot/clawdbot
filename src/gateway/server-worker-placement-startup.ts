@@ -527,22 +527,26 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         void pending.then(reconcileActivePlacements, reconcileActivePlacements);
       }
     });
+    let stopPromise: Promise<void> | undefined;
     const sidecar: WorkerPlacementSidecar = {
-      stop: async () => {
-        if (stopped) {
-          return;
+      stop: () => {
+        if (stopPromise) {
+          return stopPromise;
         }
         stopped = true;
         clearInterval(placementReconcileInterval);
         placementReconcileInterval = undefined;
         uninstallSessionIdentityMutation();
         uninstallPlacementAdmission();
-        await Promise.allSettled(
-          [placementReconcile.current, diskSpaceSweep.current].filter(
-            (operation): operation is Promise<void> => operation !== undefined,
-          ),
-        );
-        await params.environments.stop();
+        stopPromise = (async () => {
+          await Promise.allSettled(
+            [placementReconcile.current, diskSpaceSweep.current].filter(
+              (operation): operation is Promise<void> => operation !== undefined,
+            ),
+          );
+          await params.environments.stop();
+        })();
+        return stopPromise;
       },
     };
     // Close must see the drain handle before reconciliation can yield.
