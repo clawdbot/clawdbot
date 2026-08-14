@@ -200,9 +200,20 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const video = page.video();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+      featureMethods: ["sessions.catalog.list"],
       methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [],
+            },
+          ],
+        },
         "config.get": {
           config: {},
           hash: "settings-search-e2e",
@@ -532,7 +543,9 @@ suite.define(() => {
         .poll(() => sessionsRow.locator(".sidebar-customizer__visibility").count())
         .toBe(0);
       const tasksRow = customizer.locator('[data-sidebar-customizer-id="route:tasks"]');
+      const claudeRow = customizer.locator('[data-sidebar-customizer-id="catalog:claude"]');
       await expect.poll(() => tasksRow.getAttribute("class")).toContain("--hidden");
+      await expect.poll(() => claudeRow.getAttribute("class")).not.toContain("--hidden");
       // Ask OpenClaw moved to Settings (#111686): custodian is not a sidebar
       // nav route anymore, so the customizer does not offer it.
       await expect.poll(() => customizer.getByText("OpenClaw", { exact: true }).count()).toBe(0);
@@ -555,11 +568,22 @@ suite.define(() => {
       await expect.poll(() => pinnedSessionRow.count()).toBe(0);
 
       await tasksRow.getByRole("button", { name: "Show Tasks in sidebar" }).click();
+      await claudeRow.getByRole("button", { name: "Hide Claude Code from sidebar" }).click();
       await expect.poll(() => tasksRow.getAttribute("class")).not.toContain("--hidden");
-      await customizer.getByRole("button", { name: "Back" }).click();
+      await expect
+        .poll(() => customizer.getByRole("button", { name: "Discard changes" }).isVisible())
+        .toBe(true);
+      for (const theme of ["light", "dark"] as const) {
+        await setThemeMode(page, theme);
+        await captureSettingsSidebarProof(customizer, `04-customizer-dirty-${theme}.png`);
+      }
+      await customizer.getByRole("button", { name: "Done" }).click();
       await expect
         .poll(() => trimmedTextContents(visiblePageItems))
         .toEqual(["Automations", "Plugins", "Tasks"]);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
+      ).toBe('["claude"]');
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(visiblePageItems))
@@ -578,14 +602,61 @@ suite.define(() => {
       await captureUiProof(page, "03-persisted-customization.png");
 
       await editPersistedCustomization.click();
+      await expect
+        .poll(() => customizer.getByRole("button", { name: "Back" }).isVisible())
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => customizer.count()).toBe(0);
+      await expect
+        .poll(() => trimmedTextContents(visiblePageItems))
+        .toEqual(["Automations", "Plugins", "Tasks"]);
+
+      await moreButton.click();
+      await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
       await customizer
         .locator('[data-sidebar-customizer-id="route:tasks"]')
         .getByRole("button", { name: "Hide Tasks from sidebar" })
         .click();
-      await customizer.getByRole("button", { name: "Back" }).click();
+      await customizer
+        .locator('[data-sidebar-customizer-id="catalog:claude"]')
+        .getByRole("button", { name: "Show Claude Code in sidebar" })
+        .click();
+      const groupWritesBefore = (await gateway.getRequests("sessions.groups.put")).length;
+      await customizer
+        .locator('[data-sidebar-customizer-id="work"]')
+        .dragTo(customizer.locator('[data-sidebar-customizer-id="ungrouped"]'));
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.groups.put")).length)
+        .toBeGreaterThan(groupWritesBefore);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => customizer.count()).toBe(0);
+      await expect
+        .poll(() => trimmedTextContents(visiblePageItems))
+        .toEqual(["Automations", "Plugins", "Tasks"]);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
+      ).toBe('["claude"]');
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.groups.put")).length)
+        .toBeGreaterThan(groupWritesBefore + 1);
+
+      await moreButton.click();
+      await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
+      await customizer
+        .locator('[data-sidebar-customizer-id="route:tasks"]')
+        .getByRole("button", { name: "Hide Tasks from sidebar" })
+        .click();
+      await customizer
+        .locator('[data-sidebar-customizer-id="catalog:claude"]')
+        .getByRole("button", { name: "Show Claude Code in sidebar" })
+        .click();
+      await customizer.getByRole("button", { name: "Done" }).click();
       await expect
         .poll(() => trimmedTextContents(visiblePageItems))
         .toEqual(["Automations", "Plugins"]);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
+      ).toBe("[]");
 
       // The shell chrome search button is the command palette entry point.
       const searchButton = page.locator(".shell-chrome-controls__search");
@@ -692,6 +763,49 @@ suite.define(() => {
       if (video) {
         await video.saveAs(path.join(uiProofArtifactDir, "settings-search-flow.webm"));
       }
+    }
+  });
+
+  it("keeps the customizer open with a visible error when restore is rejected", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.groups.put"],
+      featureMethods: ["sessions.groups.list", "sessions.groups.put"],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-nav__more").click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-more-menu")
+        .getByRole("menuitem", { name: "Customize sidebar" })
+        .click();
+      const customizer = sidebar.locator(".sidebar-customizer");
+      await customizer
+        .locator('[data-sidebar-customizer-id="route:tasks"]')
+        .getByRole("button", { name: "Show Tasks in sidebar" })
+        .click();
+      await page.keyboard.press("Escape");
+      await gateway.waitForRequest("sessions.groups.put");
+      await gateway.rejectDeferred("sessions.groups.put", {
+        code: "UNAVAILABLE",
+        message: "section catalog unavailable",
+      });
+
+      await expect
+        .poll(() => customizer.getByRole("alert").textContent())
+        .toContain("Couldn't restore every sidebar change");
+      await expect.poll(() => customizer.isVisible()).toBe(true);
+      await customizer.getByRole("button", { name: "Discard changes" }).click();
+      await expect.poll(() => customizer.count()).toBe(0);
+    } finally {
+      await context.close();
     }
   });
 

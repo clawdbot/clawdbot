@@ -86,8 +86,16 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     severity: null as "danger" | "warning" | null,
   };
   @state() private sidebarCustomizerOpen = false;
+  @state() private sidebarCustomizerDirty = false;
+  @state() private sidebarCustomizerError: string | null = null;
 
   private sidebarCustomizerReturnFocus: HTMLElement | null = null;
+  private sidebarCustomizerSnapshot: {
+    sidebarEntries: readonly string[];
+    hiddenCatalogIds: ReadonlySet<string>;
+    groups: readonly string[];
+    sectionOrder: readonly string[];
+  } | null = null;
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
@@ -445,6 +453,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   openSidebarCustomizer(trigger: HTMLElement | null = null): void {
     this.sidebarMenus.dismissTransientMenus();
     this.sidebarCustomizerReturnFocus = trigger;
+    this.sidebarCustomizerSnapshot = {
+      sidebarEntries: [...this.reconciledSidebarZone().sidebarEntries],
+      hiddenCatalogIds: new Set(this.hiddenSessionCatalogIds),
+      groups: [...(this.context?.sessions.state.groups ?? [])],
+      sectionOrder: this.knownSectionOrder(),
+    };
+    this.sidebarCustomizerDirty = false;
+    this.sidebarCustomizerError = null;
     this.sidebarCustomizerOpen = true;
     void this.updateComplete.then(() =>
       this.querySelector<HTMLElement>(".sidebar-customizer button:not([disabled])")?.focus(),
@@ -453,6 +469,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   private closeSidebarCustomizer(): void {
     this.sidebarCustomizerOpen = false;
+    this.sidebarCustomizerDirty = false;
+    this.sidebarCustomizerError = null;
+    this.sidebarCustomizerSnapshot = null;
     const returnFocus = this.sidebarCustomizerReturnFocus;
     this.sidebarCustomizerReturnFocus = null;
     void this.updateComplete.then(() => {
@@ -464,17 +483,81 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     });
   }
 
+  private reportSidebarCustomizerError(
+    key: "nav.customizeMutationError" | "nav.customizeRestoreError",
+  ): void {
+    this.sidebarCustomizerError = t(key);
+    showToast({ message: this.sidebarCustomizerError });
+  }
+
+  private async discardSidebarCustomizerChanges(): Promise<void> {
+    const snapshot = this.sidebarCustomizerSnapshot;
+    if (!snapshot || !this.sidebarCustomizerDirty) {
+      this.closeSidebarCustomizer();
+      return;
+    }
+    let failed = false;
+    const updateSidebarEntries = this.onUpdateSidebarEntries;
+    try {
+      if (updateSidebarEntries) {
+        updateSidebarEntries([...snapshot.sidebarEntries]);
+      } else {
+        failed = true;
+      }
+    } catch {
+      failed = true;
+    }
+    const catalogIds = new Set([...this.hiddenSessionCatalogIds, ...snapshot.hiddenCatalogIds]);
+    for (const catalogId of catalogIds) {
+      try {
+        setStoredSessionCatalogHidden(catalogId, snapshot.hiddenCatalogIds.has(catalogId));
+      } catch {
+        failed = true;
+      }
+    }
+    const sessions = this.context?.sessions;
+    if (sessions) {
+      try {
+        await sessions.groupsPut([...snapshot.groups], [...snapshot.sectionOrder]);
+      } catch {
+        failed = true;
+      }
+    } else {
+      failed = true;
+    }
+    if (failed) {
+      this.reportSidebarCustomizerError("nav.customizeRestoreError");
+    } else {
+      this.closeSidebarCustomizer();
+    }
+  }
+
+  private markSidebarCustomizerDirty(): void {
+    this.sidebarCustomizerDirty = true;
+    this.sidebarCustomizerError = null;
+  }
+
   private toggleSidebarCustomizerItem(item: SidebarCustomizerItem): void {
     if (item.kind === "entry" && item.entry) {
+      if (!this.onUpdateSidebarEntries) {
+        this.reportSidebarCustomizerError("nav.customizeMutationError");
+        return;
+      }
       const canonical = this.reconciledSidebarZone().sidebarEntries;
       const next = canonical.includes(item.entry)
         ? canonical.filter((candidate) => candidate !== item.entry)
         : [...canonical, item.entry];
-      this.onUpdateSidebarEntries?.(next);
+      this.onUpdateSidebarEntries(next);
+      this.markSidebarCustomizerDirty();
       return;
     }
     if (item.id.startsWith("catalog:")) {
-      setStoredSessionCatalogHidden(item.id.slice("catalog:".length), item.visible);
+      try {
+        setStoredSessionCatalogHidden(item.id.slice("catalog:".length), item.visible);
+        this.markSidebarCustomizerDirty();
+      } catch {
+        this.reportSidebarCustomizerError("nav.customizeMutationError");
+      }
     }
   }
 
@@ -515,9 +598,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     return renderSidebarCustomizer({
       entries: this.sidebarCustomizerEntries(),
       sections: this.sidebarCustomizerSections(),
+      dirty: this.sidebarCustomizerDirty,
+      error: this.sidebarCustomizerError,
       onToggle: (item) => this.toggleSidebarCustomizerItem(item),
       onRemove: (item) => this.removeSidebarCustomizerItem(item),
-      onBack: () => this.closeSidebarCustomizer(),
+      onDone: () => this.closeSidebarCustomizer(),
+      onBack: () => void this.discardSidebarCustomizerChanges(),
       onEntryDragStart: (event, item) => {
         const entry = item.entry ? parseSidebarEntry(item.entry) : null;
         if (entry?.type === "route") {
@@ -535,13 +621,19 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       onEntryDragOver: (event, entry) =>
         this.sessionOrganizer.handleSidebarZoneDragOver(event, entry),
       onEntryDragLeave: (event) => this.sessionOrganizer.handleSidebarZoneDragLeave(event),
-      onEntryDrop: (event, entry) => this.sessionOrganizer.handleSidebarZoneDrop(event, entry),
+      onEntryDrop: (event, entry) => {
+        this.markSidebarCustomizerDirty();
+        this.sessionOrganizer.handleSidebarZoneDrop(event, entry);
+      },
       onSectionDragStart: (sectionId) => this.startSidebarSectionDrag(sectionId),
       onSectionDragOver: (event, sectionId, category) =>
         this.sectionDragOver(event, sectionId, category),
       onSectionDragLeave: (event, sectionId, category) =>
         this.sectionDragLeave(event, sectionId, category),
-      onSectionDrop: (event, sectionId, category) => this.sectionDrop(event, sectionId, category),
+      onSectionDrop: (event, sectionId, category) => {
+        this.markSidebarCustomizerDirty();
+        this.sectionDrop(event, sectionId, category);
+      },
       onDragEnd: (kind) => {
         if (kind === "section") {
           this.finishSidebarSectionDrag();

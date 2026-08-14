@@ -1941,6 +1941,12 @@ export const en: TranslationMap = {
     pages: "Pages",
     pinned: "Pinned",
     customize: "Customize sidebar",
+    customizeDone: "Done",
+    customizeDiscard: "Discard changes",
+    customizeMutationError:
+      "Couldn't apply this sidebar change. Review the current state and try again.",
+    customizeRestoreError:
+      "Couldn't restore every sidebar change. Review the current state and try again.",
     customizeShow: "Show {item} in sidebar",
     customizeHide: "Hide {item} from sidebar",
     customizeRemove: "Remove {item} from sidebar",

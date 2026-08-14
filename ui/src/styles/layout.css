@@ -1321,7 +1321,8 @@ openclaw-settings-save-indicator {
 }
 
 .sidebar-customizer__visibility:hover,
-.sidebar-customizer__visibility:focus-visible {
+.sidebar-customizer__visibility:focus-visible,
+.sidebar-customizer__done:focus-visible {
   background: color-mix(in srgb, var(--bg-active) 78%, transparent);
   color: var(--text);
 }
@@ -1351,11 +1352,31 @@ openclaw-settings-save-indicator {
   padding: 8px 2px 0;
 }
 
-.sidebar-customizer__back {
+.sidebar-customizer__error {
+  margin: 8px 2px 0;
+  color: var(--danger);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.sidebar-customizer__back,
+.sidebar-customizer__done {
   width: 100%;
   min-height: 40px;
   border-radius: var(--radius-md);
   font-weight: 500;
+}
+
+.sidebar-customizer__done.btn.primary,
+.sidebar-customizer__done.btn.primary:hover {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: white;
+  box-shadow: none;
+}
+
+.sidebar-customizer__done.btn.primary:hover {
+  background: var(--danger-solid-hover);
 }
 
 .sidebar-customizer__back,

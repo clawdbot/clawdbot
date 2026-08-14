@@ -142,8 +142,11 @@ export function buildSidebarCustomizerSections(params: {
 type SidebarCustomizerParams = {
   entries: readonly SidebarCustomizerItem[];
   sections: readonly SidebarCustomizerItem[];
+  dirty: boolean;
+  error: string | null;
   onToggle: (item: SidebarCustomizerItem) => void;
   onRemove: (item: SidebarCustomizerItem) => void;
+  onDone: () => void;
   onBack: () => void;
   onEntryDragStart: (event: DragEvent, item: SidebarCustomizerItem) => void;
   onEntryDragOver: (event: DragEvent, entry: string) => void;
@@ -288,9 +291,15 @@ export function renderSidebarCustomizer(params: SidebarCustomizerParams) {
           )}
         </div>
       </div>
+      ${params.error
+        ? html`<div class="sidebar-customizer__error" role="alert">${params.error}</div>`
+        : nothing}
       <div class="sidebar-customizer__footer">
+        <button type="button" class="btn primary sidebar-customizer__done" @click=${params.onDone}>
+          ${t("nav.customizeDone")}
+        </button>
         <button type="button" class="btn sidebar-customizer__back" @click=${params.onBack}>
-          ${t("common.back")}
+          ${params.dirty ? t("nav.customizeDiscard") : t("common.back")}
         </button>
       </div>
     </section>
