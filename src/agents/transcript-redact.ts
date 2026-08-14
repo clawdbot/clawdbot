@@ -1,3 +1,4 @@
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 /**
  * Agent transcript redaction helpers.
  *
@@ -77,14 +78,6 @@ type TranscriptAssistantRoute = {
   provider?: string;
 };
 
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
   "google-vertex",

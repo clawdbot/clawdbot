@@ -1753,6 +1753,66 @@ NODE
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("schedules approved Docker refreshes from independently resolved channels", () => {
+    const workflow = readWorkflow(".github/workflows/docker-image-refresh.yml");
+    const releaseWorkflow = readWorkflow(".github/workflows/docker-release.yml");
+    const plan = workflow.jobs.plan;
+    const publish = workflow.jobs.publish;
+    const planSteps = plan.steps as WorkflowStep[];
+    const mainGuard = expectDefined(
+      planSteps.find((step) => step.name === "Require a main-branch run"),
+      "Docker refresh main-branch guard",
+    );
+    const resolve = expectDefined(
+      planSteps.find((step) => step.name === "Resolve refresh plan"),
+      "Docker refresh plan step",
+    );
+
+    expect(workflow.on.schedule).toEqual([{ cron: "17 3 * * 1" }]);
+    expect(workflow.on.workflow_dispatch.inputs.channel).toEqual({
+      description: "Release channel to rebuild",
+      required: false,
+      default: "both",
+      type: "choice",
+      options: ["stable", "extended-stable", "both"],
+    });
+    expect(workflow.on.workflow_dispatch.inputs.dry_run).toEqual({
+      description: "Resolve and summarize without publishing",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(plan.permissions).toEqual({ contents: "read" });
+    expect(mainGuard.run).toContain('[[ "${WORKFLOW_REF}" != "refs/heads/main" ]]');
+    expect(resolve.run).toContain("docker-release-policy.mjs --current");
+    expect(resolve.run).toContain('git rev-parse "refs/tags/${stable_tag}^{commit}"');
+    expect(resolve.run).toContain('git rev-parse "refs/tags/${extended_stable_tag}^{commit}"');
+    expect(resolve.run).toContain('suffix="-r$(date -u +%Y%m%d)"');
+    expect(resolve.run).toContain('echo "matrix=${matrix}"');
+    expect(resolve.run).toContain('} >> "${GITHUB_OUTPUT}"');
+    expect(plan.environment).toBeUndefined();
+    expect(publish.environment).toBeUndefined();
+
+    expect(publish.needs).toBe("plan");
+    expect(publish.if).toBe("needs.plan.outputs.dry_run != 'true'");
+    expect(publish.strategy).toEqual({
+      "fail-fast": false,
+      matrix: { include: "${{ fromJSON(needs.plan.outputs.matrix) }}" },
+    });
+    expect(publish.uses).toBe("./.github/workflows/docker-release.yml");
+    expect(publish.with).toEqual({
+      tag: "${{ matrix.tag }}",
+      release_sha: "${{ matrix.release_sha }}",
+      image_tag_suffix: "${{ needs.plan.outputs.image_tag_suffix }}",
+    });
+    expect(publish.secrets).toEqual({
+      DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}",
+      DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}",
+    });
+    expect(publish.permissions).toEqual({ contents: "read", packages: "write" });
+    expect(releaseWorkflow.jobs.approve_docker_publish.environment).toBe("docker-release");
+  });
+
   it("forbids moving reusable workflow references", () => {
     expect([...OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS]).toEqual([]);
   });
@@ -2604,7 +2664,7 @@ NODE
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
     const nodeMaxParallel =
       workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"];
-    expect(nodeMaxParallel).toBe("${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 48 || 28 }}");
+    expect(nodeMaxParallel).toBe("${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 64 || 28 }}");
     expect(
       evaluateWorkflowExpression(nodeMaxParallel, {
         eventName: "push",
@@ -2620,7 +2680,7 @@ NODE
         runnerBackend: "github",
         runAttempt: 1,
       }),
-    ).toBe(48);
+    ).toBe(64);
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -3708,10 +3768,11 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(setupNodeStep.with).toMatchObject({
       "node-compile-cache": "true",
       "node-compile-cache-scope": "test",
+      "save-vitest-fs-cache":
+        "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && matrix.save_vitest_fs_cache && 'true' || 'false' }}",
       "vitest-fs-cache": "true",
     });
     expect(setupNodeStep.with).not.toHaveProperty("save-node-compile-cache");
-    expect(setupNodeStep.with).not.toHaveProperty("save-vitest-fs-cache");
     expect(setupNodeStep.with).not.toHaveProperty("runtime-cache-sticky-disk");
     expect(action.inputs).not.toHaveProperty("runtime-cache-sticky-disk");
     expect(action.inputs["vitest-fs-cache"].default).toBe("false");
@@ -3806,9 +3867,14 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
 
     expect(warmer.concurrency["cancel-in-progress"]).toBe(false);
     expect(warmer.concurrency.group).toBe("vitest-cache-warm");
-    expect(warmer.on.workflow_dispatch).toBeUndefined();
+    // hosted-mode cache recovery needs a maintainer-operated fallback when the
+    // scheduled seed is missing or stale.
+    expect(warmer.on).toHaveProperty("workflow_dispatch");
     expect(warmer.on.repository_dispatch.types).toEqual(["vitest-cache-warm"]);
     expect(warmer.jobs.warm.if).toContain("github.repository == 'openclaw/openclaw'");
+    expect(warmer.jobs.warm["runs-on"]).toBe(
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
+    );
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
     expect(warmerSource).toContain('cron: "17 8 * * *"');
@@ -3828,8 +3894,8 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       "use-actions-cache": "true",
     });
     expect(warmerSetup.with).not.toHaveProperty("dependency-cache");
-    // CI is restore-only, so no per-PR runtime cache family or close-time
-    // cleanup workflow exists. Actions cache LRU/TTL expires old warmers.
+    // No close-time cleanup workflow is needed; Actions cache LRU/TTL expires
+    // old hosted-writer and warmer generations.
     expect(existsSync(".github/workflows/pr-cache-cleanup.yml")).toBe(false);
     expect(seedStep.if).toBeUndefined();
     expect(warmStep.if).toBeUndefined();
@@ -3846,14 +3912,26 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
       "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
     );
+    // PR events validate the artifact build on hosted runners (landing gate
+    // stays satisfiable during Blacksmith outages); Testbox leases are
+    // dispatch-only, mirroring ci-check-testbox.yml.
     expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
-      "blacksmith-16vcpu-ubuntu-2404",
+      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );
+    for (const stepName of ["Begin Testbox", "Run Testbox"]) {
+      expect(
+        buildArtifactsTestbox.jobs["build-artifacts"].steps.find(
+          (step: { name?: string }) => step.name === stepName,
+        ).if,
+      ).toContain("github.event_name == 'workflow_dispatch'");
+    }
     expect(
       buildArtifactsTestbox.jobs["build-artifacts"].steps.find(
         (step: { name?: string }) => step.name === "Build dist on cache miss",
       ).env.NODE_OPTIONS,
-    ).toBe("--max-old-space-size=16384");
+    ).toBe(
+      "${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}",
+    );
     expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
       "blacksmith-4vcpu-ubuntu-2404",
     );
@@ -3909,11 +3987,29 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     const lintMount = checkShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Mount extension boundary sticky disk",
     );
+    const boundaryCache = expectDefined(
+      additionalJob.steps.find(
+        (step: WorkflowStep) => step.name === "Cache extension package boundary artifacts",
+      ),
+      "extension package boundary cache",
+    );
+    const hostedLintCache = expectDefined(
+      checkShardJob.steps.find(
+        (step: WorkflowStep) =>
+          step.name === "Cache extension package boundary artifacts for hosted lint",
+      ),
+      "hosted lint extension package boundary cache",
+    );
     expect(boundaryMount.with.key).toBe("${{ github.repository }}-ext-boundary-v2");
     expect(lintMount.with.key).toBe(boundaryMount.with.key);
     for (const gate of [boundaryMount, lintMount]) {
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
+    expect(hostedLintCache.if).toBe(
+      "matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'",
+    );
+    expect(hostedLintCache.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
+    expect(hostedLintCache.with).toEqual(boundaryCache.with);
     // Single semantic writer: protected pushes commit explicitly (not
     // on-change/if-missing, whose allocated-byte heuristic can strand a stale
     // marker); PR clones and the lint consumer stay read-only.
@@ -4734,6 +4830,14 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+
+    const macosNodeSetup = workflow.jobs["macos-node"].steps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
+    expect(macosNodeSetup.with).toMatchObject({
+      "install-bun": "false",
+      "save-actions-cache": "true",
+    });
   });
 
   it("checks native and Node state schema versions in the macOS lane", () => {
@@ -5805,6 +5909,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const uiInstall = workflow.jobs["checks-ui"].steps.find(
       (step: { name?: string }) => step.name === "Install Playwright Chromium",
     );
+    const uiBrowserCache = workflow.jobs["checks-ui"].steps.find(
+      (step: { name?: string }) => step.name === "Cache Playwright Chromium",
+    );
     const uiTest = workflow.jobs["checks-ui"].steps.find(
       (step: { name?: string }) => step.name === "Test Control UI",
     );
@@ -5823,6 +5930,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Target does not provide a supported Playwright Chromium installer.",
     );
     expect(uiInstall.run).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+    const playwrightVersion = JSON.parse(readFileSync("package.json", "utf8")).devDependencies
+      .playwright;
+    expect(playwrightVersion).toBe(
+      JSON.parse(readFileSync("ui/package.json", "utf8")).devDependencies.playwright,
+    );
+    expect(uiBrowserCache).toMatchObject({
+      if: "needs.preflight.outputs.compatibility_target != 'true'",
+      uses: "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      with: {
+        key: "${{ runner.os }}-playwright-chromium-" + playwrightVersion,
+        path: "~/.cache/ms-playwright",
+      },
+    });
     expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
     expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000 --isolate");
     expect(uiTest.run).not.toContain("--retry");
@@ -6018,6 +6138,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "node --import tsx scripts/ensure-playwright-chromium.mts",
     );
     expect(chromiumInstall.run).toContain("node scripts/ensure-playwright-chromium.mjs");
+    const chromiumCache = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Cache Playwright Chromium"),
+      "Control UI E2E Chromium cache",
+    );
     const realGatewayChromiumInstall = expectDefined(
       uiE2eRealGateway.steps.find(
         (step: WorkflowStep) => step.name === "Install Playwright Chromium",
@@ -6025,6 +6149,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "real-Gateway Control UI E2E Chromium installation",
     );
     expect(realGatewayChromiumInstall).toEqual(chromiumInstall);
+    const realGatewayChromiumCache = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Cache Playwright Chromium",
+      ),
+      "real-Gateway Control UI E2E Chromium cache",
+    );
+    expect(realGatewayChromiumCache).toEqual(chromiumCache);
 
     const scenario = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),

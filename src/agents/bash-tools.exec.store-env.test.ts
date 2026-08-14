@@ -1,22 +1,41 @@
 /** Store-backed exec environment tests cover run snapshots, precedence, and security filtering. */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 const mocks = vi.hoisted(() => ({
+  egressActive: false,
+  proxyUrl: ["http://openclaw:", "fixture-password", "@127.0.0.1:19090"].join(""),
   gatewayParams: [] as Array<{
     env: Record<string, string>;
     requestedEnv?: Record<string, string>;
   }>,
   spawnInputs: [] as Array<{ env?: Record<string, string> }>,
+  proxyBindings: [] as Array<unknown>,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => null,
   getGlobalHookRunnerRegistry: () => null,
+}));
+
+vi.mock("../secrets/egress-proxy/registry.js", () => ({
+  isSecretEgressProxyActive: () => mocks.egressActive,
+  registerSecretEgressProxyRun: (_run: unknown, bindings: unknown) => {
+    mocks.proxyBindings.push(bindings);
+    return {
+      HTTPS_PROXY: mocks.proxyUrl,
+      HTTP_PROXY: mocks.proxyUrl,
+      NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
+      SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
+      CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+      REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+    };
+  },
 }));
 
 vi.mock("../infra/shell-env.js", () => ({
@@ -70,7 +89,12 @@ vi.mock("../process/supervisor/index.js", () => ({
 let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 let createLazyExecTool: typeof import("./lazy-exec-tool.js").createLazyExecTool;
 
-type StoreEntry = { name: string; value: string; kind: "env" | "secret" };
+type StoreEntry = {
+  name: string;
+  value: string;
+  kind: "env" | "secret";
+  allowedHosts?: string[];
+};
 
 async function withTeamStoreEntries(
   entries: StoreEntry[],
@@ -99,8 +123,10 @@ describe("exec store environment", () => {
   });
 
   beforeEach(() => {
+    mocks.egressActive = false;
     mocks.gatewayParams.length = 0;
     mocks.spawnInputs.length = 0;
+    mocks.proxyBindings.length = 0;
   });
 
   it("adds only team env-kind entries to gateway exec subprocesses", async () => {
@@ -267,5 +293,97 @@ describe("exec store environment", () => {
         baseline,
       );
     });
+  });
+
+  it("keeps disabled secret egress byte-identical with a secret-kind store entry", async () => {
+    await withTeamStoreEntries(
+      [
+        {
+          name: "SERVICE_API_KEY",
+          value: "disabled-secret",
+          kind: "secret",
+          allowedHosts: ["api.example.com"],
+        },
+      ],
+      async () => {
+        const absentConfig = createExecTool({ host: "gateway", security: "full", ask: "off" });
+        await absentConfig.execute("call-egress-absent", {
+          command: "echo ok",
+          yieldMs: 120_000,
+        });
+        const baseline = JSON.stringify({
+          gateway: mocks.gatewayParams[0],
+          spawn: mocks.spawnInputs[0],
+        });
+        mocks.gatewayParams.length = 0;
+        mocks.spawnInputs.length = 0;
+
+        const explicitFalse = createExecTool({
+          host: "gateway",
+          security: "full",
+          ask: "off",
+          config: { secrets: { egressProxy: { enabled: false } } },
+        });
+        await explicitFalse.execute("call-egress-disabled", {
+          command: "echo ok",
+          yieldMs: 120_000,
+        });
+
+        expect(
+          JSON.stringify({ gateway: mocks.gatewayParams[0], spawn: mocks.spawnInputs[0] }),
+        ).toBe(baseline);
+      },
+    );
+  });
+
+  it("injects proxy trust and secret-kind sentinels without changing env-kind entries", async () => {
+    await withTeamStoreEntries(
+      [
+        { name: "AWS_REGION", value: "us-west-2", kind: "env" },
+        {
+          name: "SERVICE_API_KEY",
+          value: "enabled-secret",
+          kind: "secret",
+          allowedHosts: ["API.EXAMPLE.COM"],
+        },
+      ],
+      async () => {
+        mocks.egressActive = true;
+        const tool = createExecTool({
+          host: "gateway",
+          security: "full",
+          ask: "off",
+          operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+          config: { secrets: { egressProxy: { enabled: true } } },
+        });
+        await tool.execute("call-egress-enabled", {
+          command: "echo ok",
+          yieldMs: 120_000,
+        });
+
+        const env = mocks.gatewayParams[0]?.env ?? {};
+        expect(env.AWS_REGION).toBe("us-west-2");
+        expect(looksLikeSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe(true);
+        expect(resolveSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe("enabled-secret");
+        expect(env).toMatchObject({
+          HTTPS_PROXY: mocks.proxyUrl,
+          HTTP_PROXY: mocks.proxyUrl,
+          NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
+          SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
+          CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+          REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+        });
+        expect(JSON.stringify(env)).not.toContain("enabled-secret");
+        expect(mocks.proxyBindings).toEqual([
+          [
+            expect.objectContaining({
+              name: "SERVICE_API_KEY",
+              allowedHosts: ["api.example.com"],
+              sentinel: env.SERVICE_API_KEY,
+            }),
+          ],
+        ]);
+      },
+    );
   });
 });

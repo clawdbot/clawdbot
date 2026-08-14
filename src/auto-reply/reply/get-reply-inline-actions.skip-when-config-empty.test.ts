@@ -932,6 +932,9 @@ describe("handleInlineActions", () => {
       ].join("\n"),
     );
     expect(ctx.Body).toBe(result.cleanedBody);
+    expect(result.explicitSkillSelections).toEqual([
+      { name: "office_hours", path: "/tmp/skills/office-hours/SKILL.md" },
+    ]);
   });
 
   it("reloads preloaded skill commands when final exec overrides are present", async () => {

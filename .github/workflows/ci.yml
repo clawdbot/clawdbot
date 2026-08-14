@@ -765,6 +765,7 @@ jobs:
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
+                predicted_seconds: shard.predictedSeconds,
                 save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
@@ -1585,6 +1586,14 @@ jobs:
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - &cache_playwright_chromium
+        name: Cache Playwright Chromium
+        if: needs.preflight.outputs.compatibility_target != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
       - &install_playwright_chromium
         name: Install Playwright Chromium
         env:
@@ -1651,6 +1660,7 @@ jobs:
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
+      - *cache_playwright_chromium
       - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
@@ -1692,6 +1702,7 @@ jobs:
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
+      - *cache_playwright_chromium
       - *install_playwright_chromium
 
       - name: Test MCP app conformance with a real Gateway
@@ -2195,7 +2206,7 @@ jobs:
       fail-fast: false
       # Canonical main admits only one complete run at a time, so widen this
       # matrix within the current runner-registration budget.
-      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 48 || 28 }}
+      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 64 || 28 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -2211,8 +2222,9 @@ jobs:
           vitest-fs-cache: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          # CI shards only read the protected immutable seed. The scheduled or
-          # explicitly dispatched warmer is the sole test-cache writer.
+          # Hosted mode elects one in-run writer so the transform cache can
+          # recover without waiting for the scheduled or manual warmer.
+          save-vitest-fs-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -2236,6 +2248,7 @@ jobs:
         # that can overlap Vitest processes keeps the proven 2-worker cap.
         # Timing-sensitive groups stay pinned to 2 via plan-level env.
         env:
+          PREDICTED_TEST_SECONDS: ${{ matrix.predicted_seconds || '' }}
           SHARD_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency || '' }}
         run: |
           cores="$(nproc)"
@@ -2248,7 +2261,7 @@ jobs:
           else
             workers=3
           fi
-          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
+          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} predicted_test_seconds=${PREDICTED_TEST_SECONDS:-unknown} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
       - name: Checkout trusted Node shard runner
@@ -2344,6 +2357,19 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Cache extension package boundary artifacts for hosted lint
+        if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            dist/plugin-sdk
+            packages/plugin-sdk/dist
+            extensions/*/dist/.boundary-tsc.tsbuildinfo
+            extensions/*/dist/.boundary-tsc.stamp
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-extension-package-boundary-v1-
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
       # artifacts the boundary lane snapshots (~72s cold); restore them from
@@ -3251,6 +3277,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          save-actions-cache: "true"
 
       - name: TS tests (macOS)
         env:

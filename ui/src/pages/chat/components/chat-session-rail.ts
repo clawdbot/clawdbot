@@ -594,11 +594,12 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             time: formatTimeAgo(Math.max(0, this.terminalAgeReference - digest.updatedAt)),
           })
         : null;
+    // No aria-live on the section: it contains a 1Hz elapsed clock, so a live
+    // region would announce every tick; the thread owns its own polite region.
     return html`
       <section
         class="chat-session-rail chat-session-rail--expanded"
         role="region"
-        aria-live="polite"
         aria-label=${t("chat.rail.title")}
         tabindex="-1"
         @keydown=${(event: KeyboardEvent) => {

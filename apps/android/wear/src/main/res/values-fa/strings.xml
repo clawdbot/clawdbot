@@ -11,7 +11,7 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دیکته"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"زنده"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رشته گفتگو"</string>
-    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"باز کردن رشته گفتگو"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"باز کردن رشته"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← بکشید →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نگه دارید"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ضربه بزنید"</string>
@@ -27,9 +27,9 @@
     <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"توقف صحبت"</string>
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن آخرین پاسخ"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال صحبت"</string>
-    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال گوش‌دادن"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال گوش دادن"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال اتصال"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال فکرکردن"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تفکر"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال تایپ"</string>
     <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال ارسال"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عامل در حال کار است"</string>
