@@ -229,13 +229,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ).toBe(true);
     expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
     expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
-    expect(bundled.slice(0, 6).map((shard) => shard.shardName)).toEqual([
+    expect(bundled.slice(0, 7).map((shard) => shard.shardName)).toEqual([
       "core-unit-fast-1",
       "core-unit-fast-2",
       "core-tooling-1",
       "core-tooling-2",
       "core-tooling-3",
       "core-tooling-4",
+      "core-tooling-5",
     ]);
     expect(bundled.find((shard) => shard.shardName === "core-unit-fast-1")?.runner).toBe(
       DEFAULT_NODE_TEST_RUNNER,
@@ -304,14 +305,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "core-tooling-2",
       "core-tooling-3",
       "core-tooling-4",
+      "core-tooling-5",
       "core-tooling-isolated",
     ]);
 
     // Pushes retain three lanes of headroom under the workflow's 28-worker cap.
     expect(compact).toHaveLength(25);
-    expect(pullRequestCompact).toHaveLength(31);
+    expect(pullRequestCompact).toHaveLength(32);
     expect(githubCompact).toHaveLength(55);
-    expect(githubPullRequestCompact).toHaveLength(64);
+    expect(githubPullRequestCompact).toHaveLength(62);
     expect(hybridCompact).toEqual(githubCompact);
     expect(hybridPullRequestCompact).toEqual(githubPullRequestCompact);
     expect(githubPullRequestCompact.length).toBeLessThanOrEqual(64);
@@ -600,7 +602,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .flatMap((shard) => shard.groups)
       .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
     const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
-    expect(toolingGroups).toHaveLength(4);
+    expect(toolingGroups).toHaveLength(5);
     expect(
       toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
     ).toBe(true);
@@ -770,7 +772,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
 
     const stripes = toolingShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
-    expect(stripes).toHaveLength(4);
+    expect(stripes).toHaveLength(5);
     for (const stripe of stripes) {
       expect(stripe.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
       expect(stripe.requiresDist).toBe(false);

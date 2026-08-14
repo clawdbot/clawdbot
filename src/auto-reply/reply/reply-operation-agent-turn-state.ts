@@ -1,20 +1,32 @@
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
-type ReplyOperationAgentTurnStatus = "ok" | "failed";
+type ReplyOperationAgentTurnStatus = "ok" | "failed" | "superseded";
 
-const agentTurns = new WeakMap<ReplyOperationRunState, ReplyOperationAgentTurnStatus>();
+type ReplyOperationAgentTurn = {
+  status: ReplyOperationAgentTurnStatus;
+  owner?: ReplyOperation;
+};
+
+const agentTurns = new WeakMap<ReplyOperationRunState, ReplyOperationAgentTurn>();
 
 export function recordReplyOperationAgentTurn(
   state: ReplyOperationRunState | undefined,
   status: ReplyOperationAgentTurnStatus,
+  owner?: ReplyOperation,
 ): void {
   if (state) {
-    agentTurns.set(state, status);
+    agentTurns.set(state, { status, owner });
   }
 }
 
 export function resolveReplyOperationAgentTurn(
   state: ReplyOperationRunState | undefined,
 ): ReplyOperationAgentTurnStatus | undefined {
-  return state ? agentTurns.get(state) : undefined;
+  if (!state) {
+    return undefined;
+  }
+  const turn = agentTurns.get(state);
+  return isReplyOperationSuperseded(turn?.owner) ? "superseded" : turn?.status;
 }
