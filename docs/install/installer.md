@@ -211,7 +211,7 @@ by default, plus git-checkout installs under the same prefix flow.
   </Step>
   <Step title="Verify the installed CLI">
     Runs `<prefix>/bin/openclaw --version` and stops with an error unless the
-    installed wrapper returns a version.
+    installed wrapper exits successfully with a nonempty version.
   </Step>
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs

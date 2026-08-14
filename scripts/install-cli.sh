@@ -1448,14 +1448,6 @@ EOF
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"method\":\"git\"}"
 }
 
-resolve_openclaw_version() {
-  local version=""
-  if [[ -x "${PREFIX}/bin/openclaw" ]]; then
-    version="$("${PREFIX}/bin/openclaw" --version 2>/dev/null | head -n 1 | tr -d '\r')"
-  fi
-  echo "$version"
-}
-
 is_gateway_daemon_loaded() {
   local claw="$1"
   if [[ -z "$claw" || ! -x "$claw" ]]; then
@@ -1538,9 +1530,9 @@ main() {
   fi
 
   local installed_version
-  installed_version="$(resolve_openclaw_version)"
-  if [[ -z "$installed_version" ]]; then
-    fail "Installed OpenClaw CLI did not return a version from ${PREFIX}/bin/openclaw."
+  if ! installed_version="$("${PREFIX}/bin/openclaw" --version 2>/dev/null | head -n 1 | tr -d '\r')" ||
+    [[ -z "$installed_version" ]]; then
+    fail "Installed OpenClaw CLI did not return a version successfully from ${PREFIX}/bin/openclaw."
   fi
 
   refresh_gateway_service_if_loaded
