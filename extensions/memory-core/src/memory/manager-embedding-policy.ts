@@ -93,9 +93,17 @@ const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 
 // 402/billing failures mean "will keep failing until the next billing cycle or a plan
 // change" — unlike 429/5xx, retrying sooner cannot help, so this is classified separately
-// to drive a long cooldown instead of the short in-call retry loop.
+// to drive a long cooldown instead of the short in-call retry loop. A 402 carrying a
+// periodic/rolling-window or organization-scoped usage-limit signal is transient (resets
+// on its own, like a rate limit) rather than a durable billing failure — mirrors the same
+// distinction core's failover classifier makes for chat-completion providers
+// (src/agents/failover/classification-rules.ts), reimplemented locally since extensions
+// cannot import core internals.
 const BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE =
   /(^| )402(\D|$)|payment required|insufficient_quota|insufficient quota|check your subscription|billing|quota exceeded/i;
+
+const TRANSIENT_402_SIGNAL_RE =
+  /(daily|weekly|monthly|rolling time window|automatic quota refresh|usage limit|organization usage|billing period|spend(?:ing)? limit|resets? (?:in|at)|try again (?:in|later))/i;
 
 function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
   return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
@@ -107,7 +115,10 @@ export function isSplittableMemoryEmbeddingTransportError(message: string): bool
 
 /** Whether a failure means the embedding provider is out of quota/billing until a future cycle. */
 export function isBillingExhaustedMemoryEmbeddingError(message: string): boolean {
-  return BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE.test(message);
+  if (!BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE.test(message)) {
+    return false;
+  }
+  return !TRANSIENT_402_SIGNAL_RE.test(message);
 }
 
 export function isRetryableMemoryEmbeddingError(message: string): boolean {

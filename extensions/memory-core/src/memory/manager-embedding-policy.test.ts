@@ -353,4 +353,30 @@ describe("memory embedding policy", () => {
       isBillingExhaustedMemoryEmbeddingError("openai embeddings failed: 502 Bad Gateway"),
     ).toBe(false);
   });
+
+  it("does not classify a transient periodic/organization-scoped 402 as billing-exhausted", () => {
+    // Regression: a 402 alone is not proof of a durable billing failure — some providers
+    // return 402 for a periodic (daily/weekly/monthly) or org-scoped usage window that
+    // resets on its own, which behaves like a rate limit, not a subscription exhaustion.
+    expect(
+      isBillingExhaustedMemoryEmbeddingError(
+        "openai embeddings failed: 402 daily usage limit exceeded, resets in 4 hours",
+      ),
+    ).toBe(false);
+    expect(
+      isBillingExhaustedMemoryEmbeddingError(
+        "openai embeddings failed: 402 organization spend limit reached for this billing period",
+      ),
+    ).toBe(false);
+  });
+
+  it("still classifies an explicit subscription/billing 402 with no periodic qualifier", () => {
+    // The actual Mistral response body from the live incident carries no periodic
+    // wording at all — it must still classify as a durable billing failure.
+    expect(
+      isBillingExhaustedMemoryEmbeddingError(
+        'openai embeddings failed: 402 {"error":{"message":"Check your subscription on https://admin.mistral.ai/subscription"}}',
+      ),
+    ).toBe(true);
+  });
 });
