@@ -10,6 +10,7 @@ import {
   LLAMA_CPP_PROVIDER_ID,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
+  resolveHomePath,
 } from "./defaults.js";
 import {
   inspectLlamaCppModelFile,
@@ -87,7 +88,8 @@ export function resolveLlamaCppChatModel(
 }
 
 export function resolveLlamaCppEmbeddingSource(options: EmbeddingProviderCreateOptions): string {
-  return normalizeOptionalString(options.local?.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
+  const configured = normalizeOptionalString(options.local?.modelPath);
+  return configured ? resolveHomePath(configured) : DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
 }
 
 export async function inspectLlamaCppEmbeddingStartupPrerequisites(

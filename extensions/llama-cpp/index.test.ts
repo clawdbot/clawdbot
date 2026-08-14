@@ -221,6 +221,21 @@ describe("llama.cpp provider plugin", () => {
     expect(mocks.genericCreate).not.toHaveBeenCalled();
   });
 
+  it("expands home-relative embedding paths before passive inspection", async () => {
+    expect(
+      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(
+        configuredOptions({ embeddingModelPath: "~/models/embedding.gguf" }),
+      ),
+    ).toEqual({ status: "ready" });
+    expect(mocks.inspectModelFile.mock.calls).toEqual([
+      [{ filePath: "/models/chat.gguf" }],
+      [{ filePath: path.join(os.homedir(), "models", "embedding.gguf") }],
+    ]);
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+    expect(mocks.genericCreate).not.toHaveBeenCalled();
+  });
+
   it("reports a missing cached chat model without downloading or starting services", async () => {
     mocks.inspectModelFile.mockResolvedValueOnce({ status: "missing" });
 
