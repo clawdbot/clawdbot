@@ -272,14 +272,31 @@ describe("acp session UX bridge behavior", () => {
 });
 
 describe("acp bridge session cwd persistence", () => {
-  function createRecordingGateway() {
+  function createRecordingGateway(existingSessionKeys: string[] = []) {
     const calls: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       calls.push({ method, params });
+      if (method === "sessions.list") {
+        return {
+          sessions: existingSessionKeys.map((key) => ({
+            key,
+            label: key,
+            displayName: key,
+            kind: "direct",
+            updatedAt: 1_710_000_000_000,
+            thinkingLevel: "adaptive",
+            modelProvider: "openai",
+            model: "gpt-5.4",
+          })),
+        };
+      }
       return { ok: true };
     }) as GatewayClient["request"];
     return { calls, gateway: createAcpGateway(request) };
   }
+
+  const createdCwds = (calls: Array<{ method: string; params: unknown }>) =>
+    calls.filter((call) => call.method === "sessions.create").map((call) => call.params);
 
   it("creates the Gateway session with the requested cwd for a bridge-minted session", async () => {
     const sessionStore = createInMemorySessionStore();
@@ -290,17 +307,30 @@ describe("acp bridge session cwd persistence", () => {
     const sessionKey = sessionStore.getSession(result.sessionId)?.sessionKey;
 
     // The Gateway persists this as spawnedCwd, which every later prompt turn resolves.
-    expect(calls).toContainEqual({
-      method: "sessions.create",
-      params: { key: sessionKey, cwd: "/tmp/my-project" },
-    });
+    expect(createdCwds(calls)).toStrictEqual([{ key: sessionKey, cwd: "/tmp/my-project" }]);
 
     sessionStore.clearAllSessionsForTest();
   });
 
-  it("does not reconfigure an explicitly routed session key", async () => {
+  it("creates an explicitly routed session key that has no Gateway row yet", async () => {
     const sessionStore = createInMemorySessionStore();
     const { calls, gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    // requireExisting defaults to false, so this key routes through unresolved and may not exist.
+    await agent.newSession({
+      ...createNewSessionRequest("/tmp/my-project"),
+      _meta: { sessionKey: "agent:main:work" },
+    } as never);
+
+    expect(createdCwds(calls)).toStrictEqual([{ key: "agent:main:work", cwd: "/tmp/my-project" }]);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("leaves an existing operator-owned session key untouched", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway(["agent:main:work"]);
     const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
 
     await agent.newSession({
@@ -308,7 +338,8 @@ describe("acp bridge session cwd persistence", () => {
       _meta: { sessionKey: "agent:main:work" },
     } as never);
 
-    expect(calls.some((call) => call.method === "sessions.create")).toBe(false);
+    // That row already owns its spawnedCwd; creating over it would restate operator state.
+    expect(createdCwds(calls)).toStrictEqual([]);
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -321,7 +352,7 @@ describe("acp bridge session cwd persistence", () => {
     await expect(agent.newSession(createNewSessionRequest("relative/project"))).rejects.toThrow(
       /requires an absolute cwd/i,
     );
-    expect(calls.some((call) => call.method === "sessions.create")).toBe(false);
+    expect(createdCwds(calls)).toStrictEqual([]);
 
     sessionStore.clearAllSessionsForTest();
   });

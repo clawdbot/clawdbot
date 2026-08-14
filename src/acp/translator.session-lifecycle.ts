@@ -76,11 +76,15 @@ export class AcpTranslatorSessionLifecycle {
       meta,
       fallbackKey: `acp-bridge:${sessionId}`,
     });
-    // A bridge-minted key has no Gateway session row yet, and chat.send carries no cwd, so the
-    // requested directory must be persisted as spawnedCwd here or every prompt turn falls back
-    // to the agent workspace. Explicitly routed keys/labels address operator-owned sessions that
-    // already own their cwd; creating over them would restate that state from the wrong owner.
-    if (!hasExplicitSessionRouting(meta, this.opts)) {
+    // chat.send carries no cwd, so the requested directory only reaches a turn as the session
+    // row's spawnedCwd. A bridge-minted key never has that row; an explicit key or label may not
+    // either, since requireExisting=false routes it through unresolved. Create whenever the row
+    // is absent, and never over an existing one: that row is operator-owned and already holds the
+    // cwd session/list reads back.
+    const routedSnapshot = hasExplicitSessionRouting(meta, this.opts)
+      ? await this.sessionState.findExistingSnapshot(sessionKey)
+      : undefined;
+    if (!routedSnapshot) {
       await this.gateway.request("sessions.create", { key: sessionKey, cwd: params.cwd });
     }
 
@@ -91,7 +95,8 @@ export class AcpTranslatorSessionLifecycle {
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
-    const sessionSnapshot = await this.sessionState.getSnapshot(session.sessionKey);
+    const sessionSnapshot =
+      routedSnapshot ?? (await this.sessionState.getSnapshot(session.sessionKey));
     await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
       record: true,
