@@ -4,7 +4,7 @@ import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { findModelCatalogEntry } from "../../model-catalog-lookup.js";
-import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { resolveAllowedModelRef, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
@@ -82,6 +82,54 @@ async function resolveCollectorOutputModelError(params: {
     return undefined;
   }
   return `sessions_spawn outputSchema requires a tool-capable target model; "${provider}/${model}" declares compat.supportsTools=false.`;
+}
+
+/**
+ * Validates an explicit caller-supplied sessions_spawn model ref against the
+ * prepared catalog and modelPolicy.allow before any child state is created.
+ * Implicit default selection is intentionally left unchanged.
+ */
+async function resolveExplicitSpawnModelAllowError(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  targetAgentDir: string;
+  workspaceDir?: string;
+  resolvedModel: string;
+}): Promise<string | undefined> {
+  const fallback = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.targetAgentId,
+  });
+  const { provider, model } = splitModelRef(params.resolvedModel);
+  const providerId = provider ?? fallback.provider;
+  if (!providerId || !model) {
+    return undefined;
+  }
+  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
+  try {
+    catalog = await getSubagentSpawnDeps().loadPreparedModelCatalog({
+      config: params.cfg,
+      agentDir: params.targetAgentDir,
+      workspaceDir: params.workspaceDir,
+      readOnly: true,
+      providerDiscoveryProviderIds: [providerId],
+      scopedLiveProviderDiscovery: true,
+    });
+  } catch (error) {
+    return `sessions_spawn could not verify the requested model: ${summarizeSpawnError(error)}`;
+  }
+  const resolved = resolveAllowedModelRef({
+    cfg: params.cfg,
+    catalog,
+    raw: params.resolvedModel,
+    defaultProvider: fallback.provider,
+    defaultModel: fallback.model,
+    agentId: params.targetAgentId,
+  });
+  if ("error" in resolved) {
+    return `sessions_spawn model "${params.resolvedModel}" is not usable: ${resolved.error}`;
+  }
+  return undefined;
 }
 
 type ResolvedSubagentChildPlan = {
@@ -221,6 +269,22 @@ export async function resolveSubagentChildPlan(params: {
     };
   }
   const { resolvedModel } = modelPlan;
+  // Explicit model refs must pass catalog/policy before any child state exists.
+  if (params.request.model?.trim()) {
+    const modelAllowError = await resolveExplicitSpawnModelAllowError({
+      cfg: params.cfg,
+      targetAgentId: params.targetAgentId,
+      targetAgentDir,
+      workspaceDir: spawnedWorkspaceDir,
+      resolvedModel,
+    });
+    if (modelAllowError) {
+      return {
+        ok: false,
+        result: { status: "error", error: modelAllowError },
+      };
+    }
+  }
   const resolvedLaunchModel = splitModelRef(resolvedModel);
   const launchAuthorization: SubagentLaunchAuthorization | undefined =
     params.request.model?.trim() && resolvedLaunchModel.model

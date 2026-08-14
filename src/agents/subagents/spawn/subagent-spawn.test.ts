@@ -1074,6 +1074,84 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
+  it("rejects an explicit non-allowlisted model before creating child state", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          modelPolicy: { allow: ["openai/gpt-5.6-sol"] },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+
+    const rejected = await spawnSubagentDirect(
+      {
+        task: "explicit disallowed model",
+        model: "openai/gpt-5.4",
+      },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    expect(rejected.status).toBe("error");
+    expect(rejected.error).toContain("is not usable");
+    expect(rejected.error).toContain("model not allowed");
+    expect(hoisted.loadPreparedModelCatalogMock).toHaveBeenCalledWith({
+      config: hoisted.configOverride,
+      agentDir: expect.any(String),
+      workspaceDir: "/tmp/workspace-main",
+      readOnly: true,
+      providerDiscoveryProviderIds: ["openai"],
+      scopedLiveProviderDiscovery: true,
+    });
+    expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts an explicit model that is on the configured allowlist", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          modelPolicy: { allow: ["openai/gpt-5.4"] },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+
+    const accepted = await spawnSubagentDirect(
+      {
+        task: "explicit allowed model",
+        model: "openai/gpt-5.4",
+      },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    expect(accepted.status).toBe("accepted");
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalled();
+  });
+
+  it("leaves implicit default model selection unchanged under a configured allowlist", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          modelPolicy: { allow: ["openai/gpt-5.6-sol"] },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+
+    const accepted = await spawnSubagentDirect(
+      { task: "implicit default model" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    expect(accepted.status).toBe("accepted");
+    expect(hoisted.loadPreparedModelCatalogMock).not.toHaveBeenCalled();
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalled();
+  });
+
   it("rejects a group id outside collector mode", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
 
