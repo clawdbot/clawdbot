@@ -596,12 +596,24 @@ test("createGatewaySession persists a generated title only for a new session", a
   expect(reused).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
 });
 
-test("chat.send generates a dashboard title only after the user turn finishes", async () => {
-  await createSessionStoreDir();
+test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
+  const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
   let finishDispatch: (() => void) | undefined;
   const dispatchFinished = new Promise<void>((resolve) => {
     finishDispatch = resolve;
+  });
+  let finishTitle: (() => void) | undefined;
+  let markTitleStarted = () => {};
+  const titleStarted = new Promise<void>((resolve) => {
+    markTitleStarted = resolve;
+  });
+  dashboardTitleGenerationMocks.generate.mockImplementationOnce(async () => {
+    markTitleStarted();
+    await new Promise<void>((resolve) => {
+      finishTitle = resolve;
+    });
+    return "Generated Dashboard Title";
   });
   dispatchInboundMessageMock.mockImplementationOnce(async () => {
     await dispatchFinished;
@@ -637,8 +649,27 @@ test("chat.send generates a dashboard title only after the user turn finishes", 
         sessionKey,
       }),
     );
+    await titleStarted;
+
+    let deletionSettled = false;
+    const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
+      key: sessionKey,
+    }).finally(() => {
+      deletionSettled = true;
+    });
+    await waitForFast(
+      () => expect(isSessionLifecycleMutationActive(storePath, [sessionKey])).toBe(true),
+      { timeout: 5_000 },
+    );
+    expect(deletionSettled).toBe(false);
+
+    finishTitle?.();
+    const deleted = await deletion;
+    expect(deleted.ok, JSON.stringify(deleted.error)).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
   } finally {
     finishDispatch?.();
+    finishTitle?.();
     ws.close();
   }
 });

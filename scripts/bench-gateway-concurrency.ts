@@ -938,7 +938,8 @@ async function runGatewaySample(options: {
         );
       }
     })();
-    const [, , freshConnectionResult] = await Promise.all([turns, sampler, freshConnection]);
+    await Promise.all([turns, sampler]);
+    const freshConnectionResult = await freshConnection;
     const turnsDurationMs = performance.now() - turnsStartedAt;
 
     return {
@@ -960,9 +961,11 @@ async function runGatewaySample(options: {
     if (gateway) {
       if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
         // V8 flushes the main-isolate CPU profile on its normal interrupt path.
-        const profileFlushed = new Promise<void>((resolve) =>
-          gateway!.once("exit", () => resolve()),
-        );
+        const profileFlushed = new Promise<void>((resolve) => {
+          gateway!.once("exit", () => {
+            resolve();
+          });
+        });
         gateway.kill("SIGINT");
         await Promise.race([profileFlushed, delay(2_000)]);
       }
@@ -1083,12 +1086,16 @@ async function main(): Promise<void> {
     }
   }
   if (options.maxControlMs !== undefined) {
-    const violation = runs
-      .flatMap((run) => [
+    const controlSamples: Array<{ name: string; sample: TimedProbe }> = [];
+    for (const run of runs) {
+      controlSamples.push(
         ...run.readyz.map((sample) => ({ name: "readyz", sample })),
         ...run.sessionsList.map((sample) => ({ name: "sessions.list", sample })),
-      ])
-      .find(({ sample }) => !sample.ok || sample.latencyMs > options.maxControlMs!);
+      );
+    }
+    const violation = controlSamples.find(
+      ({ sample }) => !sample.ok || sample.latencyMs > options.maxControlMs!,
+    );
     if (violation) {
       throw new Error(
         `Gateway ${violation.name} probe exceeded ${options.maxControlMs}ms: ` +
