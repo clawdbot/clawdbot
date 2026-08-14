@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,6 +8,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { resolveHooksConfig } from "../hooks.js";
+import { createResponse } from "../server-http.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
@@ -65,14 +66,7 @@ async function postAgentHook(global: boolean) {
       socket: { remoteAddress: "127.0.0.1" },
     },
   ) as unknown as IncomingMessage;
-  let responseBody = "";
-  const res = {
-    statusCode: 200,
-    setHeader: vi.fn(),
-    end: vi.fn((chunk: string) => {
-      responseBody = chunk;
-    }),
-  } as unknown as ServerResponse;
+  const { res, getBody } = createResponse();
 
   mocks.getRuntimeConfig
     .mockImplementationOnce(() => {
@@ -80,7 +74,7 @@ async function postAgentHook(global: boolean) {
     })
     .mockReturnValue(config);
   expect(await handler(req, res)).toBe(true);
-  return { body: JSON.parse(responseBody) as unknown, status: res.statusCode };
+  return { body: JSON.parse(getBody()) as unknown, status: res.statusCode };
 }
 
 describe("gateway hook early-failure recovery", () => {
