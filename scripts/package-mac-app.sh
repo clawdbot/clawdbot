@@ -566,6 +566,9 @@ fi
 rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
 cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
 
+echo "🖥  Staging embedded CUA driver"
+"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
+
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then

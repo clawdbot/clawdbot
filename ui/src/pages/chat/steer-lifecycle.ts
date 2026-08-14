@@ -251,7 +251,7 @@ export function retireSteeredChipsForTerminalRun(
   return firstPersistedSteerIndex;
 }
 
-export function retireHistoryProvenSteeredChips(state: SteerLifecycleHost): void {
+export function retirePersistedSteeredChips(state: SteerLifecycleHost): void {
   const retired = state.chatQueue.filter(
     (item) =>
       isAckedSteeredChip(item) && chatMessagesContainQueuedSend(state.chatMessages, item, true),

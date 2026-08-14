@@ -483,9 +483,40 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      const originalPrompt = "keep this run active";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(originalPrompt);
       await page.getByRole("button", { name: "Send message" }).click();
-      await gateway.waitForRequest("chat.send");
+      const initialSend = await gateway.waitForRequest("chat.send");
+      const activeRunId = requireString(
+        requireRecord(initialSend.params).idempotencyKey,
+        "active chat run id",
+      );
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [activeRunId],
+        clientRunId: activeRunId,
+        hasActiveRun: true,
+        message: {
+          __openclaw: {
+            id: "persisted-original-user",
+            idempotencyKey: `${activeRunId}:user`,
+            seq: 1,
+          },
+          content: [{ text: originalPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "persisted-original-user",
+        messageSeq: 1,
+        session: {
+          activeRunIds: [activeRunId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       const followUp = "tighten the active plan";
@@ -493,11 +524,13 @@ suite.define(() => {
       await page.getByRole("button", { name: "Steer into the active run" }).click();
 
       const sends = await waitForRequests(gateway, "chat.send", 2);
-      expect(requireRecord(sends[1]?.params)).toMatchObject({
+      const steerParams = requireRecord(sends[1]?.params);
+      expect(steerParams).toMatchObject({
         deliver: false,
         message: followUp,
         sessionKey: "main",
       });
+      const steerRunId = requireString(steerParams.idempotencyKey, "steer run id");
       const queue = page.locator(".chat-queue");
       await queue.locator(".chat-queue__badge--steered", { hasText: "Steering" }).waitFor({
         timeout: 10_000,
@@ -505,7 +538,57 @@ suite.define(() => {
       await queue.getByText(followUp).waitFor({ timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({
-          path: `${artifactDir}/steer-default.png`,
+          path: `${artifactDir}/steer-before-persistence.png`,
+          fullPage: true,
+        });
+      }
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [activeRunId],
+        clientRunId: activeRunId,
+        hasActiveRun: true,
+        message: {
+          __openclaw: {
+            id: "persisted-steer-user",
+            idempotencyKey: `${steerRunId}:user`,
+            seq: 2,
+          },
+          content: [{ text: followUp, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "persisted-steer-user",
+        messageSeq: 2,
+        session: {
+          activeRunIds: [activeRunId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+
+      await queue.getByText(followUp).waitFor({ state: "detached", timeout: 10_000 });
+      await expect
+        .poll(() => page.locator(".chat-thread .chat-group.user", { hasText: followUp }).count())
+        .toBe(1);
+      await expect
+        .poll(() =>
+          page.locator(".chat-thread-inner").evaluate(
+            (thread, texts) => {
+              const bubbles = Array.from(thread.querySelectorAll(".chat-bubble"));
+              return texts.map((text) =>
+                bubbles.findIndex((bubble) => bubble.textContent?.includes(text)),
+              );
+            },
+            [originalPrompt, followUp],
+          ),
+        )
+        .toEqual([0, 1]);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/steer-after-persistence.png`,
           fullPage: true,
         });
       }

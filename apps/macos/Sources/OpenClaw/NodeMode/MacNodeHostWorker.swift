@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import OSLog
 import Subprocess
 
@@ -14,16 +15,37 @@ struct MacNodeHostManifest: Equatable, Sendable {
     let version: String
     let caps: [String]
     let commands: [String]
+    let computerUse: AnyCodable?
     let pathEnv: String
+
+    init(
+        version: String,
+        caps: [String],
+        commands: [String],
+        computerUse: AnyCodable? = nil,
+        pathEnv: String)
+    {
+        self.version = version
+        self.caps = caps
+        self.commands = commands
+        self.computerUse = computerUse
+        self.pathEnv = pathEnv
+    }
 }
 
 struct MacNodeHostWorkerLaunch: Equatable, Sendable {
     let command: [String]
     let currentDirectoryURL: URL?
+    let environment: [String: String]
 
-    init(command: [String], currentDirectoryURL: URL? = nil) {
+    init(
+        command: [String],
+        currentDirectoryURL: URL? = nil,
+        environment: [String: String] = [:])
+    {
         self.command = command
         self.currentDirectoryURL = currentDirectoryURL
+        self.environment = environment
     }
 }
 
@@ -321,6 +343,9 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             return
         }
         var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: CuaDriverWorkerEnvironment.socketPath)
+        environment.removeValue(forKey: CuaDriverWorkerEnvironment.binaryPath)
+        environment.merge(launch.environment, uniquingKeysWith: { _, explicit in explicit })
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
         environment["OPENCLAW_NODE_EXEC_FALLBACK"] = "0"
@@ -459,7 +484,25 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 self.stopLocked(reason: "worker returned invalid manifest")
                 return
             }
-            let manifest = MacNodeHostManifest(version: version, caps: caps, commands: commands, pathEnv: pathEnv)
+            let computerUse: AnyCodable?
+            if let rawComputerUse = rawManifest["computerUse"] {
+                guard let rawComputerUse = rawComputerUse as? [String: Any],
+                      let data = try? JSONSerialization.data(withJSONObject: rawComputerUse),
+                      let decoded = try? JSONDecoder().decode(AnyCodable.self, from: data)
+                else {
+                    self.stopLocked(reason: "worker returned invalid computer-use descriptor")
+                    return
+                }
+                computerUse = decoded
+            } else {
+                computerUse = nil
+            }
+            let manifest = MacNodeHostManifest(
+                version: version,
+                caps: caps,
+                commands: commands,
+                computerUse: computerUse,
+                pathEnv: pathEnv)
             self.manifest = manifest
             self.inventoryData = (message["inventory"] as? [String: Any]).flatMap(Self.jsonData)
             self.finishStartLocked(.success(manifest))
