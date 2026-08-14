@@ -3,6 +3,7 @@ import {
   buildSidebarCustomizerEntries,
   buildSidebarCustomizerSections,
   mergeSidebarCustomizerEntries,
+  sidebarCustomizerValuesEqual,
 } from "./app-sidebar-customizer.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-navigation-logic.ts";
 
@@ -15,6 +16,33 @@ describe("sidebar customizer model", () => {
         ["route:cron", "route:plugins", "route:tasks"],
       ),
     ).toEqual(["fixed:current", "route:cron", "route:plugins"]);
+  });
+
+  it("returns to pristine when the current values match the baseline", () => {
+    const baseline = {
+      sidebarEntries: ["route:cron", "route:plugins"],
+      hiddenCatalogIds: ["claude"],
+      groups: ["Research"],
+      sectionOrder: ["work", "ungrouped"],
+    };
+
+    expect(
+      sidebarCustomizerValuesEqual(
+        {
+          sidebarEntries: [...baseline.sidebarEntries],
+          hiddenCatalogIds: [...baseline.hiddenCatalogIds],
+          groups: [...baseline.groups],
+          sectionOrder: [...baseline.sectionOrder],
+        },
+        baseline,
+      ),
+    ).toBe(true);
+    expect(
+      sidebarCustomizerValuesEqual(
+        { ...baseline, sidebarEntries: [...baseline.sidebarEntries, "route:tasks"] },
+        baseline,
+      ),
+    ).toBe(false);
   });
 
   it("keeps Home fixed and orders visible pages before hidden pages", () => {

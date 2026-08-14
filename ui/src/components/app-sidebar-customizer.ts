@@ -26,6 +26,29 @@ export type SidebarCustomizerItem = {
   sessionKey?: string;
 };
 
+export type SidebarCustomizerValue = {
+  sidebarEntries: readonly string[];
+  hiddenCatalogIds: readonly string[];
+  groups: readonly string[];
+  sectionOrder: readonly string[];
+};
+
+function equalStringArrays(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function sidebarCustomizerValuesEqual(
+  left: SidebarCustomizerValue,
+  right: SidebarCustomizerValue,
+): boolean {
+  return (
+    equalStringArrays(left.sidebarEntries, right.sidebarEntries) &&
+    equalStringArrays(left.hiddenCatalogIds, right.hiddenCatalogIds) &&
+    equalStringArrays(left.groups, right.groups) &&
+    equalStringArrays(left.sectionOrder, right.sectionOrder)
+  );
+}
+
 export function mergeSidebarCustomizerEntries(
   current: readonly string[],
   snapshot: readonly string[],

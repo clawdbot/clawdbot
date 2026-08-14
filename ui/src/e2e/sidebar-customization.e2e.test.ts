@@ -11,6 +11,7 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionRow, sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -202,7 +203,12 @@ suite.define(() => {
     const video = page.video();
     const gateway = await installMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
-      featureMethods: ["sessions.catalog.list", "sessions.groups.list", "sessions.groups.put"],
+      featureMethods: [
+        "sessions.catalog.list",
+        "sessions.groups.list",
+        "sessions.groups.put",
+        "sessions.patch",
+      ],
       methodResponses: {
         "sessions.catalog.list": {
           catalogs: [
@@ -214,6 +220,14 @@ suite.define(() => {
             },
           ],
         },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", 2),
+          sessionRow("agent:main:tax-research", "Tax filing research", 1, {
+            pinned: true,
+            pinnedAt: 1,
+          }),
+        ]),
+        "sessions.patch": { ok: true },
         "config.get": {
           config: {},
           hash: "settings-search-e2e",
@@ -558,6 +572,18 @@ suite.define(() => {
         .poll(() => tasksRow.evaluate((row) => getComputedStyle(row).animationName))
         .toBe("none");
 
+      await tasksRow.getByRole("button", { name: "Show Tasks in sidebar" }).click();
+      await expect
+        .poll(() => customizer.getByRole("button", { name: "Discard changes" }).isVisible())
+        .toBe(true);
+      await tasksRow.getByRole("button", { name: "Hide Tasks from sidebar" }).click();
+      await expect
+        .poll(() => customizer.getByRole("button", { name: "Back" }).isVisible())
+        .toBe(true);
+      await expect
+        .poll(() => customizer.getByRole("button", { name: "Discard changes" }).count())
+        .toBe(0);
+
       const pinnedSessionRow = customizer.locator(
         '[data-sidebar-customizer-id="session:agent:main:tax-research"]',
       );
@@ -566,6 +592,12 @@ suite.define(() => {
         .getByRole("button", { name: "Remove Tax filing research from sidebar" })
         .click();
       await expect.poll(() => pinnedSessionRow.count()).toBe(0);
+      await customizer.getByRole("button", { name: "Discard changes" }).click();
+      await expect.poll(() => customizer.count()).toBe(0);
+
+      await moreButton.click();
+      await moreMenu.getByRole("menuitem", { name: "Customize sidebar" }).click();
+      await expect.poll(() => pinnedSessionRow.isVisible()).toBe(true);
 
       await tasksRow.getByRole("button", { name: "Show Tasks in sidebar" }).click();
       await claudeRow.getByRole("button", { name: "Hide Claude Code from sidebar" }).click();
@@ -628,6 +660,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.groups.put")).length)
         .toBeGreaterThan(groupWritesBefore);
+      await customizer.getByRole("button", { name: "Discard changes" }).focus();
       await page.keyboard.press("Escape");
       await expect.poll(() => customizer.count()).toBe(0);
       await expect
@@ -802,7 +835,13 @@ suite.define(() => {
         .poll(() => customizer.getByRole("alert").textContent())
         .toContain("Couldn't restore every sidebar change");
       await expect.poll(() => customizer.isVisible()).toBe(true);
-      await customizer.getByRole("button", { name: "Discard changes" }).click();
+      await expect
+        .poll(() => customizer.getByRole("button", { name: "Back" }).isVisible())
+        .toBe(true);
+      await expect
+        .poll(() => customizer.getByRole("button", { name: "Discard changes" }).count())
+        .toBe(0);
+      await customizer.getByRole("button", { name: "Back" }).click();
       await expect.poll(() => customizer.count()).toBe(0);
     } finally {
       await context.close();
