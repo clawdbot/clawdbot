@@ -2212,12 +2212,13 @@ describe("createBackupArchive", () => {
       },
       async (state) => {
         const outputDir = state.path("backups");
-        const externalDbPath = state.path("external-malformed.sqlite");
+        const backingPath = state.statePath("plugins", "backing", "malformed.bin");
         const linkedDbPath = state.statePath("plugins", "dedicated", "linked.sqlite");
+        await fs.mkdir(path.dirname(backingPath), { recursive: true });
         await fs.mkdir(path.dirname(linkedDbPath), { recursive: true });
         await fs.mkdir(outputDir, { recursive: true });
-        await fs.writeFile(externalDbPath, "not a sqlite database", "utf8");
-        await fs.symlink(externalDbPath, linkedDbPath);
+        await fs.writeFile(backingPath, "not a sqlite database", "utf8");
+        await fs.symlink(path.relative(path.dirname(linkedDbPath), backingPath), linkedDbPath);
 
         const result = await createBackupArchive({
           output: outputDir,
@@ -2231,7 +2232,7 @@ describe("createBackupArchive", () => {
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
-        ).resolves.toMatchObject({ ok: true });
+        ).resolves.toEqual(expect.objectContaining({ ok: true, symlinkCount: 1 }));
       },
     );
   });
