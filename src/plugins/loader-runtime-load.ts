@@ -1,3 +1,4 @@
+import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import {
@@ -279,6 +280,22 @@ function loadOpenClawPluginsInternal(
           `[plugins] ${failedPlugins.length} plugin(s) failed to initialize (${formatPluginFailureSummary(
             failedPlugins,
           )}). Run 'openclaw plugins inspect <id> --runtime --json' for runtime diagnostics, 'openclaw plugins list' for registry state, and restart the Gateway after plugin code or load-path changes.`,
+        );
+      }
+      // A plugin whose hook policy refused a registration still reports as
+      // loaded, so nothing else at startup states that part of it is dead.
+      // Summarize next to the failure summary rather than leaving the state to
+      // be inferred from a diagnostic nobody reads. Error severity only: the
+      // warn-level refusals are denials the operator wrote themselves, and they
+      // already print at their own level.
+      const blockedHookPluginIds = uniqueValues(
+        registry.blockedHooks
+          .filter((entry) => entry.severity === "error")
+          .map((entry) => entry.pluginId),
+      );
+      if (blockedHookPluginIds.length > 0) {
+        logger.error(
+          `[plugins] hook registrations blocked for ${blockedHookPluginIds.length} plugin(s) (${blockedHookPluginIds.join(", ")}); those handlers will never run. Run '/status plugins' or 'openclaw plugins inspect <id> --runtime --json' for the blocked hook names and the config key that unblocks each one.`,
         );
       }
     }
