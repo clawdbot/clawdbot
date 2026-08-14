@@ -649,18 +649,13 @@ private struct AISetupHarness {
 @MainActor
 private final class FirstRunGatewayTestPresenter: FirstRunOnboardingPresenting {
     private let makeView: @MainActor () -> OnboardingView
-    let presentsDashboardInsteadOfOnboarding: Bool
+    let presentsDashboardInsteadOfOnboarding = false
     private(set) var completionCount = 0
-    private(set) var openDashboardCount = 0
     private(set) var showCount = 0
     private(set) var view: OnboardingView?
     private(set) var probeTask: Task<Void, Never>?
 
-    init(
-        presentsDashboardInsteadOfOnboarding: Bool = false,
-        makeView: @escaping @MainActor () -> OnboardingView)
-    {
-        self.presentsDashboardInsteadOfOnboarding = presentsDashboardInsteadOfOnboarding
+    init(makeView: @escaping @MainActor () -> OnboardingView) {
         self.makeView = makeView
     }
 
@@ -668,9 +663,7 @@ private final class FirstRunGatewayTestPresenter: FirstRunOnboardingPresenting {
         self.completionCount += 1
     }
 
-    func openDashboard() {
-        self.openDashboardCount += 1
-    }
+    func openDashboard() {}
 
     func showOnboarding() {
         self.showCount += 1
@@ -822,16 +815,43 @@ private func setupAdmissionBusyResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingAISetupTests {
-    @Test func `nix first run presenter hands off to dashboard`() {
-        let presenter = FirstRunGatewayTestPresenter(
-            presentsDashboardInsteadOfOnboarding: true,
-            makeView: { fatalError("Nix first run must not present onboarding") })
+    @Test func `nix first run presenter opens a dashboard outcome`() async {
+        let defaults = AppDefaults.standard
+        let nixModeKey = "openclaw.nixMode"
+        let previousDefaults: [(String, Any?)] = [
+            (nixModeKey, defaults.object(forKey: nixModeKey)),
+            (onboardingSeenKey, defaults.object(forKey: onboardingSeenKey)),
+            (onboardingVersionKey, defaults.object(forKey: onboardingVersionKey)),
+        ]
+        let state = AppStateStore.shared
+        let previousConnectionMode = state.connectionMode
+        let previousOnboardingSeen = state.onboardingSeen
+        let dashboard = DashboardManager.shared
+        dashboard.close()
+        defer {
+            dashboard.close()
+            state.connectionMode = previousConnectionMode
+            state.onboardingSeen = previousOnboardingSeen
+            for (key, value) in previousDefaults {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+        defaults.set(true, forKey: nixModeKey)
+        state.connectionMode = .unconfigured
+        state.onboardingSeen = false
 
+        let presenter = OnboardingController()
         presenter.show()
+        for _ in 0..<400 where dashboard._testController()?.isWindowOpen != true {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
 
-        #expect(presenter.completionCount == 1)
-        #expect(presenter.openDashboardCount == 1)
-        #expect(presenter.showCount == 0)
+        #expect(state.onboardingSeen)
+        #expect(dashboard._testController()?.isWindowOpen == true)
     }
 
     @Test func `first run verifies configured gateway before opening dashboard`() async throws {

@@ -68,6 +68,13 @@ actor GatewayConnection {
     struct ServerIdentity: Equatable, Sendable {
         fileprivate let routeGeneration: UInt64
         fileprivate let socketGeneration: UInt64
+
+        func covers(_ other: ServerIdentity) -> Bool {
+            if self.routeGeneration != other.routeGeneration {
+                return self.routeGeneration > other.routeGeneration
+            }
+            return self.socketGeneration >= other.socketGeneration
+        }
     }
 
     /// One connected Gateway server, not merely an endpoint configuration.

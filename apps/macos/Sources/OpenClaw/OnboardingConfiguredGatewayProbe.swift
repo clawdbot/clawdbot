@@ -261,7 +261,9 @@ final class OnboardingConfiguredGatewayProbe {
 
     private func registerProbeServer(_ identity: GatewayConnection.ServerIdentity) {
         self.observedServerIdentity = identity
-        if self.pendingReconnectIdentity == identity {
+        if let pendingReconnectIdentity,
+           identity.covers(pendingReconnectIdentity)
+        {
             self.pendingReconnectIdentity = nil
         }
     }

@@ -6,6 +6,19 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayConnectionTests {
+    private func waitForReplacementServer(
+        _ connection: GatewayConnection,
+        after identity: GatewayConnection.ServerIdentity) async -> GatewayConnection.ServerLease?
+    {
+        for _ in 0..<400 {
+            if let lease = await connection.captureServerLease(), lease.identity != identity {
+                return lease
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        return nil
+    }
+
     private func makeConnection(
         session: GatewayTestWebSocketSession,
         token: String? = nil) throws -> (GatewayConnection, ConfigSource)
@@ -139,6 +152,37 @@ struct GatewayConnectionTests {
         #expect(session.snapshotMakeCount() == 1)
         #expect(session.latestTask()?.snapshotSendCount() == 2)
         await conn.shutdown()
+    }
+
+    @Test func `server identity coverage follows replacement order`() async throws {
+        let session = self.makeSession()
+        let (connection, _) = try self.makeConnection(session: session)
+        let pendingB = try await connection.acquireServerLease()
+
+        let pendingBSocket = try #require(session.latestTask())
+        for _ in 0..<400 where !pendingBSocket.hasPendingReceiveHandler() {
+            await Task.yield()
+        }
+        #expect(pendingBSocket.hasPendingReceiveHandler())
+        pendingBSocket.emitReceiveFailure()
+        let acquiredC = try #require(await self.waitForReplacementServer(
+            connection,
+            after: pendingB.identity))
+
+        let acquiredCSocket = try #require(session.latestTask())
+        for _ in 0..<400 where !acquiredCSocket.hasPendingReceiveHandler() {
+            await Task.yield()
+        }
+        #expect(acquiredCSocket.hasPendingReceiveHandler())
+        acquiredCSocket.emitReceiveFailure()
+        let newerD = try #require(await self.waitForReplacementServer(
+            connection,
+            after: acquiredC.identity))
+
+        #expect(acquiredC.identity.covers(pendingB.identity)) // Acquired C retires pending B.
+        #expect(!acquiredC.identity.covers(newerD.identity)) // Acquired C retains newer D.
+        #expect(newerD.identity.covers(acquiredC.identity))
+        await connection.shutdown()
     }
 
     @Test func `server lease preserves caller cancellation after dispatch`() async throws {
