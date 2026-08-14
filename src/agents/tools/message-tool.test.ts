@@ -2882,7 +2882,7 @@ describe("message tool explicit target guard", () => {
         invalidBroadcastTargetTool.execute("invalid-broadcast-target", {
           action: "broadcast",
           channel: "workspace",
-          targets: ["not-a-target"],
+          targets: ["not-a-target", "also-not-a-target"],
           message: "hi",
         }),
       );
@@ -2999,6 +2999,17 @@ describe("message tool explicit target guard", () => {
         contextId: "context-message-decisions",
         executionId: "execution-message-decisions",
         runId: "run-message-decisions",
+        actionId: "invalid-broadcast-target",
+        decision: { outcome: "denied", reasonCode: "message_target_unknown" },
+        enforcement: expect.objectContaining({
+          coverageState: "enforced",
+          policyRefs: ["message-target:known"],
+        }),
+      }),
+      expect.objectContaining({
+        contextId: "context-message-decisions",
+        executionId: "execution-message-decisions",
+        runId: "run-message-decisions",
         actionId: "disabled-broadcast",
         decision: { outcome: "denied", reasonCode: "message_broadcast_disabled" },
         enforcement: expect.objectContaining({
@@ -3011,7 +3022,13 @@ describe("message tool explicit target guard", () => {
     expect(JSON.stringify(receipts)).not.toContain("/tmp/x");
     expect(JSON.stringify(receipts)).not.toContain("missing-account");
     expect(JSON.stringify(receipts)).not.toContain("not-a-target");
+    expect(JSON.stringify(receipts)).not.toContain("also-not-a-target");
     expect(JSON.stringify(receipts)).not.toContain("secret-token-in-channel");
+    const broadcastDenials = receipts.filter(
+      (receipt) => receipt.actionId === "invalid-broadcast-target",
+    );
+    expect(broadcastDenials).toHaveLength(2);
+    expect(new Set(broadcastDenials.map((receipt) => receipt.receiptId)).size).toBe(2);
   });
 
   it("requires an explicit target for upload-file when configured", async () => {

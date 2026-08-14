@@ -21,10 +21,15 @@ import {
 import { presentExecutionDecisionReceipts } from "./execution-decision-receipts.js";
 import {
   configureExecutionIdentityAdmissionSink,
+  createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionEnvelope,
 } from "./execution-identity-admission.js";
 import { processExecutionIdentityAdmissionWork } from "./execution-identity-context.js";
+import {
+  configureMessageActionDecisionSink,
+  recordMessageActionDecision,
+} from "./message-action-decision.js";
 import { recordOutboundMessageProgress } from "./message-delivery-progress-store.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -114,6 +119,52 @@ function receipt(id: string, occurredAt = 100): DecisionReceiptV1 {
 }
 
 describe("execution decision facts", () => {
+  it("persists repeated same-reason broadcast denials with opaque distinct ids", () => {
+    const database = databaseOptions();
+    seedExecutionContext(database);
+    const token = createExecutionIdentityAdmissionToken("run-1", {
+      contextId: "context-1",
+      executionId: "execution-1",
+      now: 100,
+    });
+    const clear = configureMessageActionDecisionSink(
+      (decision) => recordExecutionDecisionFact(decision, { ...database, now: 100 }) === "inserted",
+    );
+    try {
+      for (const receiptDiscriminator of ["broadcast:0", "broadcast:1"]) {
+        expect(
+          recordMessageActionDecision({
+            token,
+            actionId: "broadcast-action",
+            action: "broadcast",
+            channel: "qa-channel",
+            outcome: "denied",
+            reasonCode: "message_target_unknown",
+            coverageState: "enforced",
+            policyRefs: ["message-target:known"],
+            summary: "Message action was denied before platform delivery.",
+            remediation: [],
+            receiptDiscriminator,
+            occurredAt: 100,
+          }),
+        ).toBe(true);
+      }
+    } finally {
+      clear();
+    }
+
+    const receipts = pageExecutionDecisionFactsForContext({
+      context: { contextId: "context-1", executionId: "execution-1", runId: "run-1" },
+      limit: 10,
+      now: 100,
+      database,
+    }).receipts;
+    expect(receipts).toHaveLength(2);
+    expect(new Set(receipts.map((item) => item.receiptId)).size).toBe(2);
+    expect(JSON.stringify(receipts)).not.toContain("broadcast:0");
+    expect(JSON.stringify(receipts)).not.toContain("broadcast:1");
+  });
+
   it("projects owner-native outbound delivery into run inspection", () => {
     const database = databaseOptions();
     const context = seedExecutionContext(database);

@@ -757,10 +757,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           // Source-less scheduled and ambient sends remain ordinary message actions.
           sourceReplyFinal: hasExactSourceTurn ? (requestedSourceReplyFinal ?? true) : undefined,
           sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
-          onActionDenied: (error, channel) =>
+          onActionDenied: (error, channel, receiptDiscriminator) =>
             decisions.recordTypedDenial(
               error,
               resolveTrustedDecisionChannel(channel, preparedMessageToolCatalog),
+              receiptDiscriminator,
             ),
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,

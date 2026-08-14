@@ -24,7 +24,11 @@ export function createMessageToolDecisionRecorder(params: {
       ...decision,
     });
   const record = (decision: Decision) => recordWithChannel(decision, sourceChannel);
-  const recordTypedDenial = (error: unknown, channel = sourceChannel): void => {
+  const recordTypedDenial = (
+    error: unknown,
+    channel = sourceChannel,
+    receiptDiscriminator?: string,
+  ): void => {
     if (!(error instanceof MessageActionDeniedError)) {
       return;
     }
@@ -41,6 +45,7 @@ export function createMessageToolDecisionRecorder(params: {
             text: "Correct the target or policy violation described by the tool error, then retry.",
           },
         ],
+        receiptDiscriminator,
       },
       channel,
     );

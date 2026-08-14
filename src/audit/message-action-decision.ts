@@ -19,9 +19,18 @@ export function configureMessageActionDecisionSink(
   };
 }
 
-function decisionId(params: { contextId: string; actionId: string; reasonCode: string }): string {
+function decisionId(params: {
+  contextId: string;
+  actionId: string;
+  reasonCode: string;
+  receiptDiscriminator?: string;
+}): string {
+  const identity = [params.contextId, params.actionId, params.reasonCode];
+  if (params.receiptDiscriminator) {
+    identity.push(params.receiptDiscriminator);
+  }
   const digest = createHash("sha256")
-    .update(JSON.stringify([params.contextId, params.actionId, params.reasonCode]))
+    .update(JSON.stringify(identity))
     .digest("base64url")
     .slice(0, 32);
   return `message-action:${digest}`;
@@ -39,6 +48,8 @@ export function recordMessageActionDecision(params: {
   policyRefs?: string[];
   summary: string;
   remediation: DecisionReceiptV1["remediation"];
+  /** Internal deterministic occurrence identity; hashed into the receipt id and never retained. */
+  receiptDiscriminator?: string;
   occurredAt?: number;
 }): boolean {
   const token = params.token;
@@ -50,6 +61,7 @@ export function recordMessageActionDecision(params: {
     contextId: token.contextId,
     actionId: params.actionId,
     reasonCode: params.reasonCode,
+    receiptDiscriminator: params.receiptDiscriminator,
   });
   return state.sink({
     schemaVersion: 1,

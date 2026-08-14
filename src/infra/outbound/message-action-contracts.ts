@@ -92,7 +92,11 @@ export type MessageActionInput = {
   /** @internal Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   /** @internal Runs when broadcast converts a typed target denial into result text. */
-  onActionDenied?: (error: MessageActionDeniedError, channel: ChannelId) => void;
+  onActionDenied?: (
+    error: MessageActionDeniedError,
+    channel: ChannelId,
+    receiptDiscriminator: string,
+  ) => void;
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
