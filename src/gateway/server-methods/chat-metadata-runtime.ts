@@ -96,7 +96,7 @@ type ChatMetadataRuntimeDeps = {
     facts: PreparedAgentFacts;
     preferredProfileId?: string;
     lockedProfileId?: string;
-  }) => Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }>;
+  }) => Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[]; catalogMode?: "replace" }>;
 };
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
