@@ -24,7 +24,7 @@ import {
 } from "../../../../src/infra/node-runner-inventory.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
 import {
-  resolveNodeWorkerBuild,
+  resolveNodeWorkerInstallation,
   type NodeWorkerInstallation,
 } from "../../../../src/node-host/node-worker-build.js";
 import { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
@@ -145,15 +145,11 @@ async function createSourceWorkerInstallation(root: string): Promise<NodeWorkerI
     path.join(packageRoot, "node_modules"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  const canonicalRoot = await fs.realpath(packageRoot);
-  return {
-    packageRoot: canonicalRoot,
-    build: await resolveNodeWorkerBuild({
-      packageRoot: canonicalRoot,
-      openclawVersion: VERSION,
-      protocolFeatures: WORKER_PROTOCOL_FEATURES,
-    }),
-  };
+  return await resolveNodeWorkerInstallation({
+    packageRoot,
+    openclawVersion: VERSION,
+    protocolFeatures: WORKER_PROTOCOL_FEATURES,
+  });
 }
 
 async function connectClient(params: {

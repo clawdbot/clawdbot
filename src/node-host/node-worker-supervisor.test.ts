@@ -1,5 +1,6 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -199,7 +200,7 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
-  it("runs the advertised local install and refuses it after its worker bytes change", async () => {
+  it("reuses the advertised local install and refuses it after its worker bytes change", async () => {
     const root = tempDirs.make("node-worker-local-install-");
     const packageRoot = path.join(root, "package");
     const workspaceDir = path.join(root, "workspace");
@@ -229,12 +230,14 @@ describe("node worker supervisor", () => {
       input.descriptor.admission.handshake = structuredClone(installation.build);
       return input;
     };
+    const stagingRoot = vi.spyOn(fsp, "mkdtemp");
 
     const first = localInput("local-success");
     expect(await supervisor.launch(first, TEST_WORKER_ENDPOINT)).toMatchObject({
       state: "running",
     });
     expect(await waitForTerminal(supervisor, first.launchId)).toMatchObject({ state: "completed" });
+    expect(stagingRoot).not.toHaveBeenCalled();
 
     fs.writeFileSync(distPath, "export const workerBuild = 2;\n");
     expect(
@@ -243,6 +246,7 @@ describe("node worker supervisor", () => {
       state: "failed",
       errorText: expect.stringContaining("changed after its build was advertised"),
     });
+    expect(stagingRoot).toHaveBeenCalledTimes(1);
     await supervisor.close();
   });
 

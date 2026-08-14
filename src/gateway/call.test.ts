@@ -504,6 +504,36 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
+  it("reconnects with admin only after sessions.create cwd returns structured escalation", async () => {
+    const scopeAttempts: Array<readonly string[] | undefined> = [];
+    gatewayClientRequest = async () => {
+      scopeAttempts.push(lastClientOptions?.scopes);
+      if (scopeAttempts.length === 1) {
+        throw Object.assign(new Error("missing scope: operator.admin"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+          retryable: false,
+        });
+      }
+      return { key: "agent:main:dashboard:created" };
+    };
+    setLocalLoopbackGatewayConfig();
+
+    await expect(
+      callGatewayCli({
+        method: "sessions.create",
+        params: { cwd: "/outside/configured/workspaces" },
+      }),
+    ).resolves.toEqual({ key: "agent:main:dashboard:created" });
+
+    expect(scopeAttempts).toEqual([["operator.write"], ["operator.admin"]]);
+  });
+
   it("keeps direct-local backend shared-token auth independent of paired device state", async () => {
     setLocalLoopbackGatewayConfig();
 

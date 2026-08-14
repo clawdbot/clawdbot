@@ -1609,7 +1609,7 @@ describe("refreshChatMetadata", () => {
   it("loads compatibility models when the gateway does not advertise chat metadata", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "models.list") {
-        expect(params).toEqual({ view: "configured", preparedOnly: true });
+        expect(params).toEqual({ view: "configured", agentId: "main", preparedOnly: true });
         return {
           models: [{ id: "compat-model", name: "Compat Model", provider: "openai" }],
         };

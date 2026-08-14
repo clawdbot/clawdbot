@@ -136,6 +136,14 @@ function respondLaunchBlocked(
     );
     return;
   }
+  if (block.kind === "owner-required") {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, terminalFailureMessage(block.message, hint)),
+    );
+    return;
+  }
   // Fail closed: a sandboxed agent must never receive a host shell.
   respond(
     false,

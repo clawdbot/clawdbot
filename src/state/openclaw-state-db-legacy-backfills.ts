@@ -663,6 +663,7 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
       `SELECT queue_name, id, entry_json
          FROM delivery_queue_entries
         WHERE status <> 'completed'
+          AND NOT (status = 'failed' AND recovery_state = 'failed_terminal_v1')
           AND (retry_count = 0
             OR last_attempt_at IS NULL
             OR last_error IS NULL

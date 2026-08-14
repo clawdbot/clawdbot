@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { sweepDeliveryFailureMaintenance } from "../../../infra/delivery-queue-failure-maintenance.js";
+import {
+  bindDeliveryQueueEntry,
+  upsertBoundDeliveryQueueEntryInDatabase,
+} from "../../../infra/delivery-queue-sqlite-bound.js";
 import {
   prepareClaimedSessionDelivery,
   SessionDeliveryDeadLetteredError,
@@ -34,11 +39,13 @@ import {
 } from "./subagent-completion-delivery.js";
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
+const scheduleSessionDelivery = vi.hoisted(() => vi.fn(async () => undefined));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const discardTerminalDelivery = (entry: SubagentRunRecord, completedAt: number) =>
   SubagentLifecycleController.discardTerminalDelivery(entry, completedAt);
 
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun }));
+vi.mock("../../../infra/session-delivery-queue-runtime.js", () => ({ scheduleSessionDelivery }));
 
 describe("atomic subagent completion admission store", () => {
   let tempDir: string;
@@ -216,6 +223,158 @@ describe("atomic subagent completion admission store", () => {
     expect(rowCount("delivery_queue_entries")).toBe(0);
     expect(rowCount("subagent_runs")).toBe(0);
     expect(rowCount("task_runs")).toBe(0);
+  });
+
+  it("atomically admits a replacement generation and compacts its prior failed owner", () => {
+    const prior = records();
+    prior.queueEntry.terminalPolicy = {
+      version: 1,
+      detail: "full",
+      replay: "owner-managed",
+      fence: { kind: "permanent" },
+      reason: "owner_settled",
+      payload: "present",
+      cleanup: "complete",
+      evidence: "owner_managed",
+      owner: "subagent_completion",
+      detailExpiresAt: Date.now() + 7 * 24 * 60 * 60_000,
+    };
+    expect(
+      upsertBoundDeliveryQueueEntryInDatabase(
+        bindDeliveryQueueEntry({
+          queueName: "session",
+          entry: prior.queueEntry,
+          status: "failed",
+        }),
+        database,
+      ),
+    ).toBe(true);
+
+    const replacement = records();
+    if (
+      replacement.queueEntry.kind !== "agentTurn" ||
+      replacement.queueEntry.owner?.kind !== "subagent_completion"
+    ) {
+      throw new Error("expected correlated agent-turn replacement");
+    }
+    replacement.queueEntry.id = `${replacement.queueEntry.id}-generation-2`;
+    replacement.queueEntry.messageId = "completion:2";
+    replacement.queueEntry.owner.generation = 2;
+    replacement.subagent.delivery!.generation = 2;
+    replacement.subagent.delivery!.queueId = replacement.queueEntry.id;
+    replacement.task.deliveryStatus = "session_queued";
+
+    expect(
+      admitSubagentCompletionDelivery({
+        ...replacement,
+        retireFailed: { entry: prior.queueEntry, reason: "owner_settled" },
+        databaseOptions: { database },
+      }),
+    ).toEqual({ claimed: true });
+
+    const rows = database.db
+      .prepare(
+        "SELECT id, status, entry_json FROM delivery_queue_entries WHERE queue_name='session' ORDER BY id",
+      )
+      .all() as Array<{ id: string; status: string; entry_json: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.id === prior.queueEntry.id)).toMatchObject({ status: "failed" });
+    expect(
+      JSON.parse(rows.find((row) => row.id === prior.queueEntry.id)!.entry_json),
+    ).toMatchObject({
+      terminalPolicy: { detail: "compacted", owner: "subagent_completion" },
+    });
+    expect(rows.find((row) => row.id === replacement.queueEntry.id)).toMatchObject({
+      status: "pending",
+    });
+  });
+
+  it("redrives an exact pre-upgrade failed owner after maintenance canonicalizes it", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+      closeOpenClawStateDatabaseForTest();
+      database = openOpenClawStateDatabase();
+      const input = records();
+      const now = Date.now();
+      Object.assign(input.subagent.delivery!, {
+        status: "suspended" as const,
+        disposition: "permanent_failure" as const,
+        suspendedAt: now,
+        suspendedReason: "permanent_failure" as const,
+        lastError: "requester unavailable",
+      });
+      input.task.deliveryStatus = "failed";
+      input.task.terminalOutcome = "blocked";
+      input.task.error = "requester unavailable";
+      input.task.terminalSummary = "Task completed, but result delivery is blocked.";
+      input.task.cleanupAfter = now + 7 * 24 * 60 * 60_000;
+      settleSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
+      subagentRuns.set(input.subagent.runId, structuredClone(input.subagent));
+      publishTaskRecordAfterAtomicStore(input.task);
+
+      expect(
+        upsertBoundDeliveryQueueEntryInDatabase(
+          bindDeliveryQueueEntry({
+            queueName: "session",
+            entry: input.queueEntry,
+          }),
+          database,
+        ),
+      ).toBe(true);
+      database.db
+        .prepare(
+          `UPDATE delivery_queue_entries
+              SET status='failed', failed_at=?, updated_at=?, last_error=?
+            WHERE queue_name='session' AND id=?`,
+        )
+        .run(now, now, input.queueEntry.lastError ?? "requester unavailable", input.queueEntry.id);
+
+      await expect(
+        sweepDeliveryFailureMaintenance({ stateDir: tempDir, batchSize: 10, now }),
+      ).resolves.toMatchObject({ scanned: 1, compacted: 0, legacyUnknown: 0, errors: 0 });
+      const retained = database.db
+        .prepare(
+          "SELECT entry_json FROM delivery_queue_entries WHERE queue_name='session' AND id=?",
+        )
+        .get(input.queueEntry.id) as { entry_json: string };
+      expect(JSON.parse(retained.entry_json)).toEqual({
+        ...input.queueEntry,
+        terminalPolicy: expect.objectContaining({
+          detail: "full",
+          replay: "owner-managed",
+          owner: "subagent_completion",
+        }),
+      });
+
+      const result = await retrySubagentCompletionDelivery(input.task.taskId, { database });
+
+      expect(result).toMatchObject({ ok: true, duplicateRisk: true });
+      expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+        status: "in_progress",
+        disposition: "session_queued",
+        generation: 2,
+      });
+      const replacementId = subagentRuns.get(input.subagent.runId)?.delivery?.queueId;
+      expect(replacementId).not.toBe(input.queueEntry.id);
+      expect(scheduleSessionDelivery).toHaveBeenCalledWith(replacementId);
+      const rows = database.db
+        .prepare(
+          "SELECT id, status, entry_json FROM delivery_queue_entries WHERE queue_name='session' ORDER BY id",
+        )
+        .all() as Array<{ id: string; status: string; entry_json: string }>;
+      expect(rows.find((row) => row.id === input.queueEntry.id)).toMatchObject({
+        status: "failed",
+      });
+      expect(
+        JSON.parse(rows.find((row) => row.id === input.queueEntry.id)!.entry_json),
+      ).toMatchObject({
+        terminalPolicy: {
+          detail: "compacted",
+          reason: "owner_settled",
+          owner: "subagent_completion",
+        },
+      });
+      expect(rows.find((row) => row.id === replacementId)).toMatchObject({ status: "pending" });
+    });
   });
 
   it("dead-letters expired orphan generations before resolving their logical owner", () => {

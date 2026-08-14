@@ -6,6 +6,8 @@ import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
 import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
+import type { ScheduledToolPolicyContext } from "../../../agents/scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
@@ -16,6 +18,7 @@ import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { ExplicitSkillSelection, SkillSnapshot } from "../../../skills/types.js";
@@ -99,6 +102,9 @@ export type FollowupRun = {
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
+  /** Turn-owned tool authority captured before queue ownership transfers. */
+  toolsAllow?: string[];
+  disableTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
   /** The current-turn hook already ran before this steer became a fallback. */
@@ -156,6 +162,7 @@ export type FollowupRun = {
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
+    memberRoleIds?: string[];
     /** Parent session provenance used to validate inherited group policy. */
     spawnedBy?: string;
     senderId?: string;
@@ -205,6 +212,10 @@ export type FollowupRun = {
     blockReplyBreak: "text_end" | "message_end";
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;
+    /** Trusted authority facts that must survive queueing and steering admission. */
+    trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
+    runtimePluginToolGrant?: RuntimePluginToolGrant;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;

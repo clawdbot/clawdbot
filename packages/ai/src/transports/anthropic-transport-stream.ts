@@ -3,6 +3,7 @@ import type {
   Context,
   ImageContent,
   Model,
+  ProviderReplayState,
   SimpleStreamOptions,
   StreamFn,
   TextContent,
@@ -83,6 +84,13 @@ import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
+  buildAnthropicReplayPlan,
+  createCompactionCapture,
+  isAnthropicReplayRejection,
+  suppressAnthropicCompaction,
+  type AnthropicCompactionBlock,
+} from "./anthropic-compaction-replay.js";
+import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
@@ -128,7 +136,10 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 };
 
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop">;
+  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop"> & {
+    anthropicServerCompaction?: boolean;
+    authProfileId?: string;
+  };
 type AnthropicMessagesClient = {
   messages: {
     stream(
@@ -183,6 +194,7 @@ type MutableAssistantOutput = {
   stopReason: string;
   timestamp: number;
   responseId?: string;
+  providerReplay?: ProviderReplayState;
   errorMessage?: string;
   diagnostics?: AssistantMessageDiagnostic[];
 };
@@ -347,6 +359,7 @@ async function convertAnthropicMessages(
   options: {
     allowReasoningContentReplay?: boolean;
     cacheBreakpointOptOutMessageIndexes: Set<number>;
+    compaction?: AnthropicCompactionBlock;
     replayThinkingEnabled?: boolean;
   },
 ): Promise<Array<Record<string, unknown>>> {
@@ -433,7 +446,8 @@ async function convertAnthropicMessages(
       continue;
     }
     if (msg.role === "assistant") {
-      const blocks: Array<Record<string, unknown>> = [];
+      const blocks: Array<Record<string, unknown>> =
+        i === 0 && options.compaction ? [options.compaction] : [];
       const reasoningContent: string[] = [];
       let omittedThinking = false;
       for (const block of msg.content) {
@@ -926,6 +940,7 @@ async function buildAnthropicParams(
 ): Promise<{
   params: Record<string, unknown>;
   toolProjection?: AnthropicToolProjection;
+  usedCompactionReplay: boolean;
 }> {
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
@@ -949,9 +964,15 @@ async function buildAnthropicParams(
   // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
   // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const messages = await convertAnthropicMessages(context.messages, model, isOAuthToken, {
+  const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
+    enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+  });
+  const messages = await convertAnthropicMessages(replayPlan.messages, model, isOAuthToken, {
     allowReasoningContentReplay: supportsReasoningContentReplay(model),
     cacheBreakpointOptOutMessageIndexes,
+    compaction: replayPlan.compaction,
     replayThinkingEnabled,
   });
   const params: Record<string, unknown> = {
@@ -1052,7 +1073,7 @@ async function buildAnthropicParams(
     }
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy, cacheBreakpointOptOutMessageIndexes);
-  return { params, toolProjection };
+  return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
 }
 
 function resolveAnthropicTransportOptions(
@@ -1096,6 +1117,8 @@ function resolveAnthropicTransportOptions(
     toolChoice: options?.toolChoice,
     thinkingBudgets: options?.thinkingBudgets,
     reasoning,
+    ...(options?.anthropicServerCompaction === true ? { anthropicServerCompaction: true } : {}),
+    ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
   };
   if (reasoning === "off") {
     resolved.thinkingEnabled = false;
@@ -1157,6 +1180,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // swaps this to the fallback model's cost table.
       let costModel = model;
       let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
+      let usedCompactionReplay = false;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1176,6 +1200,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           isOAuthToken,
           transportOptions,
         );
+        usedCompactionReplay = builtParams.usedCompactionReplay;
         let params = builtParams.params;
         const toolProjection = builtParams.toolProjection;
         const nextParams = await transportOptions.onPayload?.(params, model);
@@ -1189,6 +1214,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
+        const compactionCapture = createCompactionCapture(output, model, transportOptions);
         // Signature deltas are opaque and only complete at content_block_stop.
         // Keep partial bytes out of output so interrupted streams cannot poison replay.
         const pendingThinkingSignatures = new Map<number, string>();
@@ -1339,6 +1365,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (event.type === "content_block_start") {
             const contentBlock = event.content_block as Record<string, unknown> | undefined;
             const index = typeof event.index === "number" ? event.index : -1;
+            if (
+              transportOptions.anthropicServerCompaction === true &&
+              compactionCapture.begin(index, contentBlock, output.content.length)
+            ) {
+              continue;
+            }
             const fallbackBoundary = refusalBuffer
               ? readAnthropicFallbackBoundary(contentBlock)
               : null;
@@ -1356,9 +1388,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 boundary: fallbackBoundary,
                 provider: model.provider,
               });
-              // Cost intentionally mirrors top-level usage (serving attempt at
-              // serving-model rates). A mid-stream decline's billed partial is
-              // only in usage.iterations and is not folded in here.
+              // Fallback-only iteration partials stay outside the serving-model
+              // estimate. Compaction responses are the exception: usage policy
+              // aggregates their complete billed iteration list.
               costModel = {
                 ...model,
                 cost: resolveAnthropicFallbackServingModelCost({
@@ -1498,6 +1530,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (event.type === "content_block_delta") {
             const delta = event.delta as Record<string, unknown> | undefined;
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            if (eventIndex !== undefined && compactionCapture.delta(eventIndex, delta)) {
+              continue;
+            }
             let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
             let block = index === undefined ? undefined : blocks[index];
             if (allowReasoningContentReplay) {
@@ -1612,6 +1647,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           if (event.type === "content_block_stop") {
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            if (eventIndex !== undefined && compactionCapture.complete(eventIndex)) {
+              continue;
+            }
             const pendingSignature =
               eventIndex === undefined ? undefined : pendingThinkingSignatures.get(eventIndex);
             if (eventIndex !== undefined) {
@@ -1715,6 +1753,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         if (refusalBuffer) {
           refusalBuffer.discard();
           output.content = [];
+        }
+        if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
+          suppressAnthropicCompaction(output, model, options);
         }
         failTransportStream({
           stream,

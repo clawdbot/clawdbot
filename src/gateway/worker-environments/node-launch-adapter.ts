@@ -267,14 +267,19 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         "device worker node transport is unavailable",
       );
     }
-    const rpcController = new AbortController();
-    const rpcBudgetMs = Math.max(1, Math.min(rpcTimeoutMs, remainingMs));
-    const rpcTimer = setTimeout(
-      () => rpcController.abort(new Error("node worker RPC timed out")),
-      rpcBudgetMs,
-    );
-    rpcTimer.unref?.();
-    const signal = AbortSignal.any([params.deadline.signal, rpcController.signal]);
+    // The deadline is the sole expiry authority unless the per-RPC budget binds first.
+    // A second timer armed at the same expiry makes "retryable RPC timeout" versus
+    // "terminal deadline" a scheduling race, and the retryable branch then funds another
+    // attempt out of a residual budget too small to complete it.
+    const rpcBudgetMs = Math.min(rpcTimeoutMs, remainingMs);
+    const rpcController = rpcBudgetMs < remainingMs ? new AbortController() : undefined;
+    const rpcTimer = rpcController
+      ? setTimeout(() => rpcController.abort(new Error("node worker RPC timed out")), rpcBudgetMs)
+      : undefined;
+    rpcTimer?.unref?.();
+    const signal = rpcController
+      ? AbortSignal.any([params.deadline.signal, rpcController.signal])
+      : params.deadline.signal;
     try {
       const node = await findNode({
         transport,
@@ -309,7 +314,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       }
       return parseInvokeReceipt(result.payloadJSON);
     } catch (error) {
-      if (rpcController.signal.aborted && !params.deadline.signal.aborted) {
+      if (rpcController?.signal.aborted && !params.deadline.signal.aborted) {
         throw new NodeWorkerLaunchTransportError("TIMEOUT", "node worker RPC timed out");
       }
       throw error;

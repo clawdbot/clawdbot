@@ -335,12 +335,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: compactionStorePath,
-      // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
+      compactionKind: result.compactionKind,
     });
   }
-  // Use the post-compaction token count for context summary if available
   const totalTokens = didCompact
     ? tokensAfterCompaction
     : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);

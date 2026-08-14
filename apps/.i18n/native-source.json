@@ -20641,6 +20641,17 @@
       ]
     },
     {
+      "id": "native.apple.9a896fd0c77fc03f",
+      "source": "Add domain",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.6889235e143951e7",
       "source": "Add events with least privilege.",
       "surface": "apple",
@@ -25488,6 +25499,17 @@
       ]
     },
     {
+      "id": "native.apple.84777b74e92431dd",
+      "source": "Continuously copy this Mac's logged-in cookies for the domains below into the remote OpenClaw browser profile. Off by default.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument-multiline",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.f91fc44547d416b3",
       "source": "Control Terminal for automation actions; other apps request access separately",
       "surface": "apple",
@@ -25550,6 +25572,39 @@
         {
           "kind": "ui-modifier",
           "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.fa11eff750444eb3",
+      "source": "Cookie sync",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.1715918edf44328e",
+      "source": "Cookie sync applies when OpenClaw runs on another computer (remote mode).",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.f11213588b9d720e",
+      "source": "Cookies are only synced for these domains; an empty list means nothing is synced.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         }
       ]
     },
@@ -27881,6 +27936,17 @@
       ]
     },
     {
+      "id": "native.apple.ec2ffeff69e197a3",
+      "source": "Domains",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.5a76cb708e01de50",
       "source": "Don't show again",
       "surface": "apple",
@@ -28538,6 +28604,10 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/ChannelsSettings+View.swift"
+        },
+        {
+          "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         },
         {
           "kind": "conditional-branch",
@@ -33168,6 +33238,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.947dd547c2e098b9",
+      "source": "Managed profile on the remote computer that receives the cookies.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         }
       ]
     },
@@ -40186,6 +40267,17 @@
       ]
     },
     {
+      "id": "native.apple.f68bfc762a6ffe24",
+      "source": "Remote mode required",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.a1dc871b601e526d",
       "source": "Remote test",
       "surface": "apple",
@@ -40208,6 +40300,10 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         }
       ]
     },
@@ -41660,6 +41756,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift"
+        },
+        {
+          "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         },
         {
           "kind": "ui-localized-call",
@@ -44550,6 +44650,10 @@
           "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
         },
         {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        },
+        {
           "kind": "ui-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift"
         }
@@ -44707,6 +44811,10 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift"
+        },
+        {
+          "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         },
         {
           "kind": "ui-localized-call",
@@ -44906,6 +45014,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsProTabActions.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.6f73cd1a65b8039b",
+      "source": "Sync cookies to the remote computer",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         }
       ]
     },
@@ -45344,6 +45463,17 @@
         {
           "kind": "ui-call",
           "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.fbca275c07692781",
+      "source": "Target profile",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         }
       ]
     },
@@ -50404,6 +50534,17 @@
       ]
     },
     {
+      "id": "native.apple.30aead244d2145b5",
+      "source": "example.com",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.f31e72922dfb4059",
       "source": "expired",
       "surface": "apple",
@@ -50551,6 +50692,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsProTabActions.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.00124ba1399ecec0",
+      "source": "imported",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         }
       ]
     },

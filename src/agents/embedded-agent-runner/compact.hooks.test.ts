@@ -2578,6 +2578,25 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
   });
 
+  it("reports native harness compaction ownership", async () => {
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "harness", firstKeptEntryId: "entry-1", tokensBefore: 100 },
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({ provider: "openai", model: "gpt-5.5", agentHarnessId: "codex" }),
+    );
+
+    expect(result.compactionKind).toBe("native-harness");
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+  });
+
   it("binds context-engine compaction runtime LLM to the session agent", async () => {
     resolveSessionAgentIdsMock.mockReturnValueOnce({
       defaultAgentId: "main",
@@ -2636,6 +2655,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
+    expect(result.compactionKind).toBe("context-engine");
 
     expect(mockCallArg(hookRunner.runBeforeCompaction)).toEqual({
       messageCount: -1,
