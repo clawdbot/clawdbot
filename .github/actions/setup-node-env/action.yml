@@ -35,6 +35,10 @@ inputs:
     description: Whether to restore workspace node_modules and its local pnpm store from the exact semantic dependency cache.
     required: false
     default: "false"
+  dependency-cache-hosted-image:
+    description: Whether to scope the exact dependency cache to the current GitHub-hosted runner image.
+    required: false
+    default: "false"
   save-dependency-cache:
     description: Whether to save workspace node_modules and its local pnpm store after a successful install on an exact cache miss.
     required: false
@@ -101,11 +105,16 @@ runs:
       shell: bash
       env:
         FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
+        HOSTED_IMAGE_CACHE: ${{ inputs.dependency-cache-hosted-image }}
       run: |
         set -euo pipefail
         deps_input_fingerprint="$(node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs" \
           --workspace "$GITHUB_WORKSPACE" --frozen-lockfile "$FROZEN_LOCKFILE")"
-        cache_key="${GITHUB_REPOSITORY:?}-node-deps-v2-os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${deps_input_fingerprint:?}"
+        hosted_image_suffix=""
+        if [ "$HOSTED_IMAGE_CACHE" = "true" ]; then
+          hosted_image_suffix="-hosted-image-${ImageOS:?}-${ImageVersion:?}"
+        fi
+        cache_key="${GITHUB_REPOSITORY:?}-node-deps-v2-os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)${hosted_image_suffix}-${deps_input_fingerprint:?}"
         echo "key=$cache_key" >> "$GITHUB_OUTPUT"
 
     - name: Prepare dependency cache restore

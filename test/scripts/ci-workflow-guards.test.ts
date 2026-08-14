@@ -2604,7 +2604,7 @@ NODE
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
     const nodeMaxParallel =
       workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"];
-    expect(nodeMaxParallel).toBe("${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 48 || 28 }}");
+    expect(nodeMaxParallel).toBe("${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 64 || 28 }}");
     expect(
       evaluateWorkflowExpression(nodeMaxParallel, {
         eventName: "push",
@@ -2620,7 +2620,7 @@ NODE
         runnerBackend: "github",
         runAttempt: 1,
       }),
-    ).toBe(48);
+    ).toBe(64);
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -3079,6 +3079,7 @@ NODE
       "node_modules\nui/node_modules\npackages/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
 
     expect(action.inputs["dependency-cache"].default).toBe("false");
+    expect(action.inputs["dependency-cache-hosted-image"].default).toBe("false");
     expect(action.inputs["save-dependency-cache"].default).toBe("false");
     expect(action.inputs).not.toHaveProperty("sticky-disk");
     expect(action.inputs).not.toHaveProperty("save-sticky-disk");
@@ -3092,7 +3093,11 @@ NODE
     expect(resolve.run).toContain('node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs"');
     expect(resolve.run).toContain("${GITHUB_REPOSITORY:?}-node-deps-v2");
     expect(resolve.run).toContain("${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}");
-    expect(resolve.run).toContain("node-$(node --version)-${deps_input_fingerprint:?}");
+    expect(resolve.run).toContain('if [ "$HOSTED_IMAGE_CACHE" = "true" ]');
+    expect(resolve.run).toContain("-hosted-image-${ImageOS:?}-${ImageVersion:?}");
+    expect(resolve.run).toContain(
+      "node-$(node --version)${hosted_image_suffix}-${deps_input_fingerprint:?}",
+    );
     expect(resolve.run).not.toMatch(/GITHUB_(?:REF|SHA|RUN_ID)|RUN_(?:ID|ATTEMPT)/u);
     expect(actionSteps.indexOf(resolve)).toBeLessThan(actionSteps.indexOf(restore));
     for (const cleanup of [prepare, prepareFallback]) {
@@ -3166,6 +3171,8 @@ NODE
       if: expect.stringContaining("steps.manifest.outputs.run_node == 'true'"),
       with: {
         "dependency-cache": "true",
+        "dependency-cache-hosted-image":
+          "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}",
         "save-actions-cache": "true",
         "save-dependency-cache": "true",
         "use-actions-cache": "true",
@@ -3173,10 +3180,8 @@ NODE
     });
     expect(writers[0]?.step.if).toContain("github.ref == 'refs/heads/main'");
     expect(writers[0]?.step.if).toContain("github.event_name == 'pull_request'");
-    expect(writers[0]?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    expect(workflow.jobs["pnpm-store-warmup"].if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'",
-    );
+    expect(writers[0]?.step.if).not.toContain("OPENCLAW_CI_RUNNER_BACKEND");
+    expect(workflow.jobs["pnpm-store-warmup"].if).not.toContain("OPENCLAW_CI_RUNNER_BACKEND");
     const consumers = dependencySetups.filter(({ jobName }) => jobName !== "preflight");
     expect(consumers.map(({ jobName }) => jobName).toSorted()).toEqual([
       "build-artifacts",
@@ -3196,35 +3201,79 @@ NODE
       "qa-smoke-ci-profile",
       "sqlite-session-lifecycle",
     ]);
+    const cacheRoutingScenarios = [
+      {
+        context: {
+          eventName: "push",
+          matrix: { node_version: "24.x" },
+          repository: "openclaw/openclaw",
+          runnerBackend: "blacksmith",
+          runAttempt: 1,
+        },
+        dependencyCache: "true",
+        useActionsCache: "false",
+      },
+      {
+        context: {
+          eventName: "push",
+          matrix: { node_version: "24.x" },
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        },
+        dependencyCache: "true",
+        useActionsCache: "false",
+      },
+      {
+        context: {
+          eventName: "workflow_dispatch",
+          matrix: { node_version: "24.x" },
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        },
+        dependencyCache: "false",
+        useActionsCache: "true",
+      },
+      {
+        context: {
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          matrix: { node_version: "24.x" },
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        },
+        dependencyCache: "false",
+        useActionsCache: "true",
+      },
+    ] as const;
     for (const { jobName, step: consumer } of consumers) {
       const needs = workflow.jobs[jobName].needs;
       expect(Array.isArray(needs) ? needs : [needs], jobName).toContain("preflight");
       expect(consumer.with, jobName).not.toHaveProperty("save-dependency-cache");
       expect(consumer.with?.["dependency-cache"], jobName).toContain("'true' || 'false'");
-      expect(consumer.with?.["use-actions-cache"], jobName).toContain("'false' || 'true'");
-      expect(consumer.with?.["dependency-cache"], jobName).toContain(
-        "vars.OPENCLAW_CI_RUNNER_BACKEND",
+      expect(consumer.with?.["dependency-cache-hosted-image"], jobName).toBe(
+        "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}",
       );
-      expect(
-        evaluateWorkflowExpression(consumer.with?.["dependency-cache"], {
-          eventName: "push",
-          matrix: { node_version: "24.x" },
-          repository: "openclaw/openclaw",
-          runnerBackend: "github",
-          runAttempt: 1,
-        }),
-        jobName,
-      ).toBe("false");
-      expect(
-        evaluateWorkflowExpression(consumer.with?.["use-actions-cache"], {
-          eventName: "push",
-          matrix: { node_version: "24.x" },
-          repository: "openclaw/openclaw",
-          runnerBackend: "github",
-          runAttempt: 1,
-        }),
-        jobName,
-      ).toBe("true");
+      expect(consumer.with?.["use-actions-cache"], jobName).toContain("'false' || 'true'");
+      expect(consumer.with?.["dependency-cache"], jobName).not.toContain(
+        "OPENCLAW_CI_RUNNER_BACKEND",
+      );
+      for (const { context, dependencyCache, useActionsCache } of cacheRoutingScenarios) {
+        expect(
+          evaluateWorkflowExpression(consumer.with?.["dependency-cache"], context),
+          jobName,
+        ).toBe(dependencyCache);
+        expect(
+          evaluateWorkflowExpression(consumer.with?.["use-actions-cache"], context),
+          jobName,
+        ).toBe(useActionsCache);
+        expect(
+          evaluateWorkflowExpression(consumer.with?.["dependency-cache-hosted-image"], context),
+          jobName,
+        ).toBe(context.runnerBackend === "github" ? "true" : "false");
+      }
     }
     for (const { jobName, step: setup } of Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
       ((job as { steps?: WorkflowStep[] }).steps ?? [])
@@ -5900,9 +5949,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "node-version": "24.x",
       "install-bun": "false",
       "dependency-cache":
-        "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
+        "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
+      "dependency-cache-hosted-image":
+        "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}",
       "use-actions-cache":
-        "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
+        "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
     } as const;
     expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
     const realGatewaySetup = expectDefined(
@@ -5945,7 +5996,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           runnerBackend: "github",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "true", useActionsCache: "false" },
       },
       {
         name: "same-repo pull request retry",
