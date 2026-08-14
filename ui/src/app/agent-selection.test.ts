@@ -76,6 +76,19 @@ describe("agent selection", () => {
       ],
     });
     expect(selection.state).toEqual({ selectedId: "openclaw", scopeId: null });
+    expect(selection.modelOwnerId).toBeNull();
+
+    roster.publish({
+      defaultId: "main",
+      systemModelOwnerId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "openclaw", kind: "system" },
+      ],
+    });
+    expect(selection.modelOwnerId).toBe("main");
 
     selection.setScope("historical");
     expect(selection.state.scopeId).toBe("historical");

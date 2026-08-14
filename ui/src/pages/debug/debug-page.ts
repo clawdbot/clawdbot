@@ -48,7 +48,7 @@ class DebugPage extends OpenClawLightDomElement {
     args: () =>
       [
         this.gateway.connected ? this.gateway.client : null,
-        this.context?.agentSelection.state.selectedId ?? null,
+        this.context?.agentSelection.modelOwnerId ?? null,
       ] as const,
     task: ([client, agentId], { signal }) =>
       client ? loadGatewayDiagnostics(client, agentId, signal) : initialState,
@@ -98,7 +98,7 @@ class DebugPage extends OpenClawLightDomElement {
       () => this.context?.agentSelection,
       (selection, notify) => selection.subscribe(notify),
       (selection) => {
-        const agentId = selection.state.selectedId;
+        const agentId = selection.modelOwnerId;
         if (agentId === this.diagnosticsAgentId) {
           return;
         }
@@ -145,7 +145,7 @@ class DebugPage extends OpenClawLightDomElement {
       return Promise.resolve();
     }
     this.diagnosticsTaskActiveClient = client;
-    return this.diagnosticsTask.run([client, this.context.agentSelection.state.selectedId]);
+    return this.diagnosticsTask.run([client, this.context.agentSelection.modelOwnerId]);
   }
 
   private async callDebugMethod() {

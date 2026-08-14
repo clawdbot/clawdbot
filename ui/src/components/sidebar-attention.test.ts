@@ -215,6 +215,9 @@ describe("sidebar attention refresh ownership", () => {
     const selectionListeners = new Set<() => void>();
     const agentSelection = {
       state: selectionState,
+      get modelOwnerId() {
+        return selectionState.selectedId;
+      },
       subscribe: (listener: () => void) => {
         selectionListeners.add(listener);
         return () => selectionListeners.delete(listener);
@@ -284,6 +287,91 @@ describe("sidebar attention refresh ownership", () => {
     expect(element.modelAuthStatus).toBeNull();
   });
 
+  it("finishes an agent auth refresh when a cron event arrives mid-switch", async () => {
+    const switchedCron = deferred<unknown>();
+    const switchedAuth = deferred<unknown>();
+    const writerAuth = { ts: 2, providers: [] } as ModelAuthStatusResult;
+    const responses = {
+      "cron.list": [
+        Promise.resolve(cronListResponse([])),
+        switchedCron.promise,
+        Promise.resolve(cronListResponse([])),
+      ],
+      "models.authStatus": [
+        Promise.resolve({ ts: 1, providers: [] }),
+        switchedAuth.promise,
+        Promise.resolve(writerAuth),
+      ],
+    };
+    const request = vi.fn((method: keyof typeof responses) => {
+      const response = responses[method].shift();
+      if (!response) {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return response;
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    let eventListener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+    const gateway = {
+      snapshot: {
+        client,
+        phase: "connected",
+        hello: null,
+        assistantAgentId: "main",
+        sessionKey: "agent:main:main",
+        lastError: null,
+        lastErrorCode: null,
+      },
+      connection: {
+        gatewayUrl: "ws://gateway.test",
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: (listener: NonNullable<typeof eventListener>) => {
+        eventListener = listener;
+        return () => undefined;
+      },
+    } as unknown as ApplicationGateway;
+    const selectionState = { selectedId: "main" as string | null };
+    const selectionListeners = new Set<() => void>();
+    const provider = createApplicationContextProvider({
+      gateway,
+      overlays: {
+        snapshot: { approvalQueue: [] },
+        subscribe: () => () => undefined,
+      },
+      agentSelection: {
+        state: selectionState,
+        get modelOwnerId() {
+          return selectionState.selectedId;
+        },
+        subscribe: (listener: () => void) => {
+          selectionListeners.add(listener);
+          return () => selectionListeners.delete(listener);
+        },
+      },
+    } as unknown as ApplicationContext);
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    provider.append(element);
+    document.body.append(provider);
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    selectionState.selectedId = "writer";
+    for (const listener of selectionListeners) {
+      listener();
+    }
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    eventListener?.({ type: "event", event: "cron", payload: {} });
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
+    await waitForFast(() => expect(element.modelAuthStatus).toBe(writerAuth));
+    switchedCron.resolve(cronListResponse([]));
+    switchedAuth.resolve({ ts: 3, providers: [] });
+  });
+
   it("clears a stale failure alert when the gateway reports an automation change", async () => {
     const responses = {
       "cron.list": [cronListResponse([cronJob("failed")]), cronListResponse([])],
@@ -327,6 +415,7 @@ describe("sidebar attention refresh ownership", () => {
     } as unknown as ApplicationContext["overlays"];
     const agentSelection = {
       state: { selectedId: "main" },
+      modelOwnerId: "main",
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["agentSelection"];
     vi.stubGlobal("localStorage", createTestStorageMock());

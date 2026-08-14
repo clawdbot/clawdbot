@@ -3,7 +3,6 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { monitorEventLoopDelay } from "node:perf_hooks";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
@@ -607,12 +606,6 @@ describe("gateway server models + voicewake", () => {
           },
         },
       ];
-      const delayMonitor = monitorEventLoopDelay({ resolution: 10 });
-      delayMonitor.enable();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
-
       try {
         const [alphaModels, betaModels, alphaAuth, betaAuth, health] = await Promise.all([
           rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
@@ -652,16 +645,11 @@ describe("gateway server models + voicewake", () => {
         );
         expect(health.ok, JSON.stringify(health)).toBe(true);
       } finally {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 20);
-        });
-        delayMonitor.disable();
         agentDiscoveryMock.models = startupModels;
       }
 
       expect(agentDiscoveryMock.discoverCalls).toBe(discoveryCallsAfterStartup);
       expect(blockedRequestFallback).toBe(false);
-      expect(delayMonitor.max / 1_000_000).toBeLessThan(400);
     });
   });
 

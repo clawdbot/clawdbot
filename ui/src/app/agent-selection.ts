@@ -1,4 +1,4 @@
-import type { AgentsListResult } from "../api/types.ts";
+import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 
 type AgentSelectionGateway = {
@@ -21,10 +21,34 @@ type AgentSelectionState = {
 
 export type AgentSelectionCapability = {
   readonly state: AgentSelectionState;
+  /** Configured owner for model/auth reads; null for an unbound system selection. */
+  readonly modelOwnerId: string | null;
   set: (agentId: string | null) => void;
   setScope: (agentId: string | null) => void;
   subscribe: (listener: (state: AgentSelectionState) => void) => () => void;
 };
+
+type ModelOwnerAgentList = {
+  systemModelOwnerId?: string;
+  agents?: ReadonlyArray<Pick<GatewayAgentRow, "id" | "kind">>;
+};
+
+export function resolveModelOwnerAgentId(
+  agentsList: ModelOwnerAgentList | null | undefined,
+  agentId: string | null | undefined,
+): string | null {
+  const selectedId = agentId?.trim() ? normalizeAgentId(agentId) : null;
+  if (!selectedId) {
+    return null;
+  }
+  const selected = agentsList?.agents?.find((agent) => normalizeAgentId(agent.id) === selectedId);
+  if (selected?.kind !== "system") {
+    return selectedId;
+  }
+  return agentsList?.systemModelOwnerId?.trim()
+    ? normalizeAgentId(agentsList.systemModelOwnerId)
+    : null;
+}
 
 /** Change application ownership before the Gateway session so every navigation
  * caller observes one ordered state transition. Canonical global keys need the
@@ -74,6 +98,7 @@ export function createAgentSelectionCapability(
     selectedId: initialSelectedId,
     scopeId: resolveScopeId(initialSelectedId),
   };
+  let modelOwnerId = resolveModelOwnerAgentId(roster.state.agentsList, initialSelectedId);
   let assistantAgentId = initialId;
   // Construction has no explicit-selection input: a roster repair still follows
   // hello until a navigation or picker action establishes explicit ownership.
@@ -86,10 +111,16 @@ export function createAgentSelectionCapability(
     // Otherwise route-derived agent ids keep sending agent-scoped RPCs to a dead target.
     const scopeId = selectedId === next.selectedId ? next.scopeId : selectedId;
     const reconciled = { selectedId, scopeId: resolveScopeId(scopeId) };
-    if (state.selectedId === reconciled.selectedId && state.scopeId === reconciled.scopeId) {
+    const nextModelOwnerId = resolveModelOwnerAgentId(roster.state.agentsList, selectedId);
+    if (
+      state.selectedId === reconciled.selectedId &&
+      state.scopeId === reconciled.scopeId &&
+      modelOwnerId === nextModelOwnerId
+    ) {
       return;
     }
     state = reconciled;
+    modelOwnerId = nextModelOwnerId;
     for (const listener of listeners) {
       listener(state);
     }
@@ -123,6 +154,9 @@ export function createAgentSelectionCapability(
   return {
     get state() {
       return state;
+    },
+    get modelOwnerId() {
+      return modelOwnerId;
     },
     set(agentId) {
       const selectedId = agentId?.trim() ? normalizeAgentId(agentId) : null;

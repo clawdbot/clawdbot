@@ -336,7 +336,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfo = systemInfo;
       const client = this.systemInfoRequestClient();
       if (client) {
-        void this.ensureSessionObserverModels(client, this.context.agentSelection.state.selectedId);
+        void this.ensureSessionObserverModels(client, this.context.agentSelection.modelOwnerId);
       }
     },
     onError: (error) => {
@@ -359,7 +359,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           : null;
       return [
         client,
-        this.context?.agentSelection.state.selectedId ?? null,
+        this.context?.agentSelection.modelOwnerId ?? null,
         hiddenCatalogIds.join("\0"),
       ] as const;
     },
@@ -406,7 +406,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.agentSelection,
       (selection, notify) => selection.subscribe(notify),
-      (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
+      (selection) => this.synchronizeSessionObserverAgent(selection.modelOwnerId),
     )
     .watch(
       () => this.context?.nativeNotifications ?? undefined,
@@ -788,7 +788,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isConnected &&
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
-      this.context.agentSelection.state.selectedId === agentId;
+      this.context.agentSelection.modelOwnerId === agentId;
     const promise = loadModels(client, { agentId, preparedOnly: true })
       .then((models) => {
         if (isCurrent()) {

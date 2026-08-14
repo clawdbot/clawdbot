@@ -2761,6 +2761,7 @@ describe("gateway session utils", () => {
 
       const result = listAgentsForGateway({}, undefined, { includeSystem: true });
 
+      expect(result.systemModelOwnerId).toBe("main");
       expect(result.agents.map(({ id, kind }) => ({ id, kind }))).toEqual([
         { id: "main", kind: "agent" },
         { id: "openclaw", kind: "system" },

@@ -108,6 +108,22 @@ describe("listGatewayAgentsBasic", () => {
     });
   });
 
+  it("projects the configured model owner for system agents", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
+      await fs.mkdir(path.join(stateDir, "agents", "openclaw"), { recursive: true });
+
+      const result = listGatewayAgentsBasic({
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "research" } },
+          entries: { ops: {}, research: {} },
+        },
+      });
+
+      expect(result.systemModelOwnerId).toBe("research");
+    });
+  });
+
   it("falls back to identity.name when the configured agent name is missing", () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "main" },

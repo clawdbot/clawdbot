@@ -243,7 +243,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private resolveSelectedAgentId(): string {
-    const selected = this.context.agentSelection.state.selectedId;
+    const selected = this.context.agentSelection.modelOwnerId;
     return selected ? normalizeAgentId(selected) : "";
   }
 

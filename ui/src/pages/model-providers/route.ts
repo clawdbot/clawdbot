@@ -2,7 +2,6 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ModelProvidersRouteData } from "./model-providers-page.ts";
 
 async function loadModelProvidersRouteData(
@@ -11,11 +10,10 @@ async function loadModelProvidersRouteData(
   const gatewaySnapshot = context.gateway.snapshot;
   const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
-  if (!context.agentSelection.state.selectedId && client) {
+  if (!context.agentSelection.modelOwnerId && client) {
     await context.agents.ensureList();
   }
-  const selectedAgentId = context.agentSelection.state.selectedId;
-  const agentId = selectedAgentId ? normalizeAgentId(selectedAgentId) : null;
+  const agentId = context.agentSelection.modelOwnerId;
   if (!client || !agentId) {
     return { data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
   }

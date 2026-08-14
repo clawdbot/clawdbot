@@ -49,6 +49,7 @@ async function mountDebugPage(
   } as unknown as ApplicationContext["gateway"];
   const agentSelection = {
     state: { selectedId: "main" },
+    modelOwnerId: "main",
     subscribe: () => () => undefined,
   } as unknown as ApplicationContext["agentSelection"];
   const page = document.createElement("openclaw-debug-page") as TestDebugPage;

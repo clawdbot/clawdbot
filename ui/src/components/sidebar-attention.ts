@@ -51,6 +51,9 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
   private loadedAgentId: string | null = null;
+  // Cron events may restart the combined task; retain the committed auth owner so an
+  // interrupted agent switch reissues auth instead of displaying the prior agent's alert.
+  private modelAuthAgentId: string | null = null;
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
@@ -87,11 +90,13 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
             .then((modelAuthStatus) => {
               if (!signal.aborted) {
                 this.modelAuthStatus = modelAuthStatus;
+                this.modelAuthAgentId = agentId;
               }
             }),
         );
       } else if (!agentId) {
         this.modelAuthStatus = null;
+        this.modelAuthAgentId = null;
       }
       await Promise.allSettled(loads);
       return true;
@@ -179,6 +184,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.loadedClient = null;
     this.loadedGateway = null;
     this.loadedAgentId = null;
+    this.modelAuthAgentId = null;
     super.disconnectedCallback();
   }
 
@@ -197,11 +203,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.loadedClient = null;
       this.loadedGateway = null;
       this.loadedAgentId = null;
+      this.modelAuthAgentId = null;
       this.cronJobs = [];
       this.modelAuthStatus = null;
       return;
     }
-    const agentId = this.context?.agentSelection.state.selectedId ?? null;
+    const agentId = this.context?.agentSelection.modelOwnerId ?? null;
     if (
       gateway === this.loadedGateway &&
       snapshot.client === this.loadedClient &&
@@ -212,7 +219,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.loadedGateway = gateway;
     this.loadedClient = snapshot.client;
     this.loadedAgentId = agentId;
-    void this.loadTask.run([gateway, snapshot.client, agentId, options.refreshModelAuth !== false]);
+    void this.loadTask.run([
+      gateway,
+      snapshot.client,
+      agentId,
+      options.refreshModelAuth !== false || agentId !== this.modelAuthAgentId,
+    ]);
   }
 
   // Re-arm stale snoozes only right after this tab's own data refresh: fresh

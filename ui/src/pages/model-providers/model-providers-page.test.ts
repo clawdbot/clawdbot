@@ -32,6 +32,10 @@ type ModelProvidersPageTestElement = HTMLElement & {
   selectedAgentId: string;
 };
 
+type AgentSelectElement = HTMLElement & {
+  onSelect: (value: string) => void;
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -93,6 +97,9 @@ function createHarness(initialScopeId: string) {
     state: {
       selectedId: initialScopeId as string | null,
       scopeId: initialScopeId as string | null,
+    },
+    get modelOwnerId() {
+      return this.state.selectedId;
     },
     set: vi.fn(),
     setScope: vi.fn(),
@@ -182,6 +189,17 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
+  it("switches application ownership from the concrete agent picker", async () => {
+    const { agentSelection, context } = createHarness("main");
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.querySelector("openclaw-agent-select")).not.toBeNull());
+
+    page.querySelector<AgentSelectElement>("openclaw-agent-select")?.onSelect("writer");
+
+    expect(agentSelection.set).toHaveBeenCalledWith("writer");
+    expect(agentSelection.setScope).not.toHaveBeenCalled();
+  });
+
   it("links the page subtitle to the model providers guide", async () => {
     const { context } = createHarness("main");
     const page = appendPage(context);
