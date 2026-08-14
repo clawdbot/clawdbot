@@ -104,6 +104,7 @@ describe("responses compact endpoint", () => {
 
   it.each([
     ["native xAI default", model, undefined, true],
+    ["native xAI alias default", { ...model, provider: "x-ai" }, undefined, true],
     ["native xAI opt-out", model, { responsesCompactEndpoint: false }, false],
     [
       "custom Responses opt-in",
