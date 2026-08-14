@@ -364,4 +364,33 @@ describe("resolveMatrixMonitorConfig", () => {
       "matrix rooms must be room IDs or aliases (example: !room:server or #alias:server). Unresolved entries are ignored.",
     );
   });
+
+  it("admits an inbound event from a configured server-less room ID end-to-end (#122739)", async () => {
+    // Real config resolution (no mocked resolver) feeds the real room-config
+    // matcher: a server-less room ID flows from channels.matrix.groups into
+    // the admission map, then an inbound event from that room is admitted
+    // rather than dropped. Pre-fix the ID never reached the map, so the
+    // matcher returned allowed=false (silent message loss).
+    const roomId = "!kyPsk-bXS5fEmaIzUxZHgs6QVNyVjlbTSjy_ZkN48Ss";
+    const resolveTargets = vi.fn(async () => []);
+    const { resolveMatrixRoomConfig } = await import("./rooms.js");
+
+    const result = await resolveMatrixMonitorConfig({
+      cfg: createConfig(),
+      accountId: "ops",
+      roomsConfig: { [roomId]: { enabled: true } },
+      runtime: createRuntime(),
+      resolveTargets,
+    });
+
+    expect(result.roomsConfig).toHaveProperty(roomId);
+    const admission = resolveMatrixRoomConfig({
+      rooms: result.roomsConfig,
+      roomId,
+      aliases: [],
+    });
+    expect(admission.allowed).toBe(true);
+    expect(admission.matchSource).toBe("direct");
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
 });

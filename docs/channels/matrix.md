@@ -94,7 +94,7 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
 ### Allowlist target formats
 
 - DMs (`dm.allowFrom`, `groupAllowFrom`, `groups.<room>.users`): use `@user:server`. Display names are ignored by default (mutable); set `dangerouslyAllowNameMatching: true` only for explicit display-name compatibility.
-- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
+- Room allowlist keys (`groups`, legacy alias `rooms`): use a room ID (`!room:server`, or a server-less `!roomId` as modern homeservers issue) or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
 - Invite allowlists (`autoJoinAllowlist`): use `!room:server`, `#alias:server`, or `*`. Plain names are always rejected.
 
 ### Account ID normalization
@@ -835,7 +835,7 @@ Live directory lookup uses the logged-in Matrix account:
 
 Allowlist-style user fields (`groupAllowFrom`, `dm.allowFrom`, `groups.<room>.users`) accept full Matrix user IDs (safest). Non-ID entries are ignored by default. If `dangerouslyAllowNameMatching: true` is set, exact Matrix directory display-name matches are resolved at startup and whenever the allowlist changes while the monitor is running; unresolvable entries are ignored at runtime.
 
-Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Plain room-name keys are ignored by default; `dangerouslyAllowNameMatching: true` restores best-effort lookup against joined room names.
+Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Room IDs may include or omit the `:server` suffix — modern homeservers issue server-less `!roomId` forms, and both are matched verbatim for admission. Plain room-name keys are ignored by default; `dangerouslyAllowNameMatching: true` restores best-effort lookup against joined room names.
 
 ### Account and connection
 
